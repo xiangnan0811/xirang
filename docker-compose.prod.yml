@@ -1,0 +1,37 @@
+services:
+  xirang-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: xirang-backend
+    env_file:
+      - ./backend/.env.production
+    environment:
+      # 默认落盘到容器挂载卷，若使用 postgres 可忽略
+      SQLITE_PATH: /data/xirang.db
+    volumes:
+      - xirang-data:/data
+      - xirang-backup:/backup
+    restart: unless-stopped
+
+  xirang-gateway:
+    build:
+      context: .
+      dockerfile: deploy/nginx/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    container_name: xirang-gateway
+    environment:
+      ENABLE_TLS: "true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - xirang-backend
+    restart: unless-stopped
+
+volumes:
+  xirang-data:
+  xirang-backup:

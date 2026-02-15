@@ -1,0 +1,39 @@
+# Node
+web/node_modules/
+web/dist/
+
+# Go
+backend/xirang
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
+# Env
+.env
+backend/.env
+web/.env
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+
+# ai
+.omc/
+.claude/
+.codex/
+.gemini/
+.agent/
+
+# temp
+tmp/
+
+# temp docs
+docs/
+
+# deploy
+deploy/
+
+# local build artifacts
+backend/.env.production
+web/*.tsbuildinfo

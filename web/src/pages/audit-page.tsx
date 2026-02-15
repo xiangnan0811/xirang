@@ -1,0 +1,327 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Download, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
+import { useAuth } from "@/context/auth-context";
+import { ApiError, apiClient } from "@/lib/api/client";
+import type { AuditLogRecord } from "@/types/domain";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+
+const pageSize = 30;
+const auditViewStorageKey = "xirang.audit.view";
+
+type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
+
+function methodBadge(method: string) {
+  const normalized = method.toUpperCase();
+  if (normalized === "DELETE") {
+    return "danger" as const;
+  }
+  if (normalized === "POST" || normalized === "PUT" || normalized === "PATCH") {
+    return "warning" as const;
+  }
+  return "outline" as const;
+}
+
+function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
+  if (range === "all") {
+    return {};
+  }
+
+  const now = new Date();
+  const from = new Date(now);
+
+  if (range === "1h") {
+    from.setHours(from.getHours() - 1);
+  } else if (range === "24h") {
+    from.setHours(from.getHours() - 24);
+  } else if (range === "7d") {
+    from.setDate(from.getDate() - 7);
+  } else if (range === "30d") {
+    from.setDate(from.getDate() - 30);
+  }
+
+  return {
+    from: from.toISOString(),
+    to: now.toISOString()
+  };
+}
+
+export function AuditPage() {
+  const { token } = useAuth();
+  const [rows, setRows] = useState<AuditLogRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const [method, setMethod] = useState("all");
+  const [timeRange, setTimeRange] = useState<TimeRange>("24h");
+  const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
+    const stored = localStorage.getItem(auditViewStorageKey);
+    return stored === "list" ? "list" : "cards";
+  });
+  const [toast, setToast] = useState<string | null>(null);
+
+  const autoLoadKeyRef = useRef("");
+
+  const pageIndex = useMemo(() => Math.floor(offset / pageSize) + 1, [offset]);
+  const hasNext = offset + pageSize < total;
+
+  const load = async (nextOffset: number) => {
+    if (!token) {
+      setToast("请先登录后查看审计日志。");
+      return;
+    }
+
+    const { from, to } = resolveTimeRange(timeRange);
+
+    setLoading(true);
+    setToast(null);
+    try {
+      const result = await apiClient.getAuditLogs(token, {
+        path: keyword.trim() || undefined,
+        method: method === "all" ? undefined : method,
+        from,
+        to,
+        limit: pageSize,
+        offset: nextOffset
+      });
+      setRows(result.items);
+      setTotal(result.total);
+      setOffset(result.offset);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setToast("当前账号无权访问审计日志（仅管理员可读）。");
+      } else {
+        setToast((error as Error).message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportCSV = async () => {
+    if (!token) {
+      setToast("请先登录后导出审计日志。");
+      return;
+    }
+
+    const { from, to } = resolveTimeRange(timeRange);
+
+    setExporting(true);
+    setToast(null);
+    try {
+      const blob = await apiClient.exportAuditLogsCSV(token, {
+        path: keyword.trim() || undefined,
+        method: method === "all" ? undefined : method,
+        from,
+        to,
+        limit: 5000
+      });
+
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.href = url;
+      link.download = `audit-logs-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      setToast("审计日志 CSV 导出成功。");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setToast("当前账号无权导出审计日志（仅管理员可读）。");
+      } else {
+        setToast((error as Error).message);
+      }
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) {
+      autoLoadKeyRef.current = "";
+      return;
+    }
+
+    const loadKey = `${token}:${timeRange}`;
+    if (autoLoadKeyRef.current === loadKey) {
+      return;
+    }
+    autoLoadKeyRef.current = loadKey;
+    void load(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, timeRange]);
+
+  useEffect(() => {
+    localStorage.setItem(auditViewStorageKey, viewMode);
+  }, [viewMode]);
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base">审计日志（管理员只读）</CardTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
+                <RefreshCw className="mr-1 size-4" />
+                刷新
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void exportCSV()} disabled={exporting || loading}>
+                <Download className="mr-1 size-4" />
+                {exporting ? "导出中..." : "导出 CSV"}
+              </Button>
+              <div className="inline-flex items-center gap-1 rounded-md border bg-background p-1">
+                <Button size="sm" variant={viewMode === "cards" ? "default" : "ghost"} onClick={() => setViewMode("cards")}>
+                  <LayoutGrid className="mr-1 size-4" />
+                  卡片
+                </Button>
+                <Button size="sm" variant={viewMode === "list" ? "default" : "ghost"} onClick={() => setViewMode("list")}>
+                  <List className="mr-1 size-4" />
+                  列表
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="按路径关键字过滤，例如 /nodes /policies"
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+              />
+            </div>
+            <select
+              className="h-10 rounded-md border bg-background px-3 text-sm"
+              value={method}
+              onChange={(event) => setMethod(event.target.value)}
+            >
+              <option value="all">全部方法</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+            <Button onClick={() => void load(0)} disabled={loading}>
+              查询
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { label: "全部", value: "all" as const },
+              { label: "近 1 小时", value: "1h" as const },
+              { label: "近 24 小时", value: "24h" as const },
+              { label: "近 7 天", value: "7d" as const },
+              { label: "近 30 天", value: "30d" as const }
+            ].map((item) => (
+              <Button
+                key={item.value}
+                size="sm"
+                variant={timeRange === item.value ? "default" : "outline"}
+                onClick={() => setTimeRange(item.value)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
+
+          {viewMode === "cards" ? (
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {rows.map((row) => (
+                <div key={row.id} className="rounded-lg border bg-background p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{row.username || "-"}</p>
+                    <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
+                  </div>
+                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <p>时间：{row.createdAt}</p>
+                    <p>角色：{row.role || "-"}</p>
+                    <p>路径：<span className="font-mono">{row.path}</span></p>
+                    <p>状态码：{row.statusCode}</p>
+                    <p>来源 IP：{row.clientIP}</p>
+                  </div>
+                </div>
+              ))}
+              {!rows.length && !loading ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="min-w-[1080px] text-left text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40 text-muted-foreground">
+                    <th className="px-3 py-3">时间</th>
+                    <th className="px-3 py-3">用户</th>
+                    <th className="px-3 py-3">角色</th>
+                    <th className="px-3 py-3">方法</th>
+                    <th className="px-3 py-3">路径</th>
+                    <th className="px-3 py-3">状态码</th>
+                    <th className="px-3 py-3">来源 IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id} className="border-b">
+                      <td className="px-3 py-3">{row.createdAt}</td>
+                      <td className="px-3 py-3">{row.username || "-"}</td>
+                      <td className="px-3 py-3">{row.role || "-"}</td>
+                      <td className="px-3 py-3">
+                        <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{row.path}</td>
+                      <td className="px-3 py-3">{row.statusCode}</td>
+                      <td className="px-3 py-3 text-muted-foreground">{row.clientIP}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!rows.length && !loading ? (
+                <div className="px-3 py-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              第 {pageIndex} 页 · 共 {total} 条
+            </span>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void load(Math.max(0, offset - pageSize))}
+                disabled={loading || offset === 0}
+              >
+                上一页
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void load(offset + pageSize)}
+                disabled={loading || !hasNext}
+              >
+                下一页
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {toast ? (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+          {toast}
+        </div>
+      ) : null}
+    </div>
+  );
+}

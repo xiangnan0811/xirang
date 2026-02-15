@@ -1,0 +1,32 @@
+services:
+  xirang-backend:
+    image: golang:1.23
+    container_name: xirang-backend
+    working_dir: /workspace/backend
+    volumes:
+      - ./:/workspace
+    environment:
+      SERVER_ADDR: :8080
+      DB_TYPE: sqlite
+      SQLITE_PATH: /workspace/backend/xirang.db
+      JWT_SECRET: xirang-docker-secret
+      JWT_TTL: 24h
+      EXECUTOR_SHELL: /bin/sh
+      RSYNC_BINARY: rsync
+    ports:
+      - "8080:8080"
+    command: sh -c "go mod tidy && go run ./cmd/server"
+
+  xirang-web:
+    image: node:20
+    container_name: xirang-web
+    working_dir: /workspace/web
+    volumes:
+      - ./:/workspace
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080/api/v1
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    depends_on:
+      - xirang-backend

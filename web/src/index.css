@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+}
+
+@layer utilities {
+  .grid-noise {
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(120, 120, 120, 0.11) 1px, transparent 0),
+      linear-gradient(180deg, rgba(75, 85, 99, 0.06), rgba(17, 24, 39, 0.02));
+    background-size: 16px 16px, 100% 100%;
+  }
+
+  .terminal-surface {
+    background:
+      linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.98)),
+      radial-gradient(circle at 10% 10%, rgba(34, 197, 94, 0.2), transparent 40%);
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18), 0 0 22px rgba(34, 197, 94, 0.12);
+  }
+
+  .pulse-online {
+    background-color: rgb(16 185 129);
+    box-shadow: 0 0 0 rgba(16, 185, 129, 0.55);
+    animation: pulse-online 1.6s infinite;
+  }
+
+  .pulse-warning {
+    background-color: rgb(245 158 11);
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0.5);
+    animation: pulse-warning 1.8s infinite;
+  }
+
+  .pulse-offline {
+    background-color: rgb(239 68 68);
+    box-shadow: 0 0 0 rgba(239, 68, 68, 0.55);
+    animation: pulse-offline 1.6s infinite;
+  }
+
+  .mobile-sheet {
+    box-shadow: 0 -14px 40px rgba(2, 6, 23, 0.45);
+  }
+}
+
+@keyframes pulse-online {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.52);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+@keyframes pulse-warning {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.52);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+@keyframes pulse-offline {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.52);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
