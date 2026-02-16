@@ -529,7 +529,7 @@ export function NotificationsPage() {
                 const busy = isUpdating || isTesting;
 
                 return (
-                  <div key={integration.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel">
+                  <div key={integration.id} className="interactive-surface p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">

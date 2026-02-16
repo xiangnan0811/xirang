@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatusPulse } from "@/components/status-pulse";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/loading-state";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { cn } from "@/lib/utils";
 
@@ -133,12 +134,19 @@ export function OverviewPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? <p className="text-sm text-muted-foreground">正在构建状态矩阵...</p> : null}
+            {loading ? (
+              <LoadingState
+                className="mb-3"
+                title="正在构建状态矩阵"
+                description="正在汇聚节点实时探测与最新备份指标..."
+                rows={2}
+              />
+            ) : null}
             <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8 xl:grid-cols-10">
               {nodes.map((node) => (
                 <div
                   key={node.id}
-                  className="rounded-lg border border-border/70 bg-background/75 p-2 text-[11px] shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/45 hover:shadow-panel"
+                  className="interactive-surface border-border/70 bg-background/75 p-2 text-[11px] hover:border-primary/45"
                   title={`${node.name} · ${node.ip} · 成功率 ${node.successRate}%`}
                 >
                   <div className="mb-1 flex items-center justify-between gap-1">

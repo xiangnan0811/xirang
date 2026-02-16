@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -192,9 +193,11 @@ export function PoliciesPage() {
           </div>
 
           {loading ? (
-            <p className="text-sm text-muted-foreground">
-              策略数据加载中...
-            </p>
+            <LoadingState
+              title="策略数据加载中"
+              description="正在拉取策略配置与启停状态..."
+              rows={3}
+            />
           ) : null}
 
           {viewMode === "cards" ? (
@@ -202,7 +205,7 @@ export function PoliciesPage() {
               {filteredPolicies.map((policy) => (
                 <div
                   key={policy.id}
-                  className="rounded-xl border border-border/75 bg-background/65 p-4 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                  className="interactive-surface p-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>

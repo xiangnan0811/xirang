@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "@/components/ui/toast";
 import { StatusPulse } from "@/components/status-pulse";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -767,9 +768,12 @@ export function NodesPage() {
           {viewMode === "cards" ? (
             <div className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-3">
               {loading ? (
-                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                  节点数据加载中...
-                </div>
+                <LoadingState
+                  className="md:col-span-2 lg:col-span-3"
+                  title="节点数据加载中"
+                  description="正在刷新节点探测状态与可用性..."
+                  rows={4}
+                />
               ) : null}
 
               {!loading && !sortedNodes.length ? (
@@ -787,7 +791,7 @@ export function NodesPage() {
                 return (
                   <div
                     key={node.id}
-                    className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                    className="interactive-surface p-3"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">

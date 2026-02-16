@@ -278,7 +278,7 @@ export function AuditPage() {
               {rows.map((row) => (
                 <div
                   key={row.id}
-                  className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                  className="interactive-surface p-3"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium">{row.username || "-"}</p>

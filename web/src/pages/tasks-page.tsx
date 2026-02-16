@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getTaskStatusMeta } from "@/lib/status";
@@ -236,7 +237,11 @@ export function TasksPage() {
           </div>
 
           {loading ? (
-            <p className="text-sm text-muted-foreground">正在加载任务...</p>
+            <LoadingState
+              title="任务数据加载中"
+              description="正在同步任务状态、进度与最近执行信息..."
+              rows={3}
+            />
           ) : null}
 
           <div className="space-y-3">
@@ -248,7 +253,7 @@ export function TasksPage() {
                 <div
                   key={task.id}
                   className={cn(
-                    "space-y-2 rounded-xl border border-border/75 bg-background/65 p-4 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel",
+                    "space-y-2 interactive-surface p-4",
                     task.status === "failed" && "border-red-500/35 bg-red-500/10",
                     task.status === "running" && "border-cyan-500/30"
                   )}
