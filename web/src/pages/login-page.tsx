@@ -116,6 +116,7 @@ export function LoginPage() {
                   id="username"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
+                  autoComplete="username"
                   required
                 />
               </div>
@@ -129,11 +130,12 @@ export function LoginPage() {
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
                   required
                 />
               </div>
 
-              {error ? <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">{error}</p> : null}
+              {error ? <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">{error}</p> : null}
 
               <Button className="w-full" type="submit" loading={submitting}>
                 登录控制台

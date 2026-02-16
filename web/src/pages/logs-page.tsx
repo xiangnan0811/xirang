@@ -7,6 +7,7 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
@@ -358,7 +359,13 @@ export function LogsPage() {
               <Download className="mr-1 size-4" />
               导出 TXT
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setFullScreen((prev) => !prev)}>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={fullScreen ? "退出全屏日志" : "进入全屏日志"}
+              title={fullScreen ? "退出全屏日志" : "进入全屏日志"}
+              onClick={() => setFullScreen((prev) => !prev)}
+            >
               {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
             </Button>
           </div>
@@ -491,7 +498,20 @@ export function LogsPage() {
                 </div>
               </section>
             ))}
-            {!groupedLogs.length ? <p className="text-slate-400">当前筛选条件下暂无日志输出...</p> : null}
+            {!groupedLogs.length ? (
+              <div className="px-2 py-6">
+                <EmptyState
+                  className="border-slate-700/70 bg-slate-900/55"
+                  title="当前筛选条件下暂无日志输出"
+                  description="可尝试切换节点/任务或重置筛选条件。"
+                  action={(
+                    <Button size="sm" variant="outline" onClick={resetFilters}>
+                      重置筛选
+                    </Button>
+                  )}
+                />
+              </div>
+            ) : null}
           </div>
         )}
 

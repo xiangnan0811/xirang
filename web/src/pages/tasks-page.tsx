@@ -205,7 +205,7 @@ export function TasksPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="filter-panel grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
+          <div className="filter-panel grid gap-2 md:grid-cols-[1.6fr_1fr_1fr_auto]">
             <Input
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
               value={keyword}
@@ -240,6 +240,10 @@ export function TasksPage() {
                 </option>
               ))}
             </select>
+
+            <Button size="sm" variant="outline" onClick={resetFilters}>
+              重置
+            </Button>
           </div>
 
           {loading ? (

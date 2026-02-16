@@ -6,6 +6,7 @@ import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { navItems } from "@/components/layout/navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
@@ -91,6 +92,11 @@ export function AppShell() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   最近同步：{consoleData.lastSyncedAt} · 节点 {consoleData.nodes.length} 台
                 </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <Badge variant="success">在线 {consoleData.overview.healthyNodes}</Badge>
+                  <Badge variant="warning">运行中 {consoleData.overview.runningTasks}</Badge>
+                  <Badge variant="danger">失败24h {consoleData.overview.failedTasks24h}</Badge>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -125,7 +131,7 @@ export function AppShell() {
           </div>
 
           {consoleData.warning ? (
-            <div className="border-t bg-amber-500/10 px-4 py-2 text-xs text-amber-600 md:px-8 dark:text-amber-300">
+            <div role="status" aria-live="polite" className="border-t bg-amber-500/10 px-4 py-2 text-xs text-amber-600 md:px-8 dark:text-amber-300">
               {consoleData.warning}
             </div>
           ) : null}

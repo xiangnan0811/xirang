@@ -186,7 +186,7 @@ export function PoliciesPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="filter-panel grid gap-2 md:grid-cols-[1fr_auto]">
+          <div className="filter-panel grid gap-2 md:grid-cols-[1fr_auto_auto]">
             <Input
               placeholder="搜索策略 / 路径 / cron"
               value={keyword}
@@ -195,6 +195,9 @@ export function PoliciesPage() {
             <Badge variant="secondary">
               启用 {activeCount}/{policies.length}
             </Badge>
+            <Button size="sm" variant="outline" onClick={resetFilters}>
+              重置
+            </Button>
           </div>
 
           {loading ? (

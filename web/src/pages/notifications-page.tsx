@@ -638,7 +638,7 @@ export function NotificationsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
+            <div className="filter-panel grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
