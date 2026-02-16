@@ -585,7 +585,7 @@ export function NotificationsPage() {
                           编辑
                         </Button>
                         <Button
-                          variant="outline"
+                          variant="danger"
                           size="icon"
                           aria-label={`删除通知方式 ${integration.name}`}
                           disabled={busy}

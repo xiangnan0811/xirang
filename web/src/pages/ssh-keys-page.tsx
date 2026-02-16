@@ -196,7 +196,7 @@ export function SSHKeysPage() {
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="danger"
                       onClick={() => onDelete(key)}
                     >
                       <Trash2 className="mr-1 size-4" />

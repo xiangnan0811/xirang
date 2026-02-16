@@ -339,7 +339,7 @@ export function TasksPage() {
 
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="danger"
                       disabled={isPending}
                       onClick={() => void handleDelete(task.id)}
                     >

@@ -298,31 +298,31 @@ export function AuditPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border/75 bg-background/55">
+            <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
               <table className="min-w-[1080px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
-                    <th className="px-3 py-3">时间</th>
-                    <th className="px-3 py-3">用户</th>
-                    <th className="px-3 py-3">角色</th>
-                    <th className="px-3 py-3">方法</th>
-                    <th className="px-3 py-3">路径</th>
-                    <th className="px-3 py-3">状态码</th>
-                    <th className="px-3 py-3">来源 IP</th>
+                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-3 py-2.5">时间</th>
+                    <th className="px-3 py-2.5">用户</th>
+                    <th className="px-3 py-2.5">角色</th>
+                    <th className="px-3 py-2.5">方法</th>
+                    <th className="px-3 py-2.5">路径</th>
+                    <th className="px-3 py-2.5">状态码</th>
+                    <th className="px-3 py-2.5">来源 IP</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
-                      <td className="px-3 py-3">{row.createdAt}</td>
-                      <td className="px-3 py-3">{row.username || "-"}</td>
-                      <td className="px-3 py-3">{row.role || "-"}</td>
-                      <td className="px-3 py-3">
+                    <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                      <td className="px-3 py-2.5">{row.createdAt}</td>
+                      <td className="px-3 py-2.5">{row.username || "-"}</td>
+                      <td className="px-3 py-2.5">{row.role || "-"}</td>
+                      <td className="px-3 py-2.5">
                         <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
                       </td>
-                      <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{row.path}</td>
-                      <td className="px-3 py-3">{row.statusCode}</td>
-                      <td className="px-3 py-3 text-muted-foreground">{row.clientIP}</td>
+                      <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{row.path}</td>
+                      <td className="px-3 py-2.5">{row.statusCode}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{row.clientIP}</td>
                     </tr>
                   ))}
                 </tbody>

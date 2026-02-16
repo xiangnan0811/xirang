@@ -23,7 +23,7 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
     <>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/75 bg-background/88 backdrop-blur-xl md:hidden">
         <div
-          className="grid h-16"
+          className="grid h-[68px]"
           style={{ gridTemplateColumns: `repeat(${Math.max(1, mobileTabs.length)}, minmax(0, 1fr))` }}
         >
           {mobileTabs.map((item) => {
@@ -33,7 +33,7 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
               <button
                 key={item.path}
                 className={cn(
-                  "flex flex-col items-center justify-center gap-1 px-1 text-[11px] transition-colors",
+                  "flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-[11px] transition-colors",
                   active ? "text-primary" : "text-muted-foreground"
                 )}
                 onClick={() => navigate(item.path)}
@@ -49,11 +49,11 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
       </nav>
 
       <button
-        className="fixed right-3 top-3 z-50 rounded-full border border-border/80 bg-background/85 p-2 shadow-panel md:hidden"
+        className="fixed right-3 top-3 z-50 rounded-full border border-border/80 bg-background/85 p-2.5 shadow-panel md:hidden"
         onClick={() => setDrawerOpen(true)}
         aria-label="打开快捷菜单"
       >
-        <Menu className="size-4" />
+        <Menu className="size-5" />
       </button>
 
       {drawerOpen ? (
@@ -99,12 +99,13 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
             </div>
 
             <div className="mt-6 grid grid-cols-2 gap-2">
-              <Button variant="outline" onClick={onRefresh}>
+              <Button variant="outline" className="h-10" onClick={onRefresh}>
                 <RefreshCw className="mr-1 size-4" />
                 刷新
               </Button>
               <Button
                 variant="destructive"
+                className="h-10"
                 onClick={() => {
                   onLogout();
                   setDrawerOpen(false);

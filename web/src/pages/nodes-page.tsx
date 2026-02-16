@@ -655,7 +655,7 @@ export function NodesPage() {
             <code className="mx-1">df</code>）快照。
           </div>
 
-          <div className="hidden items-center gap-2 rounded-xl border border-border/75 bg-background/55 p-2 md:flex">
+          <div className="hidden items-center gap-2 rounded-2xl border border-border/70 bg-background/55 shadow-sm p-2 md:flex">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -838,6 +838,7 @@ export function NodesPage() {
                       <Button
                         variant="outline"
                         size="sm"
+                        className="h-10"
                         onClick={() => void onTestNode(node)}
                         disabled={testingNodeId === node.id}
                       >
@@ -846,13 +847,15 @@ export function NodesPage() {
                       <Button
                         variant="outline"
                         size="sm"
+                        className="h-10"
                         onClick={() => openEditDialog(node)}
                       >
                         编辑
                       </Button>
                       <Button
-                        variant="outline"
+                        variant="danger"
                         size="sm"
+                        className="h-10"
                         onClick={() => onDeleteNode(node)}
                       >
                         删除
@@ -863,6 +866,7 @@ export function NodesPage() {
                       <Button
                         variant="outline"
                         size="sm"
+                        className="h-10"
                         onClick={() => handleOpenTerminal(node)}
                       >
                         <TerminalSquare className="mr-1 size-4" />
@@ -870,6 +874,7 @@ export function NodesPage() {
                       </Button>
                       <Button
                         size="sm"
+                        className="h-10"
                         onClick={() =>
                           void handleTriggerBackup(node.id, node.name)
                         }
@@ -882,11 +887,11 @@ export function NodesPage() {
               })}
             </div>
           ) : (
-            <div className="hidden overflow-x-auto rounded-xl border border-border/75 bg-background/55 md:block">
+            <div className="hidden overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm md:block">
               <table className="min-w-[1280px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
-                    <th className="px-3 py-3">
+                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-3 py-2.5">
                       <input
                         type="checkbox"
                         className="size-4"
@@ -896,14 +901,14 @@ export function NodesPage() {
                         }
                       />
                     </th>
-                    <th className="px-3 py-3">节点</th>
-                    <th className="px-3 py-3">地址</th>
-                    <th className="px-3 py-3">认证</th>
-                    <th className="px-3 py-3">状态</th>
-                    <th className="px-3 py-3">磁盘探测</th>
-                    <th className="px-3 py-3">最后备份</th>
-                    <th className="px-3 py-3">标签</th>
-                    <th className="px-3 py-3 text-right">操作</th>
+                    <th className="px-3 py-2.5">节点</th>
+                    <th className="px-3 py-2.5">地址</th>
+                    <th className="px-3 py-2.5">认证</th>
+                    <th className="px-3 py-2.5">状态</th>
+                    <th className="px-3 py-2.5">磁盘探测</th>
+                    <th className="px-3 py-2.5">最后备份</th>
+                    <th className="px-3 py-2.5">标签</th>
+                    <th className="px-3 py-2.5 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -934,8 +939,8 @@ export function NodesPage() {
                         : "未绑定";
 
                       return (
-                        <tr key={node.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
-                          <td className="px-3 py-3">
+                        <tr key={node.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                          <td className="px-3 py-2.5">
                             <input
                               type="checkbox"
                               className="size-4"
@@ -948,19 +953,19 @@ export function NodesPage() {
                               }
                             />
                           </td>
-                          <td className="px-3 py-3">
+                          <td className="px-3 py-2.5">
                             <p className="font-medium">{node.name}</p>
                             <p className="text-xs text-muted-foreground">
                               成功率 {node.successRate}%
                             </p>
                           </td>
-                          <td className="px-3 py-3 text-muted-foreground">
+                          <td className="px-3 py-2.5 text-muted-foreground">
                             <p>
                               {node.host}:{node.port}
                             </p>
                             <p className="text-xs">{node.username}</p>
                           </td>
-                          <td className="px-3 py-3 text-xs text-muted-foreground">
+                          <td className="px-3 py-2.5 text-xs text-muted-foreground">
                             <p>
                               {node.authType === "key" ? "密钥" : "密码"}
                             </p>
@@ -968,7 +973,7 @@ export function NodesPage() {
                               {node.authType === "key" ? keyLabel : "-"}
                             </p>
                           </td>
-                          <td className="px-3 py-3">
+                          <td className="px-3 py-2.5">
                             <div className="inline-flex items-center gap-1.5">
                               <StatusPulse tone={node.status} />
                               <Badge variant={status.variant}>
@@ -976,7 +981,7 @@ export function NodesPage() {
                               </Badge>
                             </div>
                           </td>
-                          <td className="px-3 py-3">
+                          <td className="px-3 py-2.5">
                             <div className="w-44">
                               <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                                 <span>{node.diskFreePercent}% 可用</span>
@@ -999,10 +1004,10 @@ export function NodesPage() {
                               </p>
                             </div>
                           </td>
-                          <td className="px-3 py-3 text-muted-foreground">
+                          <td className="px-3 py-2.5 text-muted-foreground">
                             {node.lastBackupAt}
                           </td>
-                          <td className="px-3 py-3">
+                          <td className="px-3 py-2.5">
                             <div className="flex flex-wrap gap-1">
                               {node.tags.map((tag) => (
                                 <Badge key={tag} variant="outline">
@@ -1011,7 +1016,7 @@ export function NodesPage() {
                               ))}
                             </div>
                           </td>
-                          <td className="px-3 py-3 text-right">
+                          <td className="px-3 py-2.5 text-right">
                             <div className="flex justify-end gap-2">
                               <Button
                                 variant="outline"
@@ -1049,7 +1054,7 @@ export function NodesPage() {
                                 <Wrench className="size-4" />
                               </Button>
                               <Button
-                                variant="outline"
+                                variant="danger"
                                 size="sm"
                                 onClick={() => onDeleteNode(node)}
                               >
@@ -1169,6 +1174,7 @@ export function NodesPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      className="h-10"
                       onClick={() => void onTestNode(node)}
                       disabled={testingNodeId === node.id}
                     >
@@ -1177,13 +1183,15 @@ export function NodesPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      className="h-10"
                       onClick={() => openEditDialog(node)}
                     >
                       编辑
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="danger"
                       size="sm"
+                      className="h-10"
                       onClick={() => onDeleteNode(node)}
                     >
                       删除
@@ -1194,6 +1202,7 @@ export function NodesPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      className="h-10"
                       onClick={() => handleOpenTerminal(node)}
                     >
                       <TerminalSquare className="mr-1 size-4" />
@@ -1201,6 +1210,7 @@ export function NodesPage() {
                     </Button>
                     <Button
                       size="sm"
+                      className="h-10"
                       onClick={() =>
                         void handleTriggerBackup(node.id, node.name)
                       }

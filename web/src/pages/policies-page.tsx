@@ -225,7 +225,7 @@ export function PoliciesPage() {
                         编辑
                       </Button>
                       <Button
-                        variant="outline"
+                        variant="danger"
                         size="sm"
                         onClick={() => onDelete(policy)}
                       >
@@ -252,46 +252,46 @@ export function PoliciesPage() {
               ))}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border/75 bg-background/55">
+            <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
               <table className="min-w-[980px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
-                    <th className="px-3 py-3">策略名</th>
-                    <th className="px-3 py-3">Cron</th>
-                    <th className="px-3 py-3">源路径</th>
-                    <th className="px-3 py-3">目标路径</th>
-                    <th className="px-3 py-3">状态</th>
-                    <th className="px-3 py-3 text-right">操作</th>
+                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-3 py-2.5">策略名</th>
+                    <th className="px-3 py-2.5">Cron</th>
+                    <th className="px-3 py-2.5">源路径</th>
+                    <th className="px-3 py-2.5">目标路径</th>
+                    <th className="px-3 py-2.5">状态</th>
+                    <th className="px-3 py-2.5 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredPolicies.map((policy) => (
-                    <tr key={policy.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
-                      <td className="px-3 py-3">
+                    <tr key={policy.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                      <td className="px-3 py-2.5">
                         <p className="font-medium">{policy.name}</p>
                         <p className="text-xs text-muted-foreground">
                           阈值 {policy.criticalThreshold}
                         </p>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5">
                         <p className="font-mono text-xs">{policy.cron}</p>
                         <p className="text-xs text-muted-foreground">
                           {policy.naturalLanguage}
                         </p>
                       </td>
-                      <td className="px-3 py-3 text-muted-foreground">
+                      <td className="px-3 py-2.5 text-muted-foreground">
                         {policy.sourcePath}
                       </td>
-                      <td className="px-3 py-3 text-muted-foreground">
+                      <td className="px-3 py-2.5 text-muted-foreground">
                         {policy.targetPath}
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5">
                         <Switch
                           checked={policy.enabled}
                           onCheckedChange={() => void onTogglePolicy(policy)}
                         />
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-2.5 text-right">
                         <div className="flex justify-end gap-2">
                           <Button
                             size="sm"
@@ -303,7 +303,7 @@ export function PoliciesPage() {
                           </Button>
                           <Button
                             size="sm"
-                            variant="outline"
+                            variant="danger"
                             onClick={() => onDelete(policy)}
                           >
                             <Trash2 className="size-4" />
