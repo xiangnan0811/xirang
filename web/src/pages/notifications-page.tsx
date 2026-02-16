@@ -7,11 +7,14 @@ import {
   RefreshCw,
   Search,
   Send,
+  Wrench,
   Trash2,
   Webhook
 } from "lucide-react";
-import { Link, useBeforeUnload, useBlocker, useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
+import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusPulse } from "@/components/status-pulse";
@@ -23,7 +26,7 @@ import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getSeverityMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import type { AlertDeliveryRecord, AlertDeliveryStats, AlertRecord, IntegrationChannel, IntegrationType } from "@/types/domain";
+import type { AlertDeliveryRecord, AlertDeliveryStats, AlertRecord, IntegrationChannel } from "@/types/domain";
 
 function integrationIcon(type: IntegrationChannel["type"]) {
   switch (type) {
@@ -71,120 +74,6 @@ function statusWeight(status: AlertRecord["status"]) {
   }
 }
 
-const defaultDraft = {
-  type: "email" as IntegrationType,
-  name: "",
-  endpoint: "",
-  failThreshold: 2,
-  cooldownMinutes: 5,
-  enabled: true
-};
-
-type IntegrationGuide = {
-  endpointLabel: string;
-  endpointPlaceholder: string;
-  endpointHint: string;
-  sample: string;
-};
-
-type IntegrationEditDraft = {
-  endpoint: string;
-  failThreshold: number;
-  cooldownMinutes: number;
-};
-
-type SaveIntegrationDraftOptions = {
-  silent?: boolean;
-};
-
-const integrationGuideMap: Record<IntegrationType, IntegrationGuide> = {
-  email: {
-    endpointLabel: "收件邮箱",
-    endpointPlaceholder: "ops@example.com, oncall@example.com",
-    endpointHint: "可填写多个邮箱，使用逗号分隔。",
-    sample: "ops@example.com"
-  },
-  slack: {
-    endpointLabel: "Slack Webhook URL",
-    endpointPlaceholder: "https://hooks.slack.com/services/xxx/yyy/zzz",
-    endpointHint: "请在 Slack Incoming Webhook 中复制地址。",
-    sample: "https://hooks.slack.com/services/T000/B000/XXXX"
-  },
-  telegram: {
-    endpointLabel: "Telegram Bot Endpoint",
-    endpointPlaceholder: "https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>",
-    endpointHint: "建议使用机器人 sendMessage 接口完整 URL。",
-    sample: "https://api.telegram.org/bot123456:abc/sendMessage?chat_id=10001"
-  },
-  webhook: {
-    endpointLabel: "Webhook URL",
-    endpointPlaceholder: "https://example.com/xirang/alerts",
-    endpointHint: "支持任意 HTTP/HTTPS 接收端点。",
-    sample: "https://example.com/hooks/xirang"
-  }
-};
-
-function isValidURL(value: string) {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function validateIntegrationDraft(type: IntegrationType, endpoint: string): string | null {
-  const raw = endpoint.trim();
-  if (!raw) {
-    return "新增失败：请填写通知地址。";
-  }
-
-  if (type === "email") {
-    const emails = raw
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    if (!emails.length) {
-      return "新增失败：请填写至少一个邮箱地址。";
-    }
-    const mailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emails.every((item) => mailRegex.test(item))) {
-      return "新增失败：邮箱格式不正确，请使用逗号分隔多个邮箱。";
-    }
-    return null;
-  }
-
-  if (!isValidURL(raw)) {
-    return "新增失败：该通道需要合法的 http/https 地址。";
-  }
-  return null;
-}
-
-function toIntegrationEditDraft(integration: IntegrationChannel): IntegrationEditDraft {
-  return {
-    endpoint: integration.endpoint,
-    failThreshold: integration.failThreshold,
-    cooldownMinutes: integration.cooldownMinutes
-  };
-}
-
-function normalizeIntegrationEditDraft(draft: IntegrationEditDraft): IntegrationEditDraft {
-  return {
-    endpoint: draft.endpoint.trim(),
-    failThreshold: Math.max(1, draft.failThreshold),
-    cooldownMinutes: Math.max(1, draft.cooldownMinutes)
-  };
-}
-
-function isIntegrationDraftDirty(draft: IntegrationEditDraft, integration: IntegrationChannel) {
-  const normalized = normalizeIntegrationEditDraft(draft);
-  return (
-    normalized.endpoint !== integration.endpoint ||
-    normalized.failThreshold !== integration.failThreshold ||
-    normalized.cooldownMinutes !== integration.cooldownMinutes
-  );
-}
-
 function severityToTone(severity: AlertRecord["severity"]) {
   if (severity === "critical") {
     return "offline" as const;
@@ -220,9 +109,11 @@ export function NotificationsPage() {
   const [keyword, setKeyword] = useState(globalSearch);
   const [severityFilter, setSeverityFilter] = useState<"all" | "critical" | "warning" | "info">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "acked" | "resolved">("all");
-  const [showCreateIntegration, setShowCreateIntegration] = useState(false);
-  const [integrationDraft, setIntegrationDraft] = useState(defaultDraft);
-  const [testingIntegrationId, setTestingIntegrationId] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingIntegration, setEditingIntegration] = useState<IntegrationChannel | null>(null);
+  const [testingIntegrationMap, setTestingIntegrationMap] = useState<Record<string, number>>({});
+  const [updatingIntegrationMap, setUpdatingIntegrationMap] = useState<Record<string, number>>({});
   const [deliveryOpenAlertId, setDeliveryOpenAlertId] = useState<string | null>(null);
   const [deliveryLoadingAlertId, setDeliveryLoadingAlertId] = useState<string | null>(null);
   const [deliveryMap, setDeliveryMap] = useState<Record<string, AlertDeliveryRecord[]>>({});
@@ -231,13 +122,54 @@ export function NotificationsPage() {
   const [statsWindow, setStatsWindow] = useState<24 | 72 | 168>(24);
   const [deliveryStats, setDeliveryStats] = useState<AlertDeliveryStats | null>(null);
   const [deliveryStatsLoading, setDeliveryStatsLoading] = useState(false);
-  const [integrationEditDrafts, setIntegrationEditDrafts] = useState<Record<string, IntegrationEditDraft>>({});
-  const [savingIntegrationId, setSavingIntegrationId] = useState<string | null>(null);
-  const [savingAllIntegrations, setSavingAllIntegrations] = useState(false);
   const statsLoadedKeyRef = useRef<string>("");
   const statsRequestRef = useRef(0);
 
-  const activeIntegrationGuide = integrationGuideMap[integrationDraft.type];
+  const beginIntegrationOp = useCallback((integrationId: string, type: "test" | "update") => {
+    if (type === "test") {
+      setTestingIntegrationMap((prev) => ({
+        ...prev,
+        [integrationId]: (prev[integrationId] ?? 0) + 1
+      }));
+      return;
+    }
+
+    setUpdatingIntegrationMap((prev) => ({
+      ...prev,
+      [integrationId]: (prev[integrationId] ?? 0) + 1
+    }));
+  }, []);
+
+  const endIntegrationOp = useCallback((integrationId: string, type: "test" | "update") => {
+    if (type === "test") {
+      setTestingIntegrationMap((prev) => {
+        const current = prev[integrationId] ?? 0;
+        if (current <= 1) {
+          const next = { ...prev };
+          delete next[integrationId];
+          return next;
+        }
+        return {
+          ...prev,
+          [integrationId]: current - 1
+        };
+      });
+      return;
+    }
+
+    setUpdatingIntegrationMap((prev) => {
+      const current = prev[integrationId] ?? 0;
+      if (current <= 1) {
+        const next = { ...prev };
+        delete next[integrationId];
+        return next;
+      }
+      return {
+        ...prev,
+        [integrationId]: current - 1
+      };
+    });
+  }, []);
 
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
   const openAlerts = alerts.filter((item) => item.status === "open");
@@ -350,176 +282,51 @@ export function NotificationsPage() {
     refreshDeliveries(alertId);
   };
 
-  useEffect(() => {
-    setIntegrationEditDrafts((prev) => {
-      const next: Record<string, IntegrationEditDraft> = {};
-      for (const integration of integrations) {
-        next[integration.id] = prev[integration.id] ?? toIntegrationEditDraft(integration);
-      }
-      return next;
-    });
-  }, [integrations]);
+  const openEditIntegrationDialog = (integration: IntegrationChannel) => {
+    setEditingIntegration(integration);
+    setEditDialogOpen(true);
+  };
 
-  const patchIntegrationDraft = useCallback((integrationId: string, patch: Partial<IntegrationEditDraft>) => {
-    setIntegrationEditDrafts((prev) => {
-      const current = prev[integrationId] ?? {
-        endpoint: "",
-        failThreshold: 1,
-        cooldownMinutes: 1
-      };
-      return {
-        ...prev,
-        [integrationId]: {
-          ...current,
-          ...patch
-        }
-      };
-    });
-  }, []);
-
-  const resetIntegrationDraft = useCallback((integration: IntegrationChannel) => {
-    setIntegrationEditDrafts((prev) => ({
-      ...prev,
-      [integration.id]: toIntegrationEditDraft(integration)
-    }));
-  }, []);
-
-  const saveIntegrationDraft = useCallback(async (
-    integration: IntegrationChannel,
-    options: SaveIntegrationDraftOptions = {}
-  ) => {
-    const draft = integrationEditDrafts[integration.id] ?? toIntegrationEditDraft(integration);
-    const normalizedDraft = normalizeIntegrationEditDraft(draft);
-
-    const validationError = validateIntegrationDraft(integration.type, normalizedDraft.endpoint);
-    if (validationError) {
-      if (!options.silent) {
-        toast.error(validationError);
-      }
-      return false;
-    }
-
-    setSavingIntegrationId(integration.id);
+  const handleEditIntegration = async (draft: IntegrationEditorDraft) => {
+    beginIntegrationOp(draft.id, "update");
     try {
-      await updateIntegration(integration.id, normalizedDraft);
-      setIntegrationEditDrafts((prev) => ({
-        ...prev,
-        [integration.id]: normalizedDraft
-      }));
-      if (!options.silent) {
-        toast.success(`通知方式 ${integration.name} 已保存。`);
-      }
-      return true;
-    } catch (error) {
-      if (!options.silent) {
-        toast.error((error as Error).message);
-      }
-      return false;
-    } finally {
-      setSavingIntegrationId(null);
-    }
-  }, [integrationEditDrafts, updateIntegration]);
-
-  const saveAllIntegrationDrafts = useCallback(async () => {
-    if (savingAllIntegrations || savingIntegrationId !== null) {
-      return;
-    }
-
-    const dirtyIntegrations = integrations.filter((integration) => {
-      const draft = integrationEditDrafts[integration.id] ?? toIntegrationEditDraft(integration);
-      return isIntegrationDraftDirty(draft, integration);
-    });
-
-    if (!dirtyIntegrations.length) {
-      toast.error("当前没有待保存修改。");
-      return;
-    }
-
-    setSavingAllIntegrations(true);
-    try {
-      let successCount = 0;
-      for (const integration of dirtyIntegrations) {
-        const saved = await saveIntegrationDraft(integration, { silent: true });
-        if (saved) {
-          successCount += 1;
-        }
-      }
-
-      const failedCount = dirtyIntegrations.length - successCount;
-      if (failedCount === 0) {
-        toast.success(`已批量保存 ${successCount} 项通知配置。`);
-      } else if (successCount === 0) {
-        toast.error(`批量保存失败：${dirtyIntegrations.length} 项配置均保存失败，请检查后重试。`);
-      } else {
-        toast.warning(`已批量保存 ${successCount}/${dirtyIntegrations.length} 项通知配置，${failedCount} 项失败，请检查后重试。`);
-      }
-    } finally {
-      setSavingAllIntegrations(false);
-    }
-  }, [integrationEditDrafts, integrations, saveIntegrationDraft, savingAllIntegrations, savingIntegrationId]);
-
-  const unsavedIntegrationCount = useMemo(() => {
-    return integrations.reduce((count, integration) => {
-      const draft = integrationEditDrafts[integration.id] ?? toIntegrationEditDraft(integration);
-      return count + (isIntegrationDraftDirty(draft, integration) ? 1 : 0);
-    }, 0);
-  }, [integrationEditDrafts, integrations]);
-
-  const hasUnsavedIntegrationChanges = unsavedIntegrationCount > 0;
-  const integrationConfigBusy = savingIntegrationId !== null || savingAllIntegrations;
-
-  const resetAllIntegrationDrafts = useCallback(() => {
-    setIntegrationEditDrafts(() => {
-      const next: Record<string, IntegrationEditDraft> = {};
-      for (const integration of integrations) {
-        next[integration.id] = toIntegrationEditDraft(integration);
-      }
-      return next;
-    });
-    toast.success("已重置所有未保存修改。");
-  }, [integrations]);
-
-  useBeforeUnload(
-    useCallback((event) => {
-      if (!hasUnsavedIntegrationChanges) {
-        return;
-      }
-      event.preventDefault();
-      event.returnValue = "";
-    }, [hasUnsavedIntegrationChanges])
-  );
-
-  const integrationLeaveBlocker = useBlocker(hasUnsavedIntegrationChanges);
-
-  useEffect(() => {
-    if (integrationLeaveBlocker.state !== "blocked") {
-      return;
-    }
-
-    let cancelled = false;
-    void (async () => {
-      const shouldLeave = await confirm({
-        title: "确认离开页面",
-        description: "当前有未保存的通知配置，确认离开当前页面吗？",
-        confirmText: "离开",
-        cancelText: "继续编辑"
+      await updateIntegration(draft.id, {
+        name: draft.name,
+        endpoint: draft.endpoint,
+        failThreshold: draft.failThreshold,
+        cooldownMinutes: draft.cooldownMinutes,
       });
+      toast.success(`通知方式 ${draft.name} 已保存。`);
+      setEditDialogOpen(false);
+      setEditingIntegration(null);
+    } finally {
+      endIntegrationOp(draft.id, "update");
+    }
+  };
 
-      if (cancelled) {
-        return;
+  const handleDeleteIntegration = async (integration: IntegrationChannel) => {
+    const ok = await confirm({
+      title: "确认删除",
+      description: `确认删除通知方式 ${integration.name} 吗？`,
+    });
+    if (!ok) {
+      return;
+    }
+
+    beginIntegrationOp(integration.id, "update");
+    try {
+      await removeIntegration(integration.id);
+      toast.success(`已删除通知方式：${integration.name}`);
+      if (editingIntegration?.id === integration.id) {
+        setEditDialogOpen(false);
+        setEditingIntegration(null);
       }
-
-      if (shouldLeave) {
-        integrationLeaveBlocker.proceed();
-      } else {
-        integrationLeaveBlocker.reset();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [confirm, integrationLeaveBlocker]);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      endIntegrationOp(integration.id, "update");
+    }
+  };
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -684,177 +491,19 @@ export function NotificationsPage() {
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-base">通知与集成设置</CardTitle>
-              <Button size="sm" onClick={() => setShowCreateIntegration((prev) => !prev)}>
+              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="mr-1 size-4" />
                 新增通知方式
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {showCreateIntegration ? (
-              <div className="rounded-lg border bg-muted/30 p-3">
-                <div className="grid gap-2 md:grid-cols-2">
-                  <select
-                    className="h-10 rounded-md border bg-background px-3 text-sm"
-                    value={integrationDraft.type}
-                    onChange={(event) =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        type: event.target.value as IntegrationType
-                      }))
-                    }
-                  >
-                    <option value="email">邮件</option>
-                    <option value="slack">Slack</option>
-                    <option value="telegram">Telegram</option>
-                    <option value="webhook">Webhook</option>
-                  </select>
-                  <Input
-                    placeholder="通道名称"
-                    value={integrationDraft.name}
-                    onChange={(event) =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        name: event.target.value
-                      }))
-                    }
-                  />
-                </div>
-
-                <div className="mt-2 space-y-1">
-                  <label className="text-xs text-muted-foreground">{activeIntegrationGuide.endpointLabel}</label>
-                  <Input
-                    placeholder={activeIntegrationGuide.endpointPlaceholder}
-                    value={integrationDraft.endpoint}
-                    onChange={(event) =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        endpoint: event.target.value
-                      }))
-                    }
-                  />
-                  <p className="text-[11px] text-muted-foreground">{activeIntegrationGuide.endpointHint}</p>
-                </div>
-
-                <div className="mt-2 flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                  <span>可直接套用示例地址后再修改。</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        endpoint: activeIntegrationGuide.sample
-                      }))
-                    }
-                  >
-                    套用示例
-                  </Button>
-                </div>
-
-                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={integrationDraft.failThreshold}
-                    onChange={(event) =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        failThreshold: Number(event.target.value || 1)
-                      }))
-                    }
-                    placeholder="失败阈值"
-                  />
-
-                  <Input
-                    type="number"
-                    min={1}
-                    max={120}
-                    value={integrationDraft.cooldownMinutes}
-                    onChange={(event) =>
-                      setIntegrationDraft((prev) => ({
-                        ...prev,
-                        cooldownMinutes: Number(event.target.value || 1)
-                      }))
-                    }
-                    placeholder="冷却时间（分钟）"
-                  />
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Button variant="outline" onClick={() => setShowCreateIntegration(false)}>
-                    取消
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      if (!integrationDraft.name.trim()) {
-                        toast.error("新增失败：请填写通道名称。");
-                        return;
-                      }
-                      const validationError = validateIntegrationDraft(
-                        integrationDraft.type,
-                        integrationDraft.endpoint
-                      );
-                      if (validationError) {
-                        toast.error(validationError);
-                        return;
-                      }
-
-                      void addIntegration(integrationDraft)
-                        .then(() => {
-                          setIntegrationDraft(defaultDraft);
-                          setShowCreateIntegration(false);
-                          toast.success("通知方式已新增，可按需启停。");
-                        })
-                        .catch((error) => toast.error((error as Error).message));
-                    }}
-                  >
-                    保存通道
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {hasUnsavedIntegrationChanges ? (
-              <div
-                role="status"
-                className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p>当前有 {unsavedIntegrationCount} 项通知配置尚未保存，离开页面会提示确认。</p>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => void saveAllIntegrationDrafts()}
-                      disabled={integrationConfigBusy || !hasUnsavedIntegrationChanges}
-                    >
-                      {savingAllIntegrations ? "批量保存中..." : "全部保存"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={resetAllIntegrationDrafts}
-                      disabled={integrationConfigBusy || !hasUnsavedIntegrationChanges}
-                    >
-                      全部重置
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {integrations.length ? (
               integrations.map((integration) => {
                 const Icon = integrationIcon(integration.type);
-                const draft = integrationEditDrafts[integration.id] ?? {
-                  endpoint: integration.endpoint,
-                  failThreshold: integration.failThreshold,
-                  cooldownMinutes: integration.cooldownMinutes
-                };
-                const dirty = isIntegrationDraftDirty(draft, integration);
-                const savingDraft = savingIntegrationId === integration.id;
-                const controlsDisabled = savingAllIntegrations || savingDraft;
+                const isUpdating = (updatingIntegrationMap[integration.id] ?? 0) > 0;
+                const isTesting = (testingIntegrationMap[integration.id] ?? 0) > 0;
+                const busy = isUpdating || isTesting;
 
                 return (
                   <div key={integration.id} className="rounded-lg border p-3">
@@ -872,38 +521,53 @@ export function NotificationsPage() {
                       <div className="flex items-center gap-2">
                         <Switch
                           checked={integration.enabled}
-                          disabled={savingAllIntegrations}
+                          disabled={busy}
                           onCheckedChange={() =>
-                            void toggleIntegration(integration.id).catch((error) =>
-                              toast.error((error as Error).message)
-                            )
+                            void (async () => {
+                              beginIntegrationOp(integration.id, "update");
+                              try {
+                                await toggleIntegration(integration.id);
+                                toast.success(`通知方式 ${integration.name} 已${integration.enabled ? "停用" : "启用"}。`);
+                              } catch (error) {
+                                toast.error((error as Error).message);
+                              } finally {
+                                endIntegrationOp(integration.id, "update");
+                              }
+                            })()
                           }
                         />
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={testingIntegrationId === integration.id || savingAllIntegrations}
+                          disabled={busy}
                           onClick={() => {
-                            setTestingIntegrationId(integration.id);
+                            beginIntegrationOp(integration.id, "test");
                             void testIntegration(integration.id)
                               .then((result) =>
                                 toast.success(`${integration.name}：${result.message}（${result.latencyMs}ms）`)
                               )
                               .catch((error) => toast.error((error as Error).message))
-                              .finally(() => setTestingIntegrationId(null));
+                              .finally(() => endIntegrationOp(integration.id, "test"));
                           }}
                         >
-                          {testingIntegrationId === integration.id ? "测试中..." : "测试发送"}
+                          {isTesting ? "测试中..." : "测试发送"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => openEditIntegrationDialog(integration)}
+                        >
+                          <Wrench className="mr-1 size-4" />
+                          编辑
                         </Button>
                         <Button
                           variant="outline"
                           size="icon"
                           aria-label={`删除通知方式 ${integration.name}`}
-                          disabled={savingAllIntegrations}
+                          disabled={busy}
                           onClick={() => {
-                            void removeIntegration(integration.id)
-                              .then(() => toast.success(`已删除通知方式：${integration.name}`))
-                              .catch((error) => toast.error((error as Error).message));
+                            void handleDeleteIntegration(integration);
                           }}
                         >
                           <Trash2 className="size-4" />
@@ -911,69 +575,10 @@ export function NotificationsPage() {
                       </div>
                     </div>
 
-                    <div className="mt-3 space-y-2">
-                      <label className="block text-xs text-muted-foreground">Endpoint / 地址</label>
-                      <Input
-                        value={draft.endpoint}
-                        disabled={controlsDisabled}
-                        onChange={(event) =>
-                          patchIntegrationDraft(integration.id, {
-                            endpoint: event.target.value
-                          })
-                        }
-                      />
-                    </div>
-
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      <label className="space-y-1 text-xs">
-                        <span className="text-muted-foreground">告警阈值（失败次数）</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={draft.failThreshold}
-                          disabled={controlsDisabled}
-                          onChange={(event) =>
-                            patchIntegrationDraft(integration.id, {
-                              failThreshold: Math.max(1, Number(event.target.value || 1))
-                            })
-                          }
-                        />
-                      </label>
-
-                      <label className="space-y-1 text-xs">
-                        <span className="text-muted-foreground">冷却时间（分钟）</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={120}
-                          value={draft.cooldownMinutes}
-                          disabled={controlsDisabled}
-                          onChange={(event) =>
-                            patchIntegrationDraft(integration.id, {
-                              cooldownMinutes: Math.max(1, Number(event.target.value || 1))
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!dirty || controlsDisabled}
-                        onClick={() => resetIntegrationDraft(integration)}
-                      >
-                        重置
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={!dirty || controlsDisabled}
-                        onClick={() => void saveIntegrationDraft(integration)}
-                      >
-                        {savingDraft ? "保存中..." : "保存修改"}
-                      </Button>
+                    <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                      <p>Endpoint：{integration.endpoint}</p>
+                      <p>告警阈值：连续失败 {integration.failThreshold} 次</p>
+                      <p>冷却时间：{integration.cooldownMinutes} 分钟</p>
                     </div>
                   </div>
                 );
@@ -1201,6 +806,28 @@ export function NotificationsPage() {
           </CardContent>
         </Card>
       </section>
+
+      <IntegrationCreateDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onSave={async (input) => {
+          await addIntegration(input);
+          setCreateDialogOpen(false);
+          toast.success("通知方式已新增，可按需启停。");
+        }}
+      />
+
+      <IntegrationEditorDialog
+        open={editDialogOpen}
+        onOpenChange={(next) => {
+          setEditDialogOpen(next);
+          if (!next) {
+            setEditingIntegration(null);
+          }
+        }}
+        integration={editingIntegration}
+        onSave={handleEditIntegration}
+      />
 
       {dialog}
     </div>

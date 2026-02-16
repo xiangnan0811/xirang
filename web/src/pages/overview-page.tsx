@@ -97,7 +97,7 @@ export function OverviewPage() {
         <Card className="grid-noise">
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base">30+ 主机状态矩阵</CardTitle>
+              <CardTitle className="text-base">主机状态矩阵</CardTitle>
               <Badge variant="secondary">
                 <Radar className="mr-1 size-3.5" />
                 秒级刷新

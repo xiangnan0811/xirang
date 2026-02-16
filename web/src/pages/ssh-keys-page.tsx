@@ -2,35 +2,17 @@ import { useMemo, useState } from "react";
 import { KeyRound, Plus, ShieldAlert, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import {
+  SSHKeyEditorDialog,
+  type SSHKeyDraft,
+} from "@/components/ssh-key-editor-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
-import type { NewSSHKeyInput, SSHKeyRecord, SSHKeyType } from "@/types/domain";
-
-type SSHKeyDraft = NewSSHKeyInput & {
-  id?: string;
-};
-
-const emptyDraft: SSHKeyDraft = {
-  name: "",
-  username: "root",
-  keyType: "auto",
-  privateKey: ""
-};
-
-function toDraft(key: SSHKeyRecord): SSHKeyDraft {
-  return {
-    id: key.id,
-    name: key.name,
-    username: key.username,
-    keyType: key.keyType,
-    privateKey: key.privateKey
-  };
-}
+import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
 
 export function SSHKeysPage() {
   const { sshKeys, nodes, createSSHKey, updateSSHKey, deleteSSHKey } =
@@ -38,8 +20,8 @@ export function SSHKeysPage() {
 
   const { confirm, dialog } = useConfirm();
 
-  const [showEditor, setShowEditor] = useState(false);
-  const [draft, setDraft] = useState<SSHKeyDraft>(emptyDraft);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<SSHKeyRecord | null>(null);
 
   const keyUsageMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -52,7 +34,17 @@ export function SSHKeysPage() {
     return map;
   }, [nodes]);
 
-  const onSave = async () => {
+  const openCreateDialog = () => {
+    setEditingKey(null);
+    setEditorOpen(true);
+  };
+
+  const openEditDialog = (key: SSHKeyRecord) => {
+    setEditingKey(key);
+    setEditorOpen(true);
+  };
+
+  const handleSave = async (draft: SSHKeyDraft) => {
     if (!draft.name.trim() || !draft.username.trim() || !draft.privateKey.trim()) {
       toast.error("保存失败：名称、用户名、私钥都不能为空。");
       return;
@@ -62,48 +54,51 @@ export function SSHKeysPage() {
       name: draft.name.trim(),
       username: draft.username.trim(),
       keyType: draft.keyType,
-      privateKey: draft.privateKey.trim()
+      privateKey: draft.privateKey.trim(),
     };
 
-    if (draft.id) {
-      await updateSSHKey(draft.id, input);
-      toast.success(`SSH Key ${draft.name} 已更新。`);
-    } else {
-      await createSSHKey(input);
-      toast.success(`SSH Key ${draft.name} 已新增。`);
-    }
+    try {
+      if (draft.id) {
+        await updateSSHKey(draft.id, input);
+        toast.success(`SSH Key ${draft.name} 已更新。`);
+      } else {
+        await createSSHKey(input);
+        toast.success(`SSH Key ${draft.name} 已新增。`);
+      }
 
-    setDraft(emptyDraft);
-    setShowEditor(false);
+      setEditorOpen(false);
+      setEditingKey(null);
+    } catch (error) {
+      toast.error((error as Error).message);
+    }
   };
 
   const onDelete = async (key: SSHKeyRecord) => {
-    const ok = await confirm({ title: "确认操作", description: `确认删除 SSH Key ${key.name} 吗？` });
+    const ok = await confirm({
+      title: "确认操作",
+      description: `确认删除 SSH Key ${key.name} 吗？`,
+    });
     if (!ok) {
       return;
     }
 
     const success = await deleteSSHKey(key.id);
     if (!success) {
-      toast.error(`删除失败：${key.name} 仍被节点使用，请先修改节点认证信息。`);
+      toast.error(
+        `删除失败：${key.name} 仍被节点使用，请先修改节点认证信息。`
+      );
       return;
     }
     toast.success(`SSH Key ${key.name} 已删除。`);
   };
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="animate-fade-in space-y-4">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">SSH Key 管理（第 0 步）</CardTitle>
-            <Button
-              size="sm"
-              onClick={() => {
-                setDraft(emptyDraft);
-                setShowEditor((prev) => !prev);
-              }}
-            >
+            <Button size="sm" onClick={openCreateDialog}>
               <Plus className="mr-1 size-4" />
               新增 Key
             </Button>
@@ -112,55 +107,9 @@ export function SSHKeysPage() {
 
         <CardContent className="space-y-3">
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            私钥仅用于演示环境。生产环境建议接入密钥管理系统（如 Vault/KMS），并启用审计与最小权限策略。
+            私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
+            Vault/KMS），并启用审计与最小权限策略。
           </div>
-
-          {showEditor ? (
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-              <div className="grid gap-2 md:grid-cols-2">
-                <Input
-                  placeholder="Key 名称"
-                  value={draft.name}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-                />
-                <Input
-                  placeholder="默认用户名"
-                  value={draft.username}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, username: event.target.value }))}
-                />
-              </div>
-
-              <div className="grid gap-2 md:grid-cols-2">
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={draft.keyType}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, keyType: event.target.value as SSHKeyType }))}
-                >
-                  <option value="auto">密钥类型：自动识别（推荐）</option>
-                  <option value="rsa">密钥类型：RSA</option>
-                  <option value="ed25519">密钥类型：ED25519</option>
-                  <option value="ecdsa">密钥类型：ECDSA</option>
-                </select>
-                <div className="rounded-md border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
-                  保存时会校验私钥内容与所选类型是否一致。
-                </div>
-              </div>
-
-              <textarea
-                className="min-h-36 w-full rounded-md border bg-background p-2 text-xs"
-                placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
-                value={draft.privateKey}
-                onChange={(event) => setDraft((prev) => ({ ...prev, privateKey: event.target.value }))}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" onClick={() => setShowEditor(false)}>
-                  取消
-                </Button>
-                <Button onClick={onSave}>保存 Key</Button>
-              </div>
-            </div>
-          ) : null}
 
           <div className="grid gap-3 lg:grid-cols-2">
             {sshKeys.map((key) => {
@@ -174,7 +123,9 @@ export function SSHKeysPage() {
                       </span>
                       <div>
                         <p className="font-medium">{key.name}</p>
-                        <p className="text-xs text-muted-foreground">{key.username}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {key.username}
+                        </p>
                       </div>
                     </div>
                     <Badge variant={usageCount > 0 ? "warning" : "outline"}>
@@ -193,15 +144,16 @@ export function SSHKeysPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setDraft(toDraft(key));
-                        setShowEditor(true);
-                      }}
+                      onClick={() => openEditDialog(key)}
                     >
                       <Wrench className="mr-1 size-4" />
                       编辑
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => onDelete(key)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onDelete(key)}
+                    >
                       <Trash2 className="mr-1 size-4" />
                       删除
                     </Button>
@@ -219,10 +171,20 @@ export function SSHKeysPage() {
           </div>
 
           {!sshKeys.length ? (
-            <EmptyState title="当前还没有 SSH Key" description="请先新增密钥后再创建节点" />
+            <EmptyState
+              title="当前还没有 SSH Key"
+              description="请先新增密钥后再创建节点"
+            />
           ) : null}
         </CardContent>
       </Card>
+
+      <SSHKeyEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        editingKey={editingKey}
+        onSave={handleSave}
+      />
 
       {dialog}
     </div>

@@ -11,55 +11,30 @@ import {
   KeyRound,
   TerminalSquare,
   Trash2,
-  Wrench
+  Wrench,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { NodeEditorDialog } from "@/components/node-editor-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { StatusPulse } from "@/components/status-pulse";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getNodeStatusMeta } from "@/lib/status";
-import type { NewNodeInput, NodeRecord, SSHKeyType } from "@/types/domain";
-
-type NodeEditorDraft = {
-  id?: number;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  authType: "key" | "password";
-  keyId: string;
-  password: string;
-  tags: string;
-  basePath: string;
-  inlineKeyName: string;
-  inlineKeyType: SSHKeyType;
-  inlinePrivateKey: string;
-};
-
-const emptyDraft: NodeEditorDraft = {
-  name: "",
-  host: "",
-  port: 22,
-  username: "root",
-  authType: "key",
-  keyId: "",
-  password: "",
-  tags: "",
-  basePath: "/",
-  inlineKeyName: "",
-  inlineKeyType: "auto",
-  inlinePrivateKey: ""
-};
+import type { NewNodeInput, NodeRecord } from "@/types/domain";
 
 const statusPriority: Record<NodeRecord["status"], number> = {
   offline: 3,
   warning: 2,
-  online: 1
+  online: 1,
 };
 
 const sortStorageKey = "xirang.nodes.sort";
@@ -112,46 +87,10 @@ function parseCSVRows(content: string): CSVNodeRow[] {
         host,
         username: username || "root",
         port: Number.isFinite(port) && port > 0 ? port : 22,
-        tags
+        tags,
       } as CSVNodeRow;
     })
     .filter((item): item is CSVNodeRow => Boolean(item));
-}
-
-function toDraft(node: NodeRecord): NodeEditorDraft {
-  return {
-    id: node.id,
-    name: node.name,
-    host: node.host,
-    port: node.port,
-    username: node.username,
-    authType: node.authType,
-    keyId: node.keyId ?? "",
-    password: "",
-    tags: node.tags.join(","),
-    basePath: node.basePath || "/",
-    inlineKeyName: "",
-    inlineKeyType: "auto",
-    inlinePrivateKey: ""
-  };
-}
-
-function buildNodeInput(draft: NodeEditorDraft): NewNodeInput {
-  const useInlineKey = draft.authType === "key" && draft.keyId === "__new__";
-  return {
-    name: draft.name.trim(),
-    host: draft.host.trim(),
-    port: draft.port || 22,
-    username: draft.username.trim(),
-    authType: draft.authType,
-    keyId: draft.authType === "key" && !useInlineKey ? (draft.keyId || null) : null,
-    password: draft.authType === "password" ? draft.password : undefined,
-    tags: draft.tags,
-    basePath: draft.basePath || "/",
-    inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
-    inlineKeyType: useInlineKey ? draft.inlineKeyType : undefined,
-    inlinePrivateKey: useInlineKey ? draft.inlinePrivateKey : undefined
-  };
 }
 
 export function NodesPage() {
@@ -167,16 +106,26 @@ export function NodesPage() {
     deleteNodes,
     testNodeConnection,
     triggerNodeBackup,
-    execNodeCommand
+    execNodeCommand,
   } = useOutletContext<ConsoleOutletContext>();
 
   const queryKeyword = searchParams.get("keyword") ?? "";
   const [keyword, setKeyword] = useState(queryKeyword || globalSearch);
-  const [statusFilter, setStatusFilter] = useState<"all" | "online" | "warning" | "offline">("all");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "online" | "warning" | "offline"
+  >("all");
   const [tagFilter, setTagFilter] = useState("all");
-  const [sortBy, setSortBy] = useState<"status" | "name-asc" | "name-desc" | "disk-low" | "backup-recent">(() => {
+  const [sortBy, setSortBy] = useState<
+    "status" | "name-asc" | "name-desc" | "disk-low" | "backup-recent"
+  >(() => {
     const stored = localStorage.getItem(sortStorageKey);
-    if (stored === "name-asc" || stored === "name-desc" || stored === "disk-low" || stored === "backup-recent" || stored === "status") {
+    if (
+      stored === "name-asc" ||
+      stored === "name-desc" ||
+      stored === "disk-low" ||
+      stored === "backup-recent" ||
+      stored === "status"
+    ) {
       return stored;
     }
     return "status";
@@ -187,10 +136,10 @@ export function NodesPage() {
   });
 
   const { confirm, dialog } = useConfirm();
-  const [showEditor, setShowEditor] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [showSearchDrawer, setShowSearchDrawer] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
-  const [draft, setDraft] = useState<NodeEditorDraft>(emptyDraft);
   const [terminalNodeId, setTerminalNodeId] = useState<number | null>(null);
   const [terminalCommand, setTerminalCommand] = useState("hostname && uptime");
   const [terminalTimeout, setTerminalTimeout] = useState(20);
@@ -199,7 +148,10 @@ export function NodesPage() {
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
-  const terminalNode = useMemo(() => nodes.find((item) => item.id === terminalNodeId) ?? null, [nodes, terminalNodeId]);
+  const terminalNode = useMemo(
+    () => nodes.find((item) => item.id === terminalNodeId) ?? null,
+    [nodes, terminalNodeId]
+  );
 
   useEffect(() => {
     localStorage.setItem(sortStorageKey, sortBy);
@@ -210,7 +162,9 @@ export function NodesPage() {
   }, [viewMode]);
 
   useEffect(() => {
-    setSelectedNodeIds((prev) => prev.filter((id) => nodes.some((node) => node.id === id)));
+    setSelectedNodeIds((prev) =>
+      prev.filter((id) => nodes.some((node) => node.id === id))
+    );
   }, [nodes]);
 
   useEffect(() => {
@@ -219,7 +173,10 @@ export function NodesPage() {
     }
   }, [queryKeyword]);
 
-  const tags = useMemo(() => ["all", ...Array.from(new Set(nodes.flatMap((node) => node.tags)))], [nodes]);
+  const tags = useMemo(
+    () => ["all", ...Array.from(new Set(nodes.flatMap((node) => node.tags)))],
+    [nodes]
+  );
 
   const effectiveKeyword = keyword || globalSearch;
 
@@ -234,9 +191,10 @@ export function NodesPage() {
       if (!effectiveKeyword.trim()) {
         return true;
       }
-      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status}`
-        .toLowerCase()
-        .trim();
+      const candidate =
+        `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status}`
+          .toLowerCase()
+          .trim();
       return candidate.includes(effectiveKeyword.trim().toLowerCase());
     });
   }, [effectiveKeyword, nodes, statusFilter, tagFilter]);
@@ -245,7 +203,8 @@ export function NodesPage() {
     const list = [...filteredNodes];
     list.sort((first, second) => {
       if (sortBy === "status") {
-        const rankGap = statusPriority[second.status] - statusPriority[first.status];
+        const rankGap =
+          statusPriority[second.status] - statusPriority[first.status];
         if (rankGap !== 0) {
           return rankGap;
         }
@@ -260,42 +219,62 @@ export function NodesPage() {
       if (sortBy === "disk-low") {
         return first.diskFreePercent - second.diskFreePercent;
       }
-      return parseDateTime(second.lastBackupAt) - parseDateTime(first.lastBackupAt);
+      return (
+        parseDateTime(second.lastBackupAt) - parseDateTime(first.lastBackupAt)
+      );
     });
     return list;
   }, [filteredNodes, sortBy]);
 
-  const selectedNodeSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
-  const allVisibleSelected = sortedNodes.length > 0 && sortedNodes.every((node) => selectedNodeSet.has(node.id));
+  const selectedNodeSet = useMemo(
+    () => new Set(selectedNodeIds),
+    [selectedNodeIds]
+  );
+  const allVisibleSelected =
+    sortedNodes.length > 0 &&
+    sortedNodes.every((node) => selectedNodeSet.has(node.id));
 
-  const onSaveNode = async () => {
-    if (!draft.name.trim() || !draft.host.trim() || !draft.username.trim()) {
+  const openCreateDialog = () => {
+    setEditingNode(null);
+    setEditorOpen(true);
+  };
+
+  const openEditDialog = (node: NodeRecord) => {
+    setEditingNode(node);
+    setEditorOpen(true);
+  };
+
+  const handleSaveNode = async (input: NewNodeInput, nodeId?: number) => {
+    if (!input.name.trim() || !input.host.trim() || !input.username.trim()) {
       toast.error("保存失败：节点名称、主机地址、用户名不能为空。");
       return;
     }
-    if (draft.authType === "key" && draft.keyId === "__new__" && !draft.inlinePrivateKey.trim()) {
+    if (
+      input.authType === "key" &&
+      input.inlinePrivateKey !== undefined &&
+      !input.inlinePrivateKey.trim()
+    ) {
       toast.error("保存失败：请填写新 SSH Key 的私钥内容。");
       return;
     }
 
-    const input = buildNodeInput(draft);
-    let nodeId = draft.id;
+    let savedNodeId = nodeId;
 
     try {
-      if (draft.id) {
-        await updateNode(draft.id, input);
-        toast.success(`节点 ${draft.name} 已更新。`);
+      if (nodeId) {
+        await updateNode(nodeId, input);
+        toast.success(`节点 ${input.name} 已更新。`);
       } else {
-        nodeId = await createNode(input);
-        toast.success(`节点 ${draft.name} 已新增。`);
+        savedNodeId = await createNode(input);
+        toast.success(`节点 ${input.name} 已新增。`);
       }
 
-      setShowEditor(false);
-      setDraft(emptyDraft);
+      setEditorOpen(false);
+      setEditingNode(null);
 
-      if (nodeId) {
-        setTestingNodeId(nodeId);
-        const result = await testNodeConnection(nodeId);
+      if (savedNodeId) {
+        setTestingNodeId(savedNodeId);
+        const result = await testNodeConnection(savedNodeId);
         setTestingNodeId(null);
         toast.success(result.message);
       }
@@ -305,13 +284,20 @@ export function NodesPage() {
     }
   };
 
-  const onEditNode = (node: NodeRecord) => {
-    setDraft(toDraft(node));
-    setShowEditor(true);
+  const handleTestConnection = async (nodeId: number) => {
+    const existing = nodes.find((node) => node.id === nodeId);
+    if (!existing) {
+      toast.error("节点记录已变更，请先保存后重试连接测试。");
+      return;
+    }
+    await onTestNode(existing);
   };
 
   const onDeleteNode = async (node: NodeRecord) => {
-    const ok = await confirm({ title: "确认操作", description: `确认删除节点 ${node.name} 吗？此操作会移除关联任务记录。` });
+    const ok = await confirm({
+      title: "确认操作",
+      description: `确认删除节点 ${node.name} 吗？此操作会移除关联任务记录。`,
+    });
     if (!ok) {
       return;
     }
@@ -338,7 +324,9 @@ export function NodesPage() {
 
   const toggleSelectAllVisible = (checked: boolean) => {
     if (checked) {
-      setSelectedNodeIds((prev) => Array.from(new Set([...prev, ...sortedNodes.map((node) => node.id)])));
+      setSelectedNodeIds((prev) =>
+        Array.from(new Set([...prev, ...sortedNodes.map((node) => node.id)]))
+      );
       return;
     }
     const visibleIDs = new Set(sortedNodes.map((node) => node.id));
@@ -351,7 +339,10 @@ export function NodesPage() {
       return;
     }
 
-    const ok = await confirm({ title: "确认操作", description: `确认批量删除 ${selectedNodeIds.length} 个节点吗？此操作会移除关联任务与告警记录。` });
+    const ok = await confirm({
+      title: "确认操作",
+      description: `确认批量删除 ${selectedNodeIds.length} 个节点吗？此操作会移除关联任务与告警记录。`,
+    });
     if (!ok) {
       return;
     }
@@ -360,7 +351,9 @@ export function NodesPage() {
       const result = await deleteNodes(selectedNodeIds);
       setSelectedNodeIds([]);
       if (result.notFoundIds.length > 0) {
-        toast.success(`批量删除完成：成功 ${result.deleted}，未找到 ${result.notFoundIds.length} 个节点。`);
+        toast.success(
+          `批量删除完成：成功 ${result.deleted}，未找到 ${result.notFoundIds.length} 个节点。`
+        );
       } else {
         toast.success(`已批量删除 ${result.deleted} 个节点。`);
       }
@@ -383,7 +376,9 @@ export function NodesPage() {
 
   const handleOpenTerminal = (node: NodeRecord) => {
     setTerminalNodeId(node.id);
-    setTerminalOutput(`$ 连接 ${node.name} (${node.host}:${node.port})\n# 可输入远程命令并执行`);
+    setTerminalOutput(
+      `$ 连接 ${node.name} (${node.host}:${node.port})\n# 可输入远程命令并执行`
+    );
     setTerminalCommand("hostname && uptime");
   };
 
@@ -399,11 +394,15 @@ export function NodesPage() {
 
     setTerminalRunning(true);
     try {
-      const result = await execNodeCommand(terminalNode.id, terminalCommand, terminalTimeout);
+      const result = await execNodeCommand(
+        terminalNode.id,
+        terminalCommand,
+        terminalTimeout
+      );
       const lines = [
         `$ ${terminalCommand}`,
         result.output || "(无输出)",
-        `# 退出码: ${result.exitCode} · 耗时: ${result.durationMs} ms`
+        `# 退出码: ${result.exitCode} · 耗时: ${result.durationMs} ms`,
       ];
       setTerminalOutput(lines.join("\n"));
       toast.success(`${terminalNode.name}：${result.message}`);
@@ -426,7 +425,22 @@ export function NodesPage() {
   const handleImportCSV = async (content: string) => {
     const rows = parseCSVRows(content);
     if (!rows.length) {
-      toast.error("未解析到有效节点记录，请检查 CSV 格式（name,host,username,port,tags）。");
+      toast.error(
+        "未解析到有效节点记录，请检查 CSV 格式（name,host,username,port,tags）。"
+      );
+      return;
+    }
+
+    const defaultKeyID = sshKeys[0]?.id ?? null;
+    if (!defaultKeyID) {
+      toast.error("批量导入前请先创建 SSH Key。出于安全考虑，CSV 导入仅支持密钥认证。", {
+        action: {
+          label: "去创建",
+          onClick: () => {
+            window.location.href = "/app/ssh-keys";
+          }
+        }
+      });
       return;
     }
 
@@ -436,17 +450,16 @@ export function NodesPage() {
 
     for (const row of rows) {
       try {
-        const defaultKeyID = sshKeys[0]?.id ?? null;
         await createNode({
           name: row.name,
           host: row.host,
           username: row.username,
           port: row.port,
           tags: row.tags,
-          authType: defaultKeyID ? "key" : "password",
+          authType: "key",
           keyId: defaultKeyID,
-          password: defaultKeyID ? undefined : "please-change-me",
-          basePath: "/"
+          password: undefined,
+          basePath: "/",
         });
         successCount += 1;
       } catch (error) {
@@ -472,11 +485,13 @@ export function NodesPage() {
           String(node.port),
           escapeCSVValue(node.tags.join(",")),
           node.status,
-          escapeCSVValue(node.lastBackupAt)
+          escapeCSVValue(node.lastBackupAt),
         ].join(",")
       );
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8",
+    });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `xirang-nodes-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
@@ -489,7 +504,7 @@ export function NodesPage() {
     const template = [
       "name,host,username,port,tags",
       "prod-app-01,10.10.0.11,root,22,prod|app",
-      "prod-db-01,10.10.0.21,root,22,prod|db"
+      "prod-db-01,10.10.0.21,root,22,prod|db",
     ].join("\n");
     const blob = new Blob([template], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
@@ -505,9 +520,16 @@ export function NodesPage() {
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）</CardTitle>
+            <CardTitle className="text-base">
+              主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
+            </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="md:hidden" onClick={() => setShowSearchDrawer(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="md:hidden"
+                onClick={() => setShowSearchDrawer(true)}
+              >
                 <Search className="mr-1 size-4" />
                 侧滑搜索
               </Button>
@@ -535,21 +557,11 @@ export function NodesPage() {
                 <Download className="mr-1 size-4" />
                 模板
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleExportCSV}
-              >
+              <Button variant="outline" size="sm" onClick={handleExportCSV}>
                 <Download className="mr-1 size-4" />
                 CSV 导出
               </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setDraft(emptyDraft);
-                  setShowEditor((prev) => !prev);
-                }}
-              >
+              <Button size="sm" onClick={openCreateDialog}>
                 <ServerCog className="mr-1 size-4" />
                 新增节点
               </Button>
@@ -566,7 +578,9 @@ export function NodesPage() {
                   void file
                     .text()
                     .then((content) => handleImportCSV(content))
-                    .catch((error) => toast.error((error as Error).message));
+                    .catch((error) =>
+                      toast.error((error as Error).message)
+                    );
                   event.target.value = "";
                 }}
               />
@@ -575,181 +589,10 @@ export function NodesPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-700 dark:text-cyan-300">
-            无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次 SSH 探测（如远程执行
+            无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次
+            SSH 探测（如远程执行
             <code className="mx-1">df</code>）快照。
           </div>
-
-          {showEditor ? (
-            <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
-              <div className="grid gap-2 md:grid-cols-4">
-                <Input
-                  placeholder="节点名称"
-                  value={draft.name}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-                />
-                <Input
-                  placeholder="主机/IP"
-                  value={draft.host}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, host: event.target.value }))}
-                />
-                <Input
-                  type="number"
-                  placeholder="端口"
-                  value={draft.port}
-                  onChange={(event) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      port: Number(event.target.value || 22)
-                    }))
-                  }
-                />
-                <Input
-                  placeholder="SSH 用户名"
-                  value={draft.username}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, username: event.target.value }))}
-                />
-              </div>
-
-              <div className="grid gap-2 md:grid-cols-3">
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={draft.authType}
-                  onChange={(event) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      authType: event.target.value as "key" | "password"
-                    }))
-                  }
-                >
-                  <option value="key">密钥认证</option>
-                  <option value="password">密码认证</option>
-                </select>
-
-                {draft.authType === "key" ? (
-                  <select
-                    className="h-10 rounded-md border bg-background px-3 text-sm"
-                    value={draft.keyId}
-                    onChange={(event) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        keyId: event.target.value
-                      }))
-                    }
-                  >
-                    <option value="">选择已有 SSH Key</option>
-                    {sshKeys.map((key) => (
-                      <option key={key.id} value={key.id}>
-                        {key.name} ({key.username})
-                      </option>
-                    ))}
-                    <option value="__new__">+ 新增 SSH Key</option>
-                  </select>
-                ) : (
-                  <Input
-                    type="password"
-                    placeholder="请输入 SSH 密码"
-                    value={draft.password}
-                    onChange={(event) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        password: event.target.value
-                      }))
-                    }
-                  />
-                )}
-
-                <Input
-                  placeholder="基础路径（可选）"
-                  value={draft.basePath}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, basePath: event.target.value }))}
-                />
-              </div>
-
-              {draft.authType === "key" && draft.keyId === "__new__" ? (
-                <div className="rounded-md border border-dashed p-3">
-                  <p className="mb-2 text-xs text-muted-foreground">第 0 步：在新增节点时可直接新增 SSH Key</p>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <Input
-                      placeholder="新 Key 名称"
-                      value={draft.inlineKeyName}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          inlineKeyName: event.target.value
-                        }))
-                      }
-                    />
-                    <Input
-                      placeholder="标签（逗号分隔）"
-                      value={draft.tags}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, tags: event.target.value }))}
-                    />
-                  </div>
-                  <div className="mt-2 grid gap-2 md:grid-cols-2">
-                    <select
-                      className="h-10 rounded-md border bg-background px-3 text-sm"
-                      value={draft.inlineKeyType}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          inlineKeyType: event.target.value as SSHKeyType
-                        }))
-                      }
-                    >
-                      <option value="auto">密钥类型：自动识别（推荐）</option>
-                      <option value="rsa">密钥类型：RSA</option>
-                      <option value="ed25519">密钥类型：ED25519</option>
-                      <option value="ecdsa">密钥类型：ECDSA</option>
-                    </select>
-                    <div className="rounded-md border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
-                      若你确认是 RSA，可手动选择 RSA，保存时会校验类型一致性。
-                    </div>
-                  </div>
-                  <textarea
-                    className="mt-2 min-h-28 w-full rounded-md border bg-background p-2 text-xs"
-                    placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
-                    value={draft.inlinePrivateKey}
-                    onChange={(event) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        inlinePrivateKey: event.target.value
-                      }))
-                    }
-                  />
-                </div>
-              ) : (
-                <Input
-                  placeholder="标签（逗号分隔）"
-                  value={draft.tags}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, tags: event.target.value }))}
-                />
-              )}
-
-              <div className="grid grid-cols-3 gap-2">
-                <Button variant="outline" onClick={() => setShowEditor(false)}>
-                  取消
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    if (draft.id) {
-                      const existing = nodes.find((node) => node.id === draft.id);
-                      if (!existing) {
-                        toast.error("节点记录已变更，请先保存后重试连接测试。");
-                        return;
-                      }
-                      await onTestNode(existing);
-                    } else {
-                      toast.error("请先保存节点，再执行连接测试。 ");
-                    }
-                  }}
-                >
-                  测试连接
-                </Button>
-                <Button onClick={onSaveNode}>保存并探测</Button>
-              </div>
-            </div>
-          ) : null}
 
           <div className="hidden items-center gap-2 md:flex">
             <div className="relative flex-1">
@@ -764,7 +607,9 @@ export function NodesPage() {
             <select
               className="h-10 rounded-md border bg-background px-3 text-sm"
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as typeof statusFilter)
+              }
             >
               <option value="all">全部状态</option>
               <option value="online">在线</option>
@@ -785,7 +630,9 @@ export function NodesPage() {
             <select
               className="h-10 rounded-md border bg-background px-3 text-sm"
               value={sortBy}
-              onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+              onChange={(event) =>
+                setSortBy(event.target.value as typeof sortBy)
+              }
             >
               <option value="status">按异常优先</option>
               <option value="name-asc">名称 A-Z</option>
@@ -819,19 +666,38 @@ export function NodesPage() {
                 type="checkbox"
                 className="size-4"
                 checked={allVisibleSelected}
-                onChange={(event) => toggleSelectAllVisible(event.target.checked)}
+                onChange={(event) =>
+                  toggleSelectAllVisible(event.target.checked)
+                }
               />
-              <span>已选 {selectedNodeIds.length} 个 · 当前筛选 {sortedNodes.length} 个节点</span>
+              <span>
+                已选 {selectedNodeIds.length} 个 · 当前筛选{" "}
+                {sortedNodes.length} 个节点
+              </span>
             </div>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
+              >
                 <CheckSquare className="mr-1 size-4" />
                 {allVisibleSelected ? "取消全选" : "全选当前筛选"}
               </Button>
-              <Button size="sm" variant="outline" disabled={!selectedNodeIds.length} onClick={() => setSelectedNodeIds([])}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!selectedNodeIds.length}
+                onClick={() => setSelectedNodeIds([])}
+              >
                 清空选择
               </Button>
-              <Button size="sm" variant="destructive" disabled={!selectedNodeIds.length} onClick={() => void handleBulkDelete()}>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!selectedNodeIds.length}
+                onClick={() => void handleBulkDelete()}
+              >
                 批量删除 ({selectedNodeIds.length})
               </Button>
             </div>
@@ -840,7 +706,9 @@ export function NodesPage() {
           {viewMode === "cards" ? (
             <div className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-3">
               {loading ? (
-                <div className="rounded-lg border p-4 text-sm text-muted-foreground">节点数据加载中...</div>
+                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                  节点数据加载中...
+                </div>
               ) : null}
 
               {!loading && !sortedNodes.length ? (
@@ -850,19 +718,25 @@ export function NodesPage() {
               {sortedNodes.map((node) => {
                 const status = getNodeStatusMeta(node.status);
                 const keyLabel = node.keyId
-                  ? sshKeys.find((key) => key.id === node.keyId)?.name || "已绑定 Key"
+                  ? sshKeys.find((key) => key.id === node.keyId)?.name ||
+                    "已绑定 Key"
                   : "未绑定";
                 const checked = selectedNodeSet.has(node.id);
 
                 return (
-                  <div key={node.id} className="rounded-lg border bg-background p-3">
+                  <div
+                    key={node.id}
+                    className="rounded-lg border bg-background p-3"
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                         <input
                           type="checkbox"
                           className="size-4"
                           checked={checked}
-                          onChange={(event) => toggleNodeSelection(node.id, event.target.checked)}
+                          onChange={(event) =>
+                            toggleNodeSelection(node.id, event.target.checked)
+                          }
                         />
                         选择
                       </label>
@@ -874,15 +748,29 @@ export function NodesPage() {
 
                     <div className="mt-2">
                       <p className="font-medium">{node.name}</p>
-                      <p className="text-xs text-muted-foreground">{node.host}:{node.port} · {node.username}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {node.host}:{node.port} · {node.username}
+                      </p>
                     </div>
 
                     <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                      <p>认证：{node.authType === "key" ? `密钥 / ${keyLabel}` : "密码"}</p>
-                      <p>磁盘余量：{node.diskFreePercent}% · 延迟 {node.connectionLatencyMs ? `${node.connectionLatencyMs}ms` : "-"}</p>
+                      <p>
+                        认证：
+                        {node.authType === "key"
+                          ? `密钥 / ${keyLabel}`
+                          : "密码"}
+                      </p>
+                      <p>
+                        磁盘余量：{node.diskFreePercent}% · 延迟{" "}
+                        {node.connectionLatencyMs
+                          ? `${node.connectionLatencyMs}ms`
+                          : "-"}
+                      </p>
                       <p>探测：{node.diskProbeAt || "未探测"}</p>
                       <p>最后备份：{node.lastBackupAt}</p>
-                      <p>标签：{node.tags.length ? node.tags.join(" / ") : "-"}</p>
+                      <p>
+                        标签：{node.tags.length ? node.tags.join(" / ") : "-"}
+                      </p>
                     </div>
 
                     <div className="mt-3 grid grid-cols-3 gap-2">
@@ -894,20 +782,37 @@ export function NodesPage() {
                       >
                         {testingNodeId === node.id ? "探测中" : "测试"}
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => onEditNode(node)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openEditDialog(node)}
+                      >
                         编辑
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => onDeleteNode(node)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onDeleteNode(node)}
+                      >
                         删除
                       </Button>
                     </div>
 
                     <div className="mt-2 grid grid-cols-2 gap-2">
-                      <Button variant="outline" size="sm" onClick={() => handleOpenTerminal(node)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenTerminal(node)}
+                      >
                         <TerminalSquare className="mr-1 size-4" />
                         终端
                       </Button>
-                      <Button size="sm" onClick={() => void handleTriggerBackup(node.id, node.name)}>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void handleTriggerBackup(node.id, node.name)
+                        }
+                      >
                         手动备份
                       </Button>
                     </div>
@@ -925,7 +830,9 @@ export function NodesPage() {
                         type="checkbox"
                         className="size-4"
                         checked={allVisibleSelected}
-                        onChange={(event) => toggleSelectAllVisible(event.target.checked)}
+                        onChange={(event) =>
+                          toggleSelectAllVisible(event.target.checked)
+                        }
                       />
                     </th>
                     <th className="px-3 py-3">节点</th>
@@ -941,13 +848,19 @@ export function NodesPage() {
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td className="px-3 py-4 text-muted-foreground" colSpan={9}>
+                      <td
+                        className="px-3 py-4 text-muted-foreground"
+                        colSpan={9}
+                      >
                         节点数据加载中...
                       </td>
                     </tr>
                   ) : !sortedNodes.length ? (
                     <tr>
-                      <td className="px-3 py-4 text-muted-foreground" colSpan={9}>
+                      <td
+                        className="px-3 py-4 text-muted-foreground"
+                        colSpan={9}
+                      >
                         当前筛选条件下暂无节点。
                       </td>
                     </tr>
@@ -955,7 +868,8 @@ export function NodesPage() {
                     sortedNodes.map((node) => {
                       const status = getNodeStatusMeta(node.status);
                       const keyLabel = node.keyId
-                        ? sshKeys.find((key) => key.id === node.keyId)?.name || "已绑定 Key"
+                        ? sshKeys.find((key) => key.id === node.keyId)?.name ||
+                          "已绑定 Key"
                         : "未绑定";
 
                       return (
@@ -965,40 +879,68 @@ export function NodesPage() {
                               type="checkbox"
                               className="size-4"
                               checked={selectedNodeSet.has(node.id)}
-                              onChange={(event) => toggleNodeSelection(node.id, event.target.checked)}
+                              onChange={(event) =>
+                                toggleNodeSelection(
+                                  node.id,
+                                  event.target.checked
+                                )
+                              }
                             />
                           </td>
                           <td className="px-3 py-3">
                             <p className="font-medium">{node.name}</p>
-                            <p className="text-xs text-muted-foreground">成功率 {node.successRate}%</p>
+                            <p className="text-xs text-muted-foreground">
+                              成功率 {node.successRate}%
+                            </p>
                           </td>
                           <td className="px-3 py-3 text-muted-foreground">
-                            <p>{node.host}:{node.port}</p>
+                            <p>
+                              {node.host}:{node.port}
+                            </p>
                             <p className="text-xs">{node.username}</p>
                           </td>
                           <td className="px-3 py-3 text-xs text-muted-foreground">
-                            <p>{node.authType === "key" ? "密钥" : "密码"}</p>
-                            <p>{node.authType === "key" ? keyLabel : "-"}</p>
+                            <p>
+                              {node.authType === "key" ? "密钥" : "密码"}
+                            </p>
+                            <p>
+                              {node.authType === "key" ? keyLabel : "-"}
+                            </p>
                           </td>
                           <td className="px-3 py-3">
-                            <div className="inline-flex items-center gap-1.5"><StatusPulse tone={node.status} /><Badge variant={status.variant}>{status.label}</Badge></div>
+                            <div className="inline-flex items-center gap-1.5">
+                              <StatusPulse tone={node.status} />
+                              <Badge variant={status.variant}>
+                                {status.label}
+                              </Badge>
+                            </div>
                           </td>
                           <td className="px-3 py-3">
                             <div className="w-44">
                               <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                                 <span>{node.diskFreePercent}% 可用</span>
-                                <span>{node.connectionLatencyMs ? `${node.connectionLatencyMs} ms` : "-"}</span>
+                                <span>
+                                  {node.connectionLatencyMs
+                                    ? `${node.connectionLatencyMs} ms`
+                                    : "-"}
+                                </span>
                               </div>
                               <div className="h-2 rounded-full bg-muted">
                                 <div
                                   className="h-2 rounded-full bg-emerald-500"
-                                  style={{ width: `${Math.max(4, node.diskFreePercent)}%` }}
+                                  style={{
+                                    width: `${Math.max(4, node.diskFreePercent)}%`,
+                                  }}
                                 />
                               </div>
-                              <p className="mt-1 text-[11px] text-muted-foreground">探测：{node.diskProbeAt || "未探测"}</p>
+                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                探测：{node.diskProbeAt || "未探测"}
+                              </p>
                             </div>
                           </td>
-                          <td className="px-3 py-3 text-muted-foreground">{node.lastBackupAt}</td>
+                          <td className="px-3 py-3 text-muted-foreground">
+                            {node.lastBackupAt}
+                          </td>
                           <td className="px-3 py-3">
                             <div className="flex flex-wrap gap-1">
                               {node.tags.map((tag) => (
@@ -1016,18 +958,40 @@ export function NodesPage() {
                                 onClick={() => void onTestNode(node)}
                                 disabled={testingNodeId === node.id}
                               >
-                                {testingNodeId === node.id ? "探测中" : "测试连接"}
+                                {testingNodeId === node.id
+                                  ? "探测中"
+                                  : "测试连接"}
                               </Button>
-                              <Button variant="outline" size="sm" onClick={() => handleOpenTerminal(node)}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleOpenTerminal(node)}
+                              >
                                 终端
                               </Button>
-                              <Button size="sm" onClick={() => void handleTriggerBackup(node.id, node.name)}>
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  void handleTriggerBackup(
+                                    node.id,
+                                    node.name
+                                  )
+                                }
+                              >
                                 手动备份
                               </Button>
-                              <Button variant="outline" size="sm" onClick={() => onEditNode(node)}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEditDialog(node)}
+                              >
                                 <Wrench className="size-4" />
                               </Button>
-                              <Button variant="outline" size="sm" onClick={() => onDeleteNode(node)}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onDeleteNode(node)}
+                              >
                                 <Trash2 className="size-4" />
                               </Button>
                             </div>
@@ -1046,7 +1010,9 @@ export function NodesPage() {
               <select
                 className="h-10 rounded-md border bg-background px-2 text-sm"
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+                onChange={(event) =>
+                  setStatusFilter(event.target.value as typeof statusFilter)
+                }
               >
                 <option value="all">全部状态</option>
                 <option value="online">在线</option>
@@ -1067,7 +1033,9 @@ export function NodesPage() {
               <select
                 className="h-10 rounded-md border bg-background px-2 text-sm"
                 value={sortBy}
-                onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+                onChange={(event) =>
+                  setSortBy(event.target.value as typeof sortBy)
+                }
               >
                 <option value="status">异常优先</option>
                 <option value="name-asc">名称 A-Z</option>
@@ -1077,10 +1045,19 @@ export function NodesPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" variant="outline" onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
+              >
                 {allVisibleSelected ? "取消全选" : "全选当前"}
               </Button>
-              <Button size="sm" variant="destructive" disabled={!selectedNodeIds.length} onClick={() => void handleBulkDelete()}>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!selectedNodeIds.length}
+                onClick={() => void handleBulkDelete()}
+              >
                 删除 {selectedNodeIds.length}
               </Button>
             </div>
@@ -1089,27 +1066,40 @@ export function NodesPage() {
               const status = getNodeStatusMeta(node.status);
               const checked = selectedNodeSet.has(node.id);
               return (
-                <div key={node.id} className="rounded-lg border bg-background p-3">
+                <div
+                  key={node.id}
+                  className="rounded-lg border bg-background p-3"
+                >
                   <div className="flex items-start justify-between gap-2">
                     <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                       <input
                         type="checkbox"
                         className="size-4"
                         checked={checked}
-                        onChange={(event) => toggleNodeSelection(node.id, event.target.checked)}
+                        onChange={(event) =>
+                          toggleNodeSelection(node.id, event.target.checked)
+                        }
                       />
                       选择
                     </label>
-                    <div className="inline-flex items-center gap-1.5"><StatusPulse tone={node.status} /><Badge variant={status.variant}>{status.label}</Badge></div>
+                    <div className="inline-flex items-center gap-1.5">
+                      <StatusPulse tone={node.status} />
+                      <Badge variant={status.variant}>{status.label}</Badge>
+                    </div>
                   </div>
 
                   <div className="mt-2">
                     <p className="font-medium">{node.name}</p>
-                    <p className="text-xs text-muted-foreground">{node.host}:{node.port} · {node.username}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {node.host}:{node.port} · {node.username}
+                    </p>
                   </div>
 
                   <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                    <p>磁盘余量：{node.diskFreePercent}%（探测：{node.diskProbeAt || "未探测"}）</p>
+                    <p>
+                      磁盘余量：{node.diskFreePercent}%（探测：
+                      {node.diskProbeAt || "未探测"}）
+                    </p>
                     <p>最后备份：{node.lastBackupAt}</p>
                     <p>标签：{node.tags.join(" / ") || "-"}</p>
                   </div>
@@ -1123,20 +1113,37 @@ export function NodesPage() {
                     >
                       测试
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => onEditNode(node)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEditDialog(node)}
+                    >
                       编辑
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => onDeleteNode(node)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onDeleteNode(node)}
+                    >
                       删除
                     </Button>
                   </div>
 
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    <Button variant="outline" size="sm" onClick={() => handleOpenTerminal(node)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenTerminal(node)}
+                    >
                       <TerminalSquare className="mr-1 size-4" />
                       终端
                     </Button>
-                    <Button size="sm" onClick={() => void handleTriggerBackup(node.id, node.name)}>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        void handleTriggerBackup(node.id, node.name)
+                      }
+                    >
                       手动备份
                     </Button>
                   </div>
@@ -1151,13 +1158,20 @@ export function NodesPage() {
         <Card className="border-cyan-500/30">
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base">节点终端（真实 SSH 命令执行）</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => setTerminalNodeId(null)}>
+              <CardTitle className="text-base">
+                节点终端（真实 SSH 命令执行）
+              </CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setTerminalNodeId(null)}
+              >
                 关闭
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              当前节点：{terminalNode.name} · {terminalNode.host}:{terminalNode.port}
+              当前节点：{terminalNode.name} · {terminalNode.host}:
+              {terminalNode.port}
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1176,21 +1190,28 @@ export function NodesPage() {
               <select
                 className="h-10 rounded-md border bg-background px-3 text-sm"
                 value={terminalTimeout}
-                onChange={(event) => setTerminalTimeout(Number(event.target.value || 20))}
+                onChange={(event) =>
+                  setTerminalTimeout(Number(event.target.value || 20))
+                }
               >
                 <option value={10}>超时 10s</option>
                 <option value={20}>超时 20s</option>
                 <option value={30}>超时 30s</option>
                 <option value={60}>超时 60s</option>
               </select>
-              <Button onClick={() => void handleRunTerminalCommand()} disabled={terminalRunning}>
+              <Button
+                onClick={() => void handleRunTerminalCommand()}
+                disabled={terminalRunning}
+              >
                 <TerminalSquare className="mr-1 size-4" />
                 {terminalRunning ? "执行中..." : "执行命令"}
               </Button>
             </div>
 
             <div className="terminal-surface min-h-52 overflow-auto rounded-lg p-3 font-mono text-xs text-slate-100">
-              <pre className="whitespace-pre-wrap break-all">{terminalOutput || "等待命令执行输出..."}</pre>
+              <pre className="whitespace-pre-wrap break-all">
+                {terminalOutput || "等待命令执行输出..."}
+              </pre>
             </div>
           </CardContent>
         </Card>
@@ -1198,10 +1219,15 @@ export function NodesPage() {
 
       {showSearchDrawer ? (
         <div className="fixed inset-0 z-50 md:hidden">
-          <button className="absolute inset-0 bg-black/45" onClick={() => setShowSearchDrawer(false)} />
+          <button
+            className="absolute inset-0 bg-black/45"
+            onClick={() => setShowSearchDrawer(false)}
+          />
           <section className="absolute right-0 top-0 h-full w-[86%] border-l bg-background p-4 shadow-2xl">
             <h3 className="text-sm font-semibold">侧滑全局搜索</h3>
-            <p className="mt-1 text-xs text-muted-foreground">通过名称或 IP 快速定位任意主机</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              通过名称或 IP 快速定位任意主机
+            </p>
             <Input
               className="mt-3"
               placeholder="搜索主机"
@@ -1219,13 +1245,24 @@ export function NodesPage() {
                   className="w-full rounded-md border px-3 py-2 text-left"
                 >
                   <p className="text-sm font-medium">{node.name}</p>
-                  <p className="text-xs text-muted-foreground">{node.host}:{node.port}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {node.host}:{node.port}
+                  </p>
                 </button>
               ))}
             </div>
           </section>
         </div>
       ) : null}
+
+      <NodeEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        editingNode={editingNode}
+        sshKeys={sshKeys}
+        onSave={handleSaveNode}
+        onTestConnection={handleTestConnection}
+      />
 
       {dialog}
     </div>
