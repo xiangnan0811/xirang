@@ -197,7 +197,7 @@ export function IntegrationCreateDialog({
                 通道类型
               </label>
               <select
-                className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={draft.type}
                 onChange={(event) =>
                   setDraft((prev) => ({

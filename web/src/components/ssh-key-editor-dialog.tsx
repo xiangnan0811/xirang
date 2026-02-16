@@ -125,7 +125,7 @@ export function SSHKeyEditorDialog({
           <div>
             <label className="mb-1 block text-sm font-medium">密钥类型</label>
             <select
-              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={draft.keyType}
               onChange={(event) =>
                 setDraft((prev) => ({
@@ -147,7 +147,7 @@ export function SSHKeyEditorDialog({
           <div>
             <label className="mb-1 block text-sm font-medium">私钥内容</label>
             <textarea
-              className="min-h-36 w-full rounded-md border bg-background p-2 text-xs"
+              className="min-h-36 w-full rounded-lg border border-input/80 bg-background/80 p-3 text-xs leading-relaxed"
               placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
               value={draft.privateKey}
               onChange={(event) =>

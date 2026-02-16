@@ -20,20 +20,20 @@ function EmptyState({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center py-12 text-center",
+        "rounded-2xl border border-dashed border-border/70 bg-background/40 px-6 py-12 text-center shadow-sm backdrop-blur-sm",
         className
       )}
     >
-      <div className="mb-4 rounded-full bg-muted p-3">
-        <Icon className="size-6 text-muted-foreground" />
+      <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-sm">
+        <Icon className="size-6" />
       </div>
-      <h3 className="text-sm font-semibold">{title}</h3>
+      <h3 className="text-sm font-semibold tracking-wide text-foreground">{title}</h3>
       {description ? (
-        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
           {description}
         </p>
       ) : null}
-      {action ? <div className="mt-4">{action}</div> : null}
+      {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
     </div>
   );
 }

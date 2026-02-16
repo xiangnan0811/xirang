@@ -645,7 +645,7 @@ export function NotificationsPage() {
               </div>
 
               <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={severityFilter}
                 onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
               >
@@ -656,7 +656,7 @@ export function NotificationsPage() {
               </select>
 
               <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
               >

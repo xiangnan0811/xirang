@@ -1069,7 +1069,7 @@ export function NodesPage() {
             <div className="space-y-2 p-2 md:hidden">
             <div className="grid grid-cols-3 gap-2">
               <select
-                className="h-10 rounded-md border bg-background px-2 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={statusFilter}
                 onChange={(event) =>
                   setStatusFilter(event.target.value as typeof statusFilter)
@@ -1081,7 +1081,7 @@ export function NodesPage() {
                 <option value="offline">离线</option>
               </select>
               <select
-                className="h-10 rounded-md border bg-background px-2 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={tagFilter}
                 onChange={(event) => setTagFilter(event.target.value)}
               >
@@ -1092,7 +1092,7 @@ export function NodesPage() {
                 ))}
               </select>
               <select
-                className="h-10 rounded-md border bg-background px-2 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={sortBy}
                 onChange={(event) =>
                   setSortBy(event.target.value as typeof sortBy)
@@ -1249,7 +1249,7 @@ export function NodesPage() {
                 }}
               />
               <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
                 value={terminalTimeout}
                 onChange={(event) =>
                   setTerminalTimeout(Number(event.target.value || 20))
