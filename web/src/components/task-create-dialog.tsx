@@ -145,7 +145,7 @@ export function TaskCreateDialog({
           <div>
             <label className="mb-1 block text-sm font-medium">目标节点</label>
             <select
-              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
               value={draft.nodeId}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -165,7 +165,7 @@ export function TaskCreateDialog({
               关联策略（可选）
             </label>
             <select
-              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
               value={draft.policyId}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, policyId: event.target.value }))
@@ -186,7 +186,7 @@ export function TaskCreateDialog({
                 执行器类型
               </label>
               <select
-                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
                 value={draft.executorType}
                 onChange={(event) =>
                   setDraft((prev) => ({

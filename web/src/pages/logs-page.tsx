@@ -360,7 +360,7 @@ export function LogsPage() {
         <CardContent className="space-y-3">
         <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-4">
           <select
-            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
             value={selectedNode}
             onChange={(event) => {
               const value = event.target.value;
@@ -377,7 +377,7 @@ export function LogsPage() {
           </select>
 
           <select
-            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
             value={selectedTask}
             onChange={(event) => {
               const nextTask = event.target.value;

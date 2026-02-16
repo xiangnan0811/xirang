@@ -645,7 +645,7 @@ export function NotificationsPage() {
               </div>
 
               <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
                 value={severityFilter}
                 onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
               >
@@ -656,7 +656,7 @@ export function NotificationsPage() {
               </select>
 
               <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
+                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
               >
