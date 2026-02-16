@@ -15,10 +15,14 @@ export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
   const location = useLocation();
 
   return (
-    <aside className="fixed left-0 top-0 z-40 hidden h-screen w-72 flex-col border-r bg-card/70 p-4 backdrop-blur md:flex">
+    <aside className="fixed left-0 top-0 z-40 hidden h-screen w-72 flex-col border-r border-border/70 bg-card/65 p-4 backdrop-blur-xl md:flex">
       <div className="flex items-center justify-between gap-2 px-2 py-3">
         <div className="flex items-center gap-2">
-          <img src="/xirang-mark.svg" alt="XiRang" className="size-9 rounded-md border border-primary/30 bg-primary/5 p-1" />
+          <img
+            src="/xirang-mark.svg"
+            alt="XiRang"
+            className="size-9 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-sm"
+          />
           <div>
             <p className="text-sm text-muted-foreground">XiRang</p>
             <h1 className="text-lg font-semibold">集中备份中枢</h1>
@@ -27,7 +31,7 @@ export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
         <ThemeToggle />
       </div>
 
-      <div className="mt-2 rounded-lg border bg-background/80 p-3">
+      <div className="mt-2 rounded-lg border border-border/80 bg-background/70 p-3 shadow-sm backdrop-blur">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Layers3 className="size-3.5" />
           监控面板已同步桌面/移动导航语义
@@ -45,10 +49,10 @@ export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
               key={item.path}
               to={item.path}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-all duration-200",
                 active
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  ? "border-primary/35 bg-primary/15 text-foreground shadow-[0_0_0_1px_rgba(16,185,129,0.12)_inset]"
+                  : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-accent/70 hover:text-foreground"
               )}
             >
               <Icon className="size-4" />

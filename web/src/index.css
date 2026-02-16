@@ -30,6 +30,13 @@
     --warning-foreground: 0 0% 100%;
     --info: 217 91% 60%;
     --info-foreground: 0 0% 100%;
+    --brand-soil: 30 36% 44%;
+    --brand-clay: 22 44% 56%;
+    --brand-life: 147 71% 44%;
+    --surface-1: 210 33% 98%;
+    --surface-2: 210 32% 96%;
+    --shadow-panel: 0 18px 38px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    --shadow-panel-hover: 0 24px 48px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.85);
     --duration-fast: 150ms;
     --duration-normal: 200ms;
     --duration-slow: 300ms;
@@ -39,24 +46,24 @@
   }
 
   .dark {
-    --background: 224 71% 4%;
+    --background: 224 48% 6%;
     --foreground: 213 31% 91%;
-    --card: 224 71% 4%;
+    --card: 222 39% 10%;
     --card-foreground: 213 31% 91%;
-    --popover: 224 71% 4%;
+    --popover: 222 39% 10%;
     --popover-foreground: 213 31% 91%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 222 47% 11%;
+    --primary: 147 71% 44%;
+    --primary-foreground: 156 100% 8%;
+    --secondary: 222 30% 16%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 223 47% 11%;
-    --muted-foreground: 215.4 16.3% 56.9%;
-    --accent: 216 34% 17%;
+    --muted: 223 29% 14%;
+    --muted-foreground: 215.4 16.3% 62%;
+    --accent: 220 30% 18%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 63% 31%;
     --destructive-foreground: 210 40% 98%;
-    --border: 216 34% 17%;
-    --input: 216 34% 17%;
+    --border: 217 26% 22%;
+    --input: 217 26% 22%;
     --ring: 224 64% 33%;
     --success: 142 71% 45%;
     --success-foreground: 0 0% 100%;
@@ -64,6 +71,13 @@
     --warning-foreground: 0 0% 100%;
     --info: 217 91% 60%;
     --info-foreground: 0 0% 100%;
+    --brand-soil: 34 42% 62%;
+    --brand-clay: 20 45% 58%;
+    --brand-life: 147 71% 44%;
+    --surface-1: 223 35% 11%;
+    --surface-2: 222 31% 14%;
+    --shadow-panel: 0 22px 50px rgba(2, 8, 23, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --shadow-panel-hover: 0 28px 58px rgba(2, 8, 23, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   * {
@@ -72,7 +86,19 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 8% 0%, rgba(196, 163, 125, 0.12), transparent 36%),
+      radial-gradient(circle at 90% 0%, rgba(34, 197, 94, 0.08), transparent 35%),
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--surface-1)));
+    background-attachment: fixed;
     font-family: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  .dark body {
+    background-image:
+      radial-gradient(circle at 10% 0%, rgba(180, 137, 92, 0.2), transparent 38%),
+      radial-gradient(circle at 85% 5%, rgba(34, 197, 94, 0.18), transparent 34%),
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--surface-1)));
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -86,6 +112,38 @@
 }
 
 @layer utilities {
+  .app-shell-bg {
+    position: relative;
+  }
+
+  .app-shell-bg::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(120deg, rgba(245, 158, 11, 0.04), rgba(34, 197, 94, 0.02) 42%, transparent 75%),
+      radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.11) 1px, transparent 0);
+    background-size: 100% 100%, 18px 18px;
+    opacity: 0.7;
+    z-index: 0;
+  }
+
+  .glass-card {
+    @apply rounded-xl border border-border/80 bg-card/80 backdrop-blur-md;
+    box-shadow: var(--shadow-panel);
+    transition: border-color var(--duration-normal) var(--ease-enter),
+      transform var(--duration-normal) var(--ease-enter),
+      box-shadow var(--duration-normal) var(--ease-enter),
+      background-color var(--duration-normal) var(--ease-enter);
+  }
+
+  .glass-card:hover {
+    @apply border-primary/25;
+    box-shadow: var(--shadow-panel-hover);
+    transform: translateY(-1px);
+  }
+
   .animate-in {
     animation: animate-in var(--duration-normal) var(--ease-enter);
   }
@@ -136,6 +194,25 @@
 
   .mobile-sheet {
     box-shadow: 0 -14px 40px rgba(2, 6, 23, 0.45);
+  }
+
+  .thin-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .thin-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .thin-scrollbar::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: hsl(var(--border));
+  }
+
+  .thin-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
 

@@ -30,7 +30,12 @@ export default {
         warning: "hsl(var(--warning))",
         "warning-foreground": "hsl(var(--warning-foreground))",
         info: "hsl(var(--info))",
-        "info-foreground": "hsl(var(--info-foreground))"
+        "info-foreground": "hsl(var(--info-foreground))",
+        "brand-soil": "hsl(var(--brand-soil))",
+        "brand-clay": "hsl(var(--brand-clay))",
+        "brand-life": "hsl(var(--brand-life))",
+        "surface-1": "hsl(var(--surface-1))",
+        "surface-2": "hsl(var(--surface-2))"
       },
       fontFamily: {
         sans: ['"IBM Plex Sans"', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
@@ -64,6 +69,15 @@ export default {
           from: { opacity: "0", transform: "scale(0.96)" },
           to: { opacity: "1", transform: "scale(1)" }
         }
+      },
+      boxShadow: {
+        panel: "var(--shadow-panel)",
+        "panel-hover": "var(--shadow-panel-hover)",
+        "inner-glow": "inset 0 1px 0 rgba(255,255,255,0.2)"
+      },
+      backgroundImage: {
+        "mesh-earth":
+          "radial-gradient(circle at 12% 0%, rgba(196,163,125,0.18), transparent 36%), radial-gradient(circle at 85% 4%, rgba(34,197,94,0.14), transparent 34%)"
       }
     }
   },
