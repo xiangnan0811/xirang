@@ -34,6 +34,22 @@ export function SSHKeysPage() {
     return map;
   }, [nodes]);
 
+  const keyStats = useMemo(() => {
+    let inUse = 0;
+    let unused = 0;
+    let bindingCount = 0;
+    for (const key of sshKeys) {
+      const usageCount = keyUsageMap.get(key.id) ?? 0;
+      if (usageCount > 0) {
+        inUse += 1;
+        bindingCount += usageCount;
+      } else {
+        unused += 1;
+      }
+    }
+    return { inUse, unused, bindingCount };
+  }, [keyUsageMap, sshKeys]);
+
   const openCreateDialog = () => {
     setEditingKey(null);
     setEditorOpen(true);
@@ -93,11 +109,37 @@ export function SSHKeysPage() {
   };
 
   return (
-    <div className="animate-fade-in space-y-4">
-      <Card>
+    <div className="animate-fade-in space-y-5">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">认证入口</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">SSH Key 密钥管理（第 0 步）</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              统一维护密钥生命周期，为节点接入、任务执行与权限隔离提供安全基线。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="success">使用中 {keyStats.inUse}</Badge>
+            <Badge variant="outline">未使用 {keyStats.unused}</Badge>
+            <Badge variant="secondary">绑定节点 {keyStats.bindingCount}</Badge>
+            <Button size="sm" onClick={openCreateDialog}>
+              <Plus className="mr-1 size-4" />
+              新增 Key
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">SSH Key 管理（第 0 步）</CardTitle>
+            <div>
+              <CardTitle className="text-base">SSH Key 管理（第 0 步）</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">支持新增、编辑、删除，并提示密钥使用依赖关系</p>
+            </div>
             <Button size="sm" onClick={openCreateDialog}>
               <Plus className="mr-1 size-4" />
               新增 Key
@@ -106,7 +148,7 @@ export function SSHKeysPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 shadow-sm dark:text-amber-300">
             私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
             Vault/KMS），并启用审计与最小权限策略。
           </div>
@@ -115,10 +157,13 @@ export function SSHKeysPage() {
             {sshKeys.map((key) => {
               const usageCount = keyUsageMap.get(key.id) ?? 0;
               return (
-                <div key={key.id} className="rounded-lg border p-3">
+                <div
+                  key={key.id}
+                  className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="rounded-md bg-primary/10 p-1.5 text-primary">
+                      <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">
                         <KeyRound className="size-4" />
                       </span>
                       <div>

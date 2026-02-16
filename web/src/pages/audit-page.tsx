@@ -69,6 +69,23 @@ export function AuditPage() {
 
   const pageIndex = useMemo(() => Math.floor(offset / pageSize) + 1, [offset]);
   const hasNext = offset + pageSize < total;
+  const auditStats = useMemo(() => {
+    let writeOps = 0;
+    let readOps = 0;
+    let errorStatus = 0;
+    for (const row of rows) {
+      const methodValue = row.method.toUpperCase();
+      if (methodValue === "POST" || methodValue === "PUT" || methodValue === "PATCH" || methodValue === "DELETE") {
+        writeOps += 1;
+      } else {
+        readOps += 1;
+      }
+      if (row.statusCode >= 400) {
+        errorStatus += 1;
+      }
+    }
+    return { writeOps, readOps, errorStatus };
+  }, [rows]);
 
   const load = async (nextOffset: number) => {
     if (!token) {
@@ -159,11 +176,34 @@ export function AuditPage() {
   }, [viewMode]);
 
   return (
-    <div className="space-y-4 animate-fade-in">
-      <Card>
+    <div className="space-y-5 animate-fade-in">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">安全审计</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">操作轨迹与访问审计面板</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              追踪请求方法、路径与状态码，支持时间窗口过滤与 CSV 导出。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">读操作 {auditStats.readOps}</Badge>
+            <Badge variant="warning">写操作 {auditStats.writeOps}</Badge>
+            <Badge variant="danger">异常状态 {auditStats.errorStatus}</Badge>
+            <Badge variant="secondary">总计 {total}</Badge>
+          </div>
+        </div>
+      </section>
+
+      <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">审计日志（管理员只读）</CardTitle>
+            <div>
+              <CardTitle className="text-base">审计日志（管理员只读）</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">支持卡片/列表切换与多维筛选</p>
+            </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
                 <RefreshCw className="mr-1 size-4" />
@@ -173,7 +213,7 @@ export function AuditPage() {
                 <Download className="mr-1 size-4" />
                 {exporting ? "导出中..." : "导出 CSV"}
               </Button>
-              <div className="inline-flex items-center gap-1 rounded-md border bg-background p-1">
+              <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/70 p-1">
                 <Button size="sm" variant={viewMode === "cards" ? "default" : "ghost"} onClick={() => setViewMode("cards")}>
                   <LayoutGrid className="mr-1 size-4" />
                   卡片
@@ -187,7 +227,7 @@ export function AuditPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -198,7 +238,7 @@ export function AuditPage() {
               />
             </div>
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={method}
               onChange={(event) => setMethod(event.target.value)}
             >
@@ -236,7 +276,10 @@ export function AuditPage() {
           {viewMode === "cards" ? (
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {rows.map((row) => (
-                <div key={row.id} className="rounded-lg border bg-background p-3">
+                <div
+                  key={row.id}
+                  className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium">{row.username || "-"}</p>
                     <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
@@ -255,10 +298,10 @@ export function AuditPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto rounded-xl border border-border/75 bg-background/55">
               <table className="min-w-[1080px] text-left text-sm">
                 <thead>
-                  <tr className="border-b bg-muted/40 text-muted-foreground">
+                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
                     <th className="px-3 py-3">时间</th>
                     <th className="px-3 py-3">用户</th>
                     <th className="px-3 py-3">角色</th>
@@ -270,7 +313,7 @@ export function AuditPage() {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-b">
+                    <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
                       <td className="px-3 py-3">{row.createdAt}</td>
                       <td className="px-3 py-3">{row.username || "-"}</td>
                       <td className="px-3 py-3">{row.role || "-"}</td>
