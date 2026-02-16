@@ -7,7 +7,6 @@ import {
   ListChecks,
   Monitor,
   Server,
-  ShieldAlert,
   type LucideIcon
 } from "lucide-react";
 
@@ -59,12 +58,6 @@ export const navItems: NavItem[] = [
     title: "通知",
     path: "/app/notifications",
     icon: Bell,
-    mobileTab: false
-  },
-  {
-    title: "通知中心",
-    path: "/app/alert-center",
-    icon: ShieldAlert,
     mobileTab: true
   },
   {

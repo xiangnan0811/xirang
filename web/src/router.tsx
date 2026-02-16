@@ -24,11 +24,6 @@ const NotificationsPage = lazy(() =>
     default: m.NotificationsPage,
   }))
 );
-const AlertCenterPage = lazy(() =>
-  import("@/pages/alert-center-page").then((m) => ({
-    default: m.AlertCenterPage,
-  }))
-);
 const TasksPage = lazy(() =>
   import("@/pages/tasks-page").then((m) => ({ default: m.TasksPage }))
 );
@@ -95,7 +90,7 @@ export const AppRouter = createBrowserRouter([
       },
       {
         path: "alert-center",
-        element: <LazyPage><AlertCenterPage /></LazyPage>
+        element: <Navigate to="../notifications" replace />
       },
       {
         path: "tasks",

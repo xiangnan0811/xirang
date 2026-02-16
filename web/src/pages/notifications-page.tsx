@@ -11,7 +11,7 @@ import {
   Trash2,
   Webhook
 } from "lucide-react";
-import { Link, useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
 import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
@@ -591,12 +591,9 @@ export function NotificationsPage() {
 
         <Card>
           <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">通知中心（按节点 / 任务分流）</CardTitle>
               <div className="flex items-center gap-2">
-                <Link to="/app/alert-center">
-                  <Button size="sm" variant="outline">打开独立通知中心</Button>
-                </Link>
                 <Button
                   size="sm"
                   variant="outline"
