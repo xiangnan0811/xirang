@@ -41,11 +41,33 @@ export function OverviewPage() {
   const egressValues = trafficSeries.map((point) => point.egressMbps);
   const peakIngress = ingressValues.length ? Math.max(...ingressValues) : 0;
   const peakEgress = egressValues.length ? Math.max(...egressValues) : 0;
+  const warningNodes = nodes.filter((node) => node.status === "warning").length;
+  const offlineNodes = nodes.filter((node) => node.status === "offline").length;
 
   return (
-    <div className="animate-fade-in space-y-4">
+    <div className="animate-fade-in space-y-5">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-12 -top-14 h-40 w-40 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-12 bottom-0 h-32 w-32 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">全局监控视图</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">息壤态势总览</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              30+ 节点的实时健康、吞吐与异常告警统一收敛在一个监控面板。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">在线 {overview.healthyNodes}</Badge>
+            <Badge variant="warning">告警 {warningNodes}</Badge>
+            <Badge variant="danger">离线 {offlineNodes}</Badge>
+            <Button size="sm" onClick={() => navigate("/app/logs")}>查看实时日志</Button>
+          </div>
+        </div>
+      </section>
+
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card className="border-success/30">
+        <Card className="border-success/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">节点健康率</CardTitle>
           </CardHeader>
@@ -62,7 +84,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-info/30">
+        <Card className="border-info/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">任务成功率</CardTitle>
           </CardHeader>
@@ -72,7 +94,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-warning/30">
+        <Card className="border-warning/30 bg-gradient-to-br from-amber-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">实时吞吐</CardTitle>
           </CardHeader>
@@ -82,7 +104,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-violet-500/30">
+        <Card className="border-violet-500/30 bg-gradient-to-br from-violet-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">策略覆盖</CardTitle>
           </CardHeader>
@@ -94,14 +116,20 @@ export function OverviewPage() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
-        <Card className="grid-noise">
+        <Card className="grid-noise border-border/70">
           <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base">主机状态矩阵</CardTitle>
-              <Badge variant="secondary">
-                <Radar className="mr-1 size-3.5" />
-                秒级刷新
-              </Badge>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">主机状态矩阵</CardTitle>
+                <p className="text-xs text-muted-foreground">红黄绿霓虹点直观识别节点健康度</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">
+                  <Radar className="mr-1 size-3.5" />
+                  秒级刷新
+                </Badge>
+                <Badge variant="outline">总计 {nodes.length} 台</Badge>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -110,7 +138,7 @@ export function OverviewPage() {
               {nodes.map((node) => (
                 <div
                   key={node.id}
-                  className="rounded-md border bg-background/80 p-2 text-[11px] transition hover:border-primary/50"
+                  className="rounded-lg border border-border/70 bg-background/75 p-2 text-[11px] shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/45 hover:shadow-panel"
                   title={`${node.name} · ${node.ip} · 成功率 ${node.successRate}%`}
                 >
                   <div className="mb-1 flex items-center justify-between gap-1">
@@ -146,12 +174,12 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="border-cyan-500/20">
           <CardHeader>
             <CardTitle className="text-base">流量趋势（近 1 小时）</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="rounded-lg border bg-background/70 p-3">
+            <div className="rounded-lg border border-border/70 bg-background/65 p-3">
               <svg viewBox="0 0 320 120" className="h-40 w-full">
                 <defs>
                   <linearGradient id="ingressGrad" x1="0" y1="0" x2="0" y2="1">
@@ -189,12 +217,12 @@ export function OverviewPage() {
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">
-              <div className="rounded-lg border p-3">
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值入站</p>
                 <p className="mt-1 text-xl font-semibold">{peakIngress} Mbps</p>
                 <p className="text-xs text-emerald-500">+12.4%</p>
               </div>
-              <div className="rounded-lg border p-3">
+              <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值出站</p>
                 <p className="mt-1 text-xl font-semibold">{peakEgress} Mbps</p>
                 <p className="text-xs text-sky-500">+8.1%</p>
@@ -211,7 +239,7 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {nodes.slice(0, 8).map((node) => (
-              <div key={node.id} className="space-y-1">
+              <div key={node.id} className="space-y-1 rounded-lg border border-border/70 bg-background/55 px-3 py-2">
                 <div className="flex items-center justify-between text-xs">
                   <span>{node.name}</span>
                   <span className="text-muted-foreground">{node.successRate}%</span>
@@ -240,7 +268,7 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {unhealthyNodes.slice(0, 8).map((node) => (
-              <div key={node.id} className="rounded-lg border p-3">
+              <div key={node.id} className="rounded-lg border border-border/75 bg-background/60 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{node.name}</p>
                   <Badge variant={node.status === "offline" ? "danger" : "warning"}>

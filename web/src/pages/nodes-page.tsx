@@ -178,6 +178,22 @@ export function NodesPage() {
     [nodes]
   );
 
+  const nodeStats = useMemo(() => {
+    let online = 0;
+    let warning = 0;
+    let offline = 0;
+    for (const node of nodes) {
+      if (node.status === "online") {
+        online += 1;
+      } else if (node.status === "warning") {
+        warning += 1;
+      } else {
+        offline += 1;
+      }
+    }
+    return { online, warning, offline };
+  }, [nodes]);
+
   const effectiveKeyword = keyword || globalSearch;
 
   const filteredNodes = useMemo(() => {
@@ -516,13 +532,58 @@ export function NodesPage() {
   };
 
   return (
-    <div className="animate-fade-in space-y-4">
-      <Card>
+    <div className="animate-fade-in space-y-5">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="border-emerald-500/25 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">节点总数</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-semibold">{nodes.length}</p>
+            <p className="mt-1 text-xs text-muted-foreground">覆盖全部资产主机</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-brand-life/25 bg-gradient-to-br from-brand-life/15 via-transparent to-transparent">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">在线节点</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-semibold">{nodeStats.online}</p>
+            <p className="mt-1 text-xs text-muted-foreground">健康率 {nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0}%</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-amber-500/25 bg-gradient-to-br from-amber-500/15 via-transparent to-transparent">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">告警 / 离线</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-semibold">{nodeStats.warning + nodeStats.offline}</p>
+            <p className="mt-1 text-xs text-muted-foreground">告警 {nodeStats.warning} · 离线 {nodeStats.offline}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-cyan-500/25 bg-gradient-to-br from-cyan-500/15 via-transparent to-transparent">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">当前筛选 / 选择</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-semibold">{sortedNodes.length}</p>
+            <p className="mt-1 text-xs text-muted-foreground">已选 {selectedNodeIds.length} 个节点</p>
+          </CardContent>
+        </Card>
+      </section>
+
+      <Card className="overflow-hidden border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">
+            <div>
+              <CardTitle className="text-base">
               主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
-            </CardTitle>
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与终端运维</p>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
@@ -588,13 +649,13 @@ export function NodesPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-700 dark:text-cyan-300">
+          <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-700 shadow-sm dark:text-cyan-300">
             无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次
             SSH 探测（如远程执行
             <code className="mx-1">df</code>）快照。
           </div>
 
-          <div className="hidden items-center gap-2 md:flex">
+          <div className="hidden items-center gap-2 rounded-xl border border-border/75 bg-background/55 p-2 md:flex">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -605,7 +666,7 @@ export function NodesPage() {
               />
             </div>
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as typeof statusFilter)
@@ -617,7 +678,7 @@ export function NodesPage() {
               <option value="offline">离线</option>
             </select>
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
             >
@@ -628,7 +689,7 @@ export function NodesPage() {
               ))}
             </select>
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={sortBy}
               onChange={(event) =>
                 setSortBy(event.target.value as typeof sortBy)
@@ -640,7 +701,7 @@ export function NodesPage() {
               <option value="disk-low">磁盘余量升序</option>
               <option value="backup-recent">最近备份优先</option>
             </select>
-            <div className="inline-flex items-center gap-1 rounded-md border bg-background p-1">
+            <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/80 p-1">
               <Button
                 size="sm"
                 variant={viewMode === "cards" ? "default" : "ghost"}
@@ -660,7 +721,7 @@ export function NodesPage() {
             </div>
           </div>
 
-          <div className="hidden items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
+          <div className="hidden items-center justify-between rounded-lg border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
             <div className="inline-flex items-center gap-2">
               <input
                 type="checkbox"
@@ -726,7 +787,7 @@ export function NodesPage() {
                 return (
                   <div
                     key={node.id}
-                    className="rounded-lg border bg-background p-3"
+                    className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -821,10 +882,10 @@ export function NodesPage() {
               })}
             </div>
           ) : (
-            <div className="hidden overflow-x-auto rounded-lg border md:block">
+            <div className="hidden overflow-x-auto rounded-xl border border-border/75 bg-background/55 md:block">
               <table className="min-w-[1280px] text-left text-sm">
                 <thead>
-                  <tr className="border-b bg-muted/40 text-muted-foreground">
+                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
                     <th className="px-3 py-3">
                       <input
                         type="checkbox"
@@ -873,7 +934,7 @@ export function NodesPage() {
                         : "未绑定";
 
                       return (
-                        <tr key={node.id} className="border-b">
+                        <tr key={node.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
                           <td className="px-3 py-3">
                             <input
                               type="checkbox"
@@ -1005,7 +1066,7 @@ export function NodesPage() {
             </div>
           )}
 
-          <div className="space-y-2 p-2 md:hidden">
+            <div className="space-y-2 p-2 md:hidden">
             <div className="grid grid-cols-3 gap-2">
               <select
                 className="h-10 rounded-md border bg-background px-2 text-sm"
@@ -1068,7 +1129,7 @@ export function NodesPage() {
               return (
                 <div
                   key={node.id}
-                  className="rounded-lg border bg-background p-3"
+                  className="rounded-xl border border-border/75 bg-background/70 p-3 shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -1155,7 +1216,7 @@ export function NodesPage() {
       </Card>
 
       {terminalNode ? (
-        <Card className="border-cyan-500/30">
+        <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-base">
@@ -1208,7 +1269,7 @@ export function NodesPage() {
               </Button>
             </div>
 
-            <div className="terminal-surface min-h-52 overflow-auto rounded-lg p-3 font-mono text-xs text-slate-100">
+            <div className="terminal-surface min-h-52 overflow-auto rounded-lg p-3 font-mono text-xs text-slate-100 thin-scrollbar">
               <pre className="whitespace-pre-wrap break-all">
                 {terminalOutput || "等待命令执行输出..."}
               </pre>
@@ -1223,7 +1284,7 @@ export function NodesPage() {
             className="absolute inset-0 bg-black/45"
             onClick={() => setShowSearchDrawer(false)}
           />
-          <section className="absolute right-0 top-0 h-full w-[86%] border-l bg-background p-4 shadow-2xl">
+          <section className="absolute right-0 top-0 h-full w-[86%] border-l border-border/75 bg-background/95 p-4 shadow-panel thin-scrollbar">
             <h3 className="text-sm font-semibold">侧滑全局搜索</h3>
             <p className="mt-1 text-xs text-muted-foreground">
               通过名称或 IP 快速定位任意主机

@@ -329,9 +329,32 @@ export function NotificationsPage() {
   };
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-14 -top-10 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">告警中枢</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">通知与告警联动面板</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              从告警收敛、投递统计到渠道管理统一完成，确保异常快速闭环。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="danger">待处理 {openAlerts.length}</Badge>
+            <Badge variant="warning">严重 {criticalAlerts.length}</Badge>
+            <Badge variant="success">通道 {activeIntegrations}</Badge>
+            <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="mr-1 size-4" />
+              新增通知方式
+            </Button>
+          </div>
+        </div>
+      </section>
+
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card className="border-red-500/30">
+        <Card className="border-red-500/30 bg-gradient-to-br from-red-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">待处理告警</CardTitle>
           </CardHeader>
@@ -341,7 +364,7 @@ export function NotificationsPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-amber-500/30">
+        <Card className="border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">严重告警</CardTitle>
           </CardHeader>
@@ -351,7 +374,7 @@ export function NotificationsPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-emerald-500/30">
+        <Card className="border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">已启用通道</CardTitle>
           </CardHeader>
@@ -361,7 +384,7 @@ export function NotificationsPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-cyan-500/30">
+        <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">24h 失败任务</CardTitle>
           </CardHeader>
@@ -372,7 +395,7 @@ export function NotificationsPage() {
         </Card>
       </section>
 
-      <Card>
+      <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">通知投递统计</CardTitle>
@@ -400,15 +423,15 @@ export function NotificationsPage() {
           ) : deliveryStats ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送成功</p>
                   <p className="mt-1 text-2xl font-semibold text-emerald-500">{deliveryStats.totalSent}</p>
                 </div>
-                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送失败</p>
                   <p className="mt-1 text-2xl font-semibold text-red-500">{deliveryStats.totalFailed}</p>
                 </div>
-                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">成功率</p>
                   <p className="mt-1 text-2xl font-semibold text-cyan-500">{deliveryStats.successRate}%</p>
                 </div>
@@ -417,7 +440,7 @@ export function NotificationsPage() {
               {deliveryStats.byIntegration.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {deliveryStats.byIntegration.map((item) => (
-                    <div key={item.integrationId} className="rounded-lg border bg-muted/20 p-3">
+                    <div key={item.integrationId} className="rounded-lg border border-border/70 bg-muted/20 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-medium">{item.name}</p>
                         <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
@@ -442,7 +465,7 @@ export function NotificationsPage() {
         </CardContent>
       </Card>
 
-      <Card className="md:hidden">
+      <Card className="md:hidden border-border/75">
         <CardHeader>
           <CardTitle className="text-base">移动端失败告警推流</CardTitle>
         </CardHeader>
@@ -451,7 +474,7 @@ export function NotificationsPage() {
             mobilePushAlerts.map((alert) => {
               const severity = getSeverityMeta(alert.severity);
               return (
-                <div key={`push-${alert.id}`} className="rounded-lg border p-3">
+                <div key={`push-${alert.id}`} className="rounded-lg border border-border/75 bg-background/70 p-3 shadow-sm">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">{alert.nodeName}</p>
                     <Badge variant={severity.variant}>{severity.label}</Badge>
@@ -487,7 +510,7 @@ export function NotificationsPage() {
       </Card>
 
       <section className="grid gap-4 xl:grid-cols-[1.05fr_1.45fr]">
-        <Card>
+        <Card className="border-border/75">
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-base">通知与集成设置</CardTitle>
@@ -506,10 +529,10 @@ export function NotificationsPage() {
                 const busy = isUpdating || isTesting;
 
                 return (
-                  <div key={integration.id} className="rounded-lg border p-3">
+                  <div key={integration.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <span className="rounded-md bg-primary/10 p-1.5 text-primary">
+                        <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">
                           <Icon className="size-4" />
                         </span>
                         <div>
@@ -589,9 +612,9 @@ export function NotificationsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="border-border/75">
           <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">通知中心（按节点 / 任务分流）</CardTitle>
               <div className="flex items-center gap-2">
                 <Button
@@ -650,7 +673,7 @@ export function NotificationsPage() {
                   const severity = getSeverityMeta(alert.severity);
                   const status = alertStatusMeta(alert.status);
                   return (
-                    <div key={alert.id} className="rounded-lg border p-3">
+                    <div key={alert.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <StatusPulse tone={severityToTone(alert.severity)} />
@@ -724,7 +747,7 @@ export function NotificationsPage() {
                       </div>
 
                       {deliveryOpenAlertId === alert.id ? (
-                        <div className="mt-3 rounded-md border bg-muted/30 p-2">
+                        <div className="mt-3 rounded-md border border-border/70 bg-muted/25 p-2">
                           {deliveryLoadingAlertId === alert.id ? (
                             <p className="text-xs text-muted-foreground">投递记录加载中...</p>
                           ) : (deliveryMap[alert.id] ?? []).length ? (
@@ -750,7 +773,7 @@ export function NotificationsPage() {
                               ) : null}
 
                               {(deliveryMap[alert.id] ?? []).map((delivery) => (
-                                <div key={delivery.id} className="rounded border bg-background px-2 py-1.5 text-xs">
+                                <div key={delivery.id} className="rounded border border-border/70 bg-background/80 px-2 py-1.5 text-xs">
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <span className="font-medium">
                                       {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
