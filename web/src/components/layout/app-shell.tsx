@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
@@ -12,6 +13,19 @@ import { useConsoleData } from "@/hooks/use-console-data";
 
 export type ConsoleOutletContext = ReturnType<typeof useConsoleData>;
 
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return (
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    target.isContentEditable
+  );
+}
+
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -19,14 +33,49 @@ export function AppShell() {
   const consoleData = useConsoleData(token);
 
   const currentItem = navItems.find((item) => item.path === location.pathname);
+  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleLogout = () => {
     logout();
     navigate("/login", { replace: true });
   };
 
+  useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      const isQuickFocus =
+        (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) ||
+        (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !isTypingTarget(event.target));
+
+      if (isQuickFocus) {
+        event.preventDefault();
+        globalSearchInputRef.current?.focus();
+        globalSearchInputRef.current?.select();
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      if (
+        event.key === "Escape" &&
+        activeElement === globalSearchInputRef.current &&
+        consoleData.globalSearch
+      ) {
+        event.preventDefault();
+        consoleData.setGlobalSearch("");
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalSearchShortcut);
+    return () => window.removeEventListener("keydown", handleGlobalSearchShortcut);
+  }, [consoleData.globalSearch, consoleData.setGlobalSearch]);
+
   return (
     <div className="app-shell-bg min-h-screen md:pl-72">
+      <a
+        href="#main-content"
+        className="sr-only absolute left-3 top-3 z-[70] rounded-md border border-border/80 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm focus:not-sr-only"
+      >
+        跳到主内容
+      </a>
       <DesktopSidebar username={username} onLogout={handleLogout} />
 
       <div className="relative z-10 flex min-h-screen flex-1 flex-col">
@@ -61,11 +110,17 @@ export function AppShell() {
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
+                ref={globalSearchInputRef}
                 value={consoleData.globalSearch}
                 onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
-                className="pl-9"
+                className="pl-9 pr-24"
+                aria-label="全局搜索节点（名称、IP、标签、状态）"
+                aria-keyshortcuts="Control+K Meta+K /"
                 placeholder="全局搜索节点（名称 / IP / 标签 / 状态）"
               />
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground md:inline-flex">
+                ⌘K /
+              </span>
             </div>
           </div>
 
@@ -77,7 +132,7 @@ export function AppShell() {
         </header>
 
         <ScrollToTop />
-        <main className="mx-auto flex-1 w-full max-w-[1680px] px-4 py-4 pb-24 md:px-8 md:pb-8">
+        <main id="main-content" className="mx-auto flex-1 w-full max-w-[1680px] px-4 py-4 pb-24 md:px-8 md:pb-8">
           <Outlet context={consoleData as ConsoleOutletContext} />
         </main>
       </div>

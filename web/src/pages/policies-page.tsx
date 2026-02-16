@@ -9,6 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Switch } from "@/components/ui/switch";
@@ -47,6 +48,10 @@ export function PoliciesPage() {
 
   const activeCount = policies.filter((policy) => policy.enabled).length;
   const disabledCount = policies.length - activeCount;
+
+  const resetFilters = () => {
+    setKeyword("");
+  };
 
   const openCreateDialog = () => {
     setEditingPolicy(null);
@@ -181,7 +186,7 @@ export function PoliciesPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1fr_auto]">
+          <div className="filter-panel grid gap-2 md:grid-cols-[1fr_auto]">
             <Input
               placeholder="搜索策略 / 路径 / cron"
               value={keyword}
@@ -230,6 +235,7 @@ export function PoliciesPage() {
                       <Button
                         variant="danger"
                         size="sm"
+                        aria-label={`删除策略 ${policy.name}`}
                         onClick={() => onDelete(policy)}
                       >
                         <Trash2 className="size-4" />
@@ -253,6 +259,23 @@ export function PoliciesPage() {
                   </div>
                 </div>
               ))}
+              {!filteredPolicies.length ? (
+                <EmptyState
+                  title="暂无匹配策略"
+                  description="可调整关键词筛选，或新增一个策略模板。"
+                  action={(
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Button size="sm" variant="outline" onClick={resetFilters}>
+                        清空筛选
+                      </Button>
+                      <Button size="sm" onClick={openCreateDialog}>
+                        <Plus className="mr-1 size-4" />
+                        新增策略
+                      </Button>
+                    </div>
+                  )}
+                />
+              ) : null}
             </div>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
@@ -268,7 +291,7 @@ export function PoliciesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredPolicies.map((policy) => (
+                  {filteredPolicies.length ? filteredPolicies.map((policy) => (
                     <tr key={policy.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
                       <td className="px-3 py-2.5">
                         <p className="font-medium">{policy.name}</p>
@@ -307,6 +330,7 @@ export function PoliciesPage() {
                           <Button
                             size="sm"
                             variant="danger"
+                            aria-label={`删除策略 ${policy.name}`}
                             onClick={() => onDelete(policy)}
                           >
                             <Trash2 className="size-4" />
@@ -314,7 +338,28 @@ export function PoliciesPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  )) : (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-5">
+                        <EmptyState
+                          className="py-8"
+                          title="暂无匹配策略"
+                          description="可调整筛选关键词，或新增策略。"
+                          action={(
+                            <div className="flex flex-wrap items-center justify-center gap-2">
+                              <Button size="sm" variant="outline" onClick={resetFilters}>
+                                清空筛选
+                              </Button>
+                              <Button size="sm" onClick={openCreateDialog}>
+                                <Plus className="mr-1 size-4" />
+                                新增策略
+                              </Button>
+                            </div>
+                          )}
+                        />
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

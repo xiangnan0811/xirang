@@ -21,6 +21,8 @@ function LoadingState({
 
   return (
     <div
+      role="status"
+      aria-live="polite"
       className={cn(
         "rounded-2xl border border-border/70 bg-background/45 px-4 py-4 shadow-sm backdrop-blur-sm animate-fade-in",
         className
@@ -36,6 +38,8 @@ function LoadingState({
           {description}
         </p>
       ) : null}
+
+      <span className="sr-only">{title}</span>
 
       <div className="mt-3 space-y-2">
         {skeletonRows.map((row) => (

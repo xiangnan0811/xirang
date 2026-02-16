@@ -45,6 +45,12 @@ export function TasksPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [pendingId, setPendingId] = useState<number | null>(null);
 
+  const resetFilters = () => {
+    setKeyword("");
+    setStatusFilter("all");
+    setNodeFilter("all");
+  };
+
   const filteredTasks = useMemo(() => {
     const effectiveKeyword = (keyword || globalSearch).trim().toLowerCase();
 
@@ -199,7 +205,7 @@ export function TasksPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1.6fr_1fr_1fr]">
+          <div className="filter-panel grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
             <Input
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
               value={keyword}
@@ -345,6 +351,7 @@ export function TasksPage() {
                     <Button
                       size="sm"
                       variant="danger"
+                      aria-label={`删除任务 #${task.id}`}
                       disabled={isPending}
                       onClick={() => void handleDelete(task.id)}
                     >
@@ -356,7 +363,21 @@ export function TasksPage() {
             })}
 
             {!filteredTasks.length ? (
-              <EmptyState title="当前筛选条件下没有任务。" />
+              <EmptyState
+                title="当前筛选条件下没有任务"
+                description="可重置筛选条件，或直接新建一个任务。"
+                action={(
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <Button size="sm" variant="outline" onClick={resetFilters}>
+                      重置筛选
+                    </Button>
+                    <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+                      <Plus className="mr-1 size-4" />
+                      新建任务
+                    </Button>
+                  </div>
+                )}
+              />
             ) : null}
           </div>
         </CardContent>

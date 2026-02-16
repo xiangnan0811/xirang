@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
 
@@ -257,6 +258,13 @@ export function LogsPage() {
     setSearchParams(next, { replace: true });
   };
 
+  const resetFilters = () => {
+    setSelectedNode("all");
+    setSelectedTask("all");
+    setKeyword("");
+    syncSearchParams({ node: "all", task: "all", q: "" });
+  };
+
   const exportAsText = () => {
     const content = filteredLogs
       .map((log) => {
@@ -358,7 +366,7 @@ export function LogsPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-        <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-4">
+        <div className="filter-panel grid gap-2 md:grid-cols-4">
           <select
             className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
             value={selectedNode}
@@ -413,6 +421,12 @@ export function LogsPage() {
           </div>
         </div>
 
+        <div className="flex justify-end">
+          <Button size="sm" variant="outline" onClick={resetFilters}>
+            重置筛选
+          </Button>
+        </div>
+
         {connectionWarning ? (
           <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
             {connectionWarning}
@@ -439,39 +453,47 @@ export function LogsPage() {
           </div>
         </div>
 
-        <div
-          ref={terminalRef}
-          className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
-          style={{ fontSize: `${12 * fontScale}px` }}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-        >
-          {groupedLogs.map((group) => (
-            <section key={group.key} className="mb-3 rounded border border-slate-700/70 bg-slate-900/40">
-              <div className="border-b border-slate-700/70 px-3 py-2 text-[11px] text-slate-300">
-                节点：{group.nodeName} · {group.taskId ? `任务 #${group.taskId}` : "系统日志"}
-              </div>
-              <div className="px-2 py-1">
-                {group.logs.map((log) => (
-                  <div
-                    key={log.logId ? `line-${log.logId}` : log.id}
-                    className="mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b border-slate-800/80 py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
-                  >
-                    <span className="text-slate-400">{log.timestamp}</span>
-                    <span className={getLevelClass(log.level)}>{log.level.toUpperCase()}</span>
-                    <span>
-                      <span className="mr-2 rounded bg-slate-700/70 px-1 text-[10px] text-slate-300 md:text-[11px]">
-                        {log.nodeName ?? "系统"}
+        {historyLoading && !groupedLogs.length ? (
+          <LoadingState
+            title="日志加载中"
+            description="正在拉取历史日志与实时流式增量..."
+            rows={4}
+          />
+        ) : (
+          <div
+            ref={terminalRef}
+            className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
+            style={{ fontSize: `${12 * fontScale}px` }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+          >
+            {groupedLogs.map((group) => (
+              <section key={group.key} className="mb-3 rounded border border-slate-700/70 bg-slate-900/40">
+                <div className="border-b border-slate-700/70 px-3 py-2 text-[11px] text-slate-300">
+                  节点：{group.nodeName} · {group.taskId ? `任务 #${group.taskId}` : "系统日志"}
+                </div>
+                <div className="px-2 py-1">
+                  {group.logs.map((log) => (
+                    <div
+                      key={log.logId ? `line-${log.logId}` : log.id}
+                      className="mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b border-slate-800/80 py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
+                    >
+                      <span className="text-slate-400">{log.timestamp}</span>
+                      <span className={getLevelClass(log.level)}>{log.level.toUpperCase()}</span>
+                      <span>
+                        <span className="mr-2 rounded bg-slate-700/70 px-1 text-[10px] text-slate-300 md:text-[11px]">
+                          {log.nodeName ?? "系统"}
+                        </span>
+                        {highlightErrorCode(log.message)}
                       </span>
-                      {highlightErrorCode(log.message)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-          {!groupedLogs.length ? <p className="text-slate-400">当前筛选条件下暂无日志输出...</p> : null}
-        </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {!groupedLogs.length ? <p className="text-slate-400">当前筛选条件下暂无日志输出...</p> : null}
+          </div>
+        )}
 
         {focusedTaskNumber ? (
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/75 bg-background/60 px-3 py-2">

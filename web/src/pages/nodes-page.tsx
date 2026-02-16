@@ -251,6 +251,13 @@ export function NodesPage() {
     sortedNodes.length > 0 &&
     sortedNodes.every((node) => selectedNodeSet.has(node.id));
 
+  const resetFilters = () => {
+    setKeyword("");
+    setStatusFilter("all");
+    setTagFilter("all");
+    setSortBy("status");
+  };
+
   const openCreateDialog = () => {
     setEditingNode(null);
     setEditorOpen(true);
@@ -656,7 +663,7 @@ export function NodesPage() {
             <code className="mx-1">df</code>）快照。
           </div>
 
-          <div className="hidden items-center gap-2 rounded-2xl border border-border/70 bg-background/55 shadow-sm p-2 md:flex">
+          <div className="filter-panel hidden items-center gap-2 md:flex">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -777,7 +784,21 @@ export function NodesPage() {
               ) : null}
 
               {!loading && !sortedNodes.length ? (
-                <EmptyState title="当前筛选条件下暂无节点" />
+                <EmptyState
+                  title="当前筛选条件下暂无节点"
+                  description="可以重置筛选条件，或新增一个节点继续测试。"
+                  action={(
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Button size="sm" variant="outline" onClick={resetFilters}>
+                        重置筛选
+                      </Button>
+                      <Button size="sm" onClick={openCreateDialog}>
+                        <ServerCog className="mr-1 size-4" />
+                        新增节点
+                      </Button>
+                    </div>
+                  )}
+                />
               ) : null}
 
               {sortedNodes.map((node) => {
@@ -1053,6 +1074,7 @@ export function NodesPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
+                                aria-label={`编辑节点 ${node.name}`}
                                 onClick={() => openEditDialog(node)}
                               >
                                 <Wrench className="size-4" />
@@ -1060,6 +1082,7 @@ export function NodesPage() {
                               <Button
                                 variant="danger"
                                 size="sm"
+                                aria-label={`删除节点 ${node.name}`}
                                 onClick={() => onDeleteNode(node)}
                               >
                                 <Trash2 className="size-4" />

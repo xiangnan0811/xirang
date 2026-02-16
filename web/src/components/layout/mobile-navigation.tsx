@@ -21,7 +21,7 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
 
   return (
     <>
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/75 bg-background/88 backdrop-blur-xl md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/75 bg-background/88 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden">
         <div
           className="grid h-[68px]"
           style={{ gridTemplateColumns: `repeat(${Math.max(1, mobileTabs.length)}, minmax(0, 1fr))` }}
@@ -37,6 +37,8 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
                   active ? "text-primary" : "text-muted-foreground"
                 )}
                 onClick={() => navigate(item.path)}
+                aria-label={`切换到${item.title}`}
+                aria-current={active ? "page" : undefined}
               >
                 <span className={cn("rounded-full px-2 py-0.5", active ? "bg-primary/15" : "bg-transparent")}>
                   <Icon className="size-4" />
@@ -70,7 +72,7 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
                 <img src="/xirang-mark.svg" alt="XiRang" className="size-5 rounded-sm" />
                 运维快捷操作
               </p>
-              <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(false)}>
+              <Button variant="ghost" size="icon" aria-label="关闭快捷菜单" title="关闭快捷菜单" onClick={() => setDrawerOpen(false)}>
                 <X className="size-5" />
               </Button>
             </div>

@@ -48,6 +48,7 @@ export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
             <Link
               key={item.path}
               to={item.path}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-all duration-200",
                 active

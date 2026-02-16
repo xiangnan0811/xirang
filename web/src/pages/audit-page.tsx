@@ -227,7 +227,7 @@ export function AuditPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1fr_auto_auto]">
+          <div className="filter-panel grid gap-2 md:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input

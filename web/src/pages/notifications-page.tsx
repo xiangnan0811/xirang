@@ -21,6 +21,7 @@ import { StatusPulse } from "@/components/status-pulse";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -419,7 +420,11 @@ export function NotificationsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           {deliveryStatsLoading ? (
-            <p className="text-sm text-muted-foreground">正在拉取投递统计...</p>
+            <LoadingState
+              title="投递统计加载中"
+              description="正在统计各通知渠道的成功率与失败次数..."
+              rows={3}
+            />
           ) : deliveryStats ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
