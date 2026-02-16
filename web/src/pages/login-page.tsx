@@ -16,8 +16,8 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
 
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("REDACTED");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +68,12 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
-      <Card className="w-full max-w-md">
+      <div className="w-full max-w-md">
+        <div className="mb-6 flex items-center justify-center gap-2">
+          <img src="/xirang-mark.svg" alt="XiRang" className="size-8" />
+          <span className="text-xl font-semibold">XiRang</span>
+        </div>
+        <Card>
         <CardHeader>
           <div className="mb-2 flex items-center gap-2 text-primary">
             <ShieldCheck className="size-5" />
@@ -106,12 +111,13 @@ export function LoginPage() {
 
             {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-            <Button className="w-full" type="submit" disabled={submitting}>
-              {submitting ? "登录中..." : "登录控制台"}
+            <Button className="w-full" type="submit" loading={submitting}>
+              登录控制台
             </Button>
           </form>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

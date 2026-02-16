@@ -1,16 +1,52 @@
+import { lazy, Suspense } from "react";
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { AppShell } from "@/components/layout/app-shell";
-import { AlertCenterPage } from "@/pages/alert-center-page";
 import { ProtectedRoute } from "@/components/protected-route";
-import { AuditPage } from "@/pages/audit-page";
 import { LoginPage } from "@/pages/login-page";
-import { LogsPage } from "@/pages/logs-page";
-import { NodesPage } from "@/pages/nodes-page";
-import { NotificationsPage } from "@/pages/notifications-page";
-import { OverviewPage } from "@/pages/overview-page";
-import { PoliciesPage } from "@/pages/policies-page";
-import { SSHKeysPage } from "@/pages/ssh-keys-page";
-import { TasksPage } from "@/pages/tasks-page";
+
+const OverviewPage = lazy(() =>
+  import("@/pages/overview-page").then((m) => ({ default: m.OverviewPage }))
+);
+const NodesPage = lazy(() =>
+  import("@/pages/nodes-page").then((m) => ({ default: m.NodesPage }))
+);
+const SSHKeysPage = lazy(() =>
+  import("@/pages/ssh-keys-page").then((m) => ({ default: m.SSHKeysPage }))
+);
+const PoliciesPage = lazy(() =>
+  import("@/pages/policies-page").then((m) => ({ default: m.PoliciesPage }))
+);
+const LogsPage = lazy(() =>
+  import("@/pages/logs-page").then((m) => ({ default: m.LogsPage }))
+);
+const NotificationsPage = lazy(() =>
+  import("@/pages/notifications-page").then((m) => ({
+    default: m.NotificationsPage,
+  }))
+);
+const AlertCenterPage = lazy(() =>
+  import("@/pages/alert-center-page").then((m) => ({
+    default: m.AlertCenterPage,
+  }))
+);
+const TasksPage = lazy(() =>
+  import("@/pages/tasks-page").then((m) => ({ default: m.TasksPage }))
+);
+const AuditPage = lazy(() =>
+  import("@/pages/audit-page").then((m) => ({ default: m.AuditPage }))
+);
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+    </div>
+  );
+}
+
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
+}
 
 export const AppRouter = createBrowserRouter([
   {
@@ -35,39 +71,39 @@ export const AppRouter = createBrowserRouter([
       },
       {
         path: "overview",
-        element: <OverviewPage />
+        element: <LazyPage><OverviewPage /></LazyPage>
       },
       {
         path: "nodes",
-        element: <NodesPage />
+        element: <LazyPage><NodesPage /></LazyPage>
       },
       {
         path: "ssh-keys",
-        element: <SSHKeysPage />
+        element: <LazyPage><SSHKeysPage /></LazyPage>
       },
       {
         path: "policies",
-        element: <PoliciesPage />
+        element: <LazyPage><PoliciesPage /></LazyPage>
       },
       {
         path: "logs",
-        element: <LogsPage />
+        element: <LazyPage><LogsPage /></LazyPage>
       },
       {
         path: "notifications",
-        element: <NotificationsPage />
+        element: <LazyPage><NotificationsPage /></LazyPage>
       },
       {
         path: "alert-center",
-        element: <AlertCenterPage />
+        element: <LazyPage><AlertCenterPage /></LazyPage>
       },
       {
         path: "tasks",
-        element: <TasksPage />
+        element: <LazyPage><TasksPage /></LazyPage>
       },
       {
         path: "audit",
-        element: <AuditPage />
+        element: <LazyPage><AuditPage /></LazyPage>
       }
     ]
   },

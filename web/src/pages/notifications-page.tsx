@@ -13,11 +13,14 @@ import {
 import { Link, useBeforeUnload, useBlocker, useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { StatusPulse } from "@/components/status-pulse";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { toast } from "@/components/ui/toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import { getSeverityMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertDeliveryStats, AlertRecord, IntegrationChannel, IntegrationType } from "@/types/domain";
@@ -193,6 +196,8 @@ function severityToTone(severity: AlertRecord["severity"]) {
 }
 
 export function NotificationsPage() {
+  const { confirm, dialog } = useConfirm();
+
   const {
     alerts,
     integrations,
@@ -217,7 +222,6 @@ export function NotificationsPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "acked" | "resolved">("all");
   const [showCreateIntegration, setShowCreateIntegration] = useState(false);
   const [integrationDraft, setIntegrationDraft] = useState(defaultDraft);
-  const [toast, setToast] = useState<string | null>(null);
   const [testingIntegrationId, setTestingIntegrationId] = useState<string | null>(null);
   const [deliveryOpenAlertId, setDeliveryOpenAlertId] = useState<string | null>(null);
   const [deliveryLoadingAlertId, setDeliveryLoadingAlertId] = useState<string | null>(null);
@@ -301,7 +305,7 @@ export function NotificationsPage() {
       })
       .catch((error) => {
         if (statsRequestRef.current === currentRequestID) {
-          setToast((error as Error).message);
+          toast.error((error as Error).message);
         }
       })
       .finally(() => {
@@ -328,7 +332,7 @@ export function NotificationsPage() {
           [alertId]: rows
         }));
       })
-      .catch((error) => setToast((error as Error).message))
+      .catch((error) => toast.error((error as Error).message))
       .finally(() => setDeliveryLoadingAlertId(null));
   };
 
@@ -390,7 +394,7 @@ export function NotificationsPage() {
     const validationError = validateIntegrationDraft(integration.type, normalizedDraft.endpoint);
     if (validationError) {
       if (!options.silent) {
-        setToast(validationError);
+        toast.error(validationError);
       }
       return false;
     }
@@ -403,12 +407,12 @@ export function NotificationsPage() {
         [integration.id]: normalizedDraft
       }));
       if (!options.silent) {
-        setToast(`通知方式 ${integration.name} 已保存。`);
+        toast.success(`通知方式 ${integration.name} 已保存。`);
       }
       return true;
     } catch (error) {
       if (!options.silent) {
-        setToast((error as Error).message);
+        toast.error((error as Error).message);
       }
       return false;
     } finally {
@@ -427,7 +431,7 @@ export function NotificationsPage() {
     });
 
     if (!dirtyIntegrations.length) {
-      setToast("当前没有待保存修改。");
+      toast.error("当前没有待保存修改。");
       return;
     }
 
@@ -443,9 +447,11 @@ export function NotificationsPage() {
 
       const failedCount = dirtyIntegrations.length - successCount;
       if (failedCount === 0) {
-        setToast(`已批量保存 ${successCount} 项通知配置。`);
+        toast.success(`已批量保存 ${successCount} 项通知配置。`);
+      } else if (successCount === 0) {
+        toast.error(`批量保存失败：${dirtyIntegrations.length} 项配置均保存失败，请检查后重试。`);
       } else {
-        setToast(`已批量保存 ${successCount}/${dirtyIntegrations.length} 项通知配置，${failedCount} 项失败，请检查后重试。`);
+        toast.warning(`已批量保存 ${successCount}/${dirtyIntegrations.length} 项通知配置，${failedCount} 项失败，请检查后重试。`);
       }
     } finally {
       setSavingAllIntegrations(false);
@@ -470,7 +476,7 @@ export function NotificationsPage() {
       }
       return next;
     });
-    setToast("已重置所有未保存修改。");
+    toast.success("已重置所有未保存修改。");
   }, [integrations]);
 
   useBeforeUnload(
@@ -490,17 +496,33 @@ export function NotificationsPage() {
       return;
     }
 
-    const shouldLeave = window.confirm("当前有未保存的通知配置，确认离开当前页面吗？");
-    if (shouldLeave) {
-      integrationLeaveBlocker.proceed();
-      return;
-    }
+    let cancelled = false;
+    void (async () => {
+      const shouldLeave = await confirm({
+        title: "确认离开页面",
+        description: "当前有未保存的通知配置，确认离开当前页面吗？",
+        confirmText: "离开",
+        cancelText: "继续编辑"
+      });
 
-    integrationLeaveBlocker.reset();
-  }, [integrationLeaveBlocker]);
+      if (cancelled) {
+        return;
+      }
+
+      if (shouldLeave) {
+        integrationLeaveBlocker.proceed();
+      } else {
+        integrationLeaveBlocker.reset();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [confirm, integrationLeaveBlocker]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-fade-in">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Card className="border-red-500/30">
           <CardHeader className="pb-2">
@@ -636,12 +658,12 @@ export function NotificationsPage() {
                       size="sm"
                       onClick={() => {
                         if (!alert.taskId) {
-                          setToast("该告警未绑定任务，请先修复节点连接。");
+                          toast.error("该告警未绑定任务，请先修复节点连接。");
                           return;
                         }
                         void retryAlert(alert.id)
-                          .then(() => setToast(`已在移动告警中心重试任务 #${alert.taskId}`))
-                          .catch((error) => setToast((error as Error).message));
+                          .then(() => toast.success(`已在移动告警中心重试任务 #${alert.taskId}`))
+                          .catch((error) => toast.error((error as Error).message));
                       }}
                       disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
                     >
@@ -767,7 +789,7 @@ export function NotificationsPage() {
                   <Button
                     onClick={() => {
                       if (!integrationDraft.name.trim()) {
-                        setToast("新增失败：请填写通道名称。");
+                        toast.error("新增失败：请填写通道名称。");
                         return;
                       }
                       const validationError = validateIntegrationDraft(
@@ -775,7 +797,7 @@ export function NotificationsPage() {
                         integrationDraft.endpoint
                       );
                       if (validationError) {
-                        setToast(validationError);
+                        toast.error(validationError);
                         return;
                       }
 
@@ -783,9 +805,9 @@ export function NotificationsPage() {
                         .then(() => {
                           setIntegrationDraft(defaultDraft);
                           setShowCreateIntegration(false);
-                          setToast("通知方式已新增，可按需启停。");
+                          toast.success("通知方式已新增，可按需启停。");
                         })
-                        .catch((error) => setToast((error as Error).message));
+                        .catch((error) => toast.error((error as Error).message));
                     }}
                   >
                     保存通道
@@ -853,7 +875,7 @@ export function NotificationsPage() {
                           disabled={savingAllIntegrations}
                           onCheckedChange={() =>
                             void toggleIntegration(integration.id).catch((error) =>
-                              setToast((error as Error).message)
+                              toast.error((error as Error).message)
                             )
                           }
                         />
@@ -865,9 +887,9 @@ export function NotificationsPage() {
                             setTestingIntegrationId(integration.id);
                             void testIntegration(integration.id)
                               .then((result) =>
-                                setToast(`${integration.name}：${result.message}（${result.latencyMs}ms）`)
+                                toast.success(`${integration.name}：${result.message}（${result.latencyMs}ms）`)
                               )
-                              .catch((error) => setToast((error as Error).message))
+                              .catch((error) => toast.error((error as Error).message))
                               .finally(() => setTestingIntegrationId(null));
                           }}
                         >
@@ -880,8 +902,8 @@ export function NotificationsPage() {
                           disabled={savingAllIntegrations}
                           onClick={() => {
                             void removeIntegration(integration.id)
-                              .then(() => setToast(`已删除通知方式：${integration.name}`))
-                              .catch((error) => setToast((error as Error).message));
+                              .then(() => toast.success(`已删除通知方式：${integration.name}`))
+                              .catch((error) => toast.error((error as Error).message));
                           }}
                         >
                           <Trash2 className="size-4" />
@@ -957,9 +979,7 @@ export function NotificationsPage() {
                 );
               })
             ) : (
-              <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                尚未配置任何通知方式，请点击“新增通知方式”手动添加。
-              </div>
+              <EmptyState title="尚未配置任何通知方式" description="请点击「新增通知方式」手动添加" />
             )}
           </CardContent>
         </Card>
@@ -1054,12 +1074,12 @@ export function NotificationsPage() {
                           size="sm"
                           onClick={() => {
                             if (!alert.taskId) {
-                              setToast("该告警未绑定任务，请先修复节点连接。");
+                              toast.error("该告警未绑定任务，请先修复节点连接。");
                               return;
                             }
                             void retryAlert(alert.id)
-                              .then(() => setToast(`已触发重试：任务 #${alert.taskId}`))
-                              .catch((error) => setToast((error as Error).message));
+                              .then(() => toast.success(`已触发重试：任务 #${alert.taskId}`))
+                              .catch((error) => toast.error((error as Error).message));
                           }}
                           disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
                         >
@@ -1071,8 +1091,8 @@ export function NotificationsPage() {
                           variant="outline"
                           onClick={() => {
                             void acknowledgeAlert(alert.id)
-                              .then(() => setToast(`已确认告警：${alert.errorCode}`))
-                              .catch((error) => setToast((error as Error).message));
+                              .then(() => toast.success(`已确认告警：${alert.errorCode}`))
+                              .catch((error) => toast.error((error as Error).message));
                           }}
                           disabled={alert.status !== "open"}
                         >
@@ -1084,8 +1104,8 @@ export function NotificationsPage() {
                           variant="outline"
                           onClick={() => {
                             void resolveAlert(alert.id)
-                              .then(() => setToast(`已标记恢复：${alert.errorCode}`))
-                              .catch((error) => setToast((error as Error).message));
+                              .then(() => toast.success(`已标记恢复：${alert.errorCode}`))
+                              .catch((error) => toast.error((error as Error).message));
                           }}
                           disabled={alert.status === "resolved"}
                         >
@@ -1116,10 +1136,10 @@ export function NotificationsPage() {
                                     setRetryingAllAlertId(alert.id);
                                     void retryFailedAlertDeliveries(alert.id)
                                       .then((result) => {
-                                        setToast(result.message);
+                                        toast.success(result.message);
                                         refreshDeliveries(alert.id);
                                       })
-                                      .catch((error) => setToast((error as Error).message))
+                                      .catch((error) => toast.error((error as Error).message))
                                       .finally(() => setRetryingAllAlertId(null));
                                   }}
                                 >
@@ -1150,10 +1170,10 @@ export function NotificationsPage() {
                                         setRetryingDeliveryKey(actionKey);
                                         void retryAlertDelivery(alert.id, delivery.integrationId)
                                           .then((result) => {
-                                            setToast(result.message);
+                                            toast.success(result.message);
                                             refreshDeliveries(alert.id);
                                           })
-                                          .catch((error) => setToast((error as Error).message))
+                                          .catch((error) => toast.error((error as Error).message))
                                           .finally(() => setRetryingDeliveryKey(null));
                                       }}
                                     >
@@ -1182,11 +1202,7 @@ export function NotificationsPage() {
         </Card>
       </section>
 
-      {toast ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-300">
-          {toast}
-        </div>
-      ) : null}
+      {dialog}
     </div>
   );
 }

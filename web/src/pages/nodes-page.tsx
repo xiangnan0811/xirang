@@ -17,8 +17,11 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
 import { StatusPulse } from "@/components/status-pulse";
+import { useConfirm } from "@/hooks/use-confirm";
 import { getNodeStatusMeta } from "@/lib/status";
 import type { NewNodeInput, NodeRecord, SSHKeyType } from "@/types/domain";
 
@@ -183,10 +186,10 @@ export function NodesPage() {
     return stored === "list" ? "list" : "cards";
   });
 
+  const { confirm, dialog } = useConfirm();
   const [showEditor, setShowEditor] = useState(false);
   const [showSearchDrawer, setShowSearchDrawer] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   const [draft, setDraft] = useState<NodeEditorDraft>(emptyDraft);
   const [terminalNodeId, setTerminalNodeId] = useState<number | null>(null);
   const [terminalCommand, setTerminalCommand] = useState("hostname && uptime");
@@ -267,11 +270,11 @@ export function NodesPage() {
 
   const onSaveNode = async () => {
     if (!draft.name.trim() || !draft.host.trim() || !draft.username.trim()) {
-      setToast("保存失败：节点名称、主机地址、用户名不能为空。");
+      toast.error("保存失败：节点名称、主机地址、用户名不能为空。");
       return;
     }
     if (draft.authType === "key" && draft.keyId === "__new__" && !draft.inlinePrivateKey.trim()) {
-      setToast("保存失败：请填写新 SSH Key 的私钥内容。");
+      toast.error("保存失败：请填写新 SSH Key 的私钥内容。");
       return;
     }
 
@@ -281,10 +284,10 @@ export function NodesPage() {
     try {
       if (draft.id) {
         await updateNode(draft.id, input);
-        setToast(`节点 ${draft.name} 已更新。`);
+        toast.success(`节点 ${draft.name} 已更新。`);
       } else {
         nodeId = await createNode(input);
-        setToast(`节点 ${draft.name} 已新增。`);
+        toast.success(`节点 ${draft.name} 已新增。`);
       }
 
       setShowEditor(false);
@@ -294,11 +297,11 @@ export function NodesPage() {
         setTestingNodeId(nodeId);
         const result = await testNodeConnection(nodeId);
         setTestingNodeId(null);
-        setToast(result.message);
+        toast.success(result.message);
       }
     } catch (error) {
       setTestingNodeId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -308,16 +311,16 @@ export function NodesPage() {
   };
 
   const onDeleteNode = async (node: NodeRecord) => {
-    const ok = window.confirm(`确认删除节点 ${node.name} 吗？此操作会移除关联任务记录。`);
+    const ok = await confirm({ title: "确认操作", description: `确认删除节点 ${node.name} 吗？此操作会移除关联任务记录。` });
     if (!ok) {
       return;
     }
     try {
       await deleteNode(node.id);
       setSelectedNodeIds((prev) => prev.filter((id) => id !== node.id));
-      setToast(`节点 ${node.name} 已删除。`);
+      toast.success(`节点 ${node.name} 已删除。`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -344,11 +347,11 @@ export function NodesPage() {
 
   const handleBulkDelete = async () => {
     if (!selectedNodeIds.length) {
-      setToast("请先选择至少一个节点。");
+      toast.error("请先选择至少一个节点。");
       return;
     }
 
-    const ok = window.confirm(`确认批量删除 ${selectedNodeIds.length} 个节点吗？此操作会移除关联任务与告警记录。`);
+    const ok = await confirm({ title: "确认操作", description: `确认批量删除 ${selectedNodeIds.length} 个节点吗？此操作会移除关联任务与告警记录。` });
     if (!ok) {
       return;
     }
@@ -357,12 +360,12 @@ export function NodesPage() {
       const result = await deleteNodes(selectedNodeIds);
       setSelectedNodeIds([]);
       if (result.notFoundIds.length > 0) {
-        setToast(`批量删除完成：成功 ${result.deleted}，未找到 ${result.notFoundIds.length} 个节点。`);
+        toast.success(`批量删除完成：成功 ${result.deleted}，未找到 ${result.notFoundIds.length} 个节点。`);
       } else {
-        setToast(`已批量删除 ${result.deleted} 个节点。`);
+        toast.success(`已批量删除 ${result.deleted} 个节点。`);
       }
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -371,10 +374,10 @@ export function NodesPage() {
       setTestingNodeId(node.id);
       const result = await testNodeConnection(node.id);
       setTestingNodeId(null);
-      setToast(`${node.name}：${result.message}`);
+      toast.success(`${node.name}：${result.message}`);
     } catch (error) {
       setTestingNodeId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -386,11 +389,11 @@ export function NodesPage() {
 
   const handleRunTerminalCommand = async () => {
     if (!terminalNode) {
-      setToast("请先选择节点。");
+      toast.error("请先选择节点。");
       return;
     }
     if (!terminalCommand.trim()) {
-      setToast("请输入要执行的命令。");
+      toast.error("请输入要执行的命令。");
       return;
     }
 
@@ -403,9 +406,9 @@ export function NodesPage() {
         `# 退出码: ${result.exitCode} · 耗时: ${result.durationMs} ms`
       ];
       setTerminalOutput(lines.join("\n"));
-      setToast(`${terminalNode.name}：${result.message}`);
+      toast.success(`${terminalNode.name}：${result.message}`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     } finally {
       setTerminalRunning(false);
     }
@@ -414,16 +417,16 @@ export function NodesPage() {
   const handleTriggerBackup = async (nodeId: number, nodeName: string) => {
     try {
       await triggerNodeBackup(nodeId);
-      setToast(`已触发 ${nodeName} 的手动备份任务。`);
+      toast.success(`已触发 ${nodeName} 的手动备份任务。`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
   const handleImportCSV = async (content: string) => {
     const rows = parseCSVRows(content);
     if (!rows.length) {
-      setToast("未解析到有效节点记录，请检查 CSV 格式（name,host,username,port,tags）。");
+      toast.error("未解析到有效节点记录，请检查 CSV 格式（name,host,username,port,tags）。");
       return;
     }
 
@@ -455,7 +458,7 @@ export function NodesPage() {
     }
 
     const summary = `批量导入完成：成功 ${successCount}，失败 ${failedCount}。`;
-    setToast(errors.length ? `${summary} ${errors.join(" | ")}` : summary);
+    toast.success(errors.length ? `${summary} ${errors.join(" | ")}` : summary);
   };
 
   const handleExportCSV = () => {
@@ -479,7 +482,7 @@ export function NodesPage() {
     link.download = `xirang-nodes-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
-    setToast(`已导出 ${sortedNodes.length} 条节点记录。`);
+    toast.success(`已导出 ${sortedNodes.length} 条节点记录。`);
   };
 
   const handleDownloadTemplate = () => {
@@ -494,11 +497,11 @@ export function NodesPage() {
     link.download = "xirang-nodes-template.csv";
     link.click();
     URL.revokeObjectURL(link.href);
-    setToast("已下载节点导入模板。");
+    toast.success("已下载节点导入模板。");
   };
 
   return (
-    <div className="space-y-4">
+    <div className="animate-fade-in space-y-4">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -563,7 +566,7 @@ export function NodesPage() {
                   void file
                     .text()
                     .then((content) => handleImportCSV(content))
-                    .catch((error) => setToast((error as Error).message));
+                    .catch((error) => toast.error((error as Error).message));
                   event.target.value = "";
                 }}
               />
@@ -732,12 +735,12 @@ export function NodesPage() {
                     if (draft.id) {
                       const existing = nodes.find((node) => node.id === draft.id);
                       if (!existing) {
-                        setToast("节点记录已变更，请先保存后重试连接测试。");
+                        toast.error("节点记录已变更，请先保存后重试连接测试。");
                         return;
                       }
                       await onTestNode(existing);
                     } else {
-                      setToast("请先保存节点，再执行连接测试。 ");
+                      toast.error("请先保存节点，再执行连接测试。 ");
                     }
                   }}
                 >
@@ -841,7 +844,7 @@ export function NodesPage() {
               ) : null}
 
               {!loading && !sortedNodes.length ? (
-                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">当前筛选条件下暂无节点。</div>
+                <EmptyState title="当前筛选条件下暂无节点" />
               ) : null}
 
               {sortedNodes.map((node) => {
@@ -1193,13 +1196,6 @@ export function NodesPage() {
         </Card>
       ) : null}
 
-
-      {toast ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-300">
-          {toast}
-        </div>
-      ) : null}
-
       {showSearchDrawer ? (
         <div className="fixed inset-0 z-50 md:hidden">
           <button className="absolute inset-0 bg-black/45" onClick={() => setShowSearchDrawer(false)} />
@@ -1230,6 +1226,8 @@ export function NodesPage() {
           </section>
         </div>
       ) : null}
+
+      {dialog}
     </div>
   );
 }

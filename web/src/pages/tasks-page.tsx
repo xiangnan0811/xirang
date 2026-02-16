@@ -5,7 +5,10 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { NewTaskInput, TaskExecutorType, TaskStatus } from "@/types/domain";
@@ -62,11 +65,12 @@ export function TasksPage() {
     retryTask
   } = useOutletContext<ConsoleOutletContext>();
 
+  const { confirm, dialog } = useConfirm();
+
   const [keyword, setKeyword] = useState(globalSearch);
   const [statusFilter, setStatusFilter] = useState<"all" | TaskStatus>("all");
   const [nodeFilter, setNodeFilter] = useState("all");
   const [showCreate, setShowCreate] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<TaskDraft>(defaultDraft);
 
@@ -98,7 +102,7 @@ export function TasksPage() {
   const saveTask = async () => {
     const nodeId = toNumberOrNull(draft.nodeId);
     if (!draft.name.trim() || !nodeId) {
-      setToast("创建失败：任务名称与节点必填。");
+      toast.error("创建失败：任务名称与节点必填。");
       return;
     }
 
@@ -117,9 +121,9 @@ export function TasksPage() {
       const taskId = await createTask(input);
       setDraft(defaultDraft);
       setShowCreate(false);
-      setToast(`任务 #${taskId} 已创建。`);
+      toast.success(`任务 #${taskId} 已创建。`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -128,10 +132,10 @@ export function TasksPage() {
       setPendingId(taskId);
       await triggerTask(taskId);
       setPendingId(null);
-      setToast(`已触发任务 #${taskId}。`);
+      toast.success(`已触发任务 #${taskId}。`);
     } catch (error) {
       setPendingId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -140,10 +144,10 @@ export function TasksPage() {
       setPendingId(taskId);
       await cancelTask(taskId);
       setPendingId(null);
-      setToast(`已取消任务 #${taskId}。`);
+      toast.success(`已取消任务 #${taskId}。`);
     } catch (error) {
       setPendingId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -152,15 +156,15 @@ export function TasksPage() {
       setPendingId(taskId);
       await retryTask(taskId);
       setPendingId(null);
-      setToast(`已重试任务 #${taskId}。`);
+      toast.success(`已重试任务 #${taskId}。`);
     } catch (error) {
       setPendingId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
   const handleDelete = async (taskId: number) => {
-    const ok = window.confirm(`确认删除任务 #${taskId} 吗？`);
+    const ok = await confirm({ title: "确认操作", description: `确认删除任务 #${taskId} 吗？` });
     if (!ok) {
       return;
     }
@@ -168,15 +172,15 @@ export function TasksPage() {
       setPendingId(taskId);
       await deleteTask(taskId);
       setPendingId(null);
-      setToast(`任务 #${taskId} 已删除。`);
+      toast.success(`任务 #${taskId} 已删除。`);
     } catch (error) {
       setPendingId(null);
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-fade-in">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -353,7 +357,16 @@ export function TasksPage() {
                       <span>{task.progress}%</span>
                     </div>
                     <div className="h-2 rounded-full bg-muted">
-                      <div className="h-2 rounded-full bg-primary" style={{ width: `${task.progress}%` }} />
+                      <div
+                        className={cn(
+                          "h-2 rounded-full transition-all",
+                          task.status === "success" ? "bg-success" :
+                          task.status === "failed" ? "bg-destructive" :
+                          task.status === "running" || task.status === "retrying" ? "bg-info" :
+                          "bg-muted-foreground"
+                        )}
+                        style={{ width: `${task.progress}%` }}
+                      />
                     </div>
                   </div>
 
@@ -404,19 +417,13 @@ export function TasksPage() {
             })}
 
             {!filteredTasks.length ? (
-              <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                当前筛选条件下没有任务。
-              </div>
+              <EmptyState title="当前筛选条件下没有任务。" />
             ) : null}
           </div>
         </CardContent>
       </Card>
 
-      {toast ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-300">
-          {toast}
-        </div>
-      ) : null}
+      {dialog}
     </div>
   );
 }

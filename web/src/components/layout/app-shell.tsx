@@ -3,6 +3,7 @@ import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { navItems } from "@/components/layout/navigation";
+import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,6 +76,7 @@ export function AppShell() {
           ) : null}
         </header>
 
+        <ScrollToTop />
         <main className="flex-1 px-4 py-4 pb-24 md:px-8 md:pb-8">
           <Outlet context={consoleData as ConsoleOutletContext} />
         </main>

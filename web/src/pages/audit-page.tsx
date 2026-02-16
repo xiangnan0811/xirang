@@ -6,7 +6,9 @@ import type { AuditLogRecord } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
 
 const pageSize = 30;
 const auditViewStorageKey = "xirang.audit.view";
@@ -62,7 +64,6 @@ export function AuditPage() {
     const stored = localStorage.getItem(auditViewStorageKey);
     return stored === "list" ? "list" : "cards";
   });
-  const [toast, setToast] = useState<string | null>(null);
 
   const autoLoadKeyRef = useRef("");
 
@@ -71,14 +72,13 @@ export function AuditPage() {
 
   const load = async (nextOffset: number) => {
     if (!token) {
-      setToast("请先登录后查看审计日志。");
+      toast.error("请先登录后查看审计日志。");
       return;
     }
 
     const { from, to } = resolveTimeRange(timeRange);
 
     setLoading(true);
-    setToast(null);
     try {
       const result = await apiClient.getAuditLogs(token, {
         path: keyword.trim() || undefined,
@@ -93,9 +93,9 @@ export function AuditPage() {
       setOffset(result.offset);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
-        setToast("当前账号无权访问审计日志（仅管理员可读）。");
+        toast.error("当前账号无权访问审计日志（仅管理员可读）。");
       } else {
-        setToast((error as Error).message);
+        toast.error((error as Error).message);
       }
     } finally {
       setLoading(false);
@@ -104,14 +104,13 @@ export function AuditPage() {
 
   const exportCSV = async () => {
     if (!token) {
-      setToast("请先登录后导出审计日志。");
+      toast.error("请先登录后导出审计日志。");
       return;
     }
 
     const { from, to } = resolveTimeRange(timeRange);
 
     setExporting(true);
-    setToast(null);
     try {
       const blob = await apiClient.exportAuditLogsCSV(token, {
         path: keyword.trim() || undefined,
@@ -128,12 +127,12 @@ export function AuditPage() {
       link.click();
       URL.revokeObjectURL(url);
 
-      setToast("审计日志 CSV 导出成功。");
+      toast.success("审计日志 CSV 导出成功。");
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
-        setToast("当前账号无权导出审计日志（仅管理员可读）。");
+        toast.error("当前账号无权导出审计日志（仅管理员可读）。");
       } else {
-        setToast((error as Error).message);
+        toast.error((error as Error).message);
       }
     } finally {
       setExporting(false);
@@ -160,7 +159,7 @@ export function AuditPage() {
   }, [viewMode]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-fade-in">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -252,7 +251,7 @@ export function AuditPage() {
                 </div>
               ))}
               {!rows.length && !loading ? (
-                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
+                <EmptyState title="当前筛选条件下没有审计记录。" />
               ) : null}
             </div>
           ) : (
@@ -317,11 +316,6 @@ export function AuditPage() {
         </CardContent>
       </Card>
 
-      {toast ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
-          {toast}
-        </div>
-      ) : null}
     </div>
   );
 }

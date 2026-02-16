@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { Activity, ArrowDownCircle, ArrowUpCircle, Radar } from "lucide-react";
+import { Activity, ArrowDownCircle, ArrowUpCircle, Radar, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPulse } from "@/components/status-pulse";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,23 +39,30 @@ export function OverviewPage() {
 
   const ingressValues = trafficSeries.map((point) => point.ingressMbps);
   const egressValues = trafficSeries.map((point) => point.egressMbps);
+  const peakIngress = ingressValues.length ? Math.max(...ingressValues) : 0;
+  const peakEgress = egressValues.length ? Math.max(...egressValues) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="animate-fade-in space-y-4">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card className="border-emerald-500/30">
+        <Card className="border-success/30">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">节点健康率</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{healthRate}%</p>
+            <div className="flex items-center gap-2">
+              <p className="text-3xl font-semibold">{healthRate}%</p>
+              {healthRate >= 90 ? (
+                <TrendingUp className="size-5 text-success" />
+              ) : null}
+            </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {overview.healthyNodes}/{overview.totalNodes} 节点在线
             </p>
           </CardContent>
         </Card>
 
-        <Card className="border-sky-500/30">
+        <Card className="border-info/30">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">任务成功率</CardTitle>
           </CardHeader>
@@ -65,7 +72,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-amber-500/30">
+        <Card className="border-warning/30">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">实时吞吐</CardTitle>
           </CardHeader>
@@ -146,8 +153,30 @@ export function OverviewPage() {
           <CardContent className="space-y-3">
             <div className="rounded-lg border bg-background/70 p-3">
               <svg viewBox="0 0 320 120" className="h-40 w-full">
-                <path d={buildLinePath(ingressValues, 320, 120)} fill="none" stroke="#22c55e" strokeWidth="2.2" />
-                <path d={buildLinePath(egressValues, 320, 120)} fill="none" stroke="#38bdf8" strokeWidth="2.2" />
+                <defs>
+                  <linearGradient id="ingressGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity="0.3" />
+                    <stop offset="100%" stopColor="#22c55e" stopOpacity="0.02" />
+                  </linearGradient>
+                  <linearGradient id="egressGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
+                    <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.02" />
+                  </linearGradient>
+                </defs>
+                {ingressValues.length > 0 ? (
+                  <path
+                    d={`${buildLinePath(ingressValues, 320, 120)} L320,120 L0,120 Z`}
+                    fill="url(#ingressGrad)"
+                  />
+                ) : null}
+                {egressValues.length > 0 ? (
+                  <path
+                    d={`${buildLinePath(egressValues, 320, 120)} L320,120 L0,120 Z`}
+                    fill="url(#egressGrad)"
+                  />
+                ) : null}
+                <path d={buildLinePath(ingressValues, 320, 120)} fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d={buildLinePath(egressValues, 320, 120)} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
               <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
@@ -162,12 +191,12 @@ export function OverviewPage() {
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">峰值入站</p>
-                <p className="mt-1 text-xl font-semibold">{Math.max(...ingressValues)} Mbps</p>
+                <p className="mt-1 text-xl font-semibold">{peakIngress} Mbps</p>
                 <p className="text-xs text-emerald-500">+12.4%</p>
               </div>
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">峰值出站</p>
-                <p className="mt-1 text-xl font-semibold">{Math.max(...egressValues)} Mbps</p>
+                <p className="mt-1 text-xl font-semibold">{peakEgress} Mbps</p>
                 <p className="text-xs text-sky-500">+8.1%</p>
               </div>
             </div>
@@ -192,10 +221,10 @@ export function OverviewPage() {
                     className={cn(
                       "h-2 rounded-full",
                       node.successRate >= 92
-                        ? "bg-emerald-500"
+                        ? "bg-success"
                         : node.successRate >= 80
-                          ? "bg-amber-500"
-                          : "bg-red-500"
+                          ? "bg-warning"
+                          : "bg-destructive"
                     )}
                     style={{ width: `${node.successRate}%` }}
                   />

@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { toast } from "@/components/ui/toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
 type PolicyTemplate = {
@@ -230,9 +232,9 @@ export function PoliciesPage() {
   const [keyword, setKeyword] = useState(globalSearch);
   const [viewMode, setViewMode] = useState<"cards" | "list">("cards");
   const [showEditor, setShowEditor] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [draft, setDraft] = useState<PolicyDraft>(emptyDraft);
   const [mobileCron, setMobileCron] = useState<MobileCronDraft>(() => parseMobileCron(emptyDraft.cron));
+  const { confirm, dialog } = useConfirm();
 
   const filteredPolicies = useMemo(() => {
     const effectiveKeyword = (keyword || globalSearch).trim().toLowerCase();
@@ -250,7 +252,7 @@ export function PoliciesPage() {
 
   const onSavePolicy = async () => {
     if (!draft.name.trim() || !draft.sourcePath.trim() || !draft.targetPath.trim() || !draft.cron.trim()) {
-      setToast("保存失败：策略名称、源路径、目标路径、Cron 必填。");
+      toast.error("保存失败：策略名称、源路径、目标路径、Cron 必填。");
       return;
     }
 
@@ -266,17 +268,17 @@ export function PoliciesPage() {
     try {
       if (draft.id) {
         await updatePolicy(draft.id, input);
-        setToast(`策略 ${draft.name} 已更新。`);
+        toast.success(`策略 ${draft.name} 已更新。`);
       } else {
         await createPolicy(input);
-        setToast(`策略 ${draft.name} 已新增。`);
+        toast.success(`策略 ${draft.name} 已新增。`);
       }
 
       setShowEditor(false);
       setDraft(emptyDraft);
       setMobileCron(parseMobileCron(emptyDraft.cron));
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -294,24 +296,24 @@ export function PoliciesPage() {
   };
 
   const onDelete = async (policy: PolicyRecord) => {
-    const ok = window.confirm(`确认删除策略 ${policy.name} 吗？`);
+    const ok = await confirm({ title: "确认删除", description: `确认删除策略 ${policy.name} 吗？` });
     if (!ok) {
       return;
     }
     try {
       await deletePolicy(policy.id);
-      setToast(`策略 ${policy.name} 已删除。`);
+      toast.success(`策略 ${policy.name} 已删除。`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
   const onTogglePolicy = async (policy: PolicyRecord) => {
     try {
       await togglePolicy(policy.id);
-      setToast(`策略 ${policy.name} 已${policy.enabled ? "停用" : "启用"}。`);
+      toast.success(`策略 ${policy.name} 已${policy.enabled ? "停用" : "启用"}。`);
     } catch (error) {
-      setToast((error as Error).message);
+      toast.error((error as Error).message);
     }
   };
 
@@ -327,7 +329,7 @@ export function PoliciesPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="animate-fade-in space-y-4">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -772,11 +774,7 @@ export function PoliciesPage() {
         </div>
       ) : null}
 
-      {toast ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-300">
-          {toast}
-        </div>
-      ) : null}
+      {dialog}
     </div>
   );
 }

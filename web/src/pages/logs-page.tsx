@@ -293,7 +293,7 @@ export function LogsPage() {
   };
 
   return (
-    <Card className={cn(fullScreen && "fixed inset-2 z-50 m-0")}> 
+    <Card className={cn("animate-fade-in", fullScreen && "fixed inset-2 z-50 m-0")}> 
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">实时日志与监控终端</CardTitle>

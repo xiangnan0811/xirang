@@ -5,7 +5,10 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import type { NewSSHKeyInput, SSHKeyRecord, SSHKeyType } from "@/types/domain";
 
 type SSHKeyDraft = NewSSHKeyInput & {
@@ -33,9 +36,10 @@ export function SSHKeysPage() {
   const { sshKeys, nodes, createSSHKey, updateSSHKey, deleteSSHKey } =
     useOutletContext<ConsoleOutletContext>();
 
+  const { confirm, dialog } = useConfirm();
+
   const [showEditor, setShowEditor] = useState(false);
   const [draft, setDraft] = useState<SSHKeyDraft>(emptyDraft);
-  const [toast, setToast] = useState<string | null>(null);
 
   const keyUsageMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -50,7 +54,7 @@ export function SSHKeysPage() {
 
   const onSave = async () => {
     if (!draft.name.trim() || !draft.username.trim() || !draft.privateKey.trim()) {
-      setToast("保存失败：名称、用户名、私钥都不能为空。");
+      toast.error("保存失败：名称、用户名、私钥都不能为空。");
       return;
     }
 
@@ -63,10 +67,10 @@ export function SSHKeysPage() {
 
     if (draft.id) {
       await updateSSHKey(draft.id, input);
-      setToast(`SSH Key ${draft.name} 已更新。`);
+      toast.success(`SSH Key ${draft.name} 已更新。`);
     } else {
       await createSSHKey(input);
-      setToast(`SSH Key ${draft.name} 已新增。`);
+      toast.success(`SSH Key ${draft.name} 已新增。`);
     }
 
     setDraft(emptyDraft);
@@ -74,21 +78,21 @@ export function SSHKeysPage() {
   };
 
   const onDelete = async (key: SSHKeyRecord) => {
-    const ok = window.confirm(`确认删除 SSH Key ${key.name} 吗？`);
+    const ok = await confirm({ title: "确认操作", description: `确认删除 SSH Key ${key.name} 吗？` });
     if (!ok) {
       return;
     }
 
     const success = await deleteSSHKey(key.id);
     if (!success) {
-      setToast(`删除失败：${key.name} 仍被节点使用，请先修改节点认证信息。`);
+      toast.error(`删除失败：${key.name} 仍被节点使用，请先修改节点认证信息。`);
       return;
     }
-    setToast(`SSH Key ${key.name} 已删除。`);
+    toast.success(`SSH Key ${key.name} 已删除。`);
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-fade-in">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -215,18 +219,12 @@ export function SSHKeysPage() {
           </div>
 
           {!sshKeys.length ? (
-            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-              当前还没有 SSH Key，请先新增密钥后再创建节点。
-            </div>
+            <EmptyState title="当前还没有 SSH Key" description="请先新增密钥后再创建节点" />
           ) : null}
         </CardContent>
       </Card>
 
-      {toast ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-300">
-          {toast}
-        </div>
-      ) : null}
+      {dialog}
     </div>
   );
 }
