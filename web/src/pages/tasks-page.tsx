@@ -68,6 +68,25 @@ export function TasksPage() {
       .sort((first, second) => second.id - first.id);
   }, [globalSearch, keyword, nodeFilter, statusFilter, tasks]);
 
+  const taskStats = useMemo(() => {
+    let pending = 0;
+    let running = 0;
+    let failed = 0;
+    let success = 0;
+    for (const task of tasks) {
+      if (task.status === "pending") {
+        pending += 1;
+      } else if (task.status === "running" || task.status === "retrying") {
+        running += 1;
+      } else if (task.status === "failed") {
+        failed += 1;
+      } else if (task.status === "success") {
+        success += 1;
+      }
+    }
+    return { pending, running, failed, success };
+  }, [tasks]);
+
   const handleCreateTask = async (input: NewTaskInput) => {
     if (!input.name.trim() || !input.nodeId) {
       toast.error("创建失败：任务名称与节点必填。");
@@ -139,13 +158,38 @@ export function TasksPage() {
   };
 
   return (
-    <div className="animate-fade-in space-y-4">
-      <Card>
+    <div className="animate-fade-in space-y-5">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">任务编排中心</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">任务调度与执行面板</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              覆盖触发、取消、重试与日志回溯，支持快速筛选定位异常任务。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">待执行 {taskStats.pending}</Badge>
+            <Badge variant="warning">运行中 {taskStats.running}</Badge>
+            <Badge variant="danger">失败 {taskStats.failed}</Badge>
+            <Badge variant="success">成功 {taskStats.success}</Badge>
+            <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="mr-1 size-4" />
+              新建任务
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">
-              任务队列（筛选 + 触发 + 取消 + 重试）
-            </CardTitle>
+            <div>
+              <CardTitle className="text-base">任务队列（筛选 + 触发 + 取消 + 重试）</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">任务按最新创建优先展示，支持节点与状态双重过滤</p>
+            </div>
             <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
               <Plus className="mr-1 size-4" />
               新建任务
@@ -154,7 +198,7 @@ export function TasksPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
+          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1.6fr_1fr_1fr]">
             <Input
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
               value={keyword}
@@ -162,7 +206,7 @@ export function TasksPage() {
             />
 
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as typeof statusFilter)
@@ -178,7 +222,7 @@ export function TasksPage() {
             </select>
 
             <select
-              className="h-10 rounded-md border bg-background px-3 text-sm"
+              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
               value={nodeFilter}
               onChange={(event) => setNodeFilter(event.target.value)}
             >
@@ -201,7 +245,14 @@ export function TasksPage() {
               const isPending = pendingId === task.id;
 
               return (
-                <div key={task.id} className="space-y-2 rounded-lg border p-4">
+                <div
+                  key={task.id}
+                  className={cn(
+                    "space-y-2 rounded-xl border border-border/75 bg-background/65 p-4 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel",
+                    task.status === "failed" && "border-red-500/35 bg-red-500/10",
+                    task.status === "running" && "border-cyan-500/30"
+                  )}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="font-medium">{task.policyName}</p>

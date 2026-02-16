@@ -45,6 +45,7 @@ export function PoliciesPage() {
   }, [globalSearch, keyword, policies]);
 
   const activeCount = policies.filter((policy) => policy.enabled).length;
+  const disabledCount = policies.length - activeCount;
 
   const openCreateDialog = () => {
     setEditingPolicy(null);
@@ -120,15 +121,39 @@ export function PoliciesPage() {
   };
 
   return (
-    <div className="animate-fade-in space-y-4">
-      <Card>
+    <div className="animate-fade-in space-y-5">
+      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">策略控制台</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight">可视化备份策略管理</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              将 Cron 与自然语言同步展示，支持启停、编辑与路径策略的快速维护。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="success">启用 {activeCount}</Badge>
+            <Badge variant="outline">停用 {disabledCount}</Badge>
+            <Badge variant="secondary">筛选 {filteredPolicies.length}</Badge>
+            <Button size="sm" onClick={openCreateDialog}>
+              <Plus className="mr-1 size-4" />
+              新增策略
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">
-              策略配置中枢（新增 / 编辑 / 删除 + 卡片视图）
-            </CardTitle>
+            <div>
+              <CardTitle className="text-base">策略配置中枢（新增 / 编辑 / 删除 + 卡片视图）</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">默认卡片视图，列表视图适合大批量路径审阅</p>
+            </div>
             <div className="flex items-center gap-2">
-              <div className="hidden items-center gap-1 rounded-md border p-1 md:flex">
+              <div className="hidden items-center gap-1 rounded-lg border border-border/80 bg-background/70 p-1 md:flex">
                 <Button
                   size="sm"
                   variant={viewMode === "cards" ? "default" : "outline"}
@@ -155,7 +180,7 @@ export function PoliciesPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+          <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-[1fr_auto]">
             <Input
               placeholder="搜索策略 / 路径 / cron"
               value={keyword}
@@ -175,7 +200,10 @@ export function PoliciesPage() {
           {viewMode === "cards" ? (
             <div className="grid gap-3 lg:grid-cols-2">
               {filteredPolicies.map((policy) => (
-                <div key={policy.id} className="rounded-lg border p-4">
+                <div
+                  key={policy.id}
+                  className="rounded-xl border border-border/75 bg-background/65 p-4 shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/35 hover:shadow-panel"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="font-medium">{policy.name}</h3>
@@ -224,10 +252,10 @@ export function PoliciesPage() {
               ))}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto rounded-xl border border-border/75 bg-background/55">
               <table className="min-w-[980px] text-left text-sm">
                 <thead>
-                  <tr className="border-b bg-muted/40 text-muted-foreground">
+                  <tr className="border-b border-border/70 bg-muted/35 text-muted-foreground">
                     <th className="px-3 py-3">策略名</th>
                     <th className="px-3 py-3">Cron</th>
                     <th className="px-3 py-3">源路径</th>
@@ -238,7 +266,7 @@ export function PoliciesPage() {
                 </thead>
                 <tbody>
                   {filteredPolicies.map((policy) => (
-                    <tr key={policy.id} className="border-b">
+                    <tr key={policy.id} className="border-b border-border/60 transition-colors hover:bg-accent/30">
                       <td className="px-3 py-3">
                         <p className="font-medium">{policy.name}</p>
                         <p className="text-xs text-muted-foreground">

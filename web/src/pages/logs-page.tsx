@@ -201,6 +201,29 @@ export function LogsPage() {
       .sort((first, second) => second.latestAt - first.latestAt);
   }, [filteredLogs]);
 
+  const logStats = useMemo(() => {
+    let info = 0;
+    let warn = 0;
+    let error = 0;
+    const groupKeys = new Set<string>();
+    for (const log of filteredLogs) {
+      if (log.level === "error") {
+        error += 1;
+      } else if (log.level === "warn") {
+        warn += 1;
+      } else {
+        info += 1;
+      }
+      groupKeys.add(`${log.nodeName ?? "系统"}::${log.taskId ?? "global"}`);
+    }
+    return {
+      info,
+      warn,
+      error,
+      groups: groupKeys.size
+    };
+  }, [filteredLogs]);
+
   const focusedTask = selectedTask === "all" ? null : tasks.find((task) => String(task.id) === selectedTask);
 
   const runningTasks = tasks.filter((task) => task.status === "running" || task.status === "retrying");
@@ -293,8 +316,32 @@ export function LogsPage() {
   };
 
   return (
-    <Card className={cn("animate-fade-in", fullScreen && "fixed inset-2 z-50 m-0")}> 
-      <CardHeader>
+    <div className="animate-fade-in space-y-5">
+      {!fullScreen ? (
+        <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
+          <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
+          <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
+          <div className="relative flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">流式终端</p>
+              <h3 className="mt-1 text-xl font-semibold tracking-tight">实时日志与任务追踪面板</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                按节点与任务聚类展示日志，支持实时追踪、历史回溯与异常码高亮定位。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">分组 {logStats.groups}</Badge>
+              <Badge variant="success">INFO {logStats.info}</Badge>
+              <Badge variant="warning">WARN {logStats.warn}</Badge>
+              <Badge variant="danger">ERROR {logStats.error}</Badge>
+              <Badge variant={connected ? "success" : "outline"}>{connected ? "已连接" : "未连接"}</Badge>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <Card className={cn("border-border/75", fullScreen && "fixed inset-2 z-50 m-0")}> 
+        <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">实时日志与监控终端</CardTitle>
           <div className="flex items-center gap-2">
@@ -308,12 +355,12 @@ export function LogsPage() {
             </Button>
           </div>
         </div>
-      </CardHeader>
+        </CardHeader>
 
-      <CardContent className="space-y-3">
-        <div className="grid gap-2 md:grid-cols-4">
+        <CardContent className="space-y-3">
+        <div className="grid gap-2 rounded-xl border border-border/70 bg-background/55 p-2 md:grid-cols-4">
           <select
-            className="h-10 rounded-md border bg-background px-3 text-sm"
+            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
             value={selectedNode}
             onChange={(event) => {
               const value = event.target.value;
@@ -330,7 +377,7 @@ export function LogsPage() {
           </select>
 
           <select
-            className="h-10 rounded-md border bg-background px-3 text-sm"
+            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm"
             value={selectedTask}
             onChange={(event) => {
               const nextTask = event.target.value;
@@ -360,7 +407,7 @@ export function LogsPage() {
             />
           </div>
 
-          <div className="flex items-center gap-2 rounded-md border px-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 rounded-lg border border-border/75 bg-background/70 px-3 text-xs text-muted-foreground">
             <RefreshCw className={cn("size-3.5", (historyLoading || historyPaging) && "animate-spin")} />
             当前筛选 {filteredLogs.length} 条 · 游标#{cursorLogId || "-"}
           </div>
@@ -379,7 +426,7 @@ export function LogsPage() {
           </div>
         ) : null}
 
-        <div className="rounded-lg border p-3">
+        <div className="rounded-lg border border-border/75 bg-background/60 p-3">
           <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
             <span>高对比度执行进度</span>
             <span>{Number.isFinite(progressValue) ? progressValue : 0}%</span>
@@ -394,7 +441,7 @@ export function LogsPage() {
 
         <div
           ref={terminalRef}
-          className="terminal-surface h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
+          className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
           style={{ fontSize: `${12 * fontScale}px` }}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
@@ -427,7 +474,7 @@ export function LogsPage() {
         </div>
 
         {focusedTaskNumber ? (
-          <div className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border/75 bg-background/60 px-3 py-2">
             <p className="text-xs text-muted-foreground">
               历史回溯：{historyLogs.length} 条{historyCursor ? `，最早游标 #${historyCursor}` : "，已到最早"}
             </p>
@@ -465,7 +512,8 @@ export function LogsPage() {
           {shortcutEcho ? <p className="mt-2 text-xs text-emerald-400">{shortcutEcho}</p> : null}
           <p className="mt-1 text-[11px] text-muted-foreground">支持双指缩放日志字体（Pinch-to-zoom）</p>
         </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
