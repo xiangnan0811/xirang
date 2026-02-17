@@ -227,7 +227,7 @@ export function AuditPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="filter-panel grid gap-2 md:grid-cols-[1fr_auto_auto]">
+          <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -249,7 +249,7 @@ export function AuditPage() {
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
             </select>
-            <Button onClick={() => void load(0)} disabled={loading}>
+            <Button className="md:col-span-2 lg:col-span-1" onClick={() => void load(0)} disabled={loading}>
               查询
             </Button>
           </div>
@@ -287,7 +287,7 @@ export function AuditPage() {
                   <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                     <p>时间：{row.createdAt}</p>
                     <p>角色：{row.role || "-"}</p>
-                    <p>路径：<span className="font-mono">{row.path}</span></p>
+                    <p>路径：<span className="break-all font-mono">{row.path}</span></p>
                     <p>状态码：{row.statusCode}</p>
                     <p>来源 IP：{row.clientIP}</p>
                   </div>

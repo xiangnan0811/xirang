@@ -70,8 +70,8 @@ export function LoginPage() {
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(34,197,94,0.2),transparent_35%),linear-gradient(180deg,rgba(15,23,42,0.08),rgba(15,23,42,0.35))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.24),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(34,197,94,0.24),transparent_35%),linear-gradient(180deg,rgba(2,6,23,0.72),rgba(2,6,23,0.92))]" />
 
-      <div className="relative z-10 grid w-full max-w-5xl gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="hidden rounded-2xl border border-border/70 bg-background/60 p-6 shadow-panel backdrop-blur-xl lg:block">
+      <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="hidden rounded-2xl border border-border/70 bg-background/60 p-5 shadow-panel backdrop-blur-xl md:block lg:p-6">
           <div className="inline-flex items-center gap-2 rounded-full border border-border/75 bg-background/70 px-3 py-1 text-xs text-muted-foreground">
             <img src="/xirang-mark.svg" alt="XiRang" className="size-4 rounded-sm border border-border/70" />
             XiRang / X-Soil

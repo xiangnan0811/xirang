@@ -6,6 +6,7 @@ import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { navItems } from "@/components/layout/navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,7 +71,7 @@ export function AppShell() {
   }, [consoleData.globalSearch, consoleData.setGlobalSearch]);
 
   return (
-    <div className="app-shell-bg min-h-screen md:pl-72">
+    <div className="app-shell-bg min-h-screen md:pl-20 lg:pl-72">
       <a
         href="#main-content"
         className="sr-only absolute left-3 top-3 z-[70] rounded-md border border-border/80 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm focus:not-sr-only"
@@ -81,7 +82,7 @@ export function AppShell() {
 
       <div className="relative z-10 flex min-h-screen flex-1 flex-col">
         <header className="sticky top-0 z-30 border-b border-border/70 bg-background/75 backdrop-blur-xl">
-          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-3 px-4 py-3 md:px-8">
+          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-3 px-4 py-3 md:px-6 lg:px-8">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-background/70 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm">
@@ -109,6 +110,7 @@ export function AppShell() {
                   <RefreshCw className="mr-2 size-4" />
                   刷新数据
                 </Button>
+                <DisplayPreferencesToggle className="hidden md:flex" />
                 <ThemeToggle />
               </div>
             </div>
@@ -124,21 +126,21 @@ export function AppShell() {
                 aria-keyshortcuts="Control+K Meta+K /"
                 placeholder="全局搜索节点（名称 / IP / 标签 / 状态）"
               />
-              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground md:inline-flex">
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground lg:inline-flex">
                 ⌘K /
               </span>
             </div>
           </div>
 
           {consoleData.warning ? (
-            <div role="status" aria-live="polite" className="border-t bg-amber-500/10 px-4 py-2 text-xs text-amber-600 md:px-8 dark:text-amber-300">
+            <div role="status" aria-live="polite" className="border-t bg-amber-500/10 px-4 py-2 text-xs text-amber-600 md:px-6 lg:px-8 dark:text-amber-300">
               {consoleData.warning}
             </div>
           ) : null}
         </header>
 
         <ScrollToTop />
-        <main id="main-content" className="mx-auto flex-1 w-full max-w-[1680px] px-4 py-4 pb-24 md:px-8 md:pb-8">
+        <main id="main-content" className="mx-auto flex-1 w-full max-w-[1680px] px-4 py-4 pb-24 md:px-6 md:pb-8 lg:px-8">
           <Outlet context={consoleData as ConsoleOutletContext} />
         </main>
       </div>

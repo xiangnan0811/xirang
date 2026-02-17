@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Menu, RefreshCw, X } from "lucide-react";
 import { navItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -120,7 +121,10 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
 
             <div className="mt-auto flex items-center justify-between border-t border-border/80 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
               <p className="text-xs text-muted-foreground">当前用户：{username ?? "未知"}</p>
-              <ThemeToggle />
+              <div className="flex items-center gap-1">
+                <DisplayPreferencesToggle />
+                <ThemeToggle />
+              </div>
             </div>
           </section>
         </div>

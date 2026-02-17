@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { Activity, ArrowDownCircle, ArrowUpCircle, Radar, TrendingUp } from "lucide-react";
+import { Activity, ArrowDownCircle, ArrowUpCircle, CheckCircle2, CircleDashed, Radar, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPulse } from "@/components/status-pulse";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +27,7 @@ function buildLinePath(values: number[], width: number, height: number) {
 
 export function OverviewPage() {
   const navigate = useNavigate();
-  const { overview, nodes, tasks, trafficSeries, loading } = useOutletContext<ConsoleOutletContext>();
+  const { overview, nodes, tasks, policies, sshKeys, trafficSeries, loading } = useOutletContext<ConsoleOutletContext>();
 
   const healthRate = overview.totalNodes > 0
     ? Math.round((overview.healthyNodes / overview.totalNodes) * 100)
@@ -44,6 +44,43 @@ export function OverviewPage() {
   const peakEgress = egressValues.length ? Math.max(...egressValues) : 0;
   const warningNodes = nodes.filter((node) => node.status === "warning").length;
   const offlineNodes = nodes.filter((node) => node.status === "offline").length;
+
+  const checklistItems = [
+    {
+      id: "ssh-key",
+      title: "新增 SSH Key",
+      description: "先配置可用密钥，后续节点可直接复用",
+      done: sshKeys.length > 0,
+      actionLabel: "去配置",
+      actionPath: "/app/ssh-keys"
+    },
+    {
+      id: "node",
+      title: "新增节点",
+      description: "添加至少一个节点并完成连接探测",
+      done: nodes.length > 0,
+      actionLabel: "去新增",
+      actionPath: "/app/nodes"
+    },
+    {
+      id: "policy",
+      title: "创建策略",
+      description: "定义 rsync 源/目标路径与执行周期",
+      done: policies.length > 0,
+      actionLabel: "去创建",
+      actionPath: "/app/policies"
+    },
+    {
+      id: "task",
+      title: "创建任务",
+      description: "绑定节点 + 策略，并尝试手动触发",
+      done: tasks.length > 0,
+      actionLabel: "去触发",
+      actionPath: "/app/tasks"
+    }
+  ];
+
+  const checklistDone = checklistItems.filter((item) => item.done).length;
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -67,7 +104,41 @@ export function OverviewPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="rounded-2xl border border-border/75 bg-background/55 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs text-muted-foreground">首次接入引导</p>
+            <h4 className="text-base font-semibold">息壤接入检查清单</h4>
+            <p className="text-xs text-muted-foreground">先 SSH Key，再节点，再策略，再任务</p>
+          </div>
+          <Badge variant={checklistDone === checklistItems.length ? "success" : "warning"}>
+            进度 {checklistDone}/{checklistItems.length}
+          </Badge>
+        </div>
+
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {checklistItems.map((item) => (
+            <div key={item.id} className="rounded-lg border border-border/75 bg-background/70 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">{item.title}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+                </div>
+                {item.done ? (
+                  <CheckCircle2 className="size-4 text-emerald-500" />
+                ) : (
+                  <CircleDashed className="size-4 text-amber-500" />
+                )}
+              </div>
+              <Button size="sm" variant="outline" className="mt-3" onClick={() => navigate(item.actionPath)}>
+                {item.actionLabel}
+              </Button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
         <Card className="border-success/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">节点健康率</CardTitle>
@@ -116,7 +187,7 @@ export function OverviewPage() {
         </Card>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+      <section className="grid gap-4 lg:grid-cols-[1.35fr_1fr] xl:grid-cols-[1.45fr_1fr]">
         <Card className="grid-noise border-border/70">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -142,7 +213,7 @@ export function OverviewPage() {
                 rows={2}
               />
             ) : null}
-            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8 xl:grid-cols-10">
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10">
               {nodes.map((node) => (
                 <div
                   key={node.id}
@@ -240,7 +311,7 @@ export function OverviewPage() {
         </Card>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">成功率看板</CardTitle>

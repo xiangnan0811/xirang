@@ -153,7 +153,7 @@ export function SSHKeysPage() {
             Vault/KMS），并启用审计与最小权限策略。
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2">
             {sshKeys.map((key) => {
               const usageCount = keyUsageMap.get(key.id) ?? 0;
               return (
@@ -180,12 +180,12 @@ export function SSHKeysPage() {
 
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                     <p>类型：{String(key.keyType).toUpperCase()}</p>
-                    <p>指纹：{key.fingerprint}</p>
+                    <p className="break-all">指纹：{key.fingerprint}</p>
                     <p>创建时间：{key.createdAt}</p>
                     <p>最后使用：{key.lastUsedAt ?? "未使用"}</p>
                   </div>
 
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                       size="sm"
                       variant="outline"

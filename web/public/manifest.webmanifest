@@ -1,0 +1,25 @@
+{
+  "name": "息壤 XiRang 控制台",
+  "short_name": "XiRang",
+  "description": "Rsync 集中备份管理平台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/xirang-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -25,6 +25,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getSeverityMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertDeliveryStats, AlertRecord, IntegrationChannel } from "@/types/domain";
@@ -85,6 +86,11 @@ function severityToTone(severity: AlertRecord["severity"]) {
   return "online" as const;
 }
 
+const notificationKeywordStorageKey = "xirang.notifications.keyword";
+const notificationSeverityStorageKey = "xirang.notifications.severity";
+const notificationStatusStorageKey = "xirang.notifications.status";
+const notificationSelectedAlertStorageKey = "xirang.notifications.selected-alert";
+
 export function NotificationsPage() {
   const { confirm, dialog } = useConfirm();
 
@@ -107,9 +113,13 @@ export function NotificationsPage() {
     fetchAlertDeliveryStats
   } = useOutletContext<ConsoleOutletContext>();
 
-  const [keyword, setKeyword] = useState(globalSearch);
-  const [severityFilter, setSeverityFilter] = useState<"all" | "critical" | "warning" | "info">("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "acked" | "resolved">("all");
+  const [keyword, setKeyword] = usePersistentState<string>(notificationKeywordStorageKey, "");
+  const [severityFilter, setSeverityFilter] =
+    usePersistentState<"all" | "critical" | "warning" | "info">(notificationSeverityStorageKey, "all");
+  const [statusFilter, setStatusFilter] =
+    usePersistentState<"all" | "open" | "acked" | "resolved">(notificationStatusStorageKey, "all");
+  const [selectedAlertId, setSelectedAlertId] =
+    usePersistentState<string | null>(notificationSelectedAlertStorageKey, null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<IntegrationChannel | null>(null);
@@ -213,6 +223,23 @@ export function NotificationsPage() {
   }, [globalSearch, keyword, severityFilter, sortedAlerts, statusFilter]);
 
   const mobilePushAlerts = filteredAlerts.filter((alert) => alert.status === "open").slice(0, 6);
+
+  useEffect(() => {
+    if (!filteredAlerts.length) {
+      if (selectedAlertId !== null) {
+        setSelectedAlertId(null);
+      }
+      return;
+    }
+    if (!selectedAlertId || !filteredAlerts.some((alert) => alert.id === selectedAlertId)) {
+      setSelectedAlertId(filteredAlerts[0].id);
+    }
+  }, [filteredAlerts, selectedAlertId, setSelectedAlertId]);
+
+  const selectedAlert = useMemo(
+    () => filteredAlerts.find((alert) => alert.id === selectedAlertId) ?? null,
+    [filteredAlerts, selectedAlertId]
+  );
 
   const integrationNameMap = useMemo(
     () => new Map(integrations.map((integration) => [integration.id, integration.name])),
@@ -354,7 +381,7 @@ export function NotificationsPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="border-red-500/30 bg-gradient-to-br from-red-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">待处理告警</CardTitle>
@@ -400,7 +427,7 @@ export function NotificationsPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">通知投递统计</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {[{ label: "24h", value: 24 }, { label: "72h", value: 72 }, { label: "7d", value: 168 }].map((item) => (
                 <Button
                   key={`stats-window-${item.value}`}
@@ -446,7 +473,7 @@ export function NotificationsPage() {
                 <div className="grid gap-2 md:grid-cols-2">
                   {deliveryStats.byIntegration.map((item) => (
                     <div key={item.integrationId} className="rounded-lg border border-border/70 bg-muted/20 p-3">
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-medium">{item.name}</p>
                         <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
                       </div>
@@ -480,7 +507,7 @@ export function NotificationsPage() {
               const severity = getSeverityMeta(alert.severity);
               return (
                 <div key={`push-${alert.id}`} className="rounded-lg border border-border/75 bg-background/70 p-3 shadow-sm">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-medium">{alert.nodeName}</p>
                     <Badge variant={severity.variant}>{severity.label}</Badge>
                   </div>
@@ -514,10 +541,10 @@ export function NotificationsPage() {
         </CardContent>
       </Card>
 
-      <section className="grid gap-4 xl:grid-cols-[1.05fr_1.45fr]">
+      <section className="grid gap-4 lg:grid-cols-[1.05fr_1.45fr]">
         <Card className="border-border/75">
           <CardHeader>
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">通知与集成设置</CardTitle>
               <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="mr-1 size-4" />
@@ -535,7 +562,7 @@ export function NotificationsPage() {
 
                 return (
                   <div key={integration.id} className="interactive-surface p-3">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">
                           <Icon className="size-4" />
@@ -546,7 +573,7 @@ export function NotificationsPage() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         <Switch
                           checked={integration.enabled}
                           disabled={busy}
@@ -604,7 +631,7 @@ export function NotificationsPage() {
                     </div>
 
                     <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                      <p>Endpoint：{integration.endpoint}</p>
+                      <p className="break-all">Endpoint：{integration.endpoint}</p>
                       <p>告警阈值：连续失败 {integration.failThreshold} 次</p>
                       <p>冷却时间：{integration.cooldownMinutes} 分钟</p>
                     </div>
@@ -621,7 +648,7 @@ export function NotificationsPage() {
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">通知中心（按节点 / 任务分流）</CardTitle>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button
                   size="sm"
                   variant="outline"
@@ -638,7 +665,7 @@ export function NotificationsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="filter-panel grid gap-2 md:grid-cols-[1.6fr_1fr_1fr]">
+            <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -672,13 +699,14 @@ export function NotificationsPage() {
               </select>
             </div>
 
-            <div className="space-y-2">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+              <div className="space-y-2">
               {filteredAlerts.length ? (
                 filteredAlerts.map((alert) => {
                   const severity = getSeverityMeta(alert.severity);
                   const status = alertStatusMeta(alert.status);
                   return (
-                    <div key={alert.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
+                    <div key={alert.id} onClick={() => setSelectedAlertId(alert.id)} className={cn("rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-colors", selectedAlert?.id === alert.id && "border-primary/45 ring-1 ring-primary/40")}>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <StatusPulse tone={severityToTone(alert.severity)} />
@@ -827,6 +855,100 @@ export function NotificationsPage() {
                   当前筛选条件下没有待处理通知。
                 </div>
               )}
+              </div>
+
+              <aside className="hidden lg:block">
+                {selectedAlert ? (
+                  <div className="interactive-surface sticky top-32 space-y-3 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">当前选中告警</p>
+                        <h4 className="text-lg font-semibold">{selectedAlert.nodeName}</h4>
+                        <p className="text-xs text-muted-foreground">
+                          {selectedAlert.taskId ? `任务 #${selectedAlert.taskId}` : "节点探测"}
+                        </p>
+                      </div>
+                      <Badge variant={alertStatusMeta(selectedAlert.status).variant}>
+                        {alertStatusMeta(selectedAlert.status).label}
+                      </Badge>
+                    </div>
+
+                    <p className="text-sm">{selectedAlert.message}</p>
+
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <p>策略：{selectedAlert.policyName}</p>
+                      <p>错误码：{selectedAlert.errorCode}</p>
+                      <p>触发时间：{selectedAlert.triggeredAt}</p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (!selectedAlert.taskId) {
+                            toast.error("该告警未绑定任务，请先修复节点连接问题。");
+                            return;
+                          }
+                          void retryAlert(selectedAlert.id)
+                            .then(() => toast.success(`已重试 ${selectedAlert.nodeName} 的任务。`))
+                            .catch((error) => toast.error((error as Error).message));
+                        }}
+                        disabled={!selectedAlert.retryable}
+                      >
+                        一键重试
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void acknowledgeAlert(selectedAlert.id)
+                            .then(() => toast.success(`已确认告警 ${selectedAlert.id}`))
+                            .catch((error) => toast.error((error as Error).message));
+                        }}
+                        disabled={selectedAlert.status !== "open"}
+                      >
+                        确认
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void resolveAlert(selectedAlert.id)
+                            .then(() => toast.success(`告警 ${selectedAlert.id} 已标记恢复。`))
+                            .catch((error) => toast.error((error as Error).message));
+                        }}
+                        disabled={selectedAlert.status === "resolved"}
+                      >
+                        标记恢复
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => toggleDeliveries(selectedAlert.id)}
+                      >
+                        {deliveryOpenAlertId === selectedAlert.id ? "收起投递" : "投递记录"}
+                      </Button>
+                    </div>
+
+                    {deliveryOpenAlertId === selectedAlert.id ? (
+                      <div className="rounded-md border border-border/70 bg-muted/25 p-2">
+                        {deliveryLoadingAlertId === selectedAlert.id ? (
+                          <p className="text-xs text-muted-foreground">投递记录加载中...</p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            投递记录 {deliveryMap[selectedAlert.id]?.length ?? 0} 条
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <EmptyState className="py-10" title="暂无告警详情" description="请先选择一条告警。" />
+                )}
+              </aside>
             </div>
           </CardContent>
         </Card>
