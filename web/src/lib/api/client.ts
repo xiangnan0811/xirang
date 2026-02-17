@@ -118,7 +118,7 @@ type SSHKeyResponse = {
   name: string;
   username: string;
   key_type?: "auto" | "rsa" | "ed25519" | "ecdsa";
-  private_key: string;
+  private_key?: string;
   fingerprint: string;
   created_at: string;
   last_used_at?: string | null;
@@ -422,7 +422,6 @@ function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
     name: row.name,
     username: row.username,
     keyType: row.key_type ?? "auto",
-    privateKey: row.private_key,
     fingerprint: row.fingerprint,
     createdAt: formatTime(row.created_at),
     lastUsedAt: formatTime(row.last_used_at)
@@ -560,13 +559,27 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
 }
 
 function parseNumericId(rawId: string, prefix: string) {
-  if (rawId.startsWith(`${prefix}-`)) {
-    const value = Number(rawId.slice(prefix.length + 1));
-    if (Number.isFinite(value) && value > 0) {
-      return value;
+  const value = rawId.trim();
+  if (!value) {
+    throw new Error(`无效的 ${prefix} ID：不能为空`);
+  }
+
+  if (value.startsWith(`${prefix}-`)) {
+    const suffix = value.slice(prefix.length + 1);
+    if (/^\d+$/.test(suffix)) {
+      const parsed = Number.parseInt(suffix, 10);
+      if (parsed > 0) {
+        return parsed;
+      }
+    }
+  } else if (/^\d+$/.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    if (parsed > 0) {
+      return parsed;
     }
   }
-  return Number(rawId);
+
+  throw new Error(`无效的 ${prefix} ID：${rawId}（期望格式：${prefix}-123 或 123）`);
 }
 
 export const apiClient = {
@@ -809,6 +822,7 @@ export const apiClient = {
   },
 
   async createSSHKey(token: string, input: NewSSHKeyInput): Promise<SSHKeyRecord> {
+    const privateKey = input.privateKey.trim();
     const payload = await request<Envelope<SSHKeyResponse>>("/ssh-keys", {
       method: "POST",
       token,
@@ -816,7 +830,7 @@ export const apiClient = {
         name: input.name,
         username: input.username,
         key_type: input.keyType,
-        private_key: input.privateKey
+        private_key: privateKey
       }
     });
     return mapSSHKey(unwrapData(payload));
@@ -824,6 +838,7 @@ export const apiClient = {
 
   async updateSSHKey(token: string, keyId: string, input: NewSSHKeyInput): Promise<SSHKeyRecord> {
     const numericId = parseNumericId(keyId, "key");
+    const privateKey = input.privateKey.trim();
     const payload = await request<Envelope<SSHKeyResponse>>(`/ssh-keys/${numericId}`, {
       method: "PUT",
       token,
@@ -831,7 +846,7 @@ export const apiClient = {
         name: input.name,
         username: input.username,
         key_type: input.keyType,
-        private_key: input.privateKey
+        ...(privateKey ? { private_key: privateKey } : {})
       }
     });
     return mapSSHKey(unwrapData(payload));

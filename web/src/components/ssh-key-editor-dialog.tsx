@@ -38,7 +38,7 @@ function toDraft(key: SSHKeyRecord): SSHKeyDraft {
     name: key.name,
     username: key.username,
     keyType: key.keyType,
-    privateKey: key.privateKey,
+    privateKey: "",
   };
 }
 
@@ -93,7 +93,7 @@ export function SSHKeyEditorDialog({
           </div>
           <DialogDescription>
             {isEditing
-              ? "修改密钥配置，保存时会校验私钥与类型的一致性。"
+              ? "修改密钥配置。私钥留空表示不修改，填写后会更新私钥。"
               : "添加新的 SSH 密钥，用于节点连接认证。"}
           </DialogDescription>
           <DialogCloseButton />
@@ -145,10 +145,14 @@ export function SSHKeyEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">私钥内容</label>
+            <label className="mb-1 block text-sm font-medium">
+              {isEditing ? "私钥内容（留空表示不修改）" : "私钥内容"}
+            </label>
             <textarea
               className="min-h-36 w-full rounded-lg border border-input/80 bg-background/80 p-3 text-xs leading-relaxed text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background placeholder:text-muted-foreground/80 focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
-              placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
+              placeholder={isEditing
+                ? "留空表示不修改现有私钥；如需更新请粘贴新的 OpenSSH 私钥"
+                : "粘贴 OpenSSH 私钥（支持粘贴带 \\n 转义的内容）"}
               value={draft.privateKey}
               onChange={(event) =>
                 setDraft((prev) => ({

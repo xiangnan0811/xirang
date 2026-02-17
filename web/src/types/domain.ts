@@ -214,7 +214,7 @@ export interface SSHKeyRecord {
   name: string;
   username: string;
   keyType: SSHKeyType;
-  privateKey: string;
+  privateKey?: string;
   fingerprint: string;
   createdAt: string;
   lastUsedAt?: string;

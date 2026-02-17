@@ -38,6 +38,8 @@ type Hub struct {
 	mu         sync.RWMutex
 }
 
+const wsAuthProtocol = "xirang-auth.v1"
+
 func NewHub(db *gorm.DB) *Hub {
 	return &Hub{
 		db:         db,
@@ -89,6 +91,7 @@ func (h *Hub) Publish(event LogEvent) {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	Subprotocols:    []string{wsAuthProtocol},
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},

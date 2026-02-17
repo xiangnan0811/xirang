@@ -68,7 +68,7 @@ go run ./cmd/server
 - 告警投递重发：`POST /api/v1/alerts/:id/retry-delivery`
 - 告警失败投递批量重发：`POST /api/v1/alerts/:id/retry-failed-deliveries`
 - 告警投递统计：`GET /api/v1/alerts/delivery-stats`
-- WebSocket 日志：`GET /api/v1/ws/logs?token=<jwt>&task_id=<id>&since_id=<last_log_id>`
+- WebSocket 日志：`GET /api/v1/ws/logs?task_id=<id>&since_id=<last_log_id>`（鉴权 token 仅走 `Sec-WebSocket-Protocol` 子协议 `xirang-auth-token.<jwt>`）
 
 ## 任务执行说明
 

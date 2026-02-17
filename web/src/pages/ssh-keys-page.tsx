@@ -61,16 +61,25 @@ export function SSHKeysPage() {
   };
 
   const handleSave = async (draft: SSHKeyDraft) => {
-    if (!draft.name.trim() || !draft.username.trim() || !draft.privateKey.trim()) {
-      toast.error("保存失败：名称、用户名、私钥都不能为空。");
+    const name = draft.name.trim();
+    const username = draft.username.trim();
+    const privateKey = draft.privateKey.trim();
+
+    if (!name || !username) {
+      toast.error("保存失败：名称、用户名不能为空。");
+      return;
+    }
+
+    if (!draft.id && !privateKey) {
+      toast.error("保存失败：新建 SSH Key 时私钥不能为空。");
       return;
     }
 
     const input: NewSSHKeyInput = {
-      name: draft.name.trim(),
-      username: draft.username.trim(),
+      name,
+      username,
       keyType: draft.keyType,
-      privateKey: draft.privateKey.trim(),
+      privateKey,
     };
 
     try {

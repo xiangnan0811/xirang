@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
-  Mail,
-  MessageSquare,
   Plus,
   RefreshCw,
   Search,
-  Send,
   Wrench,
   Trash2,
-  Webhook
 } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
 import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
+import { SelectedAlertPanel } from "@/pages/notifications-page.components";
+import {
+  alertStatusMeta,
+  integrationIcon,
+  severityToTone,
+  severityWeight,
+  statusWeight,
+} from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusPulse } from "@/components/status-pulse";
@@ -28,63 +32,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getSeverityMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import type { AlertDeliveryRecord, AlertDeliveryStats, AlertRecord, IntegrationChannel } from "@/types/domain";
-
-function integrationIcon(type: IntegrationChannel["type"]) {
-  switch (type) {
-    case "email":
-      return Mail;
-    case "slack":
-      return MessageSquare;
-    case "telegram":
-      return Send;
-    default:
-      return Webhook;
-  }
-}
-
-function alertStatusMeta(status: AlertRecord["status"]) {
-  switch (status) {
-    case "open":
-      return { label: "待处理", variant: "danger" as const };
-    case "acked":
-      return { label: "已确认", variant: "warning" as const };
-    default:
-      return { label: "已恢复", variant: "success" as const };
-  }
-}
-
-function severityWeight(severity: AlertRecord["severity"]) {
-  switch (severity) {
-    case "critical":
-      return 3;
-    case "warning":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-function statusWeight(status: AlertRecord["status"]) {
-  switch (status) {
-    case "open":
-      return 3;
-    case "acked":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-function severityToTone(severity: AlertRecord["severity"]) {
-  if (severity === "critical") {
-    return "offline" as const;
-  }
-  if (severity === "warning") {
-    return "warning" as const;
-  }
-  return "online" as const;
-}
+import type { AlertDeliveryRecord, AlertDeliveryStats, IntegrationChannel } from "@/types/domain";
 
 const notificationKeywordStorageKey = "xirang.notifications.keyword";
 const notificationSeverityStorageKey = "xirang.notifications.severity";
@@ -240,6 +188,49 @@ export function NotificationsPage() {
     () => filteredAlerts.find((alert) => alert.id === selectedAlertId) ?? null,
     [filteredAlerts, selectedAlertId]
   );
+
+  const handleSelectedAlertRetry = () => {
+    if (!selectedAlert) {
+      return;
+    }
+
+    if (!selectedAlert.taskId) {
+      toast.error("该告警未绑定任务，请先修复节点连接问题。");
+      return;
+    }
+
+    void retryAlert(selectedAlert.id)
+      .then(() => toast.success(`已重试 ${selectedAlert.nodeName} 的任务。`))
+      .catch((error) => toast.error((error as Error).message));
+  };
+
+  const handleSelectedAlertAcknowledge = () => {
+    if (!selectedAlert) {
+      return;
+    }
+
+    void acknowledgeAlert(selectedAlert.id)
+      .then(() => toast.success(`已确认告警 ${selectedAlert.id}`))
+      .catch((error) => toast.error((error as Error).message));
+  };
+
+  const handleSelectedAlertResolve = () => {
+    if (!selectedAlert) {
+      return;
+    }
+
+    void resolveAlert(selectedAlert.id)
+      .then(() => toast.success(`告警 ${selectedAlert.id} 已标记恢复。`))
+      .catch((error) => toast.error((error as Error).message));
+  };
+
+  const handleSelectedAlertToggleDeliveries = () => {
+    if (!selectedAlert) {
+      return;
+    }
+
+    toggleDeliveries(selectedAlert.id);
+  };
 
   const integrationNameMap = useMemo(
     () => new Map(integrations.map((integration) => [integration.id, integration.name])),
@@ -857,98 +848,17 @@ export function NotificationsPage() {
               )}
               </div>
 
-              <aside className="hidden lg:block">
-                {selectedAlert ? (
-                  <div className="interactive-surface sticky top-32 space-y-3 p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs text-muted-foreground">当前选中告警</p>
-                        <h4 className="text-lg font-semibold">{selectedAlert.nodeName}</h4>
-                        <p className="text-xs text-muted-foreground">
-                          {selectedAlert.taskId ? `任务 #${selectedAlert.taskId}` : "节点探测"}
-                        </p>
-                      </div>
-                      <Badge variant={alertStatusMeta(selectedAlert.status).variant}>
-                        {alertStatusMeta(selectedAlert.status).label}
-                      </Badge>
-                    </div>
 
-                    <p className="text-sm">{selectedAlert.message}</p>
-
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      <p>策略：{selectedAlert.policyName}</p>
-                      <p>错误码：{selectedAlert.errorCode}</p>
-                      <p>触发时间：{selectedAlert.triggeredAt}</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          if (!selectedAlert.taskId) {
-                            toast.error("该告警未绑定任务，请先修复节点连接问题。");
-                            return;
-                          }
-                          void retryAlert(selectedAlert.id)
-                            .then(() => toast.success(`已重试 ${selectedAlert.nodeName} 的任务。`))
-                            .catch((error) => toast.error((error as Error).message));
-                        }}
-                        disabled={!selectedAlert.retryable}
-                      >
-                        一键重试
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          void acknowledgeAlert(selectedAlert.id)
-                            .then(() => toast.success(`已确认告警 ${selectedAlert.id}`))
-                            .catch((error) => toast.error((error as Error).message));
-                        }}
-                        disabled={selectedAlert.status !== "open"}
-                      >
-                        确认
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          void resolveAlert(selectedAlert.id)
-                            .then(() => toast.success(`告警 ${selectedAlert.id} 已标记恢复。`))
-                            .catch((error) => toast.error((error as Error).message));
-                        }}
-                        disabled={selectedAlert.status === "resolved"}
-                      >
-                        标记恢复
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => toggleDeliveries(selectedAlert.id)}
-                      >
-                        {deliveryOpenAlertId === selectedAlert.id ? "收起投递" : "投递记录"}
-                      </Button>
-                    </div>
-
-                    {deliveryOpenAlertId === selectedAlert.id ? (
-                      <div className="rounded-md border border-border/70 bg-muted/25 p-2">
-                        {deliveryLoadingAlertId === selectedAlert.id ? (
-                          <p className="text-xs text-muted-foreground">投递记录加载中...</p>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            投递记录 {deliveryMap[selectedAlert.id]?.length ?? 0} 条
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <EmptyState className="py-10" title="暂无告警详情" description="请先选择一条告警。" />
-                )}
-              </aside>
+              <SelectedAlertPanel
+                selectedAlert={selectedAlert}
+                deliveryOpenAlertId={deliveryOpenAlertId}
+                deliveryLoadingAlertId={deliveryLoadingAlertId}
+                deliveryCount={selectedAlert ? (deliveryMap[selectedAlert.id]?.length ?? 0) : 0}
+                onRetry={handleSelectedAlertRetry}
+                onAcknowledge={handleSelectedAlertAcknowledge}
+                onResolve={handleSelectedAlertResolve}
+                onToggleDeliveries={handleSelectedAlertToggleDeliveries}
+              />
             </div>
           </CardContent>
         </Card>

@@ -2,11 +2,16 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	wsAuthTokenProtocolPrefix = "xirang-auth-token."
 )
 
 type WSHandler struct {
@@ -19,7 +24,7 @@ func NewWSHandler(hub *ws.Hub, jwtManager *auth.JWTManager) *WSHandler {
 }
 
 func (h *WSHandler) ServeWS(c *gin.Context) {
-	token := c.Query("token")
+	token := extractWSToken(c)
 	if token == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少 token"})
 		return
@@ -33,4 +38,26 @@ func (h *WSHandler) ServeWS(c *gin.Context) {
 		return
 	}
 	h.hub.ServeWS(c)
+}
+
+func extractWSToken(c *gin.Context) string {
+	return tokenFromSubprotocol(c.GetHeader("Sec-WebSocket-Protocol"))
+}
+
+func tokenFromSubprotocol(headerValue string) string {
+	if headerValue == "" {
+		return ""
+	}
+
+	for _, item := range strings.Split(headerValue, ",") {
+		protocol := strings.TrimSpace(item)
+		if strings.HasPrefix(protocol, wsAuthTokenProtocolPrefix) {
+			token := strings.TrimPrefix(protocol, wsAuthTokenProtocolPrefix)
+			if token != "" {
+				return token
+			}
+		}
+	}
+
+	return ""
 }

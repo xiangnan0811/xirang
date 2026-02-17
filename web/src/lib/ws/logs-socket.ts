@@ -10,6 +10,8 @@ export type LogsSocketConnectOptions = {
 
 const RETRY_DELAY_MS = 2500;
 const DEFAULT_DEV_DIRECT_API = "http://127.0.0.1:8080/api/v1";
+const WS_AUTH_PROTOCOL = "xirang-auth.v1";
+const WS_AUTH_TOKEN_PREFIX = "xirang-auth-token.";
 
 function normalizePath(path: string): string {
   if (!path.startsWith("/")) {
@@ -156,14 +158,21 @@ export class LogsSocketClient {
   private buildRequestUrl() {
     const base = this.wsCandidates[this.activeCandidateIndex] ?? this.wsCandidates[0] ?? toWebSocketUrl("/api/v1");
     const search = new URLSearchParams();
-    search.set("token", this.token);
     if (this.taskId && Number.isFinite(this.taskId)) {
       search.set("task_id", String(this.taskId));
     }
     if (this.sinceId && Number.isFinite(this.sinceId)) {
       search.set("since_id", String(this.sinceId));
     }
-    return `${base}?${search.toString()}`;
+    const query = search.toString();
+    return query ? `${base}?${query}` : base;
+  }
+
+  private buildAuthProtocols() {
+    if (!this.token) {
+      return undefined;
+    }
+    return [WS_AUTH_PROTOCOL, `${WS_AUTH_TOKEN_PREFIX}${this.token}`];
   }
 
   private open() {
@@ -172,7 +181,8 @@ export class LogsSocketClient {
     }
 
     const attempt = ++this.connectAttempt;
-    const socket = new WebSocket(this.buildRequestUrl());
+    const protocols = this.buildAuthProtocols();
+    const socket = protocols ? new WebSocket(this.buildRequestUrl(), protocols) : new WebSocket(this.buildRequestUrl());
     this.socket = socket;
 
     socket.onopen = () => {

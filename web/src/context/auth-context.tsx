@@ -10,6 +10,11 @@ import {
 const AUTH_TOKEN_KEY = "xirang-auth-token";
 const AUTH_USERNAME_KEY = "xirang-username";
 
+type StoredAuthState = {
+  token: string | null;
+  username: string | null;
+};
+
 type AuthContextValue = {
   token: string | null;
   username: string | null;
@@ -20,30 +25,96 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function getStoredToken() {
-  return localStorage.getItem(AUTH_TOKEN_KEY);
+function getSessionStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.sessionStorage;
 }
 
-function getStoredUsername() {
-  return localStorage.getItem(AUTH_USERNAME_KEY);
+function getLocalStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.localStorage;
+}
+
+function safeGetItem(storage: Storage | null, key: string) {
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(storage: Storage | null, key: string, value: string) {
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function safeRemoveItem(storage: Storage | null, key: string) {
+  try {
+    storage?.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
+
+function readStoredAuthState(): StoredAuthState {
+  const sessionStorageRef = getSessionStorage();
+  const localStorageRef = getLocalStorage();
+
+  const sessionToken = safeGetItem(sessionStorageRef, AUTH_TOKEN_KEY);
+  const sessionUsername = safeGetItem(sessionStorageRef, AUTH_USERNAME_KEY);
+  if (sessionToken) {
+    return { token: sessionToken, username: sessionUsername };
+  }
+  safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
+
+  const legacyToken = safeGetItem(localStorageRef, AUTH_TOKEN_KEY);
+  const legacyUsername = safeGetItem(localStorageRef, AUTH_USERNAME_KEY);
+
+  if (legacyToken) {
+    safeSetItem(sessionStorageRef, AUTH_TOKEN_KEY, legacyToken);
+  }
+  if (legacyUsername) {
+    safeSetItem(sessionStorageRef, AUTH_USERNAME_KEY, legacyUsername);
+  }
+
+  safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
+  safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
+
+  return { token: legacyToken, username: legacyToken ? legacyUsername : null };
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
-  const [username, setUsername] = useState<string | null>(() => getStoredUsername());
+  const [{ token, username }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
 
   const login = useCallback((nextToken: string, nextUsername: string) => {
-    localStorage.setItem(AUTH_TOKEN_KEY, nextToken);
-    localStorage.setItem(AUTH_USERNAME_KEY, nextUsername);
-    setToken(nextToken);
-    setUsername(nextUsername);
+    const sessionStorageRef = getSessionStorage();
+    const localStorageRef = getLocalStorage();
+
+    safeSetItem(sessionStorageRef, AUTH_TOKEN_KEY, nextToken);
+    safeSetItem(sessionStorageRef, AUTH_USERNAME_KEY, nextUsername);
+    safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
+    safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
+
+    setAuthState({ token: nextToken, username: nextUsername });
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    localStorage.removeItem(AUTH_USERNAME_KEY);
-    setToken(null);
-    setUsername(null);
+    const sessionStorageRef = getSessionStorage();
+    const localStorageRef = getLocalStorage();
+
+    safeRemoveItem(sessionStorageRef, AUTH_TOKEN_KEY);
+    safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
+    safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
+    safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
+
+    setAuthState({ token: null, username: null });
   }, []);
 
   const value = useMemo<AuthContextValue>(
