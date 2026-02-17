@@ -21,10 +21,27 @@ type loginRateLimiter struct {
 }
 
 func newLoginRateLimiter(limit int, window time.Duration) *loginRateLimiter {
-	return &loginRateLimiter{
+	rl := &loginRateLimiter{
 		store:  make(map[string]rateWindow),
 		limit:  limit,
 		window: window,
+	}
+	go rl.cleanup()
+	return rl
+}
+
+func (l *loginRateLimiter) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		l.mu.Lock()
+		for ip, entry := range l.store {
+			if now.After(entry.reset) {
+				delete(l.store, ip)
+			}
+		}
+		l.mu.Unlock()
 	}
 }
 

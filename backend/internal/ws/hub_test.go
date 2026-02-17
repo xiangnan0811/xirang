@@ -28,7 +28,7 @@ func TestLoadBackfillEventsBySinceIDAndTaskID(t *testing.T) {
 		}
 	}
 
-	hub := NewHub(db)
+	hub := NewHub(db, nil)
 
 	events, err := hub.loadBackfillEvents(1, nil)
 	if err != nil {

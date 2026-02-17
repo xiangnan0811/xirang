@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -80,6 +81,29 @@ func (l *LoginFailureLocker) RegisterSuccess(username, ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.states, key)
+}
+
+// StartCleanup 定期清理过期的锁定条目，防止内存泄漏
+func (l *LoginFailureLocker) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now()
+				l.mu.Lock()
+				for key, entry := range l.states {
+					if !entry.lockedUntil.IsZero() && !entry.lockedUntil.After(now) {
+						delete(l.states, key)
+					}
+				}
+				l.mu.Unlock()
+			}
+		}
+	}()
 }
 
 func (l *LoginFailureLocker) buildKey(username, ip string) string {

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 
 	"xirang/backend/internal/model"
@@ -40,7 +41,9 @@ func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 			ClientIP:   c.ClientIP(),
 			UserAgent:  c.Request.UserAgent(),
 		}
-		_ = db.Create(&record).Error
+		if err := db.Create(&record).Error; err != nil {
+			log.Printf("审计日志写入失败: %v", err)
+		}
 	}
 }
 

@@ -250,18 +250,20 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? "GET";
+  const isWriteOperation = method !== "GET";
   let response: Response;
 
   try {
     response = await doFetch(API_BASE_URL, path, options);
   } catch (error) {
-    if (!shouldTryDirectFallback(API_BASE_URL)) {
+    if (isWriteOperation || !shouldTryDirectFallback(API_BASE_URL)) {
       throw error;
     }
     response = await doFetch(DEV_DIRECT_API_BASE_URL, path, options);
   }
 
-  if (response.status === 404 && shouldTryDirectFallback(API_BASE_URL)) {
+  if (response.status === 404 && !isWriteOperation && shouldTryDirectFallback(API_BASE_URL)) {
     try {
       response = await doFetch(DEV_DIRECT_API_BASE_URL, path, options);
     } catch {
@@ -284,7 +286,33 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError(response.status, `请求失败：${response.status}`, payload);
   }
 
+  if (payload && typeof payload === "object") {
+    return payload as T;
+  }
+
   return payload as T;
+}
+
+async function fetchWithFallback(url: string, options: RequestInit): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${url}`, options);
+  } catch (error) {
+    if (!shouldTryDirectFallback(API_BASE_URL)) {
+      throw error;
+    }
+    response = await fetch(`${DEV_DIRECT_API_BASE_URL}${url}`, options);
+  }
+
+  if (response.status === 404 && shouldTryDirectFallback(API_BASE_URL)) {
+    try {
+      response = await fetch(`${DEV_DIRECT_API_BASE_URL}${url}`, options);
+    } catch {
+      // 保留原始 404 响应
+    }
+  }
+
+  return response;
 }
 
 function unwrapData<T>(payload: Envelope<T> | T): T {
@@ -584,10 +612,14 @@ function parseNumericId(rawId: string, prefix: string) {
 
 export const apiClient = {
   async login(username: string, password: string): Promise<LoginResponse> {
-    return request<LoginResponse>("/auth/login", {
+    const result = await request<LoginResponse>("/auth/login", {
       method: "POST",
       body: { username, password }
     });
+    if (!result || typeof result !== "object" || !("token" in result)) {
+      throw new ApiError(500, "登录响应格式异常", result);
+    }
+    return result;
   },
 
   async getNodes(token: string): Promise<NodeRecord[]> {
@@ -988,35 +1020,12 @@ export const apiClient = {
     }
 
     const suffix = query.toString() ? `?${query.toString()}` : "";
-    let response: Response;
-
-    try {
-      response = await fetch(`${API_BASE_URL}/audit-logs/export${suffix}`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-    } catch (error) {
-      if (!shouldTryDirectFallback(API_BASE_URL)) {
-        throw error;
+    const response = await fetchWithFallback(`/audit-logs/export${suffix}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
       }
-      response = await fetch(`${DEV_DIRECT_API_BASE_URL}/audit-logs/export${suffix}`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-    }
-
-    if (response.status === 404 && shouldTryDirectFallback(API_BASE_URL)) {
-      response = await fetch(`${DEV_DIRECT_API_BASE_URL}/audit-logs/export${suffix}`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-    }
+    });
 
     if (!response.ok) {
       const text = await response.text();

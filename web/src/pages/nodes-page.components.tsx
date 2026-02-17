@@ -94,14 +94,22 @@ export function MobileNodeSearchDrawer({
   onClose,
   onPickNode,
 }: MobileNodeSearchDrawerProps) {
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div className="fixed inset-0 z-50 md:hidden">
-      <button className="absolute inset-0 bg-black/45" onClick={onClose} />
-      <section className="absolute right-0 top-0 h-full w-[86%] border-l border-border/75 bg-background/95 p-4 shadow-panel thin-scrollbar">
+    <div
+      className="fixed inset-0 z-50 md:hidden"
+      style={{ visibility: open ? "visible" : "hidden" }}
+      aria-label="移动端节点搜索侧滑面板"
+    >
+      <button
+        className="absolute inset-0 bg-black/45 transition-opacity"
+        style={{ opacity: open ? 1 : 0 }}
+        onClick={onClose}
+        tabIndex={open ? 0 : -1}
+      />
+      <section
+        className="absolute right-0 top-0 h-full w-[86%] border-l border-border/75 bg-background/95 p-4 shadow-panel thin-scrollbar transition-transform"
+        style={{ transform: open ? "translateX(0)" : "translateX(100%)" }}
+      >
         <h3 className="text-sm font-semibold">侧滑全局搜索</h3>
         <p className="mt-1 text-xs text-muted-foreground">通过名称或 IP 快速定位任意主机</p>
         <Input

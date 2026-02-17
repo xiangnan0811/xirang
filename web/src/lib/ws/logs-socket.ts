@@ -10,8 +10,6 @@ export type LogsSocketConnectOptions = {
 
 const RETRY_DELAY_MS = 2500;
 const DEFAULT_DEV_DIRECT_API = "http://127.0.0.1:8080/api/v1";
-const WS_AUTH_PROTOCOL = "xirang-auth.v1";
-const WS_AUTH_TOKEN_PREFIX = "xirang-auth-token.";
 
 function normalizePath(path: string): string {
   if (!path.startsWith("/")) {
@@ -168,21 +166,13 @@ export class LogsSocketClient {
     return query ? `${base}?${query}` : base;
   }
 
-  private buildAuthProtocols() {
-    if (!this.token) {
-      return undefined;
-    }
-    return [WS_AUTH_PROTOCOL, `${WS_AUTH_TOKEN_PREFIX}${this.token}`];
-  }
-
   private open() {
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
     const attempt = ++this.connectAttempt;
-    const protocols = this.buildAuthProtocols();
-    const socket = protocols ? new WebSocket(this.buildRequestUrl(), protocols) : new WebSocket(this.buildRequestUrl());
+    const socket = new WebSocket(this.buildRequestUrl());
     this.socket = socket;
 
     socket.onopen = () => {
@@ -190,6 +180,8 @@ export class LogsSocketClient {
         socket.close(1000, "stale-open");
         return;
       }
+      // 连接建立后发送认证消息
+      socket.send(JSON.stringify({ type: "auth", token: this.token }));
       this.emitStatus(true);
       this.clearReconnectTimer();
       this.activeCandidateIndex = 0;

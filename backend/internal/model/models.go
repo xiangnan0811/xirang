@@ -82,18 +82,18 @@ type Integration struct {
 
 type Alert struct {
 	ID             uint       `gorm:"primaryKey" json:"id"`
-	NodeID         uint       `gorm:"index;not null" json:"node_id"`
+	NodeID         uint       `gorm:"not null;index:idx_alerts_dedup" json:"node_id"`
 	NodeName       string     `gorm:"size:128;not null" json:"node_name"`
 	TaskID         *uint      `gorm:"index" json:"task_id"`
 	PolicyName     string     `gorm:"size:128" json:"policy_name"`
 	Severity       string     `gorm:"size:16;not null;index" json:"severity"`
 	Status         string     `gorm:"size:16;not null;index" json:"status"`
-	ErrorCode      string     `gorm:"size:64;not null" json:"error_code"`
+	ErrorCode      string     `gorm:"size:64;not null;index:idx_alerts_dedup" json:"error_code"`
 	Message        string     `gorm:"type:text;not null" json:"message"`
 	Retryable      bool       `gorm:"not null;default:false" json:"retryable"`
 	TriggeredAt    time.Time  `gorm:"index" json:"triggered_at"`
 	LastNotifiedAt *time.Time `json:"last_notified_at"`
-	CreatedAt      time.Time  `json:"created_at"`
+	CreatedAt      time.Time  `gorm:"index:idx_alerts_dedup" json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 

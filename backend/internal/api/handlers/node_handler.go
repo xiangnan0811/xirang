@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +80,9 @@ func resolveNodeExecTimeout(seconds int) time.Duration {
 }
 
 func runRemoteCommand(client *ssh.Client, command string, timeout time.Duration) (string, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	session, err := client.NewSession()
 	if err != nil {
 		return "", -1, fmt.Errorf("创建会话失败")
@@ -101,7 +108,7 @@ func runRemoteCommand(client *ssh.Client, command string, timeout time.Duration)
 			return normalizeNodeExecOutput(string(res.output)), exitErr.ExitStatus(), nil
 		}
 		return normalizeNodeExecOutput(string(res.output)), -1, fmt.Errorf("执行命令失败: %v", res.err)
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		_ = session.Close()
 		return "", -1, fmt.Errorf("命令执行超时（%s）", timeout)
 	}
@@ -122,7 +129,8 @@ func sanitizeNode(node model.Node) model.Node {
 func (h *NodeHandler) List(c *gin.Context) {
 	var nodes []model.Node
 	if err := h.db.Preload("SSHKey").Order("id asc").Find(&nodes).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
@@ -188,6 +196,10 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	if req.BasePath == "" {
 		req.BasePath = "/"
 	}
+	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.validateSSHRef(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -202,7 +214,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		Tags:        req.Tags,
 		Status:      req.Status,
 		BasePath:    req.BasePath,
-		DiskTotalGB: 800,
+		DiskTotalGB: 0,
 		DiskUsedGB:  0,
 	}
 
@@ -226,7 +238,8 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	}
 
 	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"data": sanitizeNode(node)})
@@ -270,6 +283,10 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		req.PrivateKey = node.PrivateKey
 	}
 
+	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.validateSSHRef(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -304,7 +321,8 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": sanitizeNode(node)})
@@ -359,7 +377,8 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 	tx := h.db.Begin()
 	if tx.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": tx.Error.Error()})
+		log.Printf("服务器内部错误: %v", tx.Error)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	defer func() {
@@ -371,7 +390,8 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var existingIDs []uint
 	if err := tx.Model(&model.Node{}).Where("id IN ?", nodeIDs).Pluck("id", &existingIDs).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
@@ -388,25 +408,29 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Task{}).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Alert{}).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
 	deleteResult := tx.Where("id IN ?", existingIDs).Delete(&model.Node{})
 	if deleteResult.Error != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": deleteResult.Error.Error()})
+		log.Printf("服务器内部错误: %v", deleteResult.Error)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
@@ -422,10 +446,53 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.db.Delete(&model.Node{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+
+	tx := h.db.Begin()
+	if tx.Error != nil {
+		log.Printf("服务器内部错误: %v", tx.Error)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var node model.Node
+	if err := tx.First(&node, id).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		return
+	}
+
+	if err := tx.Where("node_id = ?", id).Delete(&model.Task{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
+	if err := tx.Where("node_id = ?", id).Delete(&model.Alert{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
+	if err := tx.Delete(&model.Node{}, id).Error; err != nil {
+		tx.Rollback()
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
@@ -512,11 +579,12 @@ func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, e
 }
 
 func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
-	strictHostCheck, err := readBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", false)
+	strictHostCheck, err := readBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return nil, err
 	}
 	if !strictHostCheck {
+		log.Printf("warn: SSH 主机密钥校验已禁用，建议在生产环境启用 SSH_STRICT_HOST_KEY_CHECKING=true")
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
@@ -563,6 +631,15 @@ func (h *NodeHandler) Exec(c *gin.Context) {
 	if len(command) > maxNodeExecCommandLength {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("命令长度不能超过 %d", maxNodeExecCommandLength)})
 		return
+	}
+
+	dangerousPatterns := []string{"rm -rf /", "mkfs.", "dd if=", "> /dev/sd", ":(){ :|:&", "chmod -R 777 /"}
+	lowerCmd := strings.ToLower(command)
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(lowerCmd, pattern) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "命令包含危险操作，已拒绝执行"})
+			return
+		}
 	}
 
 	var node model.Node
@@ -741,12 +818,6 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	node.Status = "online"
 	node.ConnectionLatency = latency
 	node.LastSeenAt = &probeAt
-	if node.DiskTotalGB <= 0 {
-		node.DiskTotalGB = 800
-	}
-	if node.DiskUsedGB <= 0 {
-		node.DiskUsedGB = 160 + int(node.ID*17)%420
-	}
 
 	if session, err := client.NewSession(); err == nil {
 		output, runErr := session.Output("df -BG / | awk 'NR==2 {print $2\" \"$3}'")
@@ -759,8 +830,15 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	if node.DiskUsedGB >= node.DiskTotalGB {
-		node.DiskUsedGB = node.DiskTotalGB - 1
+	if node.DiskTotalGB > 0 {
+		if node.DiskUsedGB < 0 {
+			node.DiskUsedGB = 0
+		}
+		if node.DiskUsedGB >= node.DiskTotalGB {
+			node.DiskUsedGB = node.DiskTotalGB - 1
+		}
+	} else {
+		node.DiskUsedGB = 0
 	}
 	if node.LastBackupAt == nil {
 		lastBackup := probeAt.Add(-time.Duration(5+node.ID%40) * time.Minute)
@@ -768,7 +846,8 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	}
 
 	if err := h.db.Save(&node).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	_ = alerting.ResolveNodeAlerts(h.db, node.ID, "节点探测恢复正常")
@@ -786,4 +865,25 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		"disk_total_gb": node.DiskTotalGB,
 		"probe_at":      probeAt,
 	})
+}
+
+func validateNodeHostPort(host string, port int) error {
+	trimmedHost := strings.TrimSpace(host)
+	if trimmedHost == "" {
+		return fmt.Errorf("主机地址不能为空")
+	}
+	if net.ParseIP(trimmedHost) == nil {
+		// 不是 IP，检查是否是合法的 hostname
+		if len(trimmedHost) > 253 {
+			return fmt.Errorf("主机名过长")
+		}
+		hostnameRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+		if !hostnameRegex.MatchString(trimmedHost) {
+			return fmt.Errorf("主机地址格式不合法")
+		}
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("端口号必须在 1-65535 之间")
+	}
+	return nil
 }

@@ -220,6 +220,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const overview = useMemo(() => deriveOverview(nodes, policies, tasks), [nodes, policies, tasks]);
 
   const trafficSeries = useMemo<TrafficPoint[]>(() => {
+    // 注意: 当前流量数据为基于运行中任务速度的估算值，非真实网络流量
     const now = new Date();
     const labels = Array.from({ length: 12 }, (_, index) => {
       const pointTime = new Date(now.getTime() - (11 - index) * 5 * 60 * 1000);
@@ -246,10 +247,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return created.id;
       } catch (error) {
         handleWriteApiError("创建 SSH Key", error);
+        return "";
       }
+    } else {
+      ensureDemoWriteAllowed("创建 SSH Key");
     }
-
-    ensureDemoWriteAllowed("创建 SSH Key");
 
     const nextId = createKeyId(input.name || input.username || "ssh-key");
     const item: SSHKeyRecord = {
@@ -273,10 +275,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("更新 SSH Key", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("更新 SSH Key");
     }
-
-    ensureDemoWriteAllowed("更新 SSH Key");
 
     setSSHKeys((prev) =>
       prev.map((item) =>
@@ -352,10 +355,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return created.id;
       } catch (error) {
         handleWriteApiError("创建节点", error);
+        return -1;
       }
+    } else {
+      ensureDemoWriteAllowed("创建节点");
     }
-
-    ensureDemoWriteAllowed("创建节点");
 
     const maxNodeID = nodes.length > 0 ? Math.max(...nodes.map((node) => node.id)) : 0;
     const nextNode: NodeRecord = {
@@ -405,10 +409,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("更新节点", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("更新节点");
     }
-
-    ensureDemoWriteAllowed("更新节点");
 
     setNodes((prev) =>
       prev.map((node) =>
@@ -469,10 +474,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return result;
       } catch (error) {
         handleWriteApiError("批量删除节点", error);
+        return { deleted: 0, notFoundIds: normalized };
       }
+    } else {
+      ensureDemoWriteAllowed("批量删除节点");
     }
-
-    ensureDemoWriteAllowed("批量删除节点");
 
     const deletedSet = new Set(normalized);
     setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
@@ -521,10 +527,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         };
       } catch (error) {
         handleWriteApiError("节点连通性探测", error);
+        return { ok: false, message: "探测请求失败" };
       }
+    } else {
+      ensureDemoWriteAllowed("节点连通性探测");
     }
-
-    ensureDemoWriteAllowed("节点连通性探测");
 
     await new Promise((resolve) => setTimeout(resolve, 650));
 
@@ -593,10 +600,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
           return;
         } catch (error) {
           handleWriteApiError("触发节点手动备份", error);
+          return;
         }
+      } else {
+        ensureDemoWriteAllowed("触发节点手动备份");
       }
-
-      ensureDemoWriteAllowed("触发节点手动备份");
 
       const nextTask: TaskRecord = {
         id: nextTaskID,
@@ -636,10 +644,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return await apiClient.execNodeCommand(token, nodeID, normalizedCommand, timeoutSeconds);
       } catch (error) {
         handleWriteApiError("节点命令执行", error);
+        return { ok: false, message: "命令执行请求失败", output: "", exitCode: -1, durationMs: 0 };
       }
+    } else {
+      ensureDemoWriteAllowed("节点命令执行");
     }
-
-    ensureDemoWriteAllowed("节点命令执行");
 
     const now = new Date().toLocaleString("zh-CN", { hour12: false });
     const output = [
@@ -665,10 +674,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return created.id;
       } catch (error) {
         handleWriteApiError("创建任务", error);
+        return -1;
       }
+    } else {
+      ensureDemoWriteAllowed("创建任务");
     }
-
-    ensureDemoWriteAllowed("创建任务");
 
     const node = nodes.find((item) => item.id === input.nodeId);
     const policy = input.policyId ? policies.find((item) => item.id === input.policyId) : undefined;
@@ -733,10 +743,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("触发任务", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("触发任务");
     }
-
-    ensureDemoWriteAllowed("触发任务");
 
     setTasks((prev) =>
       prev.map((task) =>
@@ -774,10 +785,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("取消任务", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("取消任务");
     }
-
-    ensureDemoWriteAllowed("取消任务");
 
     setTasks((prev) =>
       prev.map((task) =>
@@ -841,10 +853,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("创建策略", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("创建策略");
     }
-
-    ensureDemoWriteAllowed("创建策略");
 
     const nextID = policies.length > 0 ? Math.max(...policies.map((policy) => policy.id)) + 1 : 1;
     const next: PolicyRecord = {
@@ -873,10 +886,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("更新策略", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("更新策略");
     }
-
-    ensureDemoWriteAllowed("更新策略");
 
     setPolicies((prev) =>
       prev.map((policy) =>
@@ -967,10 +981,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("新增通知通道", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("新增通知通道");
     }
-
-    ensureDemoWriteAllowed("新增通知通道");
 
     const next: IntegrationChannel = {
       id: createIntegrationId(input.name || input.type),
@@ -1015,10 +1030,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("更新通知通道", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("更新通知通道");
     }
-
-    ensureDemoWriteAllowed("更新通知通道");
 
     setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? merged : item)));
   }, [ensureDemoWriteAllowed, handleWriteApiError, integrations, token]);
@@ -1029,10 +1045,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return await apiClient.testIntegration(token, integrationID);
       } catch (error) {
         handleWriteApiError("测试通知通道", error);
+        return { ok: false, message: "测试失败", latencyMs: 0 };
       }
+    } else {
+      ensureDemoWriteAllowed("测试通知通道");
     }
-
-    ensureDemoWriteAllowed("测试通知通道");
     return {
       ok: true,
       message: "测试通知已发送",
@@ -1074,10 +1091,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("确认告警", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("确认告警");
     }
-
-    ensureDemoWriteAllowed("确认告警");
 
     setAlerts((prev) =>
       prev.map((alert) =>
@@ -1099,10 +1117,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return;
       } catch (error) {
         handleWriteApiError("恢复告警", error);
+        return;
       }
+    } else {
+      ensureDemoWriteAllowed("恢复告警");
     }
-
-    ensureDemoWriteAllowed("恢复告警");
 
     setAlerts((prev) =>
       prev.map((alert) =>
@@ -1149,7 +1168,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       successRate: 0,
       byIntegration: []
     };
-  }, [integrations, token]);
+  }, [token]);
 
   const retryAlertDelivery = useCallback(async (alertID: string, integrationID: string): Promise<AlertDeliveryRetryResult> => {
     if (token) {
@@ -1157,10 +1176,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return await apiClient.retryAlertDelivery(token, alertID, integrationID);
       } catch (error) {
         handleWriteApiError("重发通知", error);
+        return { ok: false, message: "重发失败", delivery: { id: "", alertId: alertID, integrationId: integrationID, status: "failed", createdAt: "-" } };
       }
+    } else {
+      ensureDemoWriteAllowed("重发通知");
     }
-
-    ensureDemoWriteAllowed("重发通知");
     return {
       ok: true,
       message: "通知重发已提交",
@@ -1180,10 +1200,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         return await apiClient.retryFailedDeliveries(token, alertID);
       } catch (error) {
         handleWriteApiError("批量重发通知", error);
+        return { ok: false, message: "批量重发失败", totalFailed: 0, successCount: 0, failedCount: 0, newDeliveries: [] };
       }
+    } else {
+      ensureDemoWriteAllowed("批量重发通知");
     }
-
-    ensureDemoWriteAllowed("批量重发通知");
     return {
       ok: true,
       message: "批量重发已提交",

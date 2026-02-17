@@ -79,9 +79,9 @@ function readStoredAuthState(): StoredAuthState {
 
   if (legacyToken) {
     safeSetItem(sessionStorageRef, AUTH_TOKEN_KEY, legacyToken);
-  }
-  if (legacyUsername) {
-    safeSetItem(sessionStorageRef, AUTH_USERNAME_KEY, legacyUsername);
+    if (legacyUsername) {
+      safeSetItem(sessionStorageRef, AUTH_USERNAME_KEY, legacyUsername);
+    }
   }
 
   safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);

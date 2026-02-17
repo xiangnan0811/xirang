@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -72,21 +73,32 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     persistPowerMode(powerMode);
   }, [powerMode]);
 
+  const toggleTheme = useCallback(
+    () => setTheme((prev) => (prev === "dark" ? "light" : "dark")),
+    []
+  );
+  const toggleDensity = useCallback(
+    () => setDensity((prev) => (prev === "compact" ? "comfortable" : "compact")),
+    []
+  );
+  const togglePowerMode = useCallback(
+    () => setPowerMode((prev) => (prev === "save" ? "normal" : "save")),
+    []
+  );
+
   const value = useMemo(
     () => ({
       theme,
       setTheme,
-      toggleTheme: () => setTheme((prev) => (prev === "dark" ? "light" : "dark")),
+      toggleTheme,
       density,
       setDensity,
-      toggleDensity: () =>
-        setDensity((prev) => (prev === "compact" ? "comfortable" : "compact")),
+      toggleDensity,
       powerMode,
       setPowerMode,
-      togglePowerMode: () =>
-        setPowerMode((prev) => (prev === "save" ? "normal" : "save"))
+      togglePowerMode
     }),
-    [density, powerMode, theme]
+    [density, powerMode, theme, toggleDensity, togglePowerMode, toggleTheme]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

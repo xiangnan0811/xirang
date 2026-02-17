@@ -27,6 +27,11 @@ var (
 func loadKey() {
 	raw := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_KEY"))
 	if raw == "" {
+		appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+		if appEnv != "" && appEnv != "development" {
+			keyErr = fmt.Errorf("非开发环境必须设置 DATA_ENCRYPTION_KEY")
+			return
+		}
 		raw = defaultDevKey
 	}
 

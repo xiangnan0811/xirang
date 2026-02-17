@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -182,8 +184,21 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
+
+	var taskCount int64
+	if err := h.db.Model(&model.Task{}).Where("policy_id = ?", id).Count(&taskCount).Error; err != nil {
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+	if taskCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("该策略仍有 %d 个关联任务，请先删除或解绑相关任务", taskCount)})
+		return
+	}
+
 	if err := h.db.Delete(&model.Policy{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})

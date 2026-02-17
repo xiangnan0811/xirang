@@ -113,7 +113,7 @@ export function NodesPage() {
     if (queryKeyword) {
       setKeyword(queryKeyword);
     }
-  }, [queryKeyword]);
+  }, [queryKeyword, setKeyword]);
 
   const tags = useMemo(
     () => ["all", ...Array.from(new Set(nodes.flatMap((node) => node.tags)))],

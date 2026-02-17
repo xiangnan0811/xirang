@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -56,7 +57,7 @@ func validateIntegrationEndpoint(channelType, endpoint string) error {
 		return fmt.Errorf("%s 通道仅允许 http/https URL", normalizedType)
 	}
 
-	blockPrivate, err := readBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", false)
+	blockPrivate, err := readBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", true)
 	if err != nil {
 		return err
 	}
@@ -133,7 +134,8 @@ func isPrivateOrLoopback(addr netip.Addr) bool {
 func (h *IntegrationHandler) List(c *gin.Context) {
 	var items []model.Integration
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
@@ -254,7 +256,8 @@ func (h *IntegrationHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := h.db.Delete(&model.Integration{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})

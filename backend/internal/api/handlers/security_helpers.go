@@ -1,43 +1,11 @@
 package handlers
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-)
+import "xirang/backend/internal/util"
 
 func readBoolEnv(key string, defaultValue bool) (bool, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return defaultValue, nil
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("%s 必须是 true/false", key)
-	}
-	return value, nil
+	return util.ReadBoolEnv(key, defaultValue)
 }
 
 func expandHomePath(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", nil
-	}
-	if trimmed == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return home, nil
-	}
-	if strings.HasPrefix(trimmed, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, strings.TrimPrefix(trimmed, "~/")), nil
-	}
-	return trimmed, nil
+	return util.ExpandHomePath(path)
 }

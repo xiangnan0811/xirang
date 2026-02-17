@@ -1,9 +1,10 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
+	"time"
 
-	"xirang/backend/internal/model"
 	"xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
@@ -19,42 +20,37 @@ func NewOverviewHandler(db *gorm.DB) *OverviewHandler {
 }
 
 func (h *OverviewHandler) Get(c *gin.Context) {
-	var totalNodes int64
-	var healthyNodes int64
-	var activePolicies int64
-	var runningTasks int64
-	var failedTasks int64
+	since24h := time.Now().Add(-24 * time.Hour)
 
-	if err := h.db.Model(&model.Node{}).Count(&totalNodes).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	type overviewCounts struct {
+		TotalNodes     int64
+		HealthyNodes   int64
+		ActivePolicies int64
+		RunningTasks   int64
+		FailedTasks    int64
 	}
 
-	if err := h.db.Model(&model.Node{}).Where("status = ?", "online").Count(&healthyNodes).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	var counts overviewCounts
+	row := h.db.Raw(`
+		SELECT
+			(SELECT COUNT(*) FROM nodes) AS total_nodes,
+			(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS healthy_nodes,
+			(SELECT COUNT(*) FROM policies WHERE enabled = true) AS active_policies,
+			(SELECT COUNT(*) FROM tasks WHERE status = ?) AS running_tasks,
+			(SELECT COUNT(*) FROM tasks WHERE status = ? AND created_at >= ?) AS failed_tasks
+	`, string(task.StatusRunning), string(task.StatusFailed), since24h).Row()
 
-	if err := h.db.Model(&model.Policy{}).Where("enabled = ?", true).Count(&activePolicies).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := h.db.Model(&model.Task{}).Where("status = ?", string(task.StatusRunning)).Count(&runningTasks).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := h.db.Model(&model.Task{}).Where("status = ?", string(task.StatusFailed)).Count(&failedTasks).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := row.Scan(&counts.TotalNodes, &counts.HealthyNodes, &counts.ActivePolicies, &counts.RunningTasks, &counts.FailedTasks); err != nil {
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"totalNodes":     totalNodes,
-		"healthyNodes":   healthyNodes,
-		"activePolicies": activePolicies,
-		"runningTasks":   runningTasks,
-		"failedTasks24h": failedTasks,
+		"totalNodes":     counts.TotalNodes,
+		"healthyNodes":   counts.HealthyNodes,
+		"activePolicies": counts.ActivePolicies,
+		"runningTasks":   counts.RunningTasks,
+		"failedTasks24h": counts.FailedTasks,
 	}})
 }

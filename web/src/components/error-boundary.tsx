@@ -23,6 +23,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // ErrorBoundary 是合理的 console.error 使用场景，用于记录未捕获的渲染错误
     console.error("ErrorBoundary caught:", error, errorInfo);
   }
 

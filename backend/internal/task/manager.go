@@ -119,6 +119,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	lock := m.taskLock(taskID)
 	lock.Lock()
 	defer lock.Unlock()
+	defer m.locks.Delete(taskID)
 
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
@@ -135,6 +136,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
 	strategyLock.Lock()
 	defer strategyLock.Unlock()
+	defer m.strategyLocks.Delete(buildStrategyKey(taskEntity.NodeID, taskEntity.PolicyID))
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {

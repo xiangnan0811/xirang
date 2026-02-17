@@ -1,10 +1,14 @@
 package ws
 
 import (
+	"context"
+	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -24,35 +28,39 @@ type LogEvent struct {
 }
 
 type client struct {
-	conn         *websocket.Conn
-	send         chan LogEvent
-	filterTaskID *uint
+	conn          *websocket.Conn
+	send          chan LogEvent
+	filterTaskID  *uint
+	authenticated bool
 }
 
 type Hub struct {
-	db         *gorm.DB
-	clients    map[*client]struct{}
-	register   chan *client
-	unregister chan *client
-	broadcast  chan LogEvent
-	mu         sync.RWMutex
+	db             *gorm.DB
+	clients        map[*client]struct{}
+	register       chan *client
+	unregister     chan *client
+	broadcast      chan LogEvent
+	mu             sync.RWMutex
+	allowedOrigins []string
+	droppedCount   uint64
 }
 
-const wsAuthProtocol = "xirang-auth.v1"
-
-func NewHub(db *gorm.DB) *Hub {
+func NewHub(db *gorm.DB, allowedOrigins []string) *Hub {
 	return &Hub{
-		db:         db,
-		clients:    make(map[*client]struct{}),
-		register:   make(chan *client),
-		unregister: make(chan *client),
-		broadcast:  make(chan LogEvent, 256),
+		db:             db,
+		clients:        make(map[*client]struct{}),
+		register:       make(chan *client),
+		unregister:     make(chan *client),
+		broadcast:      make(chan LogEvent, 256),
+		allowedOrigins: allowedOrigins,
 	}
 }
 
-func (h *Hub) Run() {
+func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case c := <-h.register:
 			h.mu.Lock()
 			h.clients[c] = struct{}{}
@@ -85,24 +93,69 @@ func (h *Hub) Publish(event LogEvent) {
 	select {
 	case h.broadcast <- event:
 	default:
+		atomic.AddUint64(&h.droppedCount, 1)
+		log.Printf("warn: broadcast channel full, event dropped (total dropped: %d)", atomic.LoadUint64(&h.droppedCount))
 	}
 }
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	Subprotocols:    []string{wsAuthProtocol},
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+func (h *Hub) newUpgrader() websocket.Upgrader {
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			if len(h.allowedOrigins) == 0 {
+				return true
+			}
+			for _, o := range h.allowedOrigins {
+				if o == "*" {
+					return true
+				}
+			}
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			for _, allowed := range h.allowedOrigins {
+				if strings.EqualFold(origin, allowed) {
+					return true
+				}
+			}
+			return false
+		},
+	}
 }
 
-func (h *Hub) ServeWS(c *gin.Context) {
+type authMessage struct {
+	Type  string `json:"type"`
+	Token string `json:"token"`
+}
+
+func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
+	upgrader := h.newUpgrader()
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "升级 websocket 失败"})
 		return
 	}
+
+	// 等待认证消息（5 秒超时）
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
+	var authMsg authMessage
+	if err := json.Unmarshal(msg, &authMsg); err != nil || authMsg.Type != "auth" || !validateToken(authMsg.Token) {
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "认证失败"))
+		_ = conn.Close()
+		return
+	}
+
+	// 认证通过，恢复正常读超时
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 	var filterTaskID *uint
 	if raw := c.Query("task_id"); raw != "" {
@@ -122,21 +175,22 @@ func (h *Hub) ServeWS(c *gin.Context) {
 		}
 	}
 
-	client := &client{
-		conn:         conn,
-		send:         make(chan LogEvent, 64),
-		filterTaskID: filterTaskID,
+	cl := &client{
+		conn:          conn,
+		send:          make(chan LogEvent, 64),
+		filterTaskID:  filterTaskID,
+		authenticated: true,
 	}
-	h.register <- client
+	h.register <- cl
 
-	go client.writePump(func() { h.unregister <- client })
-	go client.readPump(func() { h.unregister <- client })
+	go cl.writePump(func() { h.unregister <- cl })
+	go cl.readPump(func() { h.unregister <- cl })
 
 	for _, event := range backfillEvents {
 		select {
-		case client.send <- event:
+		case cl.send <- event:
 		default:
-			h.unregister <- client
+			h.unregister <- cl
 			return
 		}
 	}

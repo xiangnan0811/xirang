@@ -38,8 +38,10 @@ func main() {
 		log.Fatalf("初始化默认用户失败: %v", err)
 	}
 
-	hub := ws.NewHub(db)
-	go hub.Run()
+	hub := ws.NewHub(db, cfg.AllowedOrigins)
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go hub.Run(hubCtx)
 
 	cronScheduler := scheduler.NewCronScheduler()
 	cronScheduler.Start()

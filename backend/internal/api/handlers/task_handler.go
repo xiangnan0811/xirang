@@ -8,6 +8,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -343,37 +344,18 @@ func validateTaskRequest(req taskRequest) error {
 	sourceAllowList := parseCSVEnvList("RSYNC_ALLOWED_SOURCE_PREFIXES")
 	targetAllowList := parseCSVEnvList("RSYNC_ALLOWED_TARGET_PREFIXES")
 
-	if !isRemotePathSpec(req.RsyncSource) {
+	if !util.IsRemotePathSpec(req.RsyncSource) {
 		if err := validatePathByPrefix(req.RsyncSource, sourceAllowList, "rsync_source"); err != nil {
 			return err
 		}
 	}
-	if !isRemotePathSpec(req.RsyncTarget) {
+	if !util.IsRemotePathSpec(req.RsyncTarget) {
 		if err := validatePathByPrefix(req.RsyncTarget, targetAllowList, "rsync_target"); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-func isRemotePathSpec(path string) bool {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return false
-	}
-	if strings.HasPrefix(trimmed, "rsync://") {
-		return true
-	}
-	if len(trimmed) >= 3 {
-		letter := trimmed[0]
-		if ((letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z')) && trimmed[1] == ':' {
-			return false
-		}
-	}
-	colon := strings.Index(trimmed, ":")
-	slash := strings.Index(trimmed, "/")
-	return colon > 0 && (slash < 0 || colon < slash)
 }
 
 func parseTaskSort(raw string) string {

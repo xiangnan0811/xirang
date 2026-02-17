@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -51,10 +52,12 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, jwt *JWTManager, cfg LoginSecurityConfig) *Service {
+	locker := NewLoginFailureLocker(cfg.FailLockThreshold, cfg.FailLockDuration)
+	locker.StartCleanup(context.Background(), 5*time.Minute)
 	return &Service{
 		db:            db,
 		jwt:           jwt,
-		failureLocker: NewLoginFailureLocker(cfg.FailLockThreshold, cfg.FailLockDuration),
+		failureLocker: locker,
 	}
 }
 

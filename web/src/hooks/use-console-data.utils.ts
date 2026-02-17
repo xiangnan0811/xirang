@@ -53,7 +53,7 @@ export function buildFingerprint(privateKey: string) {
   for (let idx = 0; idx < raw.length; idx += 1) {
     checksum = (checksum + raw.charCodeAt(idx) * (idx + 3)) % 1_000_000;
   }
-  return `SHA256:${checksum.toString(16).padStart(6, "0")}`;
+  return `DEMO:${checksum.toString(16).padStart(6, "0")}`;
 }
 
 export function createKeyId(name: string) {

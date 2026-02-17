@@ -299,11 +299,13 @@ export function OverviewPage() {
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值入站</p>
                 <p className="mt-1 text-xl font-semibold">{peakIngress} Mbps</p>
+                {/* 示意值，非真实统计 */}
                 <p className="text-xs text-emerald-500">+12.4%</p>
               </div>
               <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值出站</p>
                 <p className="mt-1 text-xl font-semibold">{peakEgress} Mbps</p>
+                {/* 示意值，非真实统计 */}
                 <p className="text-xs text-sky-500">+8.1%</p>
               </div>
             </div>

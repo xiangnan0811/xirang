@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -123,6 +124,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	now := time.Now()
+	var wg sync.WaitGroup
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {
 			continue
@@ -131,21 +133,32 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 			continue
 		}
 
-		err := send(channel, *alert)
-		delivery := model.AlertDelivery{
-			AlertID:       alert.ID,
-			IntegrationID: channel.ID,
-		}
-		if err != nil {
-			delivery.Status = "failed"
-			delivery.Error = err.Error()
-		} else {
-			delivery.Status = "sent"
-			notifiedAt := time.Now()
-			alert.LastNotifiedAt = &notifiedAt
-			_ = db.Model(alert).Update("last_notified_at", &notifiedAt).Error
-		}
-		_ = db.Create(&delivery).Error
+		wg.Add(1)
+		go func(ch model.Integration) {
+			defer wg.Done()
+			err := send(ch, *alert)
+			delivery := model.AlertDelivery{
+				AlertID:       alert.ID,
+				IntegrationID: ch.ID,
+			}
+			if err != nil {
+				delivery.Status = "failed"
+				delivery.Error = err.Error()
+			} else {
+				delivery.Status = "sent"
+			}
+			_ = db.Create(&delivery).Error
+		}(channel)
+	}
+	wg.Wait()
+
+	// 更新 last_notified_at（在所有发送完成后）
+	var sentCount int64
+	db.Model(&model.AlertDelivery{}).Where("alert_id = ? AND status = ?", alert.ID, "sent").Count(&sentCount)
+	if sentCount > 0 {
+		notifiedAt := time.Now()
+		alert.LastNotifiedAt = &notifiedAt
+		_ = db.Model(alert).Update("last_notified_at", &notifiedAt).Error
 	}
 
 	return nil
