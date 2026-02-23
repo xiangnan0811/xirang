@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 
 type DesktopSidebarProps = {
   username: string | null;
@@ -28,10 +27,6 @@ export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
             <p className="text-sm text-muted-foreground">XiRang</p>
             <h1 className="text-lg font-semibold">集中备份中枢</h1>
           </div>
-        </div>
-        <div className="hidden lg:flex lg:items-center lg:gap-1">
-          <DisplayPreferencesToggle />
-          <ThemeToggle />
         </div>
       </div>
 

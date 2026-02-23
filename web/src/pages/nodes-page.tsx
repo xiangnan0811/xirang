@@ -734,8 +734,7 @@ export function NodesPage() {
           </div>
 
           {viewMode === "cards" ? (
-            <div className="hidden gap-3 md:grid lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]">
-              <div className="grid gap-3 md:grid-cols-2">
+            <div className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-3">
               {loading ? (
                 <LoadingState
                   className="md:col-span-2 lg:col-span-3"
@@ -774,11 +773,11 @@ export function NodesPage() {
                 return (
                   <div
                     key={node.id}
-                    onClick={() => setSelectedNodeId(node.id)}
                     className={cn(
                       "interactive-surface p-3 transition-colors",
                       selectedNode?.id === node.id && "border-primary/45 ring-1 ring-primary/40"
                     )}
+                    onClick={() => setSelectedNodeId(node.id)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -853,7 +852,7 @@ export function NodesPage() {
                       </Button>
                     </div>
 
-                    <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div className="mt-2 grid grid-cols-3 gap-2">
                       <Button
                         variant="outline"
                         size="sm"
@@ -872,65 +871,19 @@ export function NodesPage() {
                       >
                         手动备份
                       </Button>
+                      <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-10 w-full"
+                        >
+                          查看日志
+                        </Button>
+                      </Link>
                     </div>
                   </div>
                 );
               })}
-              </div>
-
-              <aside className="hidden lg:block">
-                {selectedNode ? (
-                  <div className="interactive-surface sticky top-32 space-y-3 p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-xs text-muted-foreground">当前选中节点</p>
-                        <h4 className="text-lg font-semibold">{selectedNode.name}</h4>
-                        <p className="text-xs text-muted-foreground break-all">
-                          {selectedNode.host}:{selectedNode.port} · {selectedNode.username}
-                        </p>
-                      </div>
-                      <Badge variant={getNodeStatusMeta(selectedNode.status).variant}>
-                        {getNodeStatusMeta(selectedNode.status).label}
-                      </Badge>
-                    </div>
-
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      <p>认证：{selectedNode.authType === "key" ? "密钥" : "密码"}</p>
-                      <p>磁盘余量：{selectedNode.diskFreePercent}%</p>
-                      <p>探测时间：{selectedNode.diskProbeAt || "未探测"}</p>
-                      <p>最后备份：{selectedNode.lastBackupAt}</p>
-                      <p className="break-words">标签：{selectedNode.tags.join(" / ") || "-"}</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void onTestNode(selectedNode)}
-                        disabled={testingNodeId === selectedNode.id}
-                      >
-                        {testingNodeId === selectedNode.id ? "探测中" : "测试连接"}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => openEditDialog(selectedNode)}>
-                        <Wrench className="mr-1 size-4" />
-                        编辑节点
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => handleOpenTerminal(selectedNode)}>
-                        <TerminalSquare className="mr-1 size-4" />
-                        远程终端
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => void handleTriggerBackup(selectedNode.id, selectedNode.name)}
-                      >
-                        手动备份
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <EmptyState className="py-10" title="暂无节点详情" description="请先选择一个节点。" />
-                )}
-              </aside>
             </div>
           ) : (
             <div className="hidden overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm md:block">
@@ -1081,6 +1034,11 @@ export function NodesPage() {
                               >
                                 终端
                               </Button>
+                              <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
+                                <Button variant="outline" size="sm">
+                                  日志
+                                </Button>
+                              </Link>
                               <Button
                                 size="sm"
                                 onClick={() =>
@@ -1246,7 +1204,7 @@ export function NodesPage() {
                     </Button>
                   </div>
 
-                  <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div className="mt-2 grid grid-cols-3 gap-2">
                     <Button
                       variant="outline"
                       size="sm"
@@ -1265,6 +1223,15 @@ export function NodesPage() {
                     >
                       手动备份
                     </Button>
+                    <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 w-full"
+                      >
+                        查看日志
+                      </Button>
+                    </Link>
                   </div>
                 </div>
               );

@@ -11,7 +11,6 @@ import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
 import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
-import { SelectedAlertPanel } from "@/pages/notifications-page.components";
 import {
   alertStatusMeta,
   integrationIcon,
@@ -37,7 +36,6 @@ import type { AlertDeliveryRecord, AlertDeliveryStats, IntegrationChannel } from
 const notificationKeywordStorageKey = "xirang.notifications.keyword";
 const notificationSeverityStorageKey = "xirang.notifications.severity";
 const notificationStatusStorageKey = "xirang.notifications.status";
-const notificationSelectedAlertStorageKey = "xirang.notifications.selected-alert";
 
 export function NotificationsPage() {
   const { confirm, dialog } = useConfirm();
@@ -66,8 +64,6 @@ export function NotificationsPage() {
     usePersistentState<"all" | "critical" | "warning" | "info">(notificationSeverityStorageKey, "all");
   const [statusFilter, setStatusFilter] =
     usePersistentState<"all" | "open" | "acked" | "resolved">(notificationStatusStorageKey, "all");
-  const [selectedAlertId, setSelectedAlertId] =
-    usePersistentState<string | null>(notificationSelectedAlertStorageKey, null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<IntegrationChannel | null>(null);
@@ -171,66 +167,6 @@ export function NotificationsPage() {
   }, [globalSearch, keyword, severityFilter, sortedAlerts, statusFilter]);
 
   const mobilePushAlerts = filteredAlerts.filter((alert) => alert.status === "open").slice(0, 6);
-
-  useEffect(() => {
-    if (!filteredAlerts.length) {
-      if (selectedAlertId !== null) {
-        setSelectedAlertId(null);
-      }
-      return;
-    }
-    if (!selectedAlertId || !filteredAlerts.some((alert) => alert.id === selectedAlertId)) {
-      setSelectedAlertId(filteredAlerts[0].id);
-    }
-  }, [filteredAlerts, selectedAlertId, setSelectedAlertId]);
-
-  const selectedAlert = useMemo(
-    () => filteredAlerts.find((alert) => alert.id === selectedAlertId) ?? null,
-    [filteredAlerts, selectedAlertId]
-  );
-
-  const handleSelectedAlertRetry = () => {
-    if (!selectedAlert) {
-      return;
-    }
-
-    if (!selectedAlert.taskId) {
-      toast.error("该告警未绑定任务，请先修复节点连接问题。");
-      return;
-    }
-
-    void retryAlert(selectedAlert.id)
-      .then(() => toast.success(`已重试 ${selectedAlert.nodeName} 的任务。`))
-      .catch((error) => toast.error((error as Error).message));
-  };
-
-  const handleSelectedAlertAcknowledge = () => {
-    if (!selectedAlert) {
-      return;
-    }
-
-    void acknowledgeAlert(selectedAlert.id)
-      .then(() => toast.success(`已确认告警 ${selectedAlert.id}`))
-      .catch((error) => toast.error((error as Error).message));
-  };
-
-  const handleSelectedAlertResolve = () => {
-    if (!selectedAlert) {
-      return;
-    }
-
-    void resolveAlert(selectedAlert.id)
-      .then(() => toast.success(`告警 ${selectedAlert.id} 已标记恢复。`))
-      .catch((error) => toast.error((error as Error).message));
-  };
-
-  const handleSelectedAlertToggleDeliveries = () => {
-    if (!selectedAlert) {
-      return;
-    }
-
-    toggleDeliveries(selectedAlert.id);
-  };
 
   const integrationNameMap = useMemo(
     () => new Map(integrations.map((integration) => [integration.id, integration.name])),
@@ -349,29 +285,6 @@ export function NotificationsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-        <div className="pointer-events-none absolute -right-14 -top-10 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground">告警中枢</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight">通知与告警联动面板</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              从告警收敛、投递统计到渠道管理统一完成，确保异常快速闭环。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="danger">待处理 {openAlerts.length}</Badge>
-            <Badge variant="warning">严重 {criticalAlerts.length}</Badge>
-            <Badge variant="success">通道 {activeIntegrations}</Badge>
-            <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-1 size-4" />
-              新增通知方式
-            </Button>
-          </div>
-        </div>
-      </section>
-
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="border-red-500/30 bg-gradient-to-br from-red-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
@@ -690,14 +603,13 @@ export function NotificationsPage() {
               </select>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
-              <div className="space-y-2">
+            <div className="space-y-2">
               {filteredAlerts.length ? (
                 filteredAlerts.map((alert) => {
                   const severity = getSeverityMeta(alert.severity);
                   const status = alertStatusMeta(alert.status);
                   return (
-                    <div key={alert.id} onClick={() => setSelectedAlertId(alert.id)} className={cn("rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm transition-colors", selectedAlert?.id === alert.id && "border-primary/45 ring-1 ring-primary/40")}>
+                    <div key={alert.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <StatusPulse tone={severityToTone(alert.severity)} />
@@ -846,19 +758,6 @@ export function NotificationsPage() {
                   当前筛选条件下没有待处理通知。
                 </div>
               )}
-              </div>
-
-
-              <SelectedAlertPanel
-                selectedAlert={selectedAlert}
-                deliveryOpenAlertId={deliveryOpenAlertId}
-                deliveryLoadingAlertId={deliveryLoadingAlertId}
-                deliveryCount={selectedAlert ? (deliveryMap[selectedAlert.id]?.length ?? 0) : 0}
-                onRetry={handleSelectedAlertRetry}
-                onAcknowledge={handleSelectedAlertAcknowledge}
-                onResolve={handleSelectedAlertResolve}
-                onToggleDeliveries={handleSelectedAlertToggleDeliveries}
-              />
             </div>
           </CardContent>
         </Card>

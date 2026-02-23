@@ -1,12 +1,13 @@
 import { useMemo } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { Activity, ArrowDownCircle, ArrowUpCircle, CheckCircle2, CircleDashed, Radar, TrendingUp } from "lucide-react";
+import { Activity, ArrowDownCircle, ArrowUpCircle, CheckCircle2, CircleDashed, Radar, TrendingUp, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPulse } from "@/components/status-pulse";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
 
 function buildLinePath(values: number[], width: number, height: number) {
@@ -42,8 +43,6 @@ export function OverviewPage() {
   const egressValues = trafficSeries.map((point) => point.egressMbps);
   const peakIngress = ingressValues.length ? Math.max(...ingressValues) : 0;
   const peakEgress = egressValues.length ? Math.max(...egressValues) : 0;
-  const warningNodes = nodes.filter((node) => node.status === "warning").length;
-  const offlineNodes = nodes.filter((node) => node.status === "offline").length;
 
   const checklistItems = [
     {
@@ -82,28 +81,18 @@ export function OverviewPage() {
 
   const checklistDone = checklistItems.filter((item) => item.done).length;
 
+  const [onboardingDismissed, setOnboardingDismissed] = usePersistentState<boolean>(
+    "xirang.onboarding.dismissed",
+    false
+  );
+
+  const dismissOnboarding = () => {
+    setOnboardingDismissed(true);
+  };
+
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-        <div className="pointer-events-none absolute -right-12 -top-14 h-40 w-40 rounded-full bg-brand-life/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-12 bottom-0 h-32 w-32 rounded-full bg-brand-soil/20 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground">全局监控视图</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight">息壤态势总览</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              30+ 节点的实时健康、吞吐与异常告警统一收敛在一个监控面板。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">在线 {overview.healthyNodes}</Badge>
-            <Badge variant="warning">告警 {warningNodes}</Badge>
-            <Badge variant="danger">离线 {offlineNodes}</Badge>
-            <Button size="sm" onClick={() => navigate("/app/logs")}>查看实时日志</Button>
-          </div>
-        </div>
-      </section>
-
+      {!onboardingDismissed && checklistDone < checklistItems.length ? (
       <section className="rounded-2xl border border-border/75 bg-background/55 p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -111,9 +100,14 @@ export function OverviewPage() {
             <h4 className="text-base font-semibold">息壤接入检查清单</h4>
             <p className="text-xs text-muted-foreground">先 SSH Key，再节点，再策略，再任务</p>
           </div>
-          <Badge variant={checklistDone === checklistItems.length ? "success" : "warning"}>
-            进度 {checklistDone}/{checklistItems.length}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant={checklistDone === checklistItems.length ? "success" : "warning"}>
+              进度 {checklistDone}/{checklistItems.length}
+            </Badge>
+            <Button size="sm" variant="ghost" onClick={dismissOnboarding} aria-label="关闭引导">
+              <X className="size-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
@@ -137,6 +131,7 @@ export function OverviewPage() {
           ))}
         </div>
       </section>
+      ) : null}
 
       <section className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
         <Card className="border-success/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
@@ -217,36 +212,15 @@ export function OverviewPage() {
               {nodes.map((node) => (
                 <div
                   key={node.id}
-                  className="interactive-surface border-border/70 bg-background/75 p-2 text-[11px] hover:border-primary/45"
+                  className="interactive-surface border-border/70 bg-background/75 p-2 text-[11px] cursor-pointer hover:border-primary/45"
                   title={`${node.name} · ${node.ip} · 成功率 ${node.successRate}%`}
+                  onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
                 >
                   <div className="mb-1 flex items-center justify-between gap-1">
                     <StatusPulse tone={node.status} />
                     <span className="text-[10px] text-muted-foreground">{node.diskFreePercent}%</span>
                   </div>
                   <p className="truncate font-medium">{node.name}</p>
-                  <p className="truncate text-[10px] text-muted-foreground">{node.ip}</p>
-
-                  <div className="mt-2 grid grid-cols-2 gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-[10px]"
-                      aria-label={`查看 ${node.name} 的实时日志`}
-                      onClick={() => navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)}
-                    >
-                      查看日志
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 px-2 text-[10px]"
-                      aria-label={`定位到 ${node.name} 的节点详情`}
-                      onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
-                    >
-                      详情定位
-                    </Button>
-                  </div>
                 </div>
               ))}
             </div>

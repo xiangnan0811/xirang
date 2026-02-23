@@ -205,29 +205,6 @@ export function TasksPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground">任务编排中心</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight">任务调度与执行面板</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              覆盖触发、取消、重试与日志回溯，支持快速筛选定位异常任务。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">总任务 {tasks.length}</Badge>
-            <Badge variant="warning">运行中 {taskStats.running}</Badge>
-            <Badge variant="danger">失败 {taskStats.failed}</Badge>
-            <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-1 size-4" />
-              新建任务
-            </Button>
-          </div>
-        </div>
-      </section>
-
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
           <CardHeader className="pb-2">

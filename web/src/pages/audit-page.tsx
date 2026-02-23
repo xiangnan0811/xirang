@@ -177,26 +177,6 @@ export function AuditPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground">安全审计</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight">操作轨迹与访问审计面板</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              追踪请求方法、路径与状态码，支持时间窗口过滤与 CSV 导出。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">读操作 {auditStats.readOps}</Badge>
-            <Badge variant="warning">写操作 {auditStats.writeOps}</Badge>
-            <Badge variant="danger">异常状态 {auditStats.errorStatus}</Badge>
-            <Badge variant="secondary">总计 {total}</Badge>
-          </div>
-        </div>
-      </section>
-
       <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -204,7 +184,11 @@ export function AuditPage() {
               <CardTitle className="text-base">审计日志（管理员只读）</CardTitle>
               <p className="mt-1 text-xs text-muted-foreground">支持卡片/列表切换与多维筛选</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">读操作 {auditStats.readOps}</Badge>
+              <Badge variant="warning">写操作 {auditStats.writeOps}</Badge>
+              <Badge variant="danger">异常状态 {auditStats.errorStatus}</Badge>
+              <Badge variant="secondary">总计 {total}</Badge>
               <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
                 <RefreshCw className="mr-1 size-4" />
                 刷新

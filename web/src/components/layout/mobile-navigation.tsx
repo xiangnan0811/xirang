@@ -52,7 +52,7 @@ export function MobileNavigation({ username, onLogout, onRefresh }: MobileNaviga
       </nav>
 
       <button
-        className="fixed right-3 top-3 z-50 rounded-full border border-border/80 bg-background/85 p-2.5 shadow-panel md:hidden"
+        className="fixed right-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-50 rounded-full border border-border/80 bg-background/85 p-2.5 shadow-panel md:hidden"
         onClick={() => setDrawerOpen(true)}
         aria-label="打开快捷菜单"
       >

@@ -119,29 +119,6 @@ export function SSHKeysPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-        <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground">认证入口</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight">SSH Key 密钥管理（第 0 步）</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              统一维护密钥生命周期，为节点接入、任务执行与权限隔离提供安全基线。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="success">使用中 {keyStats.inUse}</Badge>
-            <Badge variant="outline">未使用 {keyStats.unused}</Badge>
-            <Badge variant="secondary">绑定节点 {keyStats.bindingCount}</Badge>
-            <Button size="sm" onClick={openCreateDialog}>
-              <Plus className="mr-1 size-4" />
-              新增 Key
-            </Button>
-          </div>
-        </div>
-      </section>
-
       <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -149,10 +126,15 @@ export function SSHKeysPage() {
               <CardTitle className="text-base">SSH Key 管理（第 0 步）</CardTitle>
               <p className="mt-1 text-xs text-muted-foreground">支持新增、编辑、删除，并提示密钥使用依赖关系</p>
             </div>
-            <Button size="sm" onClick={openCreateDialog}>
-              <Plus className="mr-1 size-4" />
-              新增 Key
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="success">使用中 {keyStats.inUse}</Badge>
+              <Badge variant="outline">未使用 {keyStats.unused}</Badge>
+              <Badge variant="secondary">绑定节点 {keyStats.bindingCount}</Badge>
+              <Button size="sm" onClick={openCreateDialog}>
+                <Plus className="mr-1 size-4" />
+                新增 Key
+              </Button>
+            </div>
           </div>
         </CardHeader>
 
@@ -162,7 +144,7 @@ export function SSHKeysPage() {
             Vault/KMS），并启用审计与最小权限策略。
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {sshKeys.map((key) => {
               const usageCount = keyUsageMap.get(key.id) ?? 0;
               return (

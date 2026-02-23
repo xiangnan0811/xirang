@@ -388,36 +388,15 @@ export function LogsPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      {!fullScreen ? (
-        <section className="relative overflow-hidden rounded-2xl border border-border/75 bg-background/65 p-4 shadow-panel md:p-5">
-          <div className="pointer-events-none absolute -right-14 -top-8 h-36 w-36 rounded-full bg-brand-life/20 blur-3xl" />
-          <div className="pointer-events-none absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-brand-soil/20 blur-3xl" />
-          <div className="relative flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs text-muted-foreground">流式终端</p>
-              <h3 className="mt-1 text-xl font-semibold tracking-tight">实时日志与任务追踪面板</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                按节点与任务聚类展示日志，支持实时追踪、历史回溯与异常码高亮定位。
-              </p>
-            </div>
+      <Card className={cn("border-border/75", fullScreen && "fixed inset-2 z-50 m-0")}> 
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base">实时日志与监控终端</CardTitle>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">分组 {logStats.groups}</Badge>
               <Badge variant="success">INFO {logStats.info}</Badge>
               <Badge variant="warning">WARN {logStats.warn}</Badge>
               <Badge variant="danger">ERROR {logStats.error}</Badge>
-              <Badge variant={connected ? "success" : "outline"}>
-                {connected ? "已连接" : "未连接"}
-              </Badge>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      <Card className={cn("border-border/75", fullScreen && "fixed inset-2 z-50 m-0")}> 
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">实时日志与监控终端</CardTitle>
-            <div className="flex items-center gap-2">
               <Badge variant={connected ? "success" : "outline"}>{connected ? "已连接" : "未连接"}</Badge>
               <Button variant="outline" size="sm" onClick={exportAsText}>
                 <Download className="mr-1 size-4" />
@@ -524,115 +503,80 @@ export function LogsPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
-            <aside className="hidden lg:block">
-              <div className="interactive-surface h-[58vh] space-y-2 overflow-auto p-3 thin-scrollbar">
-                <p className="text-xs text-muted-foreground">节点/任务分组（点击快速定位）</p>
-                {groupedLogs.slice(0, 60).map((group) => (
-                  <button
-                    type="button"
-                    key={group.key}
-                    onClick={() => {
-                      const nextNode = group.nodeName && group.nodeName !== "系统" ? group.nodeName : "all";
-                      const nextTask = group.taskId ? String(group.taskId) : "all";
-                      setSelectedNode(nextNode);
-                      setSelectedTask(nextTask);
-                      syncSearchParams({ node: nextNode, task: nextTask });
-                    }}
-                    className={cn(
-                      "w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors",
-                      selectedTask !== "all" && group.taskId && String(group.taskId) === selectedTask
-                        ? "border-primary/45 bg-primary/10"
-                        : "border-border/70 bg-background/70 hover:border-primary/35"
-                    )}
-                  >
-                    <p className="font-medium text-foreground">{group.nodeName}</p>
-                    <p className="text-muted-foreground">
-                      {group.taskId ? `任务 #${group.taskId}` : "系统日志"} · {group.logs.length} 条
-                    </p>
-                  </button>
+          <div className="space-y-3">
+            {historyLoading && !groupedLogs.length ? (
+              <LoadingState
+                title="日志加载中"
+                description="正在拉取历史日志与实时流式增量..."
+                rows={4}
+              />
+            ) : (
+              <div
+                ref={terminalRef}
+                className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
+                style={{ fontSize: `${12 * fontScale}px` }}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onDoubleClick={() => setFontScale(1)}
+                title="双击重置字体缩放"
+              >
+                {groupedLogs.map((group) => (
+                  <section key={group.key} className="mb-3 rounded border border-slate-700/70 bg-slate-900/40">
+                    <div className="border-b border-slate-700/70 px-3 py-2 text-[11px] text-slate-300">
+                      节点：{group.nodeName} · {group.taskId ? `任务 #${group.taskId}` : "系统日志"}
+                    </div>
+                    <div className="px-2 py-1">
+                      {group.logs.map((log) => (
+                        <div
+                          key={log.logId ? `line-${log.logId}` : log.id}
+                          className="mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b border-slate-800/80 py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
+                        >
+                          <span className="text-slate-400">{log.timestamp}</span>
+                          <span className={getLevelClass(log.level)}>{log.level.toUpperCase()}</span>
+                          <span>
+                            <span className="mr-2 rounded bg-slate-700/70 px-1 text-[10px] text-slate-300 md:text-[11px]">
+                              {log.nodeName ?? "系统"}
+                            </span>
+                            {highlightErrorCode(log.message)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 ))}
                 {!groupedLogs.length ? (
-                  <EmptyState className="py-8" title="无分组" description="当前筛选无日志分组。" />
+                  <div className="px-2 py-6">
+                    <EmptyState
+                      className="border-slate-700/70 bg-slate-900/55"
+                      title="当前筛选条件下暂无日志输出"
+                      description="可尝试切换节点/任务或重置筛选条件。"
+                      action={(
+                        <Button size="sm" variant="outline" onClick={resetFilters}>
+                          重置筛选
+                        </Button>
+                      )}
+                    />
+                  </div>
                 ) : null}
               </div>
-            </aside>
+            )}
 
-            <div className="space-y-3">
-              {historyLoading && !groupedLogs.length ? (
-                <LoadingState
-                  title="日志加载中"
-                  description="正在拉取历史日志与实时流式增量..."
-                  rows={4}
-                />
-              ) : (
-                <div
-                  ref={terminalRef}
-                  className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
-                  style={{ fontSize: `${12 * fontScale}px` }}
-                  onTouchStart={handleTouchStart}
-                  onTouchMove={handleTouchMove}
-                  onDoubleClick={() => setFontScale(1)}
-                  title="双击重置字体缩放"
+            {focusedTaskNumber ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-border/75 bg-background/60 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  历史回溯：{historyLogs.length} 条
+                  {historyCursor ? `，最早游标 #${historyCursor}` : "，已到最早"}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!historyCursor || historyPaging}
+                  onClick={() => void loadMoreHistory()}
                 >
-                  {groupedLogs.map((group) => (
-                    <section key={group.key} className="mb-3 rounded border border-slate-700/70 bg-slate-900/40">
-                      <div className="border-b border-slate-700/70 px-3 py-2 text-[11px] text-slate-300">
-                        节点：{group.nodeName} · {group.taskId ? `任务 #${group.taskId}` : "系统日志"}
-                      </div>
-                      <div className="px-2 py-1">
-                        {group.logs.map((log) => (
-                          <div
-                            key={log.logId ? `line-${log.logId}` : log.id}
-                            className="mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b border-slate-800/80 py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
-                          >
-                            <span className="text-slate-400">{log.timestamp}</span>
-                            <span className={getLevelClass(log.level)}>{log.level.toUpperCase()}</span>
-                            <span>
-                              <span className="mr-2 rounded bg-slate-700/70 px-1 text-[10px] text-slate-300 md:text-[11px]">
-                                {log.nodeName ?? "系统"}
-                              </span>
-                              {highlightErrorCode(log.message)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                  {!groupedLogs.length ? (
-                    <div className="px-2 py-6">
-                      <EmptyState
-                        className="border-slate-700/70 bg-slate-900/55"
-                        title="当前筛选条件下暂无日志输出"
-                        description="可尝试切换节点/任务或重置筛选条件。"
-                        action={(
-                          <Button size="sm" variant="outline" onClick={resetFilters}>
-                            重置筛选
-                          </Button>
-                        )}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              )}
-
-              {focusedTaskNumber ? (
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-border/75 bg-background/60 px-3 py-2">
-                  <p className="text-xs text-muted-foreground">
-                    历史回溯：{historyLogs.length} 条
-                    {historyCursor ? `，最早游标 #${historyCursor}` : "，已到最早"}
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!historyCursor || historyPaging}
-                    onClick={() => void loadMoreHistory()}
-                  >
-                    {historyPaging ? "加载中..." : "加载更早日志"}
-                  </Button>
-                </div>
-              ) : null}
-            </div>
+                  {historyPaging ? "加载中..." : "加载更早日志"}
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="md:hidden">
