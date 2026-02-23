@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { KeyRound } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { KeyRound, Upload } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -57,6 +58,30 @@ export function SSHKeyEditorDialog({
 }: SSHKeyEditorDialogProps) {
   const [draft, setDraft] = useState<SSHKeyDraft>(emptyDraft);
   const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 128 * 1024) {
+      toast.error("文件过大，SSH 密钥文件通常不超过 128 KB");
+      event.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result;
+      if (typeof content === "string") {
+        setDraft((prev) => ({ ...prev, privateKey: content }));
+      }
+    };
+    reader.onerror = () => {
+      toast.error("密钥文件读取失败，请检查文件是否有效");
+    };
+    reader.readAsText(file);
+    // 重置 input 以便同一文件可再次选择
+    event.target.value = "";
+  };
 
   const isEditing = Boolean(draft.id);
 
@@ -145,9 +170,27 @@ export function SSHKeyEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
-              {isEditing ? "私钥内容（留空表示不修改）" : "私钥内容"}
-            </label>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-sm font-medium">
+                {isEditing ? "私钥内容（留空表示不修改）" : "私钥内容"}
+              </label>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={saving}
+              >
+                <Upload className="size-3.5" />
+                上传密钥文件
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pem,.key,.pub,.ppk,.openssh"
+                onChange={handleFileUpload}
+              />
+            </div>
             <textarea
               className="min-h-36 w-full rounded-lg border border-input/80 bg-background/80 p-3 text-xs leading-relaxed text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background placeholder:text-muted-foreground/80 focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
               placeholder={isEditing
