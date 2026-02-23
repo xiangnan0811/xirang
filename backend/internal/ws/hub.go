@@ -35,24 +35,26 @@ type client struct {
 }
 
 type Hub struct {
-	db             *gorm.DB
-	clients        map[*client]struct{}
-	register       chan *client
-	unregister     chan *client
-	broadcast      chan LogEvent
-	mu             sync.RWMutex
-	allowedOrigins []string
-	droppedCount   uint64
+	db               *gorm.DB
+	clients          map[*client]struct{}
+	register         chan *client
+	unregister       chan *client
+	broadcast        chan LogEvent
+	mu               sync.RWMutex
+	allowedOrigins   []string
+	allowEmptyOrigin bool
+	droppedCount     uint64
 }
 
-func NewHub(db *gorm.DB, allowedOrigins []string) *Hub {
+func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
 	return &Hub{
-		db:             db,
-		clients:        make(map[*client]struct{}),
-		register:       make(chan *client),
-		unregister:     make(chan *client),
-		broadcast:      make(chan LogEvent, 256),
-		allowedOrigins: allowedOrigins,
+		db:               db,
+		clients:          make(map[*client]struct{}),
+		register:         make(chan *client),
+		unregister:       make(chan *client),
+		broadcast:        make(chan LogEvent, 256),
+		allowedOrigins:   allowedOrigins,
+		allowEmptyOrigin: allowEmptyOrigin,
 	}
 }
 
@@ -103,20 +105,17 @@ func (h *Hub) newUpgrader() websocket.Upgrader {
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		CheckOrigin: func(r *http.Request) bool {
-			if len(h.allowedOrigins) == 0 {
-				return true
+			origin := strings.TrimSpace(r.Header.Get("Origin"))
+			if origin == "" {
+				return h.allowEmptyOrigin
 			}
 			for _, o := range h.allowedOrigins {
-				if o == "*" {
+				if strings.TrimSpace(o) == "*" {
 					return true
 				}
 			}
-			origin := r.Header.Get("Origin")
-			if origin == "" {
-				return true
-			}
 			for _, allowed := range h.allowedOrigins {
-				if strings.EqualFold(origin, allowed) {
+				if strings.EqualFold(origin, strings.TrimSpace(allowed)) {
 					return true
 				}
 			}

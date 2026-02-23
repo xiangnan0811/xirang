@@ -17,6 +17,45 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestFactoryRejectsLocalExecutor(t *testing.T) {
+	factory := NewFactory(createArgEchoScript(t))
+	exec := factory.Resolve("local")
+
+	task := model.Task{
+		ExecutorType: "local",
+		Command:      "echo hello",
+	}
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	if err == nil {
+		t.Fatalf("期望 local 执行器被拒绝")
+	}
+	if exitCode != -1 {
+		t.Fatalf("期望退出码=-1，实际=%d", exitCode)
+	}
+	if !strings.Contains(err.Error(), "已禁用") {
+		t.Fatalf("期望返回禁用错误，实际: %v", err)
+	}
+}
+
+func TestFactoryRejectsUnknownExecutor(t *testing.T) {
+	factory := NewFactory(createArgEchoScript(t))
+	exec := factory.Resolve("custom")
+
+	task := model.Task{
+		ExecutorType: "custom",
+	}
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	if err == nil {
+		t.Fatalf("期望未知执行器被拒绝")
+	}
+	if exitCode != -1 {
+		t.Fatalf("期望退出码=-1，实际=%d", exitCode)
+	}
+	if !strings.Contains(err.Error(), "不支持") {
+		t.Fatalf("期望返回不支持错误，实际: %v", err)
+	}
+}
+
 func createArgEchoScript(t *testing.T) string {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "fake-rsync.sh")
@@ -72,6 +111,9 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "root@1.2.3.4:/var/data") {
 		t.Fatalf("期望 source 使用远端地址，实际日志: %s", joined)
+	}
+	if !strings.Contains(joined, "\n--\n") {
+		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
 	}
 	if !strings.Contains(joined, "StrictHostKeyChecking=no") {
 		t.Fatalf("期望携带 StrictHostKeyChecking=no，实际日志: %s", joined)

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestLoadBackfillEventsBySinceIDAndTaskID(t *testing.T) {
 		}
 	}
 
-	hub := NewHub(db, nil)
+	hub := NewHub(db, nil, false)
 
 	events, err := hub.loadBackfillEvents(1, nil)
 	if err != nil {
@@ -51,6 +52,32 @@ func TestLoadBackfillEventsBySinceIDAndTaskID(t *testing.T) {
 	}
 	if events[0].TaskID != 1 || events[1].TaskID != 1 {
 		t.Fatalf("task_id 过滤不符合预期")
+	}
+}
+
+func TestHubCheckOriginRejectsEmptyOriginByDefault(t *testing.T) {
+	hub := NewHub(nil, []string{"https://xirang.example.com"}, false)
+	upgrader := hub.newUpgrader()
+
+	req := httptest.NewRequest("GET", "http://localhost/ws", nil)
+	if upgrader.CheckOrigin(req) {
+		t.Fatalf("默认配置下空 Origin 应被拒绝")
+	}
+
+	req = httptest.NewRequest("GET", "http://localhost/ws", nil)
+	req.Header.Set("Origin", "https://xirang.example.com")
+	if !upgrader.CheckOrigin(req) {
+		t.Fatalf("匹配白名单 Origin 应允许")
+	}
+}
+
+func TestHubCheckOriginAllowsEmptyOriginWhenEnabled(t *testing.T) {
+	hub := NewHub(nil, []string{"https://xirang.example.com"}, true)
+	upgrader := hub.newUpgrader()
+
+	req := httptest.NewRequest("GET", "http://localhost/ws", nil)
+	if !upgrader.CheckOrigin(req) {
+		t.Fatalf("开启 WS_ALLOW_EMPTY_ORIGIN 后应允许空 Origin")
 	}
 }
 

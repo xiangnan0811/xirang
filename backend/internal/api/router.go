@@ -41,10 +41,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		}
 		if allowedOrigin != "" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -83,7 +83,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/nodes/:id", middleware.RBAC("nodes:write"), nodeHandler.Update)
 	secured.DELETE("/nodes/:id", middleware.RBAC("nodes:write"), nodeHandler.Delete)
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), nodeHandler.TestConnection)
-	secured.POST("/nodes/:id/exec", middleware.RBAC("nodes:test"), nodeHandler.Exec)
 
 	secured.GET("/ssh-keys", middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
@@ -134,22 +133,21 @@ func NewRouter(dep Dependencies) *gin.Engine {
 }
 
 func resolveAllowedOrigin(origin string, allowList []string) string {
+	trimmedOrigin := strings.TrimSpace(origin)
 	if len(allowList) == 0 {
 		return ""
 	}
-	for _, item := range allowList {
-		if item == "*" {
-			if origin == "" {
-				return "*"
-			}
-			return origin
-		}
-		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(origin)) {
-			return origin
-		}
+	if trimmedOrigin == "" {
+		return ""
 	}
-	if origin == "" {
-		return allowList[0]
+	for _, item := range allowList {
+		trimmedItem := strings.TrimSpace(item)
+		if trimmedItem == "*" {
+			return trimmedOrigin
+		}
+		if strings.EqualFold(trimmedItem, trimmedOrigin) {
+			return trimmedOrigin
+		}
 	}
 	return ""
 }

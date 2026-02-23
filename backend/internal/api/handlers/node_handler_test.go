@@ -25,7 +25,7 @@ func openNodeHandlerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestNodeExecRejectsEmptyCommand(t *testing.T) {
+func TestNodeExecDisabled(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -47,39 +47,16 @@ func TestNodeExecRejectsEmptyCommand(t *testing.T) {
 	handler := NewNodeHandler(db)
 	r.POST("/nodes/:id/exec", handler.Exec)
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/exec", node.ID), strings.NewReader(`{"command":"   "}`))
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/exec", node.ID), strings.NewReader(`{"command":"hostname"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	r.ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("期望状态码 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "命令不能为空") {
-		t.Fatalf("期望返回命令不能为空，实际: %s", resp.Body.String())
-	}
-}
-
-func TestNodeExecNodeNotFound(t *testing.T) {
-	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}); err != nil {
-		t.Fatalf("初始化测试数据表失败: %v", err)
-	}
-
-	r := gin.New()
-	handler := NewNodeHandler(db)
-	r.POST("/nodes/:id/exec", handler.Exec)
-
-	req := httptest.NewRequest(http.MethodPost, "/nodes/999/exec", strings.NewReader(`{"command":"hostname"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	r.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusNotFound {
-		t.Fatalf("期望状态码 404，实际: %d，响应: %s", resp.Code, resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), "节点不存在") {
-		t.Fatalf("期望返回节点不存在，实际: %s", resp.Body.String())
+	if !strings.Contains(resp.Body.String(), "XR-SEC-EXEC-DISABLED") {
+		t.Fatalf("期望返回禁用错误码，实际: %s", resp.Body.String())
 	}
 }
 
@@ -182,5 +159,15 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 	}
 	if alertCount != 0 {
 		t.Fatalf("期望关联告警被删除，剩余: %d", alertCount)
+	}
+}
+
+func TestParseDiskProbeAcceptsFullUsage(t *testing.T) {
+	used, total, ok := parseDiskProbe("100G 100G")
+	if !ok {
+		t.Fatalf("期望 100%% 磁盘占用可被解析")
+	}
+	if used != 100 || total != 100 {
+		t.Fatalf("解析结果不符合预期，used=%d total=%d", used, total)
 	}
 }

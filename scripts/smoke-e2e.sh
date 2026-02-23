@@ -2,8 +2,8 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:5173/api/v1}"
-ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-REDACTED}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 RUN_ID="$(date +%Y%m%d%H%M%S)-$RANDOM"
 PREFIX="smoke-${RUN_ID}"
 
@@ -19,6 +19,14 @@ HTTP_BODY=""
 
 log() {
   printf '\n[smoke] %s\n' "$1"
+}
+
+require_credentials() {
+  if [[ -z "${ADMIN_USERNAME}" || -z "${ADMIN_PASSWORD}" ]]; then
+    echo "[smoke][error] 缺少管理员凭据：请显式设置 ADMIN_USERNAME 和 ADMIN_PASSWORD"
+    echo "[smoke][error] 示例：ADMIN_USERNAME=admin ADMIN_PASSWORD='<strong-password>' bash scripts/smoke-e2e.sh"
+    exit 2
+  fi
 }
 
 api_call() {
@@ -112,6 +120,8 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+require_credentials
 
 log "登录管理员账号"
 api_call POST "/auth/login" "{\"username\":\"${ADMIN_USERNAME}\",\"password\":\"${ADMIN_PASSWORD}\"}"

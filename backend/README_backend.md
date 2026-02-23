@@ -38,15 +38,17 @@ go run ./cmd/server
 - `LOGIN_CAPTCHA_ENABLED`：登录验证码字段校验开关，默认 `false`
 - `LOGIN_SECOND_CAPTCHA_ENABLED`：登录二次验证码字段校验开关，默认 `false`
 - `ALERT_DEDUP_WINDOW`：告警去重窗口（同节点+同任务+同错误码），默认 `10m`，`0` 为关闭
-- `CORS_ALLOWED_ORIGINS`：跨域白名单（逗号分隔），默认 `*`
-- `EXECUTOR_SHELL`：本地命令执行 shell，默认 `/bin/sh`
+- `CORS_ALLOWED_ORIGINS`：跨域白名单（逗号分隔）
+- `WS_ALLOW_EMPTY_ORIGIN`：是否允许 WebSocket 空 Origin，默认 `false`
+- `EXECUTOR_SHELL`：历史参数，当前本地执行器已禁用（保留兼容）
 - `RSYNC_BINARY`：rsync 可执行文件名，默认 `rsync`
+- `ADMIN_INITIAL_PASSWORD`：首次启动创建 `admin` 的初始密码（必填）
 
-## 默认账号（自动初始化）
+## 初始化账号策略（自动初始化）
 
-- `admin / REDACTED`（管理员）
-- `operator / REDACTED`（操作员）
-- `viewer / REDACTED`（只读）
+- 首次启动仅自动创建 `admin`
+- 必须通过 `ADMIN_INITIAL_PASSWORD` 显式提供管理员初始密码
+- 不再自动创建 `operator` 与 `viewer`，需由 `admin` 手工创建
 
 ## 关键接口
 
@@ -68,15 +70,15 @@ go run ./cmd/server
 - 告警投递重发：`POST /api/v1/alerts/:id/retry-delivery`
 - 告警失败投递批量重发：`POST /api/v1/alerts/:id/retry-failed-deliveries`
 - 告警投递统计：`GET /api/v1/alerts/delivery-stats`
-- WebSocket 日志：`GET /api/v1/ws/logs?task_id=<id>&since_id=<last_log_id>`（鉴权 token 仅走 `Sec-WebSocket-Protocol` 子协议 `xirang-auth-token.<jwt>`）
+- WebSocket 日志：`GET /api/v1/ws/logs?task_id=<id>&since_id=<last_log_id>`（建立连接后发送 `{"type":"auth","token":"<jwt>"}` 进行鉴权）
 
 ## 任务执行说明
 
-- `executor_type=local`：执行 `command`；若 `command` 为空，则模拟 rsync 输出，便于本地验证。
-- `executor_type=rsync`：执行真实 rsync。
+- `executor_type=rsync`：执行真实 rsync（唯一允许的执行器）。
   - 无节点信息时：`rsync -avz <source> <target>`
   - 有节点信息时：自动拼接为远端源 `user@host:source`，并注入 `ssh -p <port>`。
   - 节点有私钥时：执行前创建临时密钥文件，任务结束后自动清理。
+- `executor_type=local` 与 `command` 输入链路已禁用，后端会直接拒绝。
 
 ## 测试与格式化
 

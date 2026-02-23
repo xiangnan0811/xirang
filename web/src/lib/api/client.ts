@@ -14,7 +14,6 @@ import type {
   NewPolicyInput,
   NewSSHKeyInput,
   NewTaskInput,
-  NodeExecResult,
   NodeRecord,
   NodeStatus,
   PolicyRecord,
@@ -215,14 +214,6 @@ type TestNodeResponse = {
   disk_total_gb?: number;
 };
 
-type NodeExecResponse = {
-  ok: boolean;
-  message: string;
-  output?: string;
-  exit_code?: number;
-  duration_ms?: number;
-};
-
 type NodeBatchDeleteResponse = {
   deleted?: number;
   not_found_ids?: number[];
@@ -348,10 +339,7 @@ function mapTaskStatus(raw: string): TaskStatus {
 }
 
 function mapTaskExecutor(raw?: string): TaskRecord["executorType"] {
-  if (raw === "rsync") {
-    return "rsync";
-  }
-  return "local";
+  return raw === "rsync" ? raw : "rsync";
 }
 
 function mapLogLevel(raw?: string): LogEvent["level"] {
@@ -701,30 +689,6 @@ export const apiClient = {
     });
   },
 
-  async execNodeCommand(
-    token: string,
-    nodeId: number,
-    command: string,
-    timeoutSeconds = 20
-  ): Promise<NodeExecResult> {
-    const payload = await request<NodeExecResponse>(`/nodes/${nodeId}/exec`, {
-      method: "POST",
-      token,
-      body: {
-        command,
-        timeout_seconds: timeoutSeconds
-      }
-    });
-
-    return {
-      ok: Boolean(payload.ok),
-      message: payload.message || "执行完成",
-      output: payload.output || "",
-      exitCode: Number(payload.exit_code ?? -1),
-      durationMs: Number(payload.duration_ms ?? 0)
-    };
-  },
-
   async getPolicies(token: string): Promise<PolicyRecord[]> {
     const payload = await request<Envelope<PolicyResponse[]>>("/policies", { token });
     const rows = unwrapData(payload) ?? [];
@@ -787,7 +751,6 @@ export const apiClient = {
         name: input.name,
         node_id: input.nodeId,
         policy_id: input.policyId ?? null,
-        command: input.command,
         rsync_source: input.rsyncSource,
         rsync_target: input.rsyncTarget,
         executor_type: input.executorType,
@@ -805,7 +768,6 @@ export const apiClient = {
         name: input.name,
         node_id: input.nodeId,
         policy_id: input.policyId ?? null,
-        command: input.command,
         rsync_source: input.rsyncSource,
         rsync_target: input.rsyncTarget,
         executor_type: input.executorType,

@@ -1,81 +1,5 @@
-import { TerminalSquare } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { NodeRecord } from "@/types/domain";
-
-type NodeTerminalCardProps = {
-  node: NodeRecord;
-  command: string;
-  timeoutSeconds: number;
-  output: string;
-  running: boolean;
-  onCommandChange: (value: string) => void;
-  onTimeoutChange: (value: number) => void;
-  onRun: () => void;
-  onClose: () => void;
-};
-
-export function NodeTerminalCard({
-  node,
-  command,
-  timeoutSeconds,
-  output,
-  running,
-  onCommandChange,
-  onTimeoutChange,
-  onRun,
-  onClose,
-}: NodeTerminalCardProps) {
-  return (
-    <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base">节点终端（真实 SSH 命令执行）</CardTitle>
-          <Button variant="outline" size="sm" onClick={onClose}>
-            关闭
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          当前节点：{node.name} · {node.host}:{node.port}
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
-          <Input
-            value={command}
-            onChange={(event) => onCommandChange(event.target.value)}
-            placeholder="输入命令，例如 df -h /"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onRun();
-              }
-            }}
-          />
-          <select
-            className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
-            value={timeoutSeconds}
-            onChange={(event) => onTimeoutChange(Number(event.target.value || 20))}
-          >
-            <option value={10}>超时 10s</option>
-            <option value={20}>超时 20s</option>
-            <option value={30}>超时 30s</option>
-            <option value={60}>超时 60s</option>
-          </select>
-          <Button onClick={onRun} disabled={running}>
-            <TerminalSquare className="mr-1 size-4" />
-            {running ? "执行中..." : "执行命令"}
-          </Button>
-        </div>
-
-        <div className="terminal-surface min-h-52 overflow-auto rounded-lg p-3 font-mono text-xs text-slate-100 thin-scrollbar">
-          <pre className="whitespace-pre-wrap break-all">{output || "等待命令执行输出..."}</pre>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
 type MobileNodeSearchDrawerProps = {
   open: boolean;
@@ -138,4 +62,3 @@ export function MobileNodeSearchDrawer({
     </div>
   );
 }
-

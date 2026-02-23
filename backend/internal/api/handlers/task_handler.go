@@ -112,6 +112,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Command = ""
 
 	taskEntity := model.Task{
 		Name:         req.Name,
@@ -128,9 +129,16 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.runner.SyncSchedule(taskEntity); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	if h.runner != nil {
+		if err := h.runner.SyncSchedule(taskEntity); err != nil {
+			h.runner.RemoveSchedule(taskEntity.ID)
+			if rollbackErr := h.db.Delete(&model.Task{}, taskEntity.ID).Error; rollbackErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿删除失败: %v", rollbackErr)})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusCreated, gin.H{"data": taskEntity})
 }
@@ -151,6 +159,9 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
 		return
 	}
+	// 值拷贝用于补偿回滚；安全前提：后续仅替换指针字段（如 PolicyID），
+	// 不可通过 *previous.PolicyID = xxx 修改指向值，否则回滚数据会被污染。
+	previous := taskEntity
 
 	hydrateTaskDefaultsFromPolicy(h.db, &req)
 	inferTaskExecutor(&req, taskEntity.ExecutorType)
@@ -164,9 +175,6 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 	if req.PolicyID == nil {
 		req.PolicyID = taskEntity.PolicyID
-	}
-	if req.Command == "" {
-		req.Command = taskEntity.Command
 	}
 	if req.RsyncSource == "" {
 		req.RsyncSource = taskEntity.RsyncSource
@@ -185,6 +193,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Command = ""
 
 	taskEntity.Name = req.Name
 	taskEntity.NodeID = req.NodeID
@@ -199,9 +208,21 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.runner.SyncSchedule(taskEntity); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	if h.runner != nil {
+		if err := h.runner.SyncSchedule(taskEntity); err != nil {
+			h.runner.RemoveSchedule(taskEntity.ID)
+			if restoreErr := h.db.Save(&previous).Error; restoreErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿回滚失败: %v", restoreErr)})
+				return
+			}
+			if restoreScheduleErr := h.runner.SyncSchedule(previous); restoreScheduleErr != nil {
+				h.runner.RemoveSchedule(taskEntity.ID)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿调度失败: %v", restoreScheduleErr)})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": taskEntity})
 }
@@ -211,10 +232,12 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	h.runner.RemoveSchedule(id)
 	if err := h.db.Delete(&model.Task{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if h.runner != nil {
+		h.runner.RemoveSchedule(id)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
@@ -302,20 +325,12 @@ func hydrateTaskDefaultsFromPolicy(db *gorm.DB, req *taskRequest) {
 	}
 }
 
-func inferTaskExecutor(req *taskRequest, fallback string) {
+func inferTaskExecutor(req *taskRequest, _ string) {
 	if strings.TrimSpace(req.ExecutorType) != "" {
 		req.ExecutorType = strings.TrimSpace(strings.ToLower(req.ExecutorType))
 		return
 	}
-	if strings.TrimSpace(req.RsyncSource) != "" && strings.TrimSpace(req.RsyncTarget) != "" {
-		req.ExecutorType = "rsync"
-		return
-	}
-	if strings.TrimSpace(fallback) != "" {
-		req.ExecutorType = strings.TrimSpace(strings.ToLower(fallback))
-		return
-	}
-	req.ExecutorType = "local"
+	req.ExecutorType = "rsync"
 }
 
 func validateTaskRequest(req taskRequest) error {
@@ -325,16 +340,16 @@ func validateTaskRequest(req taskRequest) error {
 	if req.NodeID == 0 {
 		return fmt.Errorf("node_id 不能为空")
 	}
-	if req.ExecutorType != "local" && req.ExecutorType != "rsync" {
-		return fmt.Errorf("不支持的 executor_type")
+	if req.ExecutorType != "rsync" {
+		return fmt.Errorf("仅支持 rsync executor_type")
+	}
+	if strings.TrimSpace(req.Command) != "" {
+		return fmt.Errorf("command 执行已禁用，请使用 rsync_source 与 rsync_target")
 	}
 	if req.CronSpec != "" {
 		if err := validateCronSpec(req.CronSpec); err != nil {
 			return err
 		}
-	}
-	if req.ExecutorType != "rsync" {
-		return nil
 	}
 
 	if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {

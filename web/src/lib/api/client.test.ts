@@ -50,3 +50,61 @@ describe("apiClient ID 解析", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("apiClient 任务请求约束", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockResolvedValue(
+      createMockResponse(
+        200,
+        JSON.stringify({
+          data: {
+            id: 101,
+            name: "demo-task",
+            status: "pending",
+            node_id: 9
+          }
+        })
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+  });
+
+  it("createTask 仅发送 rsync 相关字段且不包含 command", async () => {
+    await apiClient.createTask("token-task", {
+      name: "demo-task",
+      nodeId: 9,
+      executorType: "rsync",
+      rsyncSource: "/data/source",
+      rsyncTarget: "/data/target"
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+
+    expect(url).toBe("/api/v1/tasks");
+    expect(init.method).toBe("POST");
+    expect(body).toMatchObject({
+      name: "demo-task",
+      node_id: 9,
+      policy_id: null,
+      rsync_source: "/data/source",
+      rsync_target: "/data/target",
+      executor_type: "rsync"
+    });
+    expect(body).not.toHaveProperty("command");
+  });
+
+  it("apiClient 不再暴露 execNodeCommand", () => {
+    const raw = apiClient as Record<string, unknown>;
+    expect(raw.execNodeCommand).toBeUndefined();
+    expect("execNodeCommand" in raw).toBe(false);
+  });
+});

@@ -22,7 +22,6 @@ import type {
   NewPolicyInput,
   NewSSHKeyInput,
   NewTaskInput,
-  NodeExecResult,
   NodeRecord,
   OverviewStats,
   PolicyRecord,
@@ -53,7 +52,6 @@ export interface ConsoleDataState {
   deleteNodes: (nodeIds: number[]) => Promise<{ deleted: number; notFoundIds: number[] }>;
   testNodeConnection: (nodeId: number) => Promise<{ ok: boolean; message: string }>;
   triggerNodeBackup: (nodeId: number) => Promise<void>;
-  execNodeCommand: (nodeId: number, command: string, timeoutSeconds?: number) => Promise<NodeExecResult>;
 
   createPolicy: (input: NewPolicyInput) => Promise<void>;
   updatePolicy: (policyId: number, input: NewPolicyInput) => Promise<void>;
@@ -633,39 +631,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     [ensureDemoWriteAllowed, handleWriteApiError, nodes, policies, tasks, token]
   );
 
-  const execNodeCommand = useCallback(async (nodeID: number, command: string, timeoutSeconds = 20): Promise<NodeExecResult> => {
-    const normalizedCommand = command.trim();
-    if (!normalizedCommand) {
-      throw new Error("命令不能为空");
-    }
-
-    if (token) {
-      try {
-        return await apiClient.execNodeCommand(token, nodeID, normalizedCommand, timeoutSeconds);
-      } catch (error) {
-        handleWriteApiError("节点命令执行", error);
-        return { ok: false, message: "命令执行请求失败", output: "", exitCode: -1, durationMs: 0 };
-      }
-    } else {
-      ensureDemoWriteAllowed("节点命令执行");
-    }
-
-    const now = new Date().toLocaleString("zh-CN", { hour12: false });
-    const output = [
-      `$ ${normalizedCommand}`,
-      `节点 #${nodeID} 已执行命令`,
-      `执行时间 ${now}`
-    ].join("\n");
-
-    return {
-      ok: true,
-      message: "命令执行成功",
-      output,
-      exitCode: 0,
-      durationMs: 120
-    };
-  }, [ensureDemoWriteAllowed, handleWriteApiError, token]);
-
   const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
     if (token) {
       try {
@@ -694,10 +659,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       status: "pending",
       progress: 0,
       startedAt: "-",
-      command: input.command,
       rsyncSource: input.rsyncSource ?? policy?.sourcePath,
       rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
-      executorType: input.executorType ?? ((input.rsyncSource || input.rsyncTarget || policy) ? "rsync" : "local"),
+      executorType: input.executorType ?? "rsync",
       cronSpec: input.cronSpec ?? policy?.cron,
       speedMbps: 0
     };
@@ -1239,7 +1203,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     deleteNodes,
     testNodeConnection,
     triggerNodeBackup,
-    execNodeCommand,
 
     createPolicy,
     updatePolicy,

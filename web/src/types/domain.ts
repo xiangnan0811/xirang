@@ -9,7 +9,7 @@ export type TaskStatus =
   | "retrying"
   | "canceled";
 
-export type TaskExecutorType = "local" | "rsync";
+export type TaskExecutorType = "rsync";
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertStatus = "open" | "acked" | "resolved";
@@ -24,14 +24,6 @@ export interface OverviewStats {
   failedTasks24h: number;
   overallSuccessRate: number;
   avgSyncMbps: number;
-}
-
-export interface NodeExecResult {
-  ok: boolean;
-  message: string;
-  output: string;
-  exitCode: number;
-  durationMs: number;
 }
 
 export interface NodeRecord {
@@ -104,7 +96,6 @@ export interface NewTaskInput {
   name: string;
   nodeId: number;
   policyId?: number | null;
-  command?: string;
   rsyncSource?: string;
   rsyncTarget?: string;
   executorType?: TaskExecutorType;

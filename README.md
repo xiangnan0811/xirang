@@ -56,6 +56,8 @@
 ```bash
 cd backend
 cp .env.example .env  # 可选
+# 首次启动必须设置初始管理员密码
+export ADMIN_INITIAL_PASSWORD='请替换为强密码'
 go mod tidy
 go run ./cmd/server
 ```
@@ -83,8 +85,13 @@ export VITE_API_BASE_URL=http://localhost:8080/api/v1
 在前后端服务已启动后执行：
 
 ```bash
-BASE_URL=http://127.0.0.1:5173/api/v1 bash scripts/smoke-e2e.sh
-# 或直接
+BASE_URL=http://127.0.0.1:5173/api/v1 \
+ADMIN_USERNAME=admin \
+ADMIN_PASSWORD='请替换为管理员密码' \
+bash scripts/smoke-e2e.sh
+# 或先导出凭据后直接
+export ADMIN_USERNAME=admin
+export ADMIN_PASSWORD='请替换为管理员密码'
 make e2e-check
 ```
 
@@ -140,13 +147,14 @@ make prod-down
 
 ---
 
-## 默认账号
+## 初始化账号策略
 
-后端启动后会自动创建：
+后端首次启动仅自动创建 `admin` 账号，且必须通过
+`ADMIN_INITIAL_PASSWORD` 提供初始密码。
 
-- `admin / REDACTED`
-- `operator / REDACTED`
-- `viewer / REDACTED`
+- 不再自动创建 `operator`/`viewer`
+- 需要多角色时，由 `admin` 登录后手工创建
+- 禁止使用弱口令示例（如 `REDACTED`）
 
 ---
 
@@ -157,7 +165,6 @@ make prod-down
 - `GET /api/v1/overview`
 - `GET|POST|PUT|DELETE /api/v1/nodes`
 - `POST /api/v1/nodes/:id/test-connection`
-- `POST /api/v1/nodes/:id/exec`（节点远程命令执行）
 - `GET|POST|PUT|DELETE /api/v1/ssh-keys`
 - `GET|POST|PUT|DELETE /api/v1/policies`
 - `GET|POST|PUT|DELETE /api/v1/tasks`
@@ -176,7 +183,7 @@ make prod-down
 - `POST /api/v1/tasks/:id/trigger`
 - `POST /api/v1/tasks/:id/cancel`
 - `GET /api/v1/tasks/:id/logs`
-- `GET /api/v1/ws/logs?token=<jwt>&task_id=<id>&since_id=<last_log_id>`
+- `GET /api/v1/ws/logs?task_id=<id>&since_id=<last_log_id>`
 
 ### 本轮接口补充（筛选与投递查询）
 
@@ -202,7 +209,7 @@ make prod-down
 
 - 作用：查询某条告警对应的投递记录（`alert_deliveries`）
 - 返回顺序：按 `id desc`
-- 权限：`alerts:deliveries`（`admin/operator/viewer` 默认具备）
+- 权限：`alerts:deliveries`（角色模型中 `admin/operator/viewer` 可分配）
 
 示例：
 
@@ -340,7 +347,7 @@ make web-test web-build
 make e2e-alert-demo
 
 # 或手动执行并保留演示资源
-CLEANUP=0 XR_LOGIN_USERNAME=admin XR_LOGIN_PASSWORD=REDACTED bash scripts/e2e-alert-demo.sh
+CLEANUP=0 XR_LOGIN_USERNAME=admin XR_LOGIN_PASSWORD='请替换为管理员密码' bash scripts/e2e-alert-demo.sh
 ```
 
 - 脚本位置：`scripts/e2e-alert-demo.sh`

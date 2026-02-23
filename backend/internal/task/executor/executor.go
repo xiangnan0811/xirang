@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -28,83 +27,34 @@ type Factory interface {
 }
 
 type factory struct {
-	local Executor
 	rsync Executor
 }
 
-func NewFactory(shell, rsyncBinary string) Factory {
+func NewFactory(rsyncBinary string) Factory {
 	return &factory{
-		local: &LocalExecutor{shell: shell},
 		rsync: &RsyncExecutor{binary: rsyncBinary},
 	}
 }
 
 func (f *factory) Resolve(executorType string) Executor {
-	switch strings.ToLower(strings.TrimSpace(executorType)) {
+	normalized := strings.ToLower(strings.TrimSpace(executorType))
+	switch normalized {
 	case "rsync":
 		return f.rsync
 	default:
-		return f.local
+		return &DisabledExecutor{executorType: normalized}
 	}
 }
 
-type LocalExecutor struct {
-	shell string
+type DisabledExecutor struct {
+	executorType string
 }
 
-func (e *LocalExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) (int, error) {
-	if strings.TrimSpace(task.Command) == "" {
-		simulated := []string{
-			"sending incremental file list",
-			"./",
-			"demo-file.txt",
-			"sent 312 bytes  received 44 bytes  712.00 bytes/sec",
-			"total size is 2048  speedup is 5.75",
-		}
-		for _, line := range simulated {
-			logf("info", line)
-			time.Sleep(40 * time.Millisecond)
-		}
-		return 0, nil
+func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc) (int, error) {
+	if e.executorType == "" || e.executorType == "local" {
+		return -1, fmt.Errorf("local 执行器已禁用")
 	}
-
-	cmd := exec.CommandContext(ctx, e.shell, "-c", task.Command)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return -1, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return -1, err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return -1, err
-	}
-
-	var wg sync.WaitGroup
-	stream := func(scanner *bufio.Scanner, level string) {
-		defer wg.Done()
-		for scanner.Scan() {
-			logf(level, scanner.Text())
-		}
-	}
-
-	wg.Add(2)
-	go stream(bufio.NewScanner(stdout), "info")
-	go stream(bufio.NewScanner(stderr), "error")
-
-	waitErr := cmd.Wait()
-	wg.Wait()
-	if waitErr == nil {
-		return 0, nil
-	}
-
-	var exitErr *exec.ExitError
-	if ok := AsExitError(waitErr, &exitErr); ok {
-		return exitErr.ExitCode(), waitErr
-	}
-	return -1, waitErr
+	return -1, fmt.Errorf("不支持的 executor_type: %s", e.executorType)
 }
 
 type RsyncExecutor struct {
@@ -205,7 +155,8 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 	}
 	defer cleanup()
 
-	args = append(args, source, task.RsyncTarget)
+	// 使用 `--` 终止参数解析，防止路径内容被解释为 rsync 选项。
+	args = append(args, "--", source, task.RsyncTarget)
 	cmd := exec.CommandContext(ctx, e.binary, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

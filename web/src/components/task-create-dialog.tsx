@@ -25,7 +25,6 @@ type TaskDraft = {
   nodeId: string;
   policyId: string;
   executorType: TaskExecutorType;
-  command: string;
   rsyncSource: string;
   rsyncTarget: string;
   cronSpec: string;
@@ -36,7 +35,6 @@ const defaultDraft: TaskDraft = {
   nodeId: "",
   policyId: "",
   executorType: "rsync",
-  command: "",
   rsyncSource: "",
   rsyncTarget: "",
   cronSpec: "",
@@ -48,13 +46,6 @@ function toNumberOrNull(value: string): number | null {
     return null;
   }
   return parsed;
-}
-
-function toTaskExecutorType(value: string): TaskExecutorType {
-  if (value === "local") {
-    return "local";
-  }
-  return "rsync";
 }
 
 type TaskCreateDialogProps = {
@@ -102,7 +93,6 @@ export function TaskCreateDialog({
       nodeId,
       policyId: toNumberOrNull(draft.policyId),
       executorType: draft.executorType,
-      command: draft.command.trim() || undefined,
       rsyncSource: draft.rsyncSource.trim() || undefined,
       rsyncTarget: draft.rsyncTarget.trim() || undefined,
       cronSpec: draft.cronSpec.trim() || undefined,
@@ -185,19 +175,9 @@ export function TaskCreateDialog({
               <label className="mb-1 block text-sm font-medium">
                 执行器类型
               </label>
-              <select
-                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
-                value={draft.executorType}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    executorType: toTaskExecutorType(event.target.value),
-                  }))
-                }
-              >
-                <option value="rsync">Rsync 执行器</option>
-                <option value="local">本地执行器</option>
-              </select>
+              <div className="flex h-10 items-center rounded-lg border border-input/80 bg-muted/50 px-3 text-sm text-muted-foreground">
+                Rsync 执行器
+              </div>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium">
@@ -214,19 +194,6 @@ export function TaskCreateDialog({
                 }
               />
             </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">
-              命令（可选）
-            </label>
-            <Input
-              placeholder="自定义执行命令"
-              value={draft.command}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, command: event.target.value }))
-              }
-            />
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">

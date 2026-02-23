@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
@@ -44,75 +43,11 @@ type nodeRequest struct {
 	BasePath   string `json:"base_path"`
 }
 
-type nodeExecRequest struct {
-	Command        string `json:"command" binding:"required"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-}
-
 type nodeBatchDeleteRequest struct {
 	IDs []uint `json:"ids"`
 }
 
-const (
-	maxNodeExecCommandLength = 2048
-	maxNodeExecOutputLength  = 16 * 1024
-)
-
-func normalizeNodeExecOutput(output string) string {
-	trimmed := strings.TrimSpace(output)
-	if len(trimmed) <= maxNodeExecOutputLength {
-		return trimmed
-	}
-	return "...输出过长，已截断为最近内容...\n" + trimmed[len(trimmed)-maxNodeExecOutputLength:]
-}
-
-func resolveNodeExecTimeout(seconds int) time.Duration {
-	if seconds <= 0 {
-		seconds = 20
-	}
-	if seconds < 3 {
-		seconds = 3
-	}
-	if seconds > 180 {
-		seconds = 180
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func runRemoteCommand(client *ssh.Client, command string, timeout time.Duration) (string, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	session, err := client.NewSession()
-	if err != nil {
-		return "", -1, fmt.Errorf("创建会话失败")
-	}
-	defer session.Close()
-
-	type result struct {
-		output []byte
-		err    error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		output, runErr := session.CombinedOutput(command)
-		resultCh <- result{output: output, err: runErr}
-	}()
-
-	select {
-	case res := <-resultCh:
-		if res.err == nil {
-			return normalizeNodeExecOutput(string(res.output)), 0, nil
-		}
-		if exitErr, ok := res.err.(*ssh.ExitError); ok {
-			return normalizeNodeExecOutput(string(res.output)), exitErr.ExitStatus(), nil
-		}
-		return normalizeNodeExecOutput(string(res.output)), -1, fmt.Errorf("执行命令失败: %v", res.err)
-	case <-ctx.Done():
-		_ = session.Close()
-		return "", -1, fmt.Errorf("命令执行超时（%s）", timeout)
-	}
-}
+const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 
 func sanitizeNode(node model.Node) model.Node {
 	copyNode := node
@@ -512,7 +447,7 @@ func parseDiskProbe(output string) (int, int, bool) {
 	}
 	total, okTotal := parseGB(fields[0])
 	used, okUsed := parseGB(fields[1])
-	if !okTotal || !okUsed || total <= 0 || used < 0 || used >= total {
+	if !okTotal || !okUsed || total <= 0 || used < 0 || used > total {
 		return 0, 0, false
 	}
 	return used, total, true
@@ -612,136 +547,9 @@ func getEnvOrDefault(key, fallback string) string {
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var req nodeExecRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
-		return
-	}
-
-	command := strings.TrimSpace(req.Command)
-	if command == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "命令不能为空"})
-		return
-	}
-	if len(command) > maxNodeExecCommandLength {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("命令长度不能超过 %d", maxNodeExecCommandLength)})
-		return
-	}
-
-	dangerousPatterns := []string{"rm -rf /", "mkfs.", "dd if=", "> /dev/sd", ":(){ :|:&", "chmod -R 777 /"}
-	lowerCmd := strings.ToLower(command)
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(lowerCmd, pattern) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "命令包含危险操作，已拒绝执行"})
-			return
-		}
-	}
-
-	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
-		return
-	}
-
-	authMethods, _, err := h.buildSSHAuth(node)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":        false,
-			"message":   fmt.Sprintf("命令执行失败：%v", err),
-			"output":    "",
-			"exit_code": -1,
-		})
-		return
-	}
-
-	hostKeyCallback, err := resolveSSHHostKeyCallback()
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":        false,
-			"message":   fmt.Sprintf("命令执行失败：%v", err),
-			"output":    "",
-			"exit_code": -1,
-		})
-		return
-	}
-
-	address := fmt.Sprintf("%s:%d", node.Host, node.Port)
-	dialStartedAt := time.Now()
-	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User:            node.Username,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         5 * time.Second,
-	})
-	if err != nil {
-		now := time.Now()
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &now
-		_ = h.db.Save(&node).Error
-		c.JSON(http.StatusOK, gin.H{
-			"ok":        false,
-			"message":   fmt.Sprintf("连接失败：%v", err),
-			"output":    "",
-			"exit_code": -1,
-		})
-		return
-	}
-	defer client.Close()
-
-	latency := int(time.Since(dialStartedAt).Milliseconds())
-	if latency <= 0 {
-		latency = 1
-	}
-	now := time.Now()
-	node.Status = "online"
-	node.ConnectionLatency = latency
-	node.LastSeenAt = &now
-	_ = h.db.Save(&node).Error
-
-	timeout := resolveNodeExecTimeout(req.TimeoutSeconds)
-	runStartedAt := time.Now()
-	output, exitCode, runErr := runRemoteCommand(client, command, timeout)
-	durationMS := time.Since(runStartedAt).Milliseconds()
-	if durationMS < 0 {
-		durationMS = 0
-	}
-
-	if node.SSHKeyID != nil {
-		now := time.Now()
-		_ = h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error
-	}
-
-	if runErr != nil {
-		node.Status = "warning"
-		_ = h.db.Save(&node).Error
-		c.JSON(http.StatusOK, gin.H{
-			"ok":          false,
-			"message":     runErr.Error(),
-			"output":      output,
-			"exit_code":   exitCode,
-			"duration_ms": durationMS,
-		})
-		return
-	}
-
-	okResult := exitCode == 0
-	message := "命令执行成功"
-	if !okResult {
-		message = fmt.Sprintf("命令执行完成，退出码 %d", exitCode)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":          okResult,
-		"message":     message,
-		"output":      output,
-		"exit_code":   exitCode,
-		"duration_ms": durationMS,
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": "节点远程执行能力已禁用",
+		"code":  nodeExecDisabledCode,
 	})
 }
 
@@ -834,8 +642,8 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if node.DiskUsedGB < 0 {
 			node.DiskUsedGB = 0
 		}
-		if node.DiskUsedGB >= node.DiskTotalGB {
-			node.DiskUsedGB = node.DiskTotalGB - 1
+		if node.DiskUsedGB > node.DiskTotalGB {
+			node.DiskUsedGB = node.DiskTotalGB
 		}
 	} else {
 		node.DiskUsedGB = 0

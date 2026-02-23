@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,33 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+type mockTaskRunner struct {
+	syncErrs    []error
+	syncCalls   []model.Task
+	removeCalls []uint
+}
+
+func (m *mockTaskRunner) TriggerManual(taskID uint) error {
+	return nil
+}
+
+func (m *mockTaskRunner) SyncSchedule(task model.Task) error {
+	m.syncCalls = append(m.syncCalls, task)
+	callIndex := len(m.syncCalls) - 1
+	if callIndex < len(m.syncErrs) && m.syncErrs[callIndex] != nil {
+		return m.syncErrs[callIndex]
+	}
+	return nil
+}
+
+func (m *mockTaskRunner) RemoveSchedule(taskID uint) {
+	m.removeCalls = append(m.removeCalls, taskID)
+}
+
+func (m *mockTaskRunner) Cancel(taskID uint) error {
+	return nil
+}
 
 func TestTaskListFilterPaginationSort(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
@@ -170,7 +198,9 @@ func TestValidateTaskRequestRejectsInvalidCron(t *testing.T) {
 	req := taskRequest{
 		Name:         "task-a",
 		NodeID:       1,
-		ExecutorType: "local",
+		ExecutorType: "rsync",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
 		CronSpec:     "invalid cron",
 	}
 	if err := validateTaskRequest(req); err == nil {
@@ -209,5 +239,248 @@ func TestValidateTaskRequestChecksWhitelist(t *testing.T) {
 	req.RsyncSource = "/data/node-a"
 	if err := validateTaskRequest(req); err != nil {
 		t.Fatalf("期望白名单内路径通过校验，实际错误: %v", err)
+	}
+}
+
+func TestValidateTaskRequestRejectsNonRsyncExecutor(t *testing.T) {
+	req := taskRequest{
+		Name:         "task-local",
+		NodeID:       1,
+		ExecutorType: "local",
+	}
+	if err := validateTaskRequest(req); err == nil {
+		t.Fatalf("期望 local 执行器被拒绝")
+	}
+}
+
+func TestValidateTaskRequestRejectsCommandInput(t *testing.T) {
+	req := taskRequest{
+		Name:         "task-rsync",
+		NodeID:       1,
+		Command:      "echo should-not-run",
+		ExecutorType: "rsync",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+	}
+	if err := validateTaskRequest(req); err == nil {
+		t.Fatalf("期望 command 输入链路被拒绝")
+	}
+}
+
+func TestInferTaskExecutorDefaultsToRsync(t *testing.T) {
+	req := &taskRequest{}
+	inferTaskExecutor(req, "local")
+	if req.ExecutorType != "rsync" {
+		t.Fatalf("期望默认推断 rsync，实际: %s", req.ExecutorType)
+	}
+}
+
+func TestInferTaskExecutorKeepsExplicitValue(t *testing.T) {
+	req := &taskRequest{ExecutorType: "local"}
+	inferTaskExecutor(req, "rsync")
+	if req.ExecutorType != "local" {
+		t.Fatalf("期望保留显式 executor_type 供校验拒绝，实际: %s", req.ExecutorType)
+	}
+}
+
+func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.POST("/tasks", handler.Create)
+
+	body := fmt.Sprintf(`{"name":"task-local","node_id":%d,"executor_type":"local","rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "仅支持 rsync executor_type") {
+		t.Fatalf("期望返回 local 拒绝错误，实际: %s", resp.Body.String())
+	}
+}
+
+func TestTaskCreateSyncFailureCompensatesByDeletingTask(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	runner := &mockTaskRunner{
+		syncErrs: []error{errors.New("sync failed")},
+	}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.POST("/tasks", handler.Create)
+
+	body := fmt.Sprintf(`{"name":"task-a","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var count int64
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("期望补偿后不保留任务记录，实际数量: %d", count)
+	}
+	if len(runner.removeCalls) != 1 {
+		t.Fatalf("期望同步失败后调用 RemoveSchedule 一次，实际: %d", len(runner.removeCalls))
+	}
+	if runner.removeCalls[0] == 0 {
+		t.Fatalf("期望 RemoveSchedule 使用有效任务 ID，实际: %d", runner.removeCalls[0])
+	}
+}
+
+func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	taskEntity := model.Task{
+		Name:         "task-old",
+		NodeID:       node.ID,
+		Command:      "",
+		RsyncSource:  "/data/old",
+		RsyncTarget:  "/backup/old",
+		ExecutorType: "rsync",
+		CronSpec:     "*/5 * * * *",
+		Status:       "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	runner := &mockTaskRunner{
+		syncErrs: []error{errors.New("sync failed"), nil},
+	}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.PUT("/tasks/:id", handler.Update)
+
+	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/new","rsync_target":"/backup/new","cron_spec":"*/10 * * * *"}`, node.ID)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var restored model.Task
+	if err := db.First(&restored, taskEntity.ID).Error; err != nil {
+		t.Fatalf("读取补偿后任务失败: %v", err)
+	}
+	if restored.Name != "task-old" || restored.RsyncSource != "/data/old" || restored.RsyncTarget != "/backup/old" || restored.CronSpec != "*/5 * * * *" {
+		t.Fatalf("期望更新失败后恢复旧任务，实际: %+v", restored)
+	}
+	if len(runner.syncCalls) != 2 {
+		t.Fatalf("期望调度补偿触发两次同步（新值失败+旧值恢复），实际: %d", len(runner.syncCalls))
+	}
+	if runner.syncCalls[1].CronSpec != "*/5 * * * *" {
+		t.Fatalf("期望第二次同步恢复旧 cron，实际: %s", runner.syncCalls[1].CronSpec)
+	}
+	if len(runner.removeCalls) != 1 || runner.removeCalls[0] != taskEntity.ID {
+		t.Fatalf("期望更新失败时先移除失败调度，实际调用: %+v", runner.removeCalls)
+	}
+}
+
+func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	taskEntity := model.Task{
+		Name:         "task-old",
+		NodeID:       node.ID,
+		Command:      "echo legacy-command",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+		ExecutorType: "rsync",
+		CronSpec:     "*/5 * * * *",
+		Status:       "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	runner := &mockTaskRunner{}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.PUT("/tasks/:id", handler.Update)
+
+	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, node.ID)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
+		t.Fatalf("查询更新后任务失败: %v", err)
+	}
+	if updated.Command != "" {
+		t.Fatalf("期望更新后 command 被清空，实际: %q", updated.Command)
+	}
+}
+
+func TestTaskDeleteDoesNotRemoveScheduleWhenDBDeleteFails(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	// 不执行 AutoMigrate，触发删除时数据库错误，验证不会提前移除调度
+
+	runner := &mockTaskRunner{}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.DELETE("/tasks/:id", handler.Delete)
+
+	req := httptest.NewRequest(http.MethodDelete, "/tasks/1", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("期望状态码 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if len(runner.removeCalls) != 0 {
+		t.Fatalf("数据库删除失败时不应先移除调度，实际 removeCalls=%+v", runner.removeCalls)
 	}
 }

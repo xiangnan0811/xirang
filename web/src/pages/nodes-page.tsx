@@ -9,12 +9,11 @@ import {
   Search,
   ServerCog,
   KeyRound,
-  TerminalSquare,
   Trash2,
   Wrench,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { MobileNodeSearchDrawer, NodeTerminalCard } from "@/pages/nodes-page.components";
+import { MobileNodeSearchDrawer } from "@/pages/nodes-page.components";
 import {
   escapeCSVValue,
   nodeStatusPriority,
@@ -61,7 +60,6 @@ export function NodesPage() {
     deleteNodes,
     testNodeConnection,
     triggerNodeBackup,
-    execNodeCommand,
   } = useOutletContext<ConsoleOutletContext>();
 
   const queryKeyword = searchParams.get("keyword") ?? "";
@@ -88,19 +86,9 @@ export function NodesPage() {
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [showSearchDrawer, setShowSearchDrawer] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
-  const [terminalNodeId, setTerminalNodeId] = useState<number | null>(null);
-  const [terminalCommand, setTerminalCommand] = useState("hostname && uptime");
-  const [terminalTimeout, setTerminalTimeout] = useState(20);
-  const [terminalOutput, setTerminalOutput] = useState("");
-  const [terminalRunning, setTerminalRunning] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
-
-  const terminalNode = useMemo(
-    () => nodes.find((item) => item.id === terminalNodeId) ?? null,
-    [nodes, terminalNodeId]
-  );
 
 
   useEffect(() => {
@@ -356,45 +344,6 @@ export function NodesPage() {
     }
   };
 
-  const handleOpenTerminal = (node: NodeRecord) => {
-    setTerminalNodeId(node.id);
-    setTerminalOutput(
-      `$ 连接 ${node.name} (${node.host}:${node.port})\n# 可输入远程命令并执行`
-    );
-    setTerminalCommand("hostname && uptime");
-  };
-
-  const handleRunTerminalCommand = async () => {
-    if (!terminalNode) {
-      toast.error("请先选择节点。");
-      return;
-    }
-    if (!terminalCommand.trim()) {
-      toast.error("请输入要执行的命令。");
-      return;
-    }
-
-    setTerminalRunning(true);
-    try {
-      const result = await execNodeCommand(
-        terminalNode.id,
-        terminalCommand,
-        terminalTimeout
-      );
-      const lines = [
-        `$ ${terminalCommand}`,
-        result.output || "(无输出)",
-        `# 退出码: ${result.exitCode} · 耗时: ${result.durationMs} ms`,
-      ];
-      setTerminalOutput(lines.join("\n"));
-      toast.success(`${terminalNode.name}：${result.message}`);
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setTerminalRunning(false);
-    }
-  };
-
   const handleTriggerBackup = async (nodeId: number, nodeName: string) => {
     try {
       await triggerNodeBackup(nodeId);
@@ -548,7 +497,7 @@ export function NodesPage() {
               <CardTitle className="text-base">
               主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
               </CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与终端运维</p>
+              <p className="mt-1 text-xs text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与节点运维</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -852,16 +801,7 @@ export function NodesPage() {
                       </Button>
                     </div>
 
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10"
-                        onClick={() => handleOpenTerminal(node)}
-                      >
-                        <TerminalSquare className="mr-1 size-4" />
-                        终端
-                      </Button>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
                       <Button
                         size="sm"
                         className="h-10"
@@ -1026,13 +966,6 @@ export function NodesPage() {
                                 {testingNodeId === node.id
                                   ? "探测中"
                                   : "测试连接"}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleOpenTerminal(node)}
-                              >
-                                终端
                               </Button>
                               <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
                                 <Button variant="outline" size="sm">
@@ -1204,16 +1137,7 @@ export function NodesPage() {
                     </Button>
                   </div>
 
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-10"
-                      onClick={() => handleOpenTerminal(node)}
-                    >
-                      <TerminalSquare className="mr-1 size-4" />
-                      终端
-                    </Button>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <Button
                       size="sm"
                       className="h-10"
@@ -1239,22 +1163,6 @@ export function NodesPage() {
           </div>
         </CardContent>
       </Card>
-
-      {terminalNode ? (
-        <NodeTerminalCard
-          node={terminalNode}
-          command={terminalCommand}
-          timeoutSeconds={terminalTimeout}
-          output={terminalOutput}
-          running={terminalRunning}
-          onCommandChange={setTerminalCommand}
-          onTimeoutChange={setTerminalTimeout}
-          onRun={() => {
-            void handleRunTerminalCommand();
-          }}
-          onClose={() => setTerminalNodeId(null)}
-        />
-      ) : null}
 
       <MobileNodeSearchDrawer
         open={showSearchDrawer}

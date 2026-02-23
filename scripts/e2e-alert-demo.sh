@@ -2,8 +2,8 @@
 set -euo pipefail
 
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8080/api/v1}"
-XR_LOGIN_USERNAME="${XR_LOGIN_USERNAME:-${E2E_USERNAME:-admin}}"
-XR_LOGIN_PASSWORD="${XR_LOGIN_PASSWORD:-${E2E_PASSWORD:-REDACTED}}"
+XR_LOGIN_USERNAME="${XR_LOGIN_USERNAME:-${E2E_USERNAME:-}}"
+XR_LOGIN_PASSWORD="${XR_LOGIN_PASSWORD:-${E2E_PASSWORD:-}}"
 BAD_HOST="${BAD_HOST:-127.0.0.1}"
 BAD_PORT="${BAD_PORT:-65535}"
 WEBHOOK_ENDPOINT="${WEBHOOK_ENDPOINT:-http://127.0.0.1:9/xirang-e2e}"
@@ -22,6 +22,14 @@ created_integration_id=""
 
 log() {
   printf '[XiRang-E2E] %s\n' "$*"
+}
+
+require_credentials() {
+  if [[ -z "${XR_LOGIN_USERNAME}" || -z "${XR_LOGIN_PASSWORD}" ]]; then
+    log "缺少登录凭据：请显式设置 XR_LOGIN_USERNAME 与 XR_LOGIN_PASSWORD。"
+    log "示例：XR_LOGIN_USERNAME=admin XR_LOGIN_PASSWORD='<strong-password>' bash scripts/e2e-alert-demo.sh"
+    exit 2
+  fi
 }
 
 extract_json() {
@@ -97,6 +105,9 @@ cleanup() {
   if [[ "$CLEANUP" != "1" ]]; then
     return 0
   fi
+  if [[ -z "$created_node_id" && -z "$created_integration_id" ]]; then
+    return 0
+  fi
 
   log "开始清理演示资源..."
   if [[ -n "$created_node_id" ]]; then
@@ -110,6 +121,8 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+require_credentials
 
 log "0/6 检查后端健康状态"
 health_code=$(curl -sS -o /tmp/xirang-e2e-health.json -w '%{http_code}' "$HEALTH_URL" || true)
@@ -216,5 +229,5 @@ Cleanup:           ${CLEANUP}
 1) 若 Deliveries Count > 0，可直接验证通知发送链路（成功或失败都记录）。
 2) 若你要保留资源做手工联调，请设置 CLEANUP=0 重新执行。
 3) 账号参数请使用 XR_LOGIN_USERNAME / XR_LOGIN_PASSWORD（避免系统环境变量 USERNAME 冲突）。
-4) 示例：CLEANUP=0 API_BASE_URL=http://127.0.0.1:8080/api/v1 XR_LOGIN_USERNAME=admin XR_LOGIN_PASSWORD=REDACTED bash scripts/e2e-alert-demo.sh
+4) 示例：CLEANUP=0 API_BASE_URL=http://127.0.0.1:8080/api/v1 XR_LOGIN_USERNAME=admin XR_LOGIN_PASSWORD='请替换为管理员密码' bash scripts/e2e-alert-demo.sh
 EOT

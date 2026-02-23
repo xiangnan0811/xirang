@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,9 +16,9 @@ type Config struct {
 	PostgresDSN               string
 	JWTSecret                 string
 	JWTTTL                    time.Duration
-	ExecutorShell             string
 	RsyncBinary               string
 	AllowedOrigins            []string
+	WSAllowEmptyOrigin        bool
 	LoginRateLimit            int
 	LoginRateWindow           time.Duration
 	LoginFailLockThreshold    int
@@ -27,15 +28,19 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	allowedOriginsRaw, hasAllowedOrigins := os.LookupEnv("CORS_ALLOWED_ORIGINS")
+	if !hasAllowedOrigins {
+		allowedOriginsRaw = "http://localhost:5173,http://127.0.0.1:5173"
+	}
+
 	cfg := Config{
 		ListenAddr:     getEnv("SERVER_ADDR", ":8080"),
 		DBType:         strings.ToLower(getEnv("DB_TYPE", "sqlite")),
 		SQLitePath:     getEnv("SQLITE_PATH", "./xirang.db"),
 		PostgresDSN:    getEnv("DB_DSN", ""),
 		JWTSecret:      getEnv("JWT_SECRET", "xirang-dev-secret"),
-		ExecutorShell:  getEnv("EXECUTOR_SHELL", "/bin/sh"),
 		RsyncBinary:    getEnv("RSYNC_BINARY", "rsync"),
-		AllowedOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "*")),
+		AllowedOrigins: splitCSV(allowedOriginsRaw),
 	}
 
 	ttlRaw := getEnv("JWT_TTL", "24h")
@@ -85,6 +90,16 @@ func Load() (Config, error) {
 	}
 	cfg.LoginSecondCaptchaEnabled = loginSecondCaptchaEnabled
 
+	wsAllowEmptyOrigin, err := getEnvAsBool("WS_ALLOW_EMPTY_ORIGIN", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.WSAllowEmptyOrigin = wsAllowEmptyOrigin
+
+	if len(cfg.AllowedOrigins) == 0 {
+		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，所有带 Origin 的浏览器请求将被拒绝")
+	}
+
 	switch cfg.DBType {
 	case "sqlite":
 	case "postgres":
@@ -102,6 +117,11 @@ func Load() (Config, error) {
 		encryptionKey := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_KEY"))
 		if isWeakDataEncryptionKey(encryptionKey) {
 			return Config{}, fmt.Errorf("生产环境必须配置强 DATA_ENCRYPTION_KEY")
+		}
+		for _, origin := range cfg.AllowedOrigins {
+			if strings.TrimSpace(origin) == "*" {
+				return Config{}, fmt.Errorf("生产环境禁止将 CORS_ALLOWED_ORIGINS 配置为 *")
+			}
 		}
 	}
 
@@ -137,9 +157,6 @@ func splitCSV(raw string) []string {
 			continue
 		}
 		items = append(items, value)
-	}
-	if len(items) == 0 {
-		return []string{"*"}
 	}
 	return items
 }

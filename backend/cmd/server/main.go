@@ -35,10 +35,10 @@ func main() {
 		log.Fatalf("执行数据库迁移失败: %v", err)
 	}
 	if err := bootstrap.SeedUsers(db); err != nil {
-		log.Fatalf("初始化默认用户失败: %v", err)
+		log.Fatalf("初始化管理员账号失败: %v", err)
 	}
 
-	hub := ws.NewHub(db, cfg.AllowedOrigins)
+	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	defer hubCancel()
 	go hub.Run(hubCtx)
@@ -47,7 +47,7 @@ func main() {
 	cronScheduler.Start()
 	defer cronScheduler.Stop()
 
-	executorFactory := executor.NewFactory(cfg.ExecutorShell, cfg.RsyncBinary)
+	executorFactory := executor.NewFactory(cfg.RsyncBinary)
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatalf("加载定时任务失败: %v", err)
