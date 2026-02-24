@@ -81,6 +81,39 @@ func TestHubCheckOriginAllowsEmptyOriginWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestHubCheckOriginAllowsSameHostDifferentPort(t *testing.T) {
+	hub := NewHub(nil, nil, false)
+	upgrader := hub.newUpgrader()
+
+	req := httptest.NewRequest("GET", "http://192.168.1.20:8080/ws", nil)
+	req.Header.Set("Origin", "http://192.168.1.20:5173")
+	if !upgrader.CheckOrigin(req) {
+		t.Fatalf("同主机跨端口 Origin 应允许")
+	}
+}
+
+func TestHubCheckOriginRejectsInvalidOrigin(t *testing.T) {
+	hub := NewHub(nil, nil, false)
+	upgrader := hub.newUpgrader()
+
+	req := httptest.NewRequest("GET", "http://192.168.1.20:8080/ws", nil)
+	req.Header.Set("Origin", "null")
+	if upgrader.CheckOrigin(req) {
+		t.Fatalf("非法 Origin 不应放行")
+	}
+}
+
+func TestHubCheckOriginRejectsDifferentHost(t *testing.T) {
+	hub := NewHub(nil, nil, false)
+	upgrader := hub.newUpgrader()
+
+	req := httptest.NewRequest("GET", "http://192.168.1.20:8080/ws", nil)
+	req.Header.Set("Origin", "http://evil.com:5173")
+	if upgrader.CheckOrigin(req) {
+		t.Fatalf("不同主机 Origin 不应放行")
+	}
+}
+
 func openHubTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))

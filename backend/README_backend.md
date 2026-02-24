@@ -39,6 +39,7 @@ go run ./cmd/server
 - `LOGIN_SECOND_CAPTCHA_ENABLED`：登录二次验证码字段校验开关，默认 `false`
 - `ALERT_DEDUP_WINDOW`：告警去重窗口（同节点+同任务+同错误码），默认 `10m`，`0` 为关闭
 - `CORS_ALLOWED_ORIGINS`：跨域白名单（逗号分隔）
+  - 若未命中白名单，但 `Origin` 与请求主机同名（忽略端口）也会放行
 - `WS_ALLOW_EMPTY_ORIGIN`：是否允许 WebSocket 空 Origin，默认 `false`
 - `EXECUTOR_SHELL`：历史参数，当前本地执行器已禁用（保留兼容）
 - `RSYNC_BINARY`：rsync 可执行文件名，默认 `rsync`

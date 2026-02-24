@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -118,6 +119,10 @@ func (h *Hub) newUpgrader() websocket.Upgrader {
 				if strings.EqualFold(origin, strings.TrimSpace(allowed)) {
 					return true
 				}
+			}
+			// 安全前提：浏览器保证 Host 头真实性；生产环境应通过反向代理强制设置 Host。
+			if util.IsSameHostOrigin(origin, r.Host) {
+				return true
 			}
 			return false
 		},

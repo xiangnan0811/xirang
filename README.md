@@ -74,11 +74,18 @@ npm run dev
 
 默认地址：`http://localhost:5173`
 
-如果你直接连本地后端，建议设置：
+默认无需设置 `VITE_API_BASE_URL`，前端会通过 `/api` 代理到后端。
+如需显式配置，建议：
 
 ```bash
-export VITE_API_BASE_URL=http://localhost:8080/api/v1
+export VITE_API_BASE_URL=/api/v1
+# 可选：覆盖前端开发代理目标
+export VITE_PROXY_TARGET=http://127.0.0.1:8080
 ```
+
+如果你要从局域网其他设备访问，请不要把 `VITE_API_BASE_URL` 写死为
+`http://localhost:8080/api/v1`；应使用 `/api/v1`（推荐）或可访问的
+实际主机地址（例如 `http://192.168.1.20:8080/api/v1`）。
 
 ### 3) 一键冒烟验收（推荐）
 

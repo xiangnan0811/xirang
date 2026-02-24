@@ -97,7 +97,7 @@ func Load() (Config, error) {
 	cfg.WSAllowEmptyOrigin = wsAllowEmptyOrigin
 
 	if len(cfg.AllowedOrigins) == 0 {
-		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，所有带 Origin 的浏览器请求将被拒绝")
+		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，仅同主机（忽略端口）Origin 会被放行")
 	}
 
 	switch cfg.DBType {

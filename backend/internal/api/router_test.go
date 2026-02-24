@@ -9,24 +9,36 @@ import (
 )
 
 func TestResolveAllowedOrigin(t *testing.T) {
-	if got := resolveAllowedOrigin("https://xirang.example.com", []string{"https://xirang.example.com"}); got != "https://xirang.example.com" {
+	if got := resolveAllowedOrigin("https://xirang.example.com", "xirang.example.com:8080", []string{"https://xirang.example.com"}); got != "https://xirang.example.com" {
 		t.Fatalf("期望返回匹配域名，实际: %s", got)
 	}
 
-	if got := resolveAllowedOrigin("https://bad.example.com", []string{"https://xirang.example.com"}); got != "" {
+	if got := resolveAllowedOrigin("https://bad.example.com", "xirang.example.com:8080", []string{"https://xirang.example.com"}); got != "" {
 		t.Fatalf("期望返回空，实际: %s", got)
 	}
 
-	if got := resolveAllowedOrigin("https://foo.example.com", []string{"*"}); got != "https://foo.example.com" {
+	if got := resolveAllowedOrigin("https://foo.example.com", "xirang.example.com:8080", []string{"*"}); got != "https://foo.example.com" {
 		t.Fatalf("通配符应回显 origin，实际: %s", got)
 	}
 
-	if got := resolveAllowedOrigin("", []string{"*"}); got != "" {
+	if got := resolveAllowedOrigin("", "xirang.example.com:8080", []string{"*"}); got != "" {
 		t.Fatalf("空 origin 不应回退通配符，实际: %s", got)
 	}
 
-	if got := resolveAllowedOrigin("", []string{"https://xirang.example.com"}); got != "" {
+	if got := resolveAllowedOrigin("", "xirang.example.com:8080", []string{"https://xirang.example.com"}); got != "" {
 		t.Fatalf("空 origin 应返回空字符串，实际: %s", got)
+	}
+
+	if got := resolveAllowedOrigin("http://192.168.1.20:5173", "192.168.1.20:8080", nil); got != "http://192.168.1.20:5173" {
+		t.Fatalf("同主机 Origin 应自动放行，实际: %s", got)
+	}
+
+	if got := resolveAllowedOrigin("null", "192.168.1.20:8080", nil); got != "" {
+		t.Fatalf("非法 Origin 应拒绝，实际: %s", got)
+	}
+
+	if got := resolveAllowedOrigin("http://evil.com:5173", "192.168.1.20:8080", nil); got != "" {
+		t.Fatalf("不同主机 Origin 应拒绝，实际: %s", got)
 	}
 }
 
@@ -100,6 +112,17 @@ func TestNewRouterCORSHeaders(t *testing.T) {
 	}
 	if got := resp.Header().Get("Access-Control-Allow-Credentials"); got != "" {
 		t.Fatalf("空 origin 不应写入 Allow-Credentials，实际: %s", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://192.168.1.20:8080/healthz", nil)
+	req.Header.Set("Origin", "http://192.168.1.20:5173")
+	resp = httptest.NewRecorder()
+	g.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("同主机跨端口 Origin 应返回 200，实际: %d", resp.Code)
+	}
+	if got := resp.Header().Get("Access-Control-Allow-Origin"); got != "http://192.168.1.20:5173" {
+		t.Fatalf("同主机 Origin 应被回写，实际: %s", got)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)

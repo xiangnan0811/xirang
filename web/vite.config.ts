@@ -16,7 +16,8 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: proxyTarget,
-        changeOrigin: true,
+        // 保留浏览器原始 Host，便于后端进行“同主机 Origin”判定。
+        changeOrigin: false,
         ws: true
       }
     }

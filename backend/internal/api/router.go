@@ -9,6 +9,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/task"
+	"xirang/backend/internal/util"
 	"xirang/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
@@ -33,12 +34,14 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		allowedOrigin := resolveAllowedOrigin(origin, dep.AllowedOrigins)
+		allowedOrigin := resolveAllowedOrigin(origin, c.Request.Host, dep.AllowedOrigins)
 		if allowedOrigin == "" && origin != "" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "origin not allowed"})
 			c.Abort()
 			return
 		}
+		// 动态 CORS 回写时必须声明 Vary: Origin，防止中间缓存投毒。
+		c.Writer.Header().Add("Vary", "Origin")
 		if allowedOrigin != "" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -132,14 +135,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	return router
 }
 
-func resolveAllowedOrigin(origin string, allowList []string) string {
+func resolveAllowedOrigin(origin string, requestHost string, allowList []string) string {
 	trimmedOrigin := strings.TrimSpace(origin)
-	if len(allowList) == 0 {
-		return ""
-	}
 	if trimmedOrigin == "" {
 		return ""
 	}
+
 	for _, item := range allowList {
 		trimmedItem := strings.TrimSpace(item)
 		if trimmedItem == "*" {
@@ -149,5 +150,12 @@ func resolveAllowedOrigin(origin string, allowList []string) string {
 			return trimmedOrigin
 		}
 	}
+
+	// 当 Origin 与当前请求主机一致（忽略端口）时默认放行，避免局域网/公网同主机部署因端口差异误拦截。
+	// 安全前提：浏览器保证 Host 头真实性；生产环境应通过反向代理强制设置 Host。
+	if util.IsSameHostOrigin(trimmedOrigin, requestHost) {
+		return trimmedOrigin
+	}
+
 	return ""
 }
