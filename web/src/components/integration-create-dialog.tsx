@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
+import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
 
 type IntegrationGuide = {
@@ -170,7 +171,7 @@ export function IntegrationCreateDialog({
         cooldownMinutes: toBoundedInt(String(draft.cooldownMinutes), 5, 1, 120),
       });
     } catch (error) {
-      toast.error((error as Error).message || "新增失败，请稍后重试。");
+      toast.error(getErrorMessage(error, "新增失败，请稍后重试。"));
     } finally {
       setSaving(false);
     }

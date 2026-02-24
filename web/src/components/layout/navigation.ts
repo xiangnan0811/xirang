@@ -7,14 +7,17 @@ import {
   ListChecks,
   Monitor,
   Server,
+  Users,
   type LucideIcon
 } from "lucide-react";
+import type { UserRecord } from "@/types/domain";
 
 export type NavItem = {
   title: string;
   path: string;
   icon: LucideIcon;
   mobileTab?: boolean;
+  adminOnly?: boolean;
 };
 
 export const navItems: NavItem[] = [
@@ -65,5 +68,16 @@ export const navItems: NavItem[] = [
     path: "/app/audit",
     icon: FileSearch,
     mobileTab: false
+  },
+  {
+    title: "用户",
+    path: "/app/users",
+    icon: Users,
+    mobileTab: false,
+    adminOnly: true
   }
 ];
+
+export function getVisibleNavItems(role: UserRecord["role"] | null): NavItem[] {
+  return navItems.filter((item) => !item.adminOnly || role === "admin");
+}

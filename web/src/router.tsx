@@ -30,6 +30,9 @@ const TasksPage = lazy(() =>
 const AuditPage = lazy(() =>
   import("@/pages/audit-page").then((m) => ({ default: m.AuditPage }))
 );
+const UsersPage = lazy(() =>
+  import("@/pages/users-page").then((m) => ({ default: m.UsersPage }))
+);
 
 function PageLoader() {
   return (
@@ -99,6 +102,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "audit",
         element: <LazyPage><AuditPage /></LazyPage>
+      },
+      {
+        path: "users",
+        element: <LazyPage><UsersPage /></LazyPage>
       }
     ]
   },

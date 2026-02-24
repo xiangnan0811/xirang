@@ -1,24 +1,27 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Menu, RefreshCw, X } from "lucide-react";
-import { navItems } from "@/components/layout/navigation";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { UserRecord } from "@/types/domain";
 
 type MobileNavigationProps = {
   username: string | null;
+  role: UserRecord["role"] | null;
   onLogout: () => void;
   onRefresh: () => void;
 };
 
-export function MobileNavigation({ username, onLogout, onRefresh }: MobileNavigationProps) {
+export function MobileNavigation({ username, role, onLogout, onRefresh }: MobileNavigationProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const navItems = useMemo(() => getVisibleNavItems(role), [role]);
 
-  const mobileTabs = useMemo(() => navItems.filter((item) => item.mobileTab !== false), []);
+  const mobileTabs = useMemo(() => navItems.filter((item) => item.mobileTab !== false), [navItems]);
 
   return (
     <>

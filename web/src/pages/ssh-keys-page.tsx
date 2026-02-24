@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
+import { getErrorMessage } from "@/lib/utils";
 import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
 
 export function SSHKeysPage() {
@@ -94,7 +95,7 @@ export function SSHKeysPage() {
       setEditorOpen(false);
       setEditingKey(null);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 

@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
-import { navItems } from "@/components/layout/navigation";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
 import { useConsoleData } from "@/hooks/use-console-data";
+import { apiClient } from "@/lib/api/client";
 
 export type ConsoleOutletContext = ReturnType<typeof useConsoleData>;
 
@@ -40,15 +41,23 @@ function isTypingTarget(target: EventTarget | null) {
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { username, token, logout } = useAuth();
+  const { username, role, token, logout } = useAuth();
   const consoleData = useConsoleData(token);
 
+  const navItems = getVisibleNavItems(role);
   const currentItem = navItems.find((item) => item.path === location.pathname);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (token) {
+      try {
+        await apiClient.logout(token);
+      } catch {
+        // 即便服务端注销失败，也执行本地会话清理，避免前端残留登录态。
+      }
+    }
     logout();
     navigate("/login", { replace: true });
   };
@@ -105,7 +114,7 @@ export function AppShell() {
       >
         跳到主内容
       </a>
-      <DesktopSidebar username={username} onLogout={handleLogout} />
+      <DesktopSidebar username={username} role={role} onLogout={handleLogout} />
 
       <div className="relative z-10 flex min-h-screen flex-1 flex-col">
         <header className="sticky top-0 z-30 border-b border-border/70 bg-background/75 backdrop-blur-xl">
@@ -203,6 +212,7 @@ export function AppShell() {
 
       <MobileNavigation
         username={username}
+        role={role}
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
       />

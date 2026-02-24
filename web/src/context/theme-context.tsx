@@ -11,6 +11,7 @@ import {
   applyDensityData,
   applyPowerData,
   applyThemeClass,
+  clearStoredTheme,
   getStoredDensity,
   getStoredPowerMode,
   getStoredTheme,
@@ -48,8 +49,12 @@ function resolveReducedMotionPreference() {
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
+  const initialStoredTheme = getStoredTheme();
   const [theme, setTheme] = useState<ThemeMode>(() =>
-    resolveInitialTheme(getStoredTheme(), resolveSystemDarkMode())
+    resolveInitialTheme(initialStoredTheme, resolveSystemDarkMode())
+  );
+  const [themeSource, setThemeSource] = useState<"system" | "manual">(
+    initialStoredTheme ? "manual" : "system"
   );
   const [density, setDensity] = useState<DensityMode>(() =>
     resolveInitialDensity(getStoredDensity())
@@ -60,8 +65,26 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     applyThemeClass(document.documentElement, theme);
-    persistTheme(theme);
-  }, [theme]);
+    if (themeSource === "manual") {
+      persistTheme(theme);
+    } else {
+      clearStoredTheme();
+    }
+  }, [theme, themeSource]);
+
+  useEffect(() => {
+    if (themeSource !== "system") {
+      return;
+    }
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event: MediaQueryListEvent) => {
+      setTheme(event.matches ? "dark" : "light");
+    };
+    media.addEventListener("change", onChange);
+    return () => {
+      media.removeEventListener("change", onChange);
+    };
+  }, [themeSource]);
 
   useEffect(() => {
     applyDensityData(document.documentElement, density);
@@ -73,10 +96,15 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     persistPowerMode(powerMode);
   }, [powerMode]);
 
-  const toggleTheme = useCallback(
-    () => setTheme((prev) => (prev === "dark" ? "light" : "dark")),
-    []
-  );
+  const setManualTheme = useCallback((nextTheme: ThemeMode) => {
+    setThemeSource("manual");
+    setTheme(nextTheme);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setThemeSource("manual");
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  }, []);
   const toggleDensity = useCallback(
     () => setDensity((prev) => (prev === "compact" ? "comfortable" : "compact")),
     []
@@ -89,7 +117,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const value = useMemo(
     () => ({
       theme,
-      setTheme,
+      setTheme: setManualTheme,
       toggleTheme,
       density,
       setDensity,
@@ -98,7 +126,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       setPowerMode,
       togglePowerMode
     }),
-    [density, powerMode, theme, toggleDensity, togglePowerMode, toggleTheme]
+    [density, powerMode, setManualTheme, theme, toggleDensity, togglePowerMode, toggleTheme]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

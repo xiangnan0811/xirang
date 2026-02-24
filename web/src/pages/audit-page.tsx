@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { getErrorMessage } from "@/lib/utils";
 import type { AuditLogRecord } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,7 +113,7 @@ export function AuditPage() {
       if (error instanceof ApiError && error.status === 403) {
         toast.error("当前账号无权访问审计日志（仅管理员可读）。");
       } else {
-        toast.error((error as Error).message);
+        toast.error(getErrorMessage(error));
       }
     } finally {
       setLoading(false);
@@ -149,7 +150,7 @@ export function AuditPage() {
       if (error instanceof ApiError && error.status === 403) {
         toast.error("当前账号无权导出审计日志（仅管理员可读）。");
       } else {
-        toast.error((error as Error).message);
+        toast.error(getErrorMessage(error));
       }
     } finally {
       setExporting(false);
@@ -162,14 +163,13 @@ export function AuditPage() {
       return;
     }
 
-    const loadKey = `${token}:${timeRange}`;
+    const loadKey = `${token}:${timeRange}:${keyword.trim()}:${method}`;
     if (autoLoadKeyRef.current === loadKey) {
       return;
     }
     autoLoadKeyRef.current = loadKey;
     void load(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, timeRange]);
+  }, [keyword, method, timeRange, token]);
 
   useEffect(() => {
     localStorage.setItem(auditViewStorageKey, viewMode);

@@ -1,18 +1,21 @@
 import { Link, useLocation } from "react-router-dom";
 import { Layers3, LogOut } from "lucide-react";
-import { navItems } from "@/components/layout/navigation";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
+import type { UserRecord } from "@/types/domain";
 
 type DesktopSidebarProps = {
   username: string | null;
+  role: UserRecord["role"] | null;
   onLogout: () => void;
 };
 
-export function DesktopSidebar({ username, onLogout }: DesktopSidebarProps) {
+export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps) {
   const location = useLocation();
+  const navItems = getVisibleNavItems(role);
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-card/65 backdrop-blur-xl md:flex md:w-20 md:p-3 lg:w-72 lg:p-4">

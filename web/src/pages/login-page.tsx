@@ -34,7 +34,7 @@ export function LoginPage() {
 
     try {
       const result = await apiClient.login(username, password);
-      login(result.token, result.user.username);
+      login(result.token, result.user.username, result.user.role, result.user.id);
       navigate(redirectTo, { replace: true });
       return;
     } catch (error) {

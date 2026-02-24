@@ -22,7 +22,7 @@ import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getTaskStatusMeta } from "@/lib/status";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { NewTaskInput, TaskStatus } from "@/types/domain";
 
 const keywordStorageKey = "xirang.tasks.keyword";
@@ -144,7 +144,7 @@ export function TasksPage() {
       setCreateDialogOpen(false);
       toast.success(`任务 #${taskId} 已创建。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -154,7 +154,7 @@ export function TasksPage() {
       await triggerTask(taskId);
       toast.success(`已触发任务 #${taskId}。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     } finally {
       setPendingId(null);
     }
@@ -166,7 +166,7 @@ export function TasksPage() {
       await cancelTask(taskId);
       toast.success(`已取消任务 #${taskId}。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     } finally {
       setPendingId(null);
     }
@@ -178,7 +178,7 @@ export function TasksPage() {
       await retryTask(taskId);
       toast.success(`已重试任务 #${taskId}。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     } finally {
       setPendingId(null);
     }
@@ -197,7 +197,7 @@ export function TasksPage() {
       await deleteTask(taskId);
       toast.success(`任务 #${taskId} 已删除。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     } finally {
       setPendingId(null);
     }

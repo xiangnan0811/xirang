@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
 const keywordStorageKey = "xirang.policies.keyword";
@@ -104,7 +105,7 @@ export function PoliciesPage() {
       setEditorOpen(false);
       setEditingPolicy(null);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -120,7 +121,7 @@ export function PoliciesPage() {
       await deletePolicy(policy.id);
       toast.success(`策略 ${policy.name} 已删除。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -129,7 +130,7 @@ export function PoliciesPage() {
       await togglePolicy(policy.id);
       toast.success(`策略 ${policy.name} 已${policy.enabled ? "停用" : "启用"}。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 

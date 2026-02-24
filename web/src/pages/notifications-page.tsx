@@ -30,7 +30,7 @@ import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getSeverityMeta } from "@/lib/status";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertDeliveryStats, IntegrationChannel } from "@/types/domain";
 
 const notificationKeywordStorageKey = "xirang.notifications.keyword";
@@ -192,7 +192,7 @@ export function NotificationsPage() {
       })
       .catch((error) => {
         if (statsRequestRef.current === currentRequestID) {
-          toast.error((error as Error).message);
+          toast.error(getErrorMessage(error));
         }
       })
       .finally(() => {
@@ -219,7 +219,7 @@ export function NotificationsPage() {
           [alertId]: rows
         }));
       })
-      .catch((error) => toast.error((error as Error).message))
+      .catch((error) => toast.error(getErrorMessage(error)))
       .finally(() => setDeliveryLoadingAlertId(null));
   };
 
@@ -277,7 +277,7 @@ export function NotificationsPage() {
         setEditingIntegration(null);
       }
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     } finally {
       endIntegrationOp(integration.id, "update");
     }
@@ -429,7 +429,7 @@ export function NotificationsPage() {
                         }
                         void retryAlert(alert.id)
                           .then(() => toast.success(`已在移动告警中心重试任务 #${alert.taskId}`))
-                          .catch((error) => toast.error((error as Error).message));
+                          .catch((error) => toast.error(getErrorMessage(error)));
                       }}
                       disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
                     >
@@ -488,7 +488,7 @@ export function NotificationsPage() {
                                 await toggleIntegration(integration.id);
                                 toast.success(`通知方式 ${integration.name} 已${integration.enabled ? "停用" : "启用"}。`);
                               } catch (error) {
-                                toast.error((error as Error).message);
+                                toast.error(getErrorMessage(error));
                               } finally {
                                 endIntegrationOp(integration.id, "update");
                               }
@@ -505,7 +505,7 @@ export function NotificationsPage() {
                               .then((result) =>
                                 toast.success(`${integration.name}：${result.message}（${result.latencyMs}ms）`)
                               )
-                              .catch((error) => toast.error((error as Error).message))
+                              .catch((error) => toast.error(getErrorMessage(error)))
                               .finally(() => endIntegrationOp(integration.id, "test"));
                           }}
                         >
@@ -640,7 +640,7 @@ export function NotificationsPage() {
                             }
                             void retryAlert(alert.id)
                               .then(() => toast.success(`已触发重试：任务 #${alert.taskId}`))
-                              .catch((error) => toast.error((error as Error).message));
+                              .catch((error) => toast.error(getErrorMessage(error)));
                           }}
                           disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
                         >
@@ -653,7 +653,7 @@ export function NotificationsPage() {
                           onClick={() => {
                             void acknowledgeAlert(alert.id)
                               .then(() => toast.success(`已确认告警：${alert.errorCode}`))
-                              .catch((error) => toast.error((error as Error).message));
+                              .catch((error) => toast.error(getErrorMessage(error)));
                           }}
                           disabled={alert.status !== "open"}
                         >
@@ -666,7 +666,7 @@ export function NotificationsPage() {
                           onClick={() => {
                             void resolveAlert(alert.id)
                               .then(() => toast.success(`已标记恢复：${alert.errorCode}`))
-                              .catch((error) => toast.error((error as Error).message));
+                              .catch((error) => toast.error(getErrorMessage(error)));
                           }}
                           disabled={alert.status === "resolved"}
                         >
@@ -700,7 +700,7 @@ export function NotificationsPage() {
                                         toast.success(result.message);
                                         refreshDeliveries(alert.id);
                                       })
-                                      .catch((error) => toast.error((error as Error).message))
+                                      .catch((error) => toast.error(getErrorMessage(error)))
                                       .finally(() => setRetryingAllAlertId(null));
                                   }}
                                 >
@@ -734,7 +734,7 @@ export function NotificationsPage() {
                                             toast.success(result.message);
                                             refreshDeliveries(alert.id);
                                           })
-                                          .catch((error) => toast.error((error as Error).message))
+                                          .catch((error) => toast.error(getErrorMessage(error)))
                                           .finally(() => setRetryingDeliveryKey(null));
                                       }}
                                     >

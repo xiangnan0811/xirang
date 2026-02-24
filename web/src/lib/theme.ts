@@ -10,8 +10,41 @@ const VALID_THEMES: ThemeMode[] = ["light", "dark"];
 const VALID_DENSITY: DensityMode[] = ["comfortable", "compact"];
 const VALID_POWER_MODE: PowerMode[] = ["normal", "save"];
 
+function safeGetItem(key: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // 忽略 Safari 隐私模式、配额或受限环境下的存储异常。
+  }
+}
+
+function safeRemoveItem(key: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 忽略受限环境下的存储异常。
+  }
+}
+
 export function getStoredTheme(): ThemeMode | null {
-  const value = localStorage.getItem(THEME_STORAGE_KEY);
+  const value = safeGetItem(THEME_STORAGE_KEY);
   if (!value) {
     return null;
   }
@@ -19,7 +52,7 @@ export function getStoredTheme(): ThemeMode | null {
 }
 
 export function getStoredDensity(): DensityMode | null {
-  const value = localStorage.getItem(DENSITY_STORAGE_KEY);
+  const value = safeGetItem(DENSITY_STORAGE_KEY);
   if (!value) {
     return null;
   }
@@ -27,7 +60,7 @@ export function getStoredDensity(): DensityMode | null {
 }
 
 export function getStoredPowerMode(): PowerMode | null {
-  const value = localStorage.getItem(POWER_MODE_STORAGE_KEY);
+  const value = safeGetItem(POWER_MODE_STORAGE_KEY);
   if (!value) {
     return null;
   }
@@ -62,15 +95,19 @@ export function resolveInitialPowerMode(
 }
 
 export function persistTheme(theme: ThemeMode) {
-  localStorage.setItem(THEME_STORAGE_KEY, theme);
+  safeSetItem(THEME_STORAGE_KEY, theme);
+}
+
+export function clearStoredTheme() {
+  safeRemoveItem(THEME_STORAGE_KEY);
 }
 
 export function persistDensity(density: DensityMode) {
-  localStorage.setItem(DENSITY_STORAGE_KEY, density);
+  safeSetItem(DENSITY_STORAGE_KEY, density);
 }
 
 export function persistPowerMode(powerMode: PowerMode) {
-  localStorage.setItem(POWER_MODE_STORAGE_KEY, powerMode);
+  safeSetItem(POWER_MODE_STORAGE_KEY, powerMode);
 }
 
 export function applyThemeClass(root: HTMLElement, theme: ThemeMode) {

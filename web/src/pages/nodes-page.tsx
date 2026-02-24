@@ -37,7 +37,7 @@ import { StatusPulse } from "@/components/status-pulse";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getNodeStatusMeta } from "@/lib/status";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeRecord } from "@/types/domain";
 
 const keywordStorageKey = "xirang.nodes.keyword";
@@ -250,7 +250,7 @@ export function NodesPage() {
       }
     } catch (error) {
       setTestingNodeId(null);
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -276,7 +276,7 @@ export function NodesPage() {
       setSelectedNodeIds((prev) => prev.filter((id) => id !== node.id));
       toast.success(`节点 ${node.name} 已删除。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -328,7 +328,7 @@ export function NodesPage() {
         toast.success(`已批量删除 ${result.deleted} 个节点。`);
       }
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -340,7 +340,7 @@ export function NodesPage() {
       toast.success(`${node.name}：${result.message}`);
     } catch (error) {
       setTestingNodeId(null);
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -349,7 +349,7 @@ export function NodesPage() {
       await triggerNodeBackup(nodeId);
       toast.success(`已触发 ${nodeName} 的手动备份任务。`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -396,7 +396,7 @@ export function NodesPage() {
       } catch (error) {
         failedCount += 1;
         if (errors.length < 3) {
-          errors.push(`${row.name}: ${(error as Error).message}`);
+          errors.push(`${row.name}: ${getErrorMessage(error)}`);
         }
       }
     }
@@ -555,7 +555,7 @@ export function NodesPage() {
                     .text()
                     .then((content) => handleImportCSV(content))
                     .catch((error) =>
-                      toast.error((error as Error).message)
+                      toast.error(getErrorMessage(error))
                     );
                   event.target.value = "";
                 }}

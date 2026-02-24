@@ -238,8 +238,14 @@ export interface LoginResponse {
   user: {
     id: number;
     username: string;
-    role: string;
+    role: "admin" | "operator" | "viewer";
   };
+}
+
+export interface UserRecord {
+  id: number;
+  username: string;
+  role: "admin" | "operator" | "viewer";
 }
 
 export interface AuditLogRecord {
