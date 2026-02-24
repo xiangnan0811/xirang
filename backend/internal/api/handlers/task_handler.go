@@ -78,7 +78,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 
 	var tasks []model.Task
 	if err := query.Preload("Node").Preload("Policy").Order(parseTaskSort(c.Query("sort"))).Find(&tasks).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": tasks})
@@ -233,7 +233,7 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := h.db.Delete(&model.Task{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	if h.runner != nil {
@@ -291,7 +291,7 @@ func (h *TaskHandler) Logs(c *gin.Context) {
 
 	var logs []model.TaskLog
 	if err := query.Order("id desc").Limit(limit).Find(&logs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": logs})

@@ -24,6 +24,7 @@ var rolePermissions = map[string]map[string]bool{
 		"alerts:deliveries":  true,
 		"alerts:write":       true,
 		"audit:read":         true,
+		"users:manage":       true,
 	},
 	"operator": {
 		"nodes:read":        true,

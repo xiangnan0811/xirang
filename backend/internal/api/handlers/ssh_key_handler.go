@@ -70,7 +70,7 @@ func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, s
 func (h *SSHKeyHandler) List(c *gin.Context) {
 	var items []model.SSHKey
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -198,7 +198,7 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 
 	var count int64
 	if err := h.db.Model(&model.Node{}).Where("ssh_key_id = ?", id).Count(&count).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	if count > 0 {
@@ -207,7 +207,7 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.db.Delete(&model.SSHKey{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted", "deleted_at": time.Now()})

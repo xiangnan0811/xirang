@@ -13,6 +13,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -57,7 +58,7 @@ func validateIntegrationEndpoint(channelType, endpoint string) error {
 		return fmt.Errorf("%s 通道仅允许 http/https URL", normalizedType)
 	}
 
-	blockPrivate, err := readBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", true)
+	blockPrivate, err := util.ReadBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", true)
 	if err != nil {
 		return err
 	}

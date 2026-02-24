@@ -52,7 +52,7 @@ func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
 		db:               db,
 		clients:          make(map[*client]struct{}),
 		register:         make(chan *client),
-		unregister:       make(chan *client),
+		unregister:       make(chan *client, 64),
 		broadcast:        make(chan LogEvent, 256),
 		allowedOrigins:   allowedOrigins,
 		allowEmptyOrigin: allowEmptyOrigin,

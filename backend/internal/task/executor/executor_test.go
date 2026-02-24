@@ -115,8 +115,8 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	if !strings.Contains(joined, "\n--\n") {
 		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
 	}
-	if !strings.Contains(joined, "StrictHostKeyChecking=no") {
-		t.Fatalf("期望携带 StrictHostKeyChecking=no，实际日志: %s", joined)
+	if !strings.Contains(joined, "StrictHostKeyChecking=yes") {
+		t.Fatalf("期望默认携带 StrictHostKeyChecking=yes，实际日志: %s", joined)
 	}
 	if !strings.Contains(joined, "-i ") || !strings.Contains(joined, "xirang-key-") {
 		t.Fatalf("期望携带 -i 临时密钥参数，实际日志: %s", joined)

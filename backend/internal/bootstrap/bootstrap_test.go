@@ -39,7 +39,7 @@ func TestSeedUsersCreatesAdminOnly(t *testing.T) {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
-	t.Setenv("ADMIN_INITIAL_PASSWORD", "strong-admin-password")
+	t.Setenv("ADMIN_INITIAL_PASSWORD", "StrongAdmin#2026")
 	if err := SeedUsers(db); err != nil {
 		t.Fatalf("初始化用户失败: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSeedUsersAllowsMissingPasswordWhenAdminAlreadyExists(t *testing.T) {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
-	t.Setenv("ADMIN_INITIAL_PASSWORD", "strong-admin-password")
+	t.Setenv("ADMIN_INITIAL_PASSWORD", "StrongAdmin#2026")
 	if err := SeedUsers(db); err != nil {
 		t.Fatalf("首次初始化用户失败: %v", err)
 	}

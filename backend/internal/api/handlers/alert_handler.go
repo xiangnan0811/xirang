@@ -47,10 +47,10 @@ type deliveryStatsByIntegration struct {
 }
 
 type deliveryStatsResponse struct {
-	WindowHours int                          `json:"window_hours"`
-	TotalSent   int64                        `json:"total_sent"`
-	TotalFailed int64                        `json:"total_failed"`
-	SuccessRate float64                      `json:"success_rate"`
+	WindowHours   int                          `json:"window_hours"`
+	TotalSent     int64                        `json:"total_sent"`
+	TotalFailed   int64                        `json:"total_failed"`
+	SuccessRate   float64                      `json:"success_rate"`
 	ByIntegration []deliveryStatsByIntegration `json:"by_integration"`
 }
 
@@ -84,13 +84,30 @@ func (h *AlertHandler) List(c *gin.Context) {
 			limit = parsed
 		}
 	}
+	offset := 0
+	if rawOffset := strings.TrimSpace(c.Query("offset")); rawOffset != "" {
+		if parsed, err := strconv.Atoi(rawOffset); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
 
-	var alerts []model.Alert
-	if err := query.Order("triggered_at desc").Limit(limit).Find(&alerts).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": alerts})
+
+	var alerts []model.Alert
+	if err := query.Order("triggered_at desc").Limit(limit).Offset(offset).Find(&alerts).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data":   alerts,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 func (h *AlertHandler) Get(c *gin.Context) {
@@ -122,7 +139,7 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 	}
 	alert.Status = "acked"
 	if err := h.db.Save(&alert).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": alert})
@@ -141,7 +158,7 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 	alert.Status = "resolved"
 	alert.Retryable = false
 	if err := h.db.Save(&alert).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": alert})
@@ -161,7 +178,7 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 
 	var deliveries []model.AlertDelivery
 	if err := h.db.Where("alert_id = ?", id).Order("id desc").Find(&deliveries).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -213,7 +230,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 
 	delivery.Status = "sent"
 	if err := h.db.Create(&delivery).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -238,7 +255,7 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 
 	var failedRecords []model.AlertDelivery
 	if err := h.db.Where("alert_id = ? AND status = ?", alert.ID, "failed").Order("id desc").Find(&failedRecords).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -289,7 +306,7 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 		}
 
 		if err := h.db.Create(&newRecord).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			respondInternalError(c, err)
 			return
 		}
 		newDeliveries = append(newDeliveries, newRecord)
@@ -318,7 +335,7 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 		Select("COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
 		Where("created_at >= ?", from).
 		Scan(&totals).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -330,7 +347,7 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 		Group("ad.integration_id, i.name, i.type").
 		Order("failed DESC, sent DESC, ad.integration_id ASC").
 		Scan(&byIntegration).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -347,10 +364,10 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": deliveryStatsResponse{
-		WindowHours: hours,
-		TotalSent:   totals.Sent,
-		TotalFailed: totals.Failed,
-		SuccessRate: successRate,
+		WindowHours:   hours,
+		TotalSent:     totals.Sent,
+		TotalFailed:   totals.Failed,
+		SuccessRate:   successRate,
 		ByIntegration: byIntegration,
 	}})
 }

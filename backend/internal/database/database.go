@@ -22,12 +22,28 @@ func configurePool(db *gorm.DB) error {
 	return nil
 }
 
+func applySQLitePragmas(db *gorm.DB) error {
+	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
+		return fmt.Errorf("设置 SQLite WAL 模式失败: %w", err)
+	}
+	if err := db.Exec("PRAGMA busy_timeout=5000;").Error; err != nil {
+		return fmt.Errorf("设置 SQLite busy_timeout 失败: %w", err)
+	}
+	if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
+		return fmt.Errorf("设置 SQLite synchronous 失败: %w", err)
+	}
+	return nil
+}
+
 func Open(cfg config.Config) (*gorm.DB, error) {
 	switch cfg.DBType {
 	case "sqlite":
 		db, err := gorm.Open(sqlite.Open(cfg.SQLitePath), &gorm.Config{})
 		if err != nil {
 			return nil, fmt.Errorf("连接 sqlite 失败: %w", err)
+		}
+		if err := applySQLitePragmas(db); err != nil {
+			return nil, err
 		}
 		if err := configurePool(db); err != nil {
 			return nil, fmt.Errorf("配置连接池失败: %w", err)

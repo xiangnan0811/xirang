@@ -363,7 +363,6 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 	}
 }
 
-
 func TestAlertDeliveryStats(t *testing.T) {
 	db := openAlertHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.AlertDelivery{}, &model.Integration{}); err != nil {
@@ -406,15 +405,15 @@ func TestAlertDeliveryStats(t *testing.T) {
 
 	var result struct {
 		Data struct {
-			WindowHours int `json:"window_hours"`
-			TotalSent int64 `json:"total_sent"`
-			TotalFailed int64 `json:"total_failed"`
-			SuccessRate float64 `json:"success_rate"`
+			WindowHours   int     `json:"window_hours"`
+			TotalSent     int64   `json:"total_sent"`
+			TotalFailed   int64   `json:"total_failed"`
+			SuccessRate   float64 `json:"success_rate"`
 			ByIntegration []struct {
-				IntegrationID uint `json:"integration_id"`
-				Name string `json:"name"`
-				Sent int64 `json:"sent"`
-				Failed int64 `json:"failed"`
+				IntegrationID uint   `json:"integration_id"`
+				Name          string `json:"name"`
+				Sent          int64  `json:"sent"`
+				Failed        int64  `json:"failed"`
 			} `json:"by_integration"`
 		} `json:"data"`
 	}

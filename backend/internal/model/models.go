@@ -137,12 +137,14 @@ type AuditLog struct {
 	StatusCode int       `gorm:"index" json:"status_code"`
 	ClientIP   string    `gorm:"size:64" json:"client_ip"`
 	UserAgent  string    `gorm:"size:255" json:"user_agent"`
-	CreatedAt  time.Time `json:"created_at"`
+	PrevHash   string    `gorm:"size:64;index" json:"prev_hash,omitempty"`
+	EntryHash  string    `gorm:"size:64;index" json:"entry_hash,omitempty"`
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }
 
 type TaskLog struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	TaskID    uint      `gorm:"not null;index" json:"task_id"`
+	ID        uint      `gorm:"primaryKey;index:idx_tasklog_task_cursor,priority:2,sort:desc" json:"id"`
+	TaskID    uint      `gorm:"not null;index;index:idx_tasklog_task_cursor,priority:1" json:"task_id"`
 	Level     string    `gorm:"size:16;not null" json:"level"`
 	Message   string    `gorm:"type:text;not null" json:"message"`
 	CreatedAt time.Time `json:"created_at"`

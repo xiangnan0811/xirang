@@ -44,6 +44,7 @@ func TestNormalizePrivateKeyMaterialExtractsKeyBlockFromMixedText(t *testing.T) 
 }
 
 func TestValidateAndPreparePrivateKeyAcceptsEncryptedCiphertextAfterDecrypt(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "xirang-test-encryption-key-for-sshutil")
 	key := buildRSAPrivateKeyForTest(t)
 	ciphertext, err := secure.EncryptIfNeeded(key)
 	if err != nil {
@@ -67,8 +68,8 @@ func TestValidateAndPreparePrivateKeyRejectsInvalidEncryptedCiphertext(t *testin
 	if err == nil {
 		t.Fatalf("期望无效 enc:v1 密文被拒绝")
 	}
-	if !strings.Contains(err.Error(), "DATA_ENCRYPTION_KEY") {
-		t.Fatalf("期望返回解密失败提示，实际: %v", err)
+	if !strings.Contains(err.Error(), "DATA_ENCRYPTION_KEY") && !strings.Contains(err.Error(), "解密") {
+		t.Fatalf("期望返回解密相关失败提示，实际: %v", err)
 	}
 }
 

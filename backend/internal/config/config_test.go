@@ -15,7 +15,7 @@ func TestLoadParsesOriginsAndRateLimit(t *testing.T) {
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "20m")
 	t.Setenv("LOGIN_CAPTCHA_ENABLED", "true")
 	t.Setenv("LOGIN_SECOND_CAPTCHA_ENABLED", "false")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 
@@ -53,7 +53,7 @@ func TestLoadRejectsInvalidRateLimit(t *testing.T) {
 	t.Setenv("LOGIN_RATE_LIMIT", "abc")
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 
@@ -77,6 +77,24 @@ func TestLoadRejectsWeakSecretsInProduction(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatalf("期望生产环境弱密钥返回错误")
+	}
+}
+
+func TestLoadRejectsWeakSecretsWhenEnvUnset(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("JWT_SECRET", "xirang-dev-secret")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望未声明开发环境且使用弱密钥时返回错误")
 	}
 }
 
@@ -105,7 +123,7 @@ func TestLoadRejectsInvalidCaptchaSwitch(t *testing.T) {
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
 	t.Setenv("LOGIN_CAPTCHA_ENABLED", "abc")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 
@@ -145,7 +163,7 @@ func TestLoadParsesWSAllowEmptyOrigin(t *testing.T) {
 	t.Setenv("LOGIN_RATE_WINDOW", "1m")
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 	t.Setenv("WS_ALLOW_EMPTY_ORIGIN", "true")
@@ -166,7 +184,7 @@ func TestLoadKeepsEmptyCORSOrigins(t *testing.T) {
 	t.Setenv("LOGIN_RATE_WINDOW", "1m")
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
@@ -187,7 +205,7 @@ func TestLoadUsesSafeDefaultCORSOriginsWhenUnset(t *testing.T) {
 	t.Setenv("LOGIN_RATE_WINDOW", "1m")
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
-	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/smtp"
 	"os"
@@ -147,7 +148,9 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 			} else {
 				delivery.Status = "sent"
 			}
-			_ = db.Create(&delivery).Error
+			if saveErr := db.Create(&delivery).Error; saveErr != nil {
+				log.Printf("warn: 保存告警投递记录失败(alert_id=%d,integration_id=%d): %v", alert.ID, ch.ID, saveErr)
+			}
 		}(channel)
 	}
 	wg.Wait()
@@ -158,7 +161,9 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	if sentCount > 0 {
 		notifiedAt := time.Now()
 		alert.LastNotifiedAt = &notifiedAt
-		_ = db.Model(alert).Update("last_notified_at", &notifiedAt).Error
+		if err := db.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
+			log.Printf("warn: 更新告警最后通知时间失败(alert_id=%d): %v", alert.ID, err)
+		}
 	}
 
 	return nil

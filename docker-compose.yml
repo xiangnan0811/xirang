@@ -6,6 +6,8 @@ services:
     volumes:
       - ./:/workspace
     environment:
+      # 仅用于本地开发；生产请通过 env_file 或密钥系统提供强密钥
+      APP_ENV: development
       SERVER_ADDR: :8080
       DB_TYPE: sqlite
       SQLITE_PATH: /workspace/backend/xirang.db

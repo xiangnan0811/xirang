@@ -60,6 +60,7 @@ func main() {
 	})
 
 	router := api.NewRouter(api.Dependencies{
+		AppContext:                hubCtx,
 		DB:                        db,
 		AuthService:               authService,
 		JWTManager:                jwtManager,
@@ -93,9 +94,16 @@ func main() {
 	<-quit
 	log.Println("收到退出信号，开始优雅关闭")
 
+	taskManager.StopAccepting()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("优雅关闭失败，强制退出: %v", err)
 	}
+
+	if err := taskManager.Shutdown(shutdownCtx); err != nil {
+		log.Printf("任务管理器关闭失败: %v", err)
+	}
+	hubCancel()
 }

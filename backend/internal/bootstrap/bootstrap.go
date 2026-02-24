@@ -39,6 +39,9 @@ func SeedUsers(db *gorm.DB) error {
 	if adminPassword == "" {
 		return fmt.Errorf("ADMIN_INITIAL_PASSWORD 不能为空")
 	}
+	if err := auth.ValidatePasswordStrength(adminPassword); err != nil {
+		return fmt.Errorf("ADMIN_INITIAL_PASSWORD 强度不足: %w", err)
+	}
 
 	hash, err := auth.HashPassword(adminPassword)
 	if err != nil {

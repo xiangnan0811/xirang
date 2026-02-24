@@ -13,6 +13,7 @@ const (
 	CtxUserID   = "userID"
 	CtxUsername = "username"
 	CtxRole     = "role"
+	CtxToken    = "token"
 )
 
 func AuthMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
@@ -38,6 +39,7 @@ func AuthMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
+		c.Set(CtxToken, parts[1])
 		c.Next()
 	}
 }

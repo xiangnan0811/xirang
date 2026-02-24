@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 )
 
 type Dependencies struct {
+	AppContext                context.Context
 	DB                        *gorm.DB
 	AuthService               *auth.Service
 	JWTManager                *auth.JWTManager
@@ -30,6 +32,10 @@ type Dependencies struct {
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
+	appCtx := dep.AppContext
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(func(c *gin.Context) {
@@ -56,10 +62,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		c.Writer.Header().Set("X-Frame-Options", "DENY")
 		c.Writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Writer.Header().Set("X-XSS-Protection", "1; mode=block")
+		csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self' wss:; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+		if util.IsDevelopmentEnv() {
+			csp = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+		}
+		c.Writer.Header().Set("Content-Security-Policy", csp)
 		c.Next()
 	})
 
-	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled)
+	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	nodeHandler := handlers.NewNodeHandler(dep.DB)
 	policyHandler := handlers.NewPolicyHandler(dep.DB)
@@ -68,16 +79,23 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
 	alertHandler := handlers.NewAlertHandler(dep.DB)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
+	userHandler := handlers.NewUserHandler(dep.AuthService)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 
 	v1 := router.Group("/api/v1")
-	v1.POST("/auth/login", middleware.LoginRateLimit(dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
+	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager))
 	secured.Use(middleware.AuditLogger(dep.DB))
 	secured.GET("/me", authHandler.Me)
+	secured.POST("/auth/logout", authHandler.Logout)
+	secured.POST("/auth/change-password", authHandler.ChangePassword)
 	secured.GET("/overview", overviewHandler.Get)
+	secured.GET("/users", middleware.RBAC("users:manage"), userHandler.List)
+	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
+	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)
+	secured.DELETE("/users/:id", middleware.RBAC("users:manage"), userHandler.Delete)
 
 	secured.GET("/nodes", middleware.RBAC("nodes:read"), nodeHandler.List)
 	secured.GET("/nodes/:id", middleware.RBAC("nodes:read"), nodeHandler.Get)

@@ -36,7 +36,7 @@ type policyRequest struct {
 func (h *PolicyHandler) List(c *gin.Context) {
 	var policies []model.Policy
 	if err := h.db.Order("id asc").Find(&policies).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": policies})

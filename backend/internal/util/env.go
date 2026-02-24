@@ -49,3 +49,17 @@ func GetEnvOrDefault(key, fallback string) string {
 	}
 	return value
 }
+
+func IsDevelopmentEnv() bool {
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
+	ginMode := strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE")))
+	return appEnv == "development" || environment == "development" || ginMode == "debug"
+}
+
+func IsProductionEnv() bool {
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
+	ginMode := strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE")))
+	return appEnv == "production" || environment == "production" || ginMode == "release"
+}

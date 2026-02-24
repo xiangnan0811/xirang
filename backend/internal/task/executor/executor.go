@@ -14,6 +14,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
+	"xirang/backend/internal/util"
 )
 
 type LogFunc func(level, message string)
@@ -66,7 +67,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 		return -1, fmt.Errorf("rsync 执行需要 rsync_source 与 rsync_target")
 	}
 
-	if !isRemoteRsyncPath(task.RsyncTarget) {
+	if !util.IsRemotePathSpec(task.RsyncTarget) {
 		if err := ensureLocalTargetReady(task.RsyncTarget); err != nil {
 			return -1, err
 		}
@@ -111,16 +112,13 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 		}
 
 		sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
-		strictHostCheck, err := readBoolEnvWithDefault("SSH_STRICT_HOST_KEY_CHECKING", false)
+		strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 		if err != nil {
 			return -1, err
 		}
 		if strictHostCheck {
-			knownHosts := strings.TrimSpace(os.Getenv("SSH_KNOWN_HOSTS_PATH"))
-			if knownHosts == "" {
-				knownHosts = "~/.ssh/known_hosts"
-			}
-			expandedKnownHosts, err := expandPath(knownHosts)
+			knownHosts := util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")
+			expandedKnownHosts, err := util.ExpandHomePath(knownHosts)
 			if err != nil {
 				return -1, fmt.Errorf("展开 SSH_KNOWN_HOSTS_PATH 失败: %w", err)
 			}
@@ -245,18 +243,6 @@ func ensureLocalTargetReady(target string) error {
 	return nil
 }
 
-func readBoolEnvWithDefault(key string, defaultValue bool) (bool, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return defaultValue, nil
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("%s 必须是 true/false", key)
-	}
-	return value, nil
-}
-
 func readIntEnvWithDefault(key string, defaultValue int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -270,40 +256,6 @@ func readIntEnvWithDefault(key string, defaultValue int) (int, error) {
 		return 0, fmt.Errorf("%s 不能为负数", key)
 	}
 	return value, nil
-}
-
-func expandPath(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		if trimmed == "~" {
-			return home, nil
-		}
-		return filepath.Join(home, strings.TrimPrefix(trimmed, "~/")), nil
-	}
-	return trimmed, nil
-}
-
-func isRemoteRsyncPath(path string) bool {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return false
-	}
-	if strings.HasPrefix(trimmed, "rsync://") {
-		return true
-	}
-	if len(trimmed) >= 3 {
-		letter := trimmed[0]
-		if ((letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z')) && trimmed[1] == ':' {
-			return false
-		}
-	}
-	colon := strings.Index(trimmed, ":")
-	slash := strings.Index(trimmed, "/")
-	return colon > 0 && (slash < 0 || colon < slash)
 }
 
 func resolveNodePrivateKey(node model.Node) (string, string, error) {

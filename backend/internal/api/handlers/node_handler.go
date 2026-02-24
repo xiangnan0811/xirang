@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
@@ -48,6 +48,8 @@ type nodeBatchDeleteRequest struct {
 }
 
 const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
+
+var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
 
 func sanitizeNode(node model.Node) model.Node {
 	copyNode := node
@@ -514,7 +516,7 @@ func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, e
 }
 
 func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
-	strictHostCheck, err := readBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +525,7 @@ func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
-	knownHostsPath, err := expandHomePath(strings.TrimSpace(getEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")))
+	knownHostsPath, err := util.ExpandHomePath(strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")))
 	if err != nil {
 		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
 	}
@@ -536,14 +538,6 @@ func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		return nil, fmt.Errorf("加载 known_hosts 失败")
 	}
 	return callback, nil
-}
-
-func getEnvOrDefault(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
@@ -571,8 +565,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.Status = "offline"
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
-		_ = h.db.Save(&node).Error
-		_ = alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err))
+		if saveErr := h.db.Save(&node).Error; saveErr != nil {
+			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+		}
+		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
 			"message": fmt.Sprintf("连接失败：%v", err),
@@ -587,8 +585,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.Status = "offline"
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
-		_ = h.db.Save(&node).Error
-		_ = alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err))
+		if saveErr := h.db.Save(&node).Error; saveErr != nil {
+			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+		}
+		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
 			"message": fmt.Sprintf("连接失败：%v", err),
@@ -608,8 +610,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.Status = "offline"
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
-		_ = h.db.Save(&node).Error
-		_ = alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err))
+		if saveErr := h.db.Save(&node).Error; saveErr != nil {
+			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+		}
+		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
 			"message": fmt.Sprintf("连接失败：%v", err),
@@ -648,21 +654,20 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	} else {
 		node.DiskUsedGB = 0
 	}
-	if node.LastBackupAt == nil {
-		lastBackup := probeAt.Add(-time.Duration(5+node.ID%40) * time.Minute)
-		node.LastBackupAt = &lastBackup
-	}
-
 	if err := h.db.Save(&node).Error; err != nil {
 		log.Printf("服务器内部错误: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	_ = alerting.ResolveNodeAlerts(h.db, node.ID, "节点探测恢复正常")
+	if resolveErr := alerting.ResolveNodeAlerts(h.db, node.ID, "节点探测恢复正常"); resolveErr != nil {
+		log.Printf("恢复节点探测告警失败(node_id=%d): %v", node.ID, resolveErr)
+	}
 
 	if node.SSHKeyID != nil {
 		now := time.Now()
-		_ = h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error
+		if err := h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error; err != nil {
+			log.Printf("更新 SSH Key 最近使用时间失败(ssh_key_id=%d): %v", *node.SSHKeyID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -685,8 +690,7 @@ func validateNodeHostPort(host string, port int) error {
 		if len(trimmedHost) > 253 {
 			return fmt.Errorf("主机名过长")
 		}
-		hostnameRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
-		if !hostnameRegex.MatchString(trimmedHost) {
+		if !nodeHostnameRegexp.MatchString(trimmedHost) {
 			return fmt.Errorf("主机地址格式不合法")
 		}
 	}

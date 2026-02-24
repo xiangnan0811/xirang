@@ -40,13 +40,13 @@ func (h *AuditHandler) List(c *gin.Context) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
 	var items []model.AuditLog
 	if err := query.Order("id desc").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -74,7 +74,7 @@ func (h *AuditHandler) ExportCSV(c *gin.Context) {
 
 	var items []model.AuditLog
 	if err := query.Order("id desc").Limit(limit).Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 

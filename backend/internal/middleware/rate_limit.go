@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -21,27 +22,36 @@ type loginRateLimiter struct {
 }
 
 func newLoginRateLimiter(limit int, window time.Duration) *loginRateLimiter {
+	return newLoginRateLimiterWithContext(context.Background(), limit, window)
+}
+
+func newLoginRateLimiterWithContext(ctx context.Context, limit int, window time.Duration) *loginRateLimiter {
 	rl := &loginRateLimiter{
 		store:  make(map[string]rateWindow),
 		limit:  limit,
 		window: window,
 	}
-	go rl.cleanup()
+	go rl.cleanup(ctx)
 	return rl
 }
 
-func (l *loginRateLimiter) cleanup() {
+func (l *loginRateLimiter) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		l.mu.Lock()
-		for ip, entry := range l.store {
-			if now.After(entry.reset) {
-				delete(l.store, ip)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			l.mu.Lock()
+			for ip, entry := range l.store {
+				if now.After(entry.reset) {
+					delete(l.store, ip)
+				}
 			}
+			l.mu.Unlock()
 		}
-		l.mu.Unlock()
 	}
 }
 
@@ -65,7 +75,11 @@ func (l *loginRateLimiter) allow(ip string, now time.Time) bool {
 }
 
 func LoginRateLimit(limit int, window time.Duration) gin.HandlerFunc {
-	limiter := newLoginRateLimiter(limit, window)
+	return LoginRateLimitWithContext(context.Background(), limit, window)
+}
+
+func LoginRateLimitWithContext(ctx context.Context, limit int, window time.Duration) gin.HandlerFunc {
+	limiter := newLoginRateLimiterWithContext(ctx, limit, window)
 	return func(c *gin.Context) {
 		if limiter.allow(c.ClientIP(), time.Now()) {
 			c.Next()

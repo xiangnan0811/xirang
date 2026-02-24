@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"xirang/backend/internal/util"
 )
 
 const (
@@ -27,9 +29,8 @@ var (
 func loadKey() {
 	raw := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_KEY"))
 	if raw == "" {
-		appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-		if appEnv != "" && appEnv != "development" {
-			keyErr = fmt.Errorf("非开发环境必须设置 DATA_ENCRYPTION_KEY")
+		if !util.IsDevelopmentEnv() {
+			keyErr = fmt.Errorf("必须设置 DATA_ENCRYPTION_KEY（仅 APP_ENV=development 可省略）")
 			return
 		}
 		raw = defaultDevKey
@@ -43,6 +44,8 @@ func loadKey() {
 	sum := sha256.Sum256([]byte(raw))
 	keyBytes = append([]byte(nil), sum[:]...)
 }
+
+// isDevelopmentEnv 已迁移至 util.IsDevelopmentEnv
 
 func getKey() ([]byte, error) {
 	loadOnce.Do(loadKey)

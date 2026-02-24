@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xirang/backend/internal/alerting"
@@ -17,6 +19,19 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	defaultLogQueueCapacity = 1024
+	defaultLogBatchSize     = 50
+	defaultLogFlushInterval = 500 * time.Millisecond
+)
+
+type queuedTaskLog struct {
+	taskID  uint
+	level   string
+	message string
+	status  string
+}
+
 type Manager struct {
 	db              *gorm.DB
 	stateMachine    *StateMachine
@@ -26,17 +41,81 @@ type Manager struct {
 	locks           sync.Map
 	strategyLocks   sync.Map
 	runningCancels  sync.Map
+	pendingRuns     sync.Map
+	retryTimers     sync.Map
 	semaphore       chan struct{}
+	taskWG          sync.WaitGroup
+
+	logQueue         chan queuedTaskLog
+	logBatchSize     int
+	logFlushInterval time.Duration
+	logWorkerCancel  context.CancelFunc
+	logWorkerDone    chan struct{}
+
+	shuttingDown atomic.Bool
 }
 
 func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler) *Manager {
-	return &Manager{
-		db:              db,
-		stateMachine:    NewStateMachine(),
-		executorFactory: executorFactory,
-		hub:             hub,
-		scheduler:       scheduler,
-		semaphore:       make(chan struct{}, 8),
+	m := &Manager{
+		db:               db,
+		stateMachine:     NewStateMachine(),
+		executorFactory:  executorFactory,
+		hub:              hub,
+		scheduler:        scheduler,
+		semaphore:        make(chan struct{}, 8),
+		logQueue:         make(chan queuedTaskLog, defaultLogQueueCapacity),
+		logBatchSize:     defaultLogBatchSize,
+		logFlushInterval: defaultLogFlushInterval,
+		logWorkerDone:    make(chan struct{}),
+	}
+	m.startLogWorker()
+	return m
+}
+
+func (m *Manager) startLogWorker() {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.logWorkerCancel = cancel
+	go m.runLogWorker(ctx)
+}
+
+func (m *Manager) runLogWorker(ctx context.Context) {
+	defer close(m.logWorkerDone)
+
+	ticker := time.NewTicker(m.logFlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]queuedTaskLog, 0, m.logBatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		m.persistLogBatch(batch)
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			for {
+				select {
+				case item := <-m.logQueue:
+					batch = append(batch, item)
+					if len(batch) >= m.logBatchSize {
+						flush()
+					}
+				default:
+					flush()
+					return
+				}
+			}
+		case item := <-m.logQueue:
+			batch = append(batch, item)
+			if len(batch) >= m.logBatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
 	}
 }
 
@@ -58,7 +137,9 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 		return nil
 	}
 	return m.scheduler.RegisterTask(task.ID, task.CronSpec, func() {
-		_ = m.TriggerFromScheduler(task.ID)
+		if err := m.TriggerFromScheduler(task.ID); err != nil {
+			log.Printf("warn: 定时触发任务失败(task_id=%d): %v", task.ID, err)
+		}
 	})
 }
 
@@ -78,6 +159,26 @@ func (m *Manager) TriggerFromScheduler(taskID uint) error {
 }
 
 func (m *Manager) trigger(taskID uint, reason string) error {
+	if m.shuttingDown.Load() {
+		if reason == "retry" || reason == "cron" {
+			return nil
+		}
+		return fmt.Errorf("服务正在关闭，任务触发已拒绝")
+	}
+
+	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
+		if reason == "retry" || reason == "cron" {
+			return nil
+		}
+		return fmt.Errorf("任务已在队列或运行中")
+	}
+	scheduled := false
+	defer func() {
+		if !scheduled {
+			m.pendingRuns.Delete(taskID)
+		}
+	}()
+
 	var taskEntity model.Task
 	result := m.db.Where("id = ?", taskID).Limit(1).Find(&taskEntity)
 	if result.Error != nil {
@@ -108,18 +209,25 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 		return fmt.Errorf("同节点同策略任务正在运行")
 	}
 
-	go m.runTask(taskID, reason)
+	m.stopRetryTimer(taskID)
+	scheduled = true
+	m.taskWG.Add(1)
+	go func() {
+		defer m.taskWG.Done()
+		m.runTask(taskID, reason)
+	}()
 	return nil
 }
 
 func (m *Manager) runTask(taskID uint, reason string) {
+	defer m.pendingRuns.Delete(taskID)
+
 	m.semaphore <- struct{}{}
 	defer func() { <-m.semaphore }()
 
 	lock := m.taskLock(taskID)
 	lock.Lock()
 	defer lock.Unlock()
-	defer m.locks.Delete(taskID)
 
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
@@ -136,7 +244,6 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
 	strategyLock.Lock()
 	defer strategyLock.Unlock()
-	defer m.strategyLocks.Delete(buildStrategyKey(taskEntity.NodeID, taskEntity.PolicyID))
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
@@ -200,7 +307,9 @@ func (m *Manager) runTask(taskID uint, reason string) {
 			return
 		}
 		m.emitLog(taskID, "info", "任务执行成功", taskEntity.Status)
-		_ = alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功")
+		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
+			log.Printf("warn: ResolveTaskAlerts 失败(task_id=%d): %v", taskID, resolveErr)
+		}
 		return
 	}
 
@@ -226,9 +335,13 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		if delay < 0 {
 			delay = 0
 		}
-		time.AfterFunc(delay, func() {
-			_ = m.trigger(taskID, "retry")
+		timer := time.AfterFunc(delay, func() {
+			m.retryTimers.Delete(taskID)
+			if err := m.trigger(taskID, "retry"); err != nil {
+				log.Printf("warn: 重试触发失败(task_id=%d): %v", taskID, err)
+			}
 		})
+		m.storeRetryTimer(taskID, timer)
 		return
 	}
 
@@ -241,7 +354,9 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		return
 	}
 	m.emitLog(taskID, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
-	_ = alerting.RaiseTaskFailure(m.db, taskEntity, errorMsg)
+	if raiseErr := alerting.RaiseTaskFailure(m.db, taskEntity, errorMsg); raiseErr != nil {
+		log.Printf("warn: RaiseTaskFailure 失败(task_id=%d): %v", taskEntity.ID, raiseErr)
+	}
 }
 
 func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates map[string]interface{}) error {
@@ -269,22 +384,73 @@ func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates ma
 }
 
 func (m *Manager) emitLog(taskID uint, level, message, status string) {
-	logRecord := model.TaskLog{
-		TaskID:  taskID,
-		Level:   level,
-		Message: message,
+	entry := queuedTaskLog{
+		taskID:  taskID,
+		level:   level,
+		message: message,
+		status:  status,
 	}
-	_ = m.db.Create(&logRecord).Error
+
+	if m.logQueue == nil {
+		m.persistLogBatch([]queuedTaskLog{entry})
+		return
+	}
+
+	select {
+	case m.logQueue <- entry:
+	default:
+		log.Printf("warn: task log queue full, fallback to direct write(task_id=%d)", taskID)
+		m.persistLogBatch([]queuedTaskLog{entry})
+	}
+}
+
+func (m *Manager) persistLogBatch(batch []queuedTaskLog) {
+	if len(batch) == 0 || m.db == nil {
+		return
+	}
+
+	records := make([]model.TaskLog, 0, len(batch))
+	for _, item := range batch {
+		records = append(records, model.TaskLog{
+			TaskID:  item.taskID,
+			Level:   item.level,
+			Message: item.message,
+		})
+	}
+
+	if err := m.db.CreateInBatches(&records, m.logBatchSize).Error; err != nil {
+		log.Printf("warn: 批量写入任务日志失败，回退单条写入: %v", err)
+		for i, item := range batch {
+			record := model.TaskLog{
+				TaskID:  item.taskID,
+				Level:   item.level,
+				Message: item.message,
+			}
+			if oneErr := m.db.Create(&record).Error; oneErr != nil {
+				log.Printf("error: 写入任务日志失败(task_id=%d, batch_index=%d): %v", item.taskID, i, oneErr)
+				continue
+			}
+			m.publishLogEvent(record, item.status)
+		}
+		return
+	}
+
+	for i := range records {
+		m.publishLogEvent(records[i], batch[i].status)
+	}
+}
+
+func (m *Manager) publishLogEvent(record model.TaskLog, status string) {
 	if m.hub == nil {
 		return
 	}
 	m.hub.Publish(ws.LogEvent{
-		LogID:     logRecord.ID,
-		TaskID:    taskID,
-		Level:     level,
-		Message:   message,
+		LogID:     record.ID,
+		TaskID:    record.TaskID,
+		Level:     record.Level,
+		Message:   record.Message,
 		Status:    status,
-		Timestamp: logRecord.CreatedAt,
+		Timestamp: record.CreatedAt,
 	})
 }
 
@@ -332,6 +498,36 @@ func (m *Manager) hasRunningConflict(taskEntity model.Task) (bool, error) {
 	return conflictCount > 0, nil
 }
 
+func (m *Manager) storeRetryTimer(taskID uint, timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if oldRaw, ok := m.retryTimers.Load(taskID); ok {
+		if oldTimer, castOK := oldRaw.(*time.Timer); castOK {
+			oldTimer.Stop()
+		}
+	}
+	m.retryTimers.Store(taskID, timer)
+}
+
+func (m *Manager) stopRetryTimer(taskID uint) {
+	if timerRaw, ok := m.retryTimers.LoadAndDelete(taskID); ok {
+		if timer, castOK := timerRaw.(*time.Timer); castOK {
+			timer.Stop()
+		}
+	}
+}
+
+func (m *Manager) stopAllRetryTimers() {
+	m.retryTimers.Range(func(key, value interface{}) bool {
+		if timer, ok := value.(*time.Timer); ok {
+			timer.Stop()
+		}
+		m.retryTimers.Delete(key)
+		return true
+	})
+}
+
 func (m *Manager) Cancel(taskID uint) error {
 	var taskEntity model.Task
 	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
@@ -340,6 +536,7 @@ func (m *Manager) Cancel(taskID uint) error {
 
 	switch ParseStatus(taskEntity.Status) {
 	case StatusPending, StatusRetrying:
+		m.stopRetryTimer(taskID)
 		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 			"next_run_at": nil,
 			"last_error":  "任务已取消",
@@ -349,6 +546,7 @@ func (m *Manager) Cancel(taskID uint) error {
 		m.emitLog(taskID, "warn", "任务已取消", taskEntity.Status)
 		return nil
 	case StatusRunning:
+		m.stopRetryTimer(taskID)
 		if cancelRaw, ok := m.runningCancels.Load(taskID); ok {
 			if cancelFn, castOK := cancelRaw.(context.CancelFunc); castOK {
 				cancelFn()
@@ -375,4 +573,44 @@ func (m *Manager) isCanceled(taskID uint) bool {
 		return false
 	}
 	return ParseStatus(current.Status) == StatusCanceled
+}
+
+func (m *Manager) StopAccepting() {
+	m.shuttingDown.Store(true)
+}
+
+func (m *Manager) Shutdown(ctx context.Context) error {
+	m.shuttingDown.Store(true)
+	m.stopAllRetryTimers()
+
+	m.runningCancels.Range(func(_, value interface{}) bool {
+		if cancelFn, ok := value.(context.CancelFunc); ok {
+			cancelFn()
+		}
+		return true
+	})
+
+	taskDone := make(chan struct{})
+	go func() {
+		m.taskWG.Wait()
+		close(taskDone)
+	}()
+
+	select {
+	case <-taskDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	if m.logWorkerCancel != nil {
+		m.logWorkerCancel()
+	}
+	if m.logWorkerDone != nil {
+		select {
+		case <-m.logWorkerDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
