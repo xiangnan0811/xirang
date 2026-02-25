@@ -10,6 +10,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -215,14 +216,14 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	}
 	if err := alerting.SendAlert(integration, alert); err != nil {
 		delivery.Status = "failed"
-		delivery.Error = err.Error()
+		delivery.Error = util.SanitizeDeliveryError(integration.Type, err)
 		if saveErr := h.db.Create(&delivery).Error; saveErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": saveErr.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": retryDeliveryResponse{
 			OK:       false,
-			Message:  "重发失败: " + err.Error(),
+			Message:  "重发失败: " + delivery.Error,
 			Delivery: delivery,
 		}})
 		return
@@ -298,7 +299,7 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 			failedCount += 1
 		} else if err := alerting.SendAlert(integration, alert); err != nil {
 			newRecord.Status = "failed"
-			newRecord.Error = err.Error()
+			newRecord.Error = util.SanitizeDeliveryError(integration.Type, err)
 			failedCount += 1
 		} else {
 			newRecord.Status = "sent"

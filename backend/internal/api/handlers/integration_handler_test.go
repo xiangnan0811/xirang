@@ -37,6 +37,36 @@ func TestValidateIntegrationEndpointAllowsPrivateHostWhenDisabled(t *testing.T) 
 	}
 }
 
+func TestValidateIntegrationEndpointTelegramRequiresBotTokenPath(t *testing.T) {
+	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
+	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/sendMessage?chat_id=1")
+	if err == nil {
+		t.Fatalf("期望缺少 /bot<token> 路径时返回错误")
+	}
+	if !strings.Contains(err.Error(), "/bot<token>") {
+		t.Fatalf("期望错误提示包含 /bot<token>，实际: %v", err)
+	}
+}
+
+func TestValidateIntegrationEndpointTelegramRequiresChatID(t *testing.T) {
+	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
+	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage")
+	if err == nil {
+		t.Fatalf("期望缺少 chat_id 时返回错误")
+	}
+	if !strings.Contains(err.Error(), "chat_id") {
+		t.Fatalf("期望错误提示包含 chat_id，实际: %v", err)
+	}
+}
+
+func TestValidateIntegrationEndpointTelegramAcceptsValidEndpoint(t *testing.T) {
+	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
+	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage?chat_id=-1001")
+	if err != nil {
+		t.Fatalf("期望合法 Telegram endpoint 校验通过，实际错误: %v", err)
+	}
+}
+
 func TestIntegrationHandlerTestSuccess(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
 

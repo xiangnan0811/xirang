@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"gorm.io/gorm"
 )
@@ -144,7 +147,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 			}
 			if err != nil {
 				delivery.Status = "failed"
-				delivery.Error = err.Error()
+				delivery.Error = util.SanitizeDeliveryError(ch.Type, err)
 			} else {
 				delivery.Status = "sent"
 			}
@@ -238,9 +241,7 @@ func send(channel model.Integration, alert model.Alert) error {
 			"text": fmt.Sprintf("[XiRang][%s] %s (%s)", strings.ToUpper(alert.Severity), alert.Message, alert.ErrorCode),
 		})
 	case "telegram":
-		return postJSON(channel.Endpoint, map[string]string{
-			"text": fmt.Sprintf("[XiRang][%s]\n节点: %s\n错误: %s\n说明: %s", strings.ToUpper(alert.Severity), alert.NodeName, alert.ErrorCode, alert.Message),
-		})
+		return postTelegram(channel.Endpoint, fmt.Sprintf("[XiRang][%s]\n节点: %s\n错误: %s\n说明: %s", strings.ToUpper(alert.Severity), alert.NodeName, alert.ErrorCode, alert.Message))
 	case "email":
 		subject := fmt.Sprintf("[XiRang][%s] %s", strings.ToUpper(alert.Severity), alert.ErrorCode)
 		content := fmt.Sprintf("节点: %s\n策略: %s\n错误码: %s\n详情: %s\n时间: %s\n", alert.NodeName, alert.PolicyName, alert.ErrorCode, alert.Message, alert.TriggeredAt.Format(time.RFC3339))
@@ -277,9 +278,88 @@ func postJSON(url string, body interface{}) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("通知发送失败: http %d", resp.StatusCode)
+		return buildNotificationHTTPError(resp.StatusCode, resp.Body)
 	}
 	return nil
+}
+
+func postTelegram(endpoint, text string) error {
+	telegramURL, params, err := buildTelegramSendMessageEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+
+	form := url.Values{}
+	form.Set("chat_id", params.Get("chat_id"))
+	form.Set("text", text)
+	if parseMode := strings.TrimSpace(params.Get("parse_mode")); parseMode != "" {
+		form.Set("parse_mode", parseMode)
+	}
+	if disabledPreview := strings.TrimSpace(params.Get("disable_web_page_preview")); disabledPreview != "" {
+		form.Set("disable_web_page_preview", disabledPreview)
+	}
+
+	resp, err := httpClient.Post(telegramURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("telegram 请求失败: %s", util.SanitizeTelegramError(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return buildNotificationHTTPError(resp.StatusCode, resp.Body)
+	}
+	return nil
+}
+
+func buildTelegramSendMessageEndpoint(rawEndpoint string) (string, url.Values, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawEndpoint))
+	if err != nil || parsed == nil {
+		return "", nil, fmt.Errorf("telegram 通道 endpoint 必须是合法 URL")
+	}
+	if parsed.Host == "" {
+		return "", nil, fmt.Errorf("telegram 通道 endpoint 缺少主机地址")
+	}
+
+	info, err := util.ValidateTelegramEndpoint(parsed)
+	if err != nil {
+		return "", nil, err
+	}
+
+	parsed.Path = "/" + info.BotSegment + "/sendMessage"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), info.Params, nil
+}
+
+func buildNotificationHTTPError(statusCode int, body io.Reader) error {
+	raw, _ := io.ReadAll(io.LimitReader(body, 2048))
+	desc := strings.TrimSpace(extractNotificationErrorDescription(raw))
+	if desc == "" {
+		return fmt.Errorf("通知发送失败: http %d", statusCode)
+	}
+	return fmt.Errorf("通知发送失败: http %d (%s)", statusCode, desc)
+}
+
+func extractNotificationErrorDescription(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var respPayload map[string]interface{}
+	if err := json.Unmarshal(raw, &respPayload); err == nil {
+		if desc, ok := respPayload["description"].(string); ok && strings.TrimSpace(desc) != "" {
+			return desc
+		}
+		if msg, ok := respPayload["message"].(string); ok && strings.TrimSpace(msg) != "" {
+			return msg
+		}
+	}
+
+	text := strings.TrimSpace(string(raw))
+	runes := []rune(text)
+	if len(runes) > 180 {
+		return string(runes[:180]) + "..."
+	}
+	return text
 }
 
 func sendEmail(toRaw, subject, content string) error {

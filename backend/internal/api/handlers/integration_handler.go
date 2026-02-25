@@ -57,6 +57,11 @@ func validateIntegrationEndpoint(channelType, endpoint string) error {
 	if (scheme != "http" && scheme != "https") || parsedURL.Host == "" {
 		return fmt.Errorf("%s 通道仅允许 http/https URL", normalizedType)
 	}
+	if normalizedType == "telegram" {
+		if err := validateTelegramEndpoint(parsedURL); err != nil {
+			return err
+		}
+	}
 
 	blockPrivate, err := util.ReadBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", true)
 	if err != nil {
@@ -74,6 +79,11 @@ func validateIntegrationEndpoint(channelType, endpoint string) error {
 		return fmt.Errorf("%s 通道 endpoint 不安全: %w", normalizedType, err)
 	}
 	return nil
+}
+
+func validateTelegramEndpoint(parsedURL *url.URL) error {
+	_, err := util.ValidateTelegramEndpoint(parsedURL)
+	return err
 }
 
 func validatePublicEndpointHost(host string) error {
@@ -280,9 +290,13 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 	err := alerting.SendProbe(item)
 	latency := time.Since(startedAt).Milliseconds()
 	if err != nil {
+		errMsg := err.Error()
+		if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
+			errMsg = util.SanitizeTelegramError(err)
+		}
 		c.JSON(http.StatusOK, gin.H{"data": integrationTestResponse{
 			OK:        false,
-			Message:   "测试发送失败: " + err.Error(),
+			Message:   "测试发送失败: " + errMsg,
 			LatencyMS: latency,
 		}})
 		return
