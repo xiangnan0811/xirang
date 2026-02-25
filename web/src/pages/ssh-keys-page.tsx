@@ -140,7 +140,7 @@ export function SSHKeysPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 shadow-sm dark:text-amber-300">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
             私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
             Vault/KMS），并启用审计与最小权限策略。
           </div>
@@ -197,7 +197,7 @@ export function SSHKeysPage() {
                   </div>
 
                   {usageCount > 0 ? (
-                    <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+                    <p className="mt-2 text-[11px] text-warning">
                       <ShieldAlert className="mr-1 inline size-3" />
                       该密钥正在被节点使用，删除前请先切换节点认证配置。
                     </p>

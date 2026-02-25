@@ -16,6 +16,12 @@ export type AlertStatus = "open" | "acked" | "resolved";
 export type IntegrationType = "email" | "slack" | "telegram" | "webhook";
 export type SSHKeyType = "auto" | "rsa" | "ed25519" | "ecdsa";
 
+const SSH_KEY_TYPES: ReadonlySet<string> = new Set<SSHKeyType>(["rsa", "ed25519", "ecdsa"]);
+
+export function parseSSHKeyType(value: string): SSHKeyType {
+  return SSH_KEY_TYPES.has(value) ? (value as SSHKeyType) : "auto";
+}
+
 export interface OverviewStats {
   totalNodes: number;
   healthyNodes: number;

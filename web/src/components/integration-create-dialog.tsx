@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
@@ -197,8 +198,8 @@ export function IntegrationCreateDialog({
               <label className="mb-1 block text-sm font-medium">
                 通道类型
               </label>
-              <select
-                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppSelect
+                className="w-full"
                 value={draft.type}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -211,7 +212,7 @@ export function IntegrationCreateDialog({
                 <option value="slack">Slack</option>
                 <option value="telegram">Telegram</option>
                 <option value="webhook">Webhook</option>
-              </select>
+              </AppSelect>
             </div>
 
             <div>

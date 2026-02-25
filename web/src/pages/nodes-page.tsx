@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useOutletContext, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   CheckSquare,
   Download,
   FileUp,
-  LayoutGrid,
-  List,
   Search,
   ServerCog,
   KeyRound,
@@ -29,10 +27,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
+import { AppSelect } from "@/components/ui/app-select";
+import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
+import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
+import { SearchInput } from "@/components/ui/search-input";
+import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
+import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
 import { StatusPulse } from "@/components/status-pulse";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
@@ -47,7 +49,18 @@ const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
 const selectedStorageKey = "xirang.nodes.selected";
 
+function getDiskBarToneClass(percent: number) {
+  if (percent < 20) {
+    return "bg-destructive";
+  }
+  if (percent < 40) {
+    return "bg-warning";
+  }
+  return "bg-success";
+}
+
 export function NodesPage() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
     nodes,
@@ -76,7 +89,7 @@ export function NodesPage() {
       sortStorageKey,
       "status"
     );
-  const [viewMode, setViewMode] = usePersistentState<"cards" | "list">(
+  const [viewMode, setViewMode] = usePersistentState<ViewMode>(
     viewStorageKey,
     "cards"
   );
@@ -90,12 +103,14 @@ export function NodesPage() {
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
+  const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
 
   useEffect(() => {
-    setSelectedNodeIds((prev) =>
-      prev.filter((id) => nodes.some((node) => node.id === id))
-    );
-  }, [nodes]);
+    setSelectedNodeIds((prev) => {
+      const filtered = prev.filter((id) => nodeIdSet.has(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [nodeIdSet, setSelectedNodeIds]);
 
   useEffect(() => {
     if (queryKeyword) {
@@ -260,7 +275,11 @@ export function NodesPage() {
       toast.error("节点记录已变更，请先保存后重试连接测试。");
       return;
     }
-    await onTestNode(existing);
+    try {
+      await onTestNode(existing);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
   };
 
   const onDeleteNode = async (node: NodeRecord) => {
@@ -368,7 +387,7 @@ export function NodesPage() {
         action: {
           label: "去创建",
           onClick: () => {
-            window.location.href = "/app/ssh-keys";
+            navigate("/app/ssh-keys");
           }
         }
       });
@@ -448,47 +467,36 @@ export function NodesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-emerald-500/25 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">节点总数</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{nodes.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">覆盖全部资产主机</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-brand-life/25 bg-gradient-to-br from-brand-life/15 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">在线节点</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{nodeStats.online}</p>
-            <p className="mt-1 text-xs text-muted-foreground">健康率 {nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0}%</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-amber-500/25 bg-gradient-to-br from-amber-500/15 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">告警 / 离线</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{nodeStats.warning + nodeStats.offline}</p>
-            <p className="mt-1 text-xs text-muted-foreground">告警 {nodeStats.warning} · 离线 {nodeStats.offline}</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-cyan-500/25 bg-gradient-to-br from-cyan-500/15 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">当前筛选 / 选择</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{sortedNodes.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">已选 {selectedNodeIds.length} 个节点</p>
-          </CardContent>
-        </Card>
-      </section>
+      <StatCardsSection
+        items={[
+          {
+            title: "节点总数",
+            value: nodes.length,
+            description: "覆盖全部资产主机",
+            tone: "info",
+          },
+          {
+            title: "在线节点",
+            value: nodeStats.online,
+            description: `健康率 ${
+              nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0
+            }%`,
+            tone: "success",
+          },
+          {
+            title: "告警 / 离线",
+            value: nodeStats.warning + nodeStats.offline,
+            description: `告警 ${nodeStats.warning} · 离线 ${nodeStats.offline}`,
+            tone: "warning",
+          },
+          {
+            title: "当前筛选 / 选择",
+            value: sortedNodes.length,
+            description: `已选 ${selectedNodeIds.length} 个节点`,
+            tone: "primary",
+          },
+        ]}
+      />
 
       <Card className="overflow-hidden border-border/75">
         <CardHeader>
@@ -497,7 +505,7 @@ export function NodesPage() {
               <CardTitle className="text-base">
               主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
               </CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与节点运维</p>
+              <p className="mt-1 text-sm text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与节点运维</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -564,24 +572,23 @@ export function NodesPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-700 shadow-sm dark:text-cyan-300">
+          <div className="rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-xs text-info shadow-sm">
             无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次
             SSH 探测（如远程执行
             <code className="mx-1">df</code>）快照。
           </div>
 
-          <div className="filter-panel sticky-filter hidden flex-wrap items-center gap-2 md:flex">
-            <div className="relative min-w-[220px] flex-1 md:basis-[280px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                value={keyword}
-                onChange={(event) => setKeyword(event.target.value)}
-                placeholder="按名称 / 标签 / IP / 用户名 / 连接状态筛选"
-              />
-            </div>
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+          <FilterPanel className="hidden flex-wrap items-center gap-2 md:flex">
+            <SearchInput
+              containerClassName="min-w-[220px] flex-1 md:basis-[280px]"
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+              placeholder="按名称 / 标签 / IP / 用户名 / 连接状态筛选"
+              aria-label="节点关键词筛选"
+            />
+            <AppSelect
+              className="w-full md:w-auto"
+              aria-label="节点状态筛选"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as typeof statusFilter)
@@ -591,9 +598,10 @@ export function NodesPage() {
               <option value="online">在线</option>
               <option value="warning">告警</option>
               <option value="offline">离线</option>
-            </select>
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            </AppSelect>
+            <AppSelect
+              className="w-full md:w-auto"
+              aria-label="节点标签筛选"
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
             >
@@ -602,9 +610,10 @@ export function NodesPage() {
                   {tag === "all" ? "全部标签" : tag}
                 </option>
               ))}
-            </select>
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            </AppSelect>
+            <AppSelect
+              className="w-full md:w-auto"
+              aria-label="节点排序方式"
               value={sortBy}
               onChange={(event) =>
                 setSortBy(event.target.value as typeof sortBy)
@@ -615,29 +624,21 @@ export function NodesPage() {
               <option value="name-desc">名称 Z-A</option>
               <option value="disk-low">磁盘余量升序</option>
               <option value="backup-recent">最近备份优先</option>
-            </select>
-            <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/80 p-1 md:ml-auto">
-              <Button
-                size="sm"
-                variant={viewMode === "cards" ? "default" : "ghost"}
-                onClick={() => setViewMode("cards")}
-              >
-                <LayoutGrid className="mr-1 size-4" />
-                卡片
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === "list" ? "default" : "ghost"}
-                onClick={() => setViewMode("list")}
-              >
-                <List className="mr-1 size-4" />
-                列表
-              </Button>
-            </div>
+            </AppSelect>
+            <ViewModeToggle
+              className="md:ml-auto"
+              value={viewMode}
+              onChange={setViewMode}
+              groupLabel="节点视图切换"
+              cardsButtonLabel="节点卡片视图"
+              listButtonLabel="节点列表视图"
+            />
             <Button size="sm" variant="outline" onClick={resetFilters}>
               重置筛选
             </Button>
-          </div>
+          </FilterPanel>
+
+          <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
 
           <div className="hidden flex-wrap items-center justify-between gap-2 rounded-lg border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
             <div className="inline-flex items-center gap-2">
@@ -694,20 +695,13 @@ export function NodesPage() {
               ) : null}
 
               {!loading && !sortedNodes.length ? (
-                <EmptyState
+                <FilteredEmptyState
                   title="当前筛选条件下暂无节点"
                   description="可以重置筛选条件，或新增一个节点继续测试。"
-                  action={(
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <Button size="sm" variant="outline" onClick={resetFilters}>
-                        重置筛选
-                      </Button>
-                      <Button size="sm" onClick={openCreateDialog}>
-                        <ServerCog className="mr-1 size-4" />
-                        新增节点
-                      </Button>
-                    </div>
-                  )}
+                  onReset={resetFilters}
+                  onCreate={openCreateDialog}
+                  createLabel="新增节点"
+                  createIcon={ServerCog}
                 />
               ) : null}
 
@@ -862,11 +856,16 @@ export function NodesPage() {
                     </tr>
                   ) : !sortedNodes.length ? (
                     <tr>
-                      <td
-                        className="px-3 py-4 text-muted-foreground"
-                        colSpan={9}
-                      >
-                        当前筛选条件下暂无节点。
+                      <td colSpan={9} className="px-3 py-6">
+                        <FilteredEmptyState
+                          className="py-8"
+                          title="当前筛选条件下暂无节点"
+                          description="可以重置筛选条件，或新增一个节点继续测试。"
+                          onReset={resetFilters}
+                          onCreate={openCreateDialog}
+                          createLabel="新增节点"
+                          createIcon={ServerCog}
+                        />
                       </td>
                     </tr>
                   ) : (
@@ -932,7 +931,10 @@ export function NodesPage() {
                               </div>
                               <div className="h-2 rounded-full bg-muted">
                                 <div
-                                  className="h-2 rounded-full bg-emerald-500"
+                                  className={cn(
+                                    "h-2 rounded-full",
+                                    getDiskBarToneClass(node.diskFreePercent)
+                                  )}
                                   style={{
                                     width: `${Math.max(4, node.diskFreePercent)}%`,
                                   }}
@@ -1012,8 +1014,9 @@ export function NodesPage() {
 
             <div className="space-y-2 p-2 md:hidden">
             <div className="grid grid-cols-3 gap-2">
-              <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppSelect
+                className="w-full"
+                aria-label="节点状态筛选"
                 value={statusFilter}
                 onChange={(event) =>
                   setStatusFilter(event.target.value as typeof statusFilter)
@@ -1023,9 +1026,10 @@ export function NodesPage() {
                 <option value="online">在线</option>
                 <option value="warning">告警</option>
                 <option value="offline">离线</option>
-              </select>
-              <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              </AppSelect>
+              <AppSelect
+                className="w-full"
+                aria-label="节点标签筛选"
                 value={tagFilter}
                 onChange={(event) => setTagFilter(event.target.value)}
               >
@@ -1034,9 +1038,10 @@ export function NodesPage() {
                     {tag === "all" ? "全部标签" : tag}
                   </option>
                 ))}
-              </select>
-              <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              </AppSelect>
+              <AppSelect
+                className="w-full"
+                aria-label="节点排序方式"
                 value={sortBy}
                 onChange={(event) =>
                   setSortBy(event.target.value as typeof sortBy)
@@ -1046,7 +1051,7 @@ export function NodesPage() {
                 <option value="name-asc">名称 A-Z</option>
                 <option value="disk-low">磁盘余量</option>
                 <option value="backup-recent">最近备份</option>
-              </select>
+              </AppSelect>
             </div>
 
             <div className="grid grid-cols-2 gap-2">

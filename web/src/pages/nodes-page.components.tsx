@@ -1,4 +1,4 @@
-import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import type { NodeRecord } from "@/types/domain";
 
 type MobileNodeSearchDrawerProps = {
@@ -36,8 +36,8 @@ export function MobileNodeSearchDrawer({
       >
         <h3 className="text-sm font-semibold">侧滑全局搜索</h3>
         <p className="mt-1 text-xs text-muted-foreground">通过名称或 IP 快速定位任意主机</p>
-        <Input
-          className="mt-3"
+        <SearchInput
+          containerClassName="mt-3"
           placeholder="搜索主机"
           value={keyword}
           onChange={(event) => onKeywordChange(event.target.value)}

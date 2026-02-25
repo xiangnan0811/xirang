@@ -12,11 +12,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type {
-  NewNodeInput,
-  NodeRecord,
-  SSHKeyRecord,
-  SSHKeyType,
+import { AppSelect } from "@/components/ui/app-select";
+import { AppTextarea } from "@/components/ui/app-textarea";
+import {
+  parseSSHKeyType,
+  type NewNodeInput,
+  type NodeRecord,
+  type SSHKeyRecord,
+  type SSHKeyType,
 } from "@/types/domain";
 
 type NodeEditorDraft = {
@@ -55,13 +58,6 @@ function toAuthType(value: string): "key" | "password" {
     return "password";
   }
   return "key";
-}
-
-function toKeyType(value: string): SSHKeyType {
-  if (value === "rsa" || value === "ed25519" || value === "ecdsa") {
-    return value;
-  }
-  return "auto";
 }
 
 function toPort(value: number): number {
@@ -227,8 +223,8 @@ export function NodeEditorDialog({
 
           <div>
             <label className="mb-1 block text-sm font-medium">认证方式</label>
-            <select
-              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
+              className="w-full"
               value={draft.authType}
               onChange={(event) =>
                   setDraft((prev) => ({
@@ -239,14 +235,14 @@ export function NodeEditorDialog({
               >
               <option value="key">密钥认证</option>
               <option value="password">密码认证</option>
-            </select>
+            </AppSelect>
           </div>
 
           {draft.authType === "key" ? (
             <div>
               <label className="mb-1 block text-sm font-medium">SSH Key</label>
-              <select
-                className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppSelect
+                className="w-full"
                 value={draft.keyId}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, keyId: event.target.value }))
@@ -259,7 +255,7 @@ export function NodeEditorDialog({
                   </option>
                 ))}
                 <option value="__new__">+ 新增 SSH Key</option>
-              </select>
+              </AppSelect>
             </div>
           ) : (
             <div>
@@ -303,13 +299,13 @@ export function NodeEditorDialog({
                   <label className="mb-1 block text-xs font-medium">
                     密钥类型
                   </label>
-                  <select
-                    className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  <AppSelect
+                    className="w-full"
                     value={draft.inlineKeyType}
                     onChange={(event) =>
                       setDraft((prev) => ({
                         ...prev,
-                        inlineKeyType: toKeyType(event.target.value),
+                        inlineKeyType: parseSSHKeyType(event.target.value),
                       }))
                     }
                   >
@@ -317,11 +313,11 @@ export function NodeEditorDialog({
                     <option value="rsa">RSA</option>
                     <option value="ed25519">ED25519</option>
                     <option value="ecdsa">ECDSA</option>
-                  </select>
+                  </AppSelect>
                 </div>
               </div>
-              <textarea
-                className="mt-1 min-h-28 w-full rounded-lg border border-input/80 bg-background/80 p-3 text-xs leading-relaxed text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background placeholder:text-muted-foreground/80 focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppTextarea
+                className="mt-1 min-h-28 text-xs"
                 placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
                 value={draft.inlinePrivateKey}
                 onChange={(event) =>

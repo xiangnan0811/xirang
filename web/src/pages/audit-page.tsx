@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
+import { Download, RefreshCw, Search } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
+import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
 
 const pageSize = 30;
 const auditViewStorageKey = "xirang.audit.view";
@@ -61,7 +63,7 @@ export function AuditPage() {
   const [keyword, setKeyword] = useState("");
   const [method, setMethod] = useState("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
-  const [viewMode, setViewMode] = useState<"cards" | "list">(() => {
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const stored = localStorage.getItem(auditViewStorageKey);
     return stored === "list" ? "list" : "cards";
   });
@@ -197,16 +199,12 @@ export function AuditPage() {
                 <Download className="mr-1 size-4" />
                 {exporting ? "导出中..." : "导出 CSV"}
               </Button>
-              <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/70 p-1">
-                <Button size="sm" variant={viewMode === "cards" ? "default" : "ghost"} onClick={() => setViewMode("cards")}>
-                  <LayoutGrid className="mr-1 size-4" />
-                  卡片
-                </Button>
-                <Button size="sm" variant={viewMode === "list" ? "default" : "ghost"} onClick={() => setViewMode("list")}>
-                  <List className="mr-1 size-4" />
-                  列表
-                </Button>
-              </div>
+              <ViewModeToggle
+                className="bg-background/70"
+                value={viewMode}
+                onChange={setViewMode}
+                groupLabel="审计视图切换"
+              />
             </div>
           </div>
         </CardHeader>
@@ -221,8 +219,7 @@ export function AuditPage() {
                 onChange={(event) => setKeyword(event.target.value)}
               />
             </div>
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
               value={method}
               onChange={(event) => setMethod(event.target.value)}
             >
@@ -232,7 +229,7 @@ export function AuditPage() {
               <option value="PUT">PUT</option>
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
-            </select>
+            </AppSelect>
             <Button className="md:col-span-2 lg:col-span-1" onClick={() => void load(0)} disabled={loading}>
               查询
             </Button>

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Layers3, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,12 @@ type DesktopSidebarProps = {
 export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps) {
   const location = useLocation();
   const navItems = getVisibleNavItems(role);
+  const navItemBaseClass =
+    "flex items-center rounded-lg border py-2 text-sm transition-all duration-200 md:justify-center md:px-2 lg:justify-start lg:gap-3 lg:px-3";
+  const navItemActiveClass =
+    "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))] shadow-[inset_0_0_0_1px_rgba(16,185,129,0.22)]";
+  const navItemIdleClass =
+    "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground";
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-card/65 backdrop-blur-xl md:flex md:w-20 md:p-3 lg:w-72 lg:p-4">
@@ -28,15 +34,8 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
           />
           <div className="hidden lg:block">
             <p className="text-sm text-muted-foreground">XiRang</p>
-            <h1 className="text-lg font-semibold">集中备份中枢</h1>
+            <p className="text-lg font-semibold tracking-tight">集中备份中枢</p>
           </div>
-        </div>
-      </div>
-
-      <div className="mt-2 hidden rounded-lg border border-border/80 bg-background/70 p-3 shadow-sm backdrop-blur lg:block">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Layers3 className="size-3.5" />
-          监控面板已同步桌面/移动导航语义
         </div>
       </div>
 
@@ -54,10 +53,10 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
               aria-label={item.title}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center rounded-lg border py-2 text-sm transition-all duration-200 md:justify-center md:px-2 lg:justify-start lg:gap-3 lg:px-3",
+                navItemBaseClass,
                 active
-                  ? "border-primary/35 bg-primary/15 text-foreground shadow-[0_0_0_1px_rgba(16,185,129,0.12)_inset]"
-                  : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-accent/70 hover:text-foreground"
+                  ? navItemActiveClass
+                  : navItemIdleClass
               )}
             >
               <Icon className="size-4 shrink-0" />

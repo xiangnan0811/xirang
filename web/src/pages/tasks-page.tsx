@@ -2,8 +2,6 @@ import { useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import {
   Clock3,
-  LayoutGrid,
-  List,
   Play,
   Plus,
   RotateCcw,
@@ -15,10 +13,14 @@ import { TaskCreateDialog } from "@/components/task-create-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
+import { AppSelect } from "@/components/ui/app-select";
+import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
+import { SearchInput } from "@/components/ui/search-input";
+import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getTaskStatusMeta } from "@/lib/status";
@@ -205,74 +207,50 @@ export function TasksPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">待执行</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{taskStats.pending}</p>
-            <p className="mt-1 text-xs text-muted-foreground">等待调度触发</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">成功</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{taskStats.success}</p>
-            <p className="mt-1 text-xs text-muted-foreground">最近执行成功任务</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">运行中</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{taskStats.running}</p>
-            <p className="mt-1 text-xs text-muted-foreground">包含重试中的任务</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-red-500/30 bg-gradient-to-br from-red-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">失败</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{taskStats.failed}</p>
-            <p className="mt-1 text-xs text-muted-foreground">可一键重试恢复</p>
-          </CardContent>
-        </Card>
-      </section>
+      <StatCardsSection
+        items={[
+          {
+            title: "待执行",
+            value: taskStats.pending,
+            description: "等待调度触发",
+            tone: "info",
+          },
+          {
+            title: "成功",
+            value: taskStats.success,
+            description: "最近执行成功任务",
+            tone: "success",
+          },
+          {
+            title: "运行中",
+            value: taskStats.running,
+            description: "包含重试中的任务",
+            tone: "warning",
+          },
+          {
+            title: "失败",
+            value: taskStats.failed,
+            description: "可一键重试恢复",
+            tone: "destructive",
+          },
+        ]}
+      />
 
       <Card className="border-border/75">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-base">任务列表（卡片 / 列表双模式）</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">视图与筛选条件自动持久化，刷新后不丢失</p>
+              <p className="mt-1 text-sm text-muted-foreground">视图与筛选条件自动持久化，刷新后不丢失</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/80 p-1">
-                <Button
-                  size="sm"
-                  variant={viewMode === "cards" ? "default" : "ghost"}
-                  onClick={() => setViewModeRaw("cards")}
-                >
-                  <LayoutGrid className="mr-1 size-4" />
-                  卡片
-                </Button>
-                <Button
-                  size="sm"
-                  variant={viewMode === "list" ? "default" : "ghost"}
-                  onClick={() => setViewModeRaw("list")}
-                >
-                  <List className="mr-1 size-4" />
-                  列表
-                </Button>
-              </div>
+              <ViewModeToggle
+                value={viewMode}
+                onChange={(mode) => setViewModeRaw(mode)}
+                groupLabel="任务视图切换"
+                cardsButtonLabel="任务卡片视图"
+                listButtonLabel="任务列表视图"
+              />
               <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="mr-1 size-4" />
                 新建任务
@@ -282,15 +260,17 @@ export function TasksPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_auto]">
-            <Input
+          <FilterPanel className="grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_auto]">
+            <SearchInput
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
+              aria-label="任务关键词筛选"
             />
 
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
+              className="w-full"
+              aria-label="任务状态筛选"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilterRaw(event.target.value as "all" | TaskStatus)
@@ -303,10 +283,11 @@ export function TasksPage() {
               <option value="failed">失败</option>
               <option value="success">成功</option>
               <option value="canceled">已取消</option>
-            </select>
+            </AppSelect>
 
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
+              className="w-full"
+              aria-label="任务节点筛选"
               value={nodeFilter}
               onChange={(event) => setNodeFilter(event.target.value)}
             >
@@ -316,7 +297,7 @@ export function TasksPage() {
                   {node.name}
                 </option>
               ))}
-            </select>
+            </AppSelect>
 
             <Button
               size="sm"
@@ -326,7 +307,9 @@ export function TasksPage() {
             >
               重置
             </Button>
-          </div>
+          </FilterPanel>
+
+          <FilterSummary filtered={filteredTasks.length} total={tasks.length} unit="条任务" />
 
           {loading ? (
             <LoadingState
@@ -347,8 +330,8 @@ export function TasksPage() {
                     key={task.id}
                     className={cn(
                       "interactive-surface flex h-full flex-col gap-2 p-4",
-                      task.status === "failed" && "border-red-500/35 bg-red-500/10",
-                      task.status === "running" && "border-cyan-500/30"
+                      task.status === "failed" && "border-destructive/35 bg-destructive/10",
+                      task.status === "running" && "border-info/30 bg-info/5"
                     )}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -364,7 +347,7 @@ export function TasksPage() {
                       <p>开始时间：{task.startedAt}</p>
                       {task.nextRunAt ? <p>下次调度：{task.nextRunAt}</p> : null}
                       {task.lastError ? (
-                        <p className="break-all text-red-400">失败信息：{task.lastError}</p>
+                        <p className="break-all text-destructive">失败信息：{task.lastError}</p>
                       ) : null}
                     </div>
 
@@ -443,21 +426,14 @@ export function TasksPage() {
               })}
 
               {!filteredTasks.length ? (
-                <EmptyState
+                <FilteredEmptyState
                   className="md:col-span-2 2xl:col-span-3"
                   title="当前筛选条件下没有任务"
                   description="可重置筛选条件，或直接新建一个任务。"
-                  action={(
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <Button size="sm" variant="outline" onClick={resetFilters}>
-                        重置筛选
-                      </Button>
-                      <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-                        <Plus className="mr-1 size-4" />
-                        新建任务
-                      </Button>
-                    </div>
-                  )}
+                  onReset={resetFilters}
+                  onCreate={() => setCreateDialogOpen(true)}
+                  createLabel="新建任务"
+                  createIcon={Plus}
                 />
               ) : null}
             </div>
@@ -514,8 +490,15 @@ export function TasksPage() {
                             <p>开始：{task.startedAt}</p>
                             <p>下次：{task.nextRunAt ?? "-"}</p>
                           </td>
-                          <td className="px-3 py-2.5 text-xs text-red-400">
-                            <span className="line-clamp-2 break-all">{task.lastError || "-"}</span>
+                          <td className="px-3 py-2.5 text-xs">
+                            <span
+                              className={cn(
+                                "line-clamp-2 break-all",
+                                task.lastError ? "text-destructive" : "text-muted-foreground"
+                              )}
+                            >
+                              {task.lastError || "-"}
+                            </span>
                           </td>
                           <td className="px-3 py-2.5 text-right">
                             <div className="flex justify-end gap-2">
@@ -565,21 +548,14 @@ export function TasksPage() {
                   ) : (
                     <tr>
                       <td colSpan={7} className="px-3 py-6">
-                        <EmptyState
+                        <FilteredEmptyState
                           className="py-8"
                           title="当前筛选条件下没有任务"
                           description="可重置筛选条件，或直接新建一个任务。"
-                          action={(
-                            <div className="flex flex-wrap items-center justify-center gap-2">
-                              <Button size="sm" variant="outline" onClick={resetFilters}>
-                                重置筛选
-                              </Button>
-                              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-                                <Plus className="mr-1 size-4" />
-                                新建任务
-                              </Button>
-                            </div>
-                          )}
+                          onReset={resetFilters}
+                          onCreate={() => setCreateDialogOpen(true)}
+                          createLabel="新建任务"
+                          createIcon={Plus}
                         />
                       </td>
                     </tr>

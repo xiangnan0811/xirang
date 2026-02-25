@@ -4,7 +4,6 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
-  Search,
   TriangleAlert,
 } from "lucide-react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
@@ -12,12 +11,14 @@ import { useAuth } from "@/context/auth-context";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { AppSelect } from "@/components/ui/app-select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
+import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
+import { SearchInput } from "@/components/ui/search-input";
 import { cn } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
 
@@ -34,7 +35,10 @@ function highlightErrorCode(message: string) {
   const parts = message.split(splitByErrorCodeRegex);
   return parts.map((part, idx) =>
     singleErrorCodeRegex.test(part) ? (
-      <span key={`${part}-${idx}`} className="rounded bg-red-600/25 px-1 text-red-300">
+      <span
+        key={`${part}-${idx}`}
+        className="rounded border border-destructive/35 bg-destructive/20 px-1 text-destructive"
+      >
         {part}
       </span>
     ) : (
@@ -45,12 +49,12 @@ function highlightErrorCode(message: string) {
 
 function getLevelClass(level: "info" | "warn" | "error") {
   if (level === "error") {
-    return "text-red-400";
+    return "text-destructive";
   }
   if (level === "warn") {
-    return "text-amber-300";
+    return "text-warning";
   }
-  return "text-emerald-300";
+  return "text-success";
 }
 
 function distanceBetweenTouches(touches: React.TouchList) {
@@ -288,6 +292,7 @@ export function LogsPage() {
         runningTasks.reduce((sum, task) => sum + task.progress, 0) /
           Math.max(1, runningTasks.length)
       );
+  const normalizedProgress = Math.min(100, Math.max(0, progressValue || 0));
 
   const syncSearchParams = (patch: { task?: string; node?: string; q?: string }) => {
     const next = new URLSearchParams(searchParams);
@@ -341,9 +346,12 @@ export function LogsPage() {
     anchor.href = url;
     anchor.download = `xirang-logs-${suffix}.txt`;
     document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+    try {
+      anchor.click();
+    } finally {
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    }
   };
 
   const loadMoreHistory = async () => {
@@ -416,9 +424,9 @@ export function LogsPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+          <FilterPanel className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <AppSelect
+              aria-label="日志节点筛选"
               value={selectedNode}
               onChange={(event) => {
                 const value = event.target.value;
@@ -432,10 +440,10 @@ export function LogsPage() {
                   {node.name}
                 </option>
               ))}
-            </select>
+            </AppSelect>
 
-            <select
-              className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
+              aria-label="日志任务筛选"
               value={selectedTask}
               onChange={(event) => {
                 const nextTask = event.target.value;
@@ -449,27 +457,26 @@ export function LogsPage() {
                   #{task.id} {task.policyName}
                 </option>
               ))}
-            </select>
+            </AppSelect>
 
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                value={keyword}
-                placeholder="关键词过滤（错误码/内容）"
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setKeyword(value);
-                  syncSearchParams({ q: value });
-                }}
-              />
-            </div>
+            <SearchInput
+              aria-label="日志关键词筛选"
+              value={keyword}
+              placeholder="关键词过滤（错误码/内容）"
+              onChange={(event) => {
+                const value = event.target.value;
+                setKeyword(value);
+                syncSearchParams({ q: value });
+              }}
+            />
 
             <div className="flex items-center gap-2 rounded-lg border border-border/75 bg-background/70 px-3 text-xs text-muted-foreground">
               <RefreshCw className={cn("size-3.5", (historyLoading || historyPaging) && "animate-spin")} />
-              当前筛选 {filteredLogs.length} 条 · 游标#{cursorLogId || "-"}
+              游标 #{cursorLogId || "-"}
             </div>
-          </div>
+          </FilterPanel>
+
+          <FilterSummary filtered={filteredLogs.length} total={mergedLogs.length} unit="条日志" />
 
           <div className="flex justify-end">
             <Button size="sm" variant="outline" onClick={resetFilters}>
@@ -478,13 +485,13 @@ export function LogsPage() {
           </div>
 
           {connectionWarning ? (
-            <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               {connectionWarning}
             </p>
           ) : null}
 
           {focusedTask?.errorCode ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               <TriangleAlert className="mr-1 inline size-4" />
               当前任务错误码：{focusedTask.errorCode}
             </div>
@@ -495,10 +502,24 @@ export function LogsPage() {
               <span>高对比度执行进度</span>
               <span>{Number.isFinite(progressValue) ? progressValue : 0}%</span>
             </div>
-            <div className="h-3 rounded-full bg-muted">
+            <div
+              className="h-3 rounded-full bg-muted"
+              role="progressbar"
+              aria-label="日志任务进度"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={normalizedProgress}
+            >
               <div
-                className="h-3 rounded-full bg-gradient-to-r from-emerald-500 via-lime-400 to-cyan-400"
-                style={{ width: `${Math.min(100, Math.max(0, progressValue || 0))}%` }}
+                className={cn(
+                  "h-3 rounded-full transition-all",
+                  normalizedProgress < 40
+                    ? "bg-destructive"
+                    : normalizedProgress < 70
+                      ? "bg-warning"
+                      : "bg-success"
+                )}
+                style={{ width: `${normalizedProgress}%` }}
               />
             </div>
           </div>
@@ -513,28 +534,32 @@ export function LogsPage() {
             ) : (
               <div
                 ref={terminalRef}
-                className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px] text-slate-100"
+                className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px]"
                 style={{ fontSize: `${12 * fontScale}px` }}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onDoubleClick={() => setFontScale(1)}
                 title="双击重置字体缩放"
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions text"
+                aria-label={`日志终端，共 ${groupedLogs.length} 个分组`}
               >
                 {groupedLogs.map((group) => (
-                  <section key={group.key} className="mb-3 rounded border border-slate-700/70 bg-slate-900/40">
-                    <div className="border-b border-slate-700/70 px-3 py-2 text-[11px] text-slate-300">
+                  <section key={group.key} className="terminal-group mb-3 rounded border">
+                    <div className="terminal-group-header border-b px-3 py-2 text-[11px]">
                       节点：{group.nodeName} · {group.taskId ? `任务 #${group.taskId}` : "系统日志"}
                     </div>
                     <div className="px-2 py-1">
                       {group.logs.map((log) => (
                         <div
                           key={log.logId ? `line-${log.logId}` : log.id}
-                          className="mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b border-slate-800/80 py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
+                          className="terminal-group-row mb-1 grid grid-cols-[92px_52px_1fr] gap-2 border-b py-1 text-[11px] md:grid-cols-[130px_90px_1fr] md:text-[12px]"
                         >
-                          <span className="text-slate-400">{log.timestamp}</span>
+                          <span className="terminal-time">{log.timestamp}</span>
                           <span className={getLevelClass(log.level)}>{log.level.toUpperCase()}</span>
                           <span>
-                            <span className="mr-2 rounded bg-slate-700/70 px-1 text-[10px] text-slate-300 md:text-[11px]">
+                            <span className="terminal-node-chip mr-2 rounded px-1 text-[10px] md:text-[11px]">
                               {log.nodeName ?? "系统"}
                             </span>
                             {highlightErrorCode(log.message)}
@@ -547,7 +572,7 @@ export function LogsPage() {
                 {!groupedLogs.length ? (
                   <div className="px-2 py-6">
                     <EmptyState
-                      className="border-slate-700/70 bg-slate-900/55"
+                      className="terminal-empty"
                       title="当前筛选条件下暂无日志输出"
                       description="可尝试切换节点/任务或重置筛选条件。"
                       action={(
@@ -599,7 +624,7 @@ export function LogsPage() {
                 </Button>
               ))}
             </div>
-            {shortcutEcho ? <p className="mt-2 text-xs text-emerald-400">{shortcutEcho}</p> : null}
+            {shortcutEcho ? <p className="mt-2 text-xs text-success">{shortcutEcho}</p> : null}
             <p className="mt-1 text-[11px] text-muted-foreground">
               支持双指缩放日志字体（Pinch-to-zoom）与双击重置
             </p>

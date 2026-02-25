@@ -20,6 +20,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorId = "login-form-error";
 
   if (isAuthenticated) {
     return <Navigate to="/app/overview" replace />;
@@ -68,7 +69,7 @@ export function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(34,197,94,0.2),transparent_35%),linear-gradient(180deg,rgba(15,23,42,0.08),rgba(15,23,42,0.35))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.24),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(34,197,94,0.24),transparent_35%),linear-gradient(180deg,rgba(2,6,23,0.72),rgba(2,6,23,0.92))]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,137,92,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.16),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.04),rgba(15,23,42,0.24))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.2),transparent_38%),linear-gradient(180deg,rgba(2,6,23,0.68),rgba(2,6,23,0.9))]" />
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
         <section className="hidden rounded-2xl border border-border/70 bg-background/60 p-5 shadow-panel backdrop-blur-xl md:block lg:p-6">
@@ -97,12 +98,13 @@ export function LoginPage() {
           </div>
         </section>
 
-        <Card className="border-border/75 bg-background/75 backdrop-blur-xl">
+        <Card className="border-border/75 bg-background/78 backdrop-blur-xl">
           <CardHeader>
             <div className="mb-2 flex items-center gap-2 text-primary">
               <ShieldCheck className="size-5" />
               <span className="text-sm font-medium">XiRang 备份控制台</span>
             </div>
+            <h1 className="text-2xl font-semibold tracking-tight md:hidden">登录息壤控制台</h1>
             <CardTitle>登录</CardTitle>
             <CardDescription>输入管理员账号，进入节点与任务统一管理。</CardDescription>
           </CardHeader>
@@ -117,6 +119,9 @@ export function LoginPage() {
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
                   autoComplete="username"
+                  placeholder="请输入用户名"
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={error ? errorId : undefined}
                   required
                 />
               </div>
@@ -131,11 +136,22 @@ export function LoginPage() {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete="current-password"
+                  placeholder="请输入密码"
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={error ? errorId : undefined}
                   required
                 />
               </div>
 
-              {error ? <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">{error}</p> : null}
+              {error ? (
+                <p
+                  id={errorId}
+                  role="alert"
+                  className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  {error}
+                </p>
+              ) : null}
 
               <Button className="w-full" type="submit" loading={submitting}>
                 登录控制台

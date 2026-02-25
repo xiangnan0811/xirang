@@ -3,7 +3,6 @@ import {
   BellRing,
   Plus,
   RefreshCw,
-  Search,
   Wrench,
   Trash2,
 } from "lucide-react";
@@ -23,8 +22,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusPulse } from "@/components/status-pulse";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { AppSelect } from "@/components/ui/app-select";
+import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
+import { SearchInput } from "@/components/ui/search-input";
+import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -96,33 +99,15 @@ export function NotificationsPage() {
   }, []);
 
   const endIntegrationOp = useCallback((integrationId: string, type: "test" | "update") => {
-    if (type === "test") {
-      setTestingIntegrationMap((prev) => {
-        const current = prev[integrationId] ?? 0;
-        if (current <= 1) {
-          const next = { ...prev };
-          delete next[integrationId];
-          return next;
-        }
-        return {
-          ...prev,
-          [integrationId]: current - 1
-        };
-      });
-      return;
-    }
-
-    setUpdatingIntegrationMap((prev) => {
-      const current = prev[integrationId] ?? 0;
-      if (current <= 1) {
-        const next = { ...prev };
-        delete next[integrationId];
-        return next;
+    const setter = type === "test" ? setTestingIntegrationMap : setUpdatingIntegrationMap;
+    setter((prev) => {
+      const next = Math.max(0, (prev[integrationId] ?? 0) - 1);
+      if (next === 0) {
+        return Object.fromEntries(
+          Object.entries(prev).filter(([key]) => key !== integrationId)
+        );
       }
-      return {
-        ...prev,
-        [integrationId]: current - 1
-      };
+      return { ...prev, [integrationId]: next };
     });
   }, []);
 
@@ -254,6 +239,8 @@ export function NotificationsPage() {
       toast.success(`通知方式 ${draft.name} 已保存。`);
       setEditDialogOpen(false);
       setEditingIntegration(null);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       endIntegrationOp(draft.id, "update");
     }
@@ -285,47 +272,34 @@ export function NotificationsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-red-500/30 bg-gradient-to-br from-red-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">待处理告警</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{openAlerts.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">实时推流中的异常项</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">严重告警</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{criticalAlerts.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">优先处置，建议立即重试</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">已启用通道</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{activeIntegrations}/{integrations.length || 0}</p>
-            <p className="mt-1 text-xs text-muted-foreground">由用户手动新增通知方式</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">24h 失败任务</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{failedTasks}</p>
-            <p className="mt-1 text-xs text-muted-foreground">支持通知中心一键重试</p>
-          </CardContent>
-        </Card>
-      </section>
+      <StatCardsSection
+        items={[
+          {
+            title: "待处理告警",
+            value: openAlerts.length,
+            description: "实时推流中的异常项",
+            tone: "destructive",
+          },
+          {
+            title: "严重告警",
+            value: criticalAlerts.length,
+            description: "优先处置，建议立即重试",
+            tone: "warning",
+          },
+          {
+            title: "已启用通道",
+            value: `${activeIntegrations}/${integrations.length || 0}`,
+            description: "由用户手动新增通知方式",
+            tone: "success",
+          },
+          {
+            title: "24h 失败任务",
+            value: failedTasks,
+            description: "支持通知中心一键重试",
+            tone: "info",
+          },
+        ]}
+      />
 
       <Card className="border-border/75">
         <CardHeader>
@@ -359,17 +333,17 @@ export function NotificationsPage() {
           ) : deliveryStats ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 shadow-sm">
+                <div className="rounded-lg border border-success/30 bg-success/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送成功</p>
-                  <p className="mt-1 text-2xl font-semibold text-emerald-500">{deliveryStats.totalSent}</p>
+                  <p className="mt-1 text-2xl font-semibold text-success">{deliveryStats.totalSent}</p>
                 </div>
-                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 shadow-sm">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送失败</p>
-                  <p className="mt-1 text-2xl font-semibold text-red-500">{deliveryStats.totalFailed}</p>
+                  <p className="mt-1 text-2xl font-semibold text-destructive">{deliveryStats.totalFailed}</p>
                 </div>
-                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 shadow-sm">
+                <div className="rounded-lg border border-info/30 bg-info/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">成功率</p>
-                  <p className="mt-1 text-2xl font-semibold text-cyan-500">{deliveryStats.successRate}%</p>
+                  <p className="mt-1 text-2xl font-semibold text-info">{deliveryStats.successRate}%</p>
                 </div>
               </div>
 
@@ -384,7 +358,7 @@ export function NotificationsPage() {
                       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
                         <p>成功 {item.sent}</p>
                         <p>失败 {item.failed}</p>
-                        <p className={cn(item.successRate >= 95 ? "text-emerald-500" : "text-amber-500")}>
+                        <p className={cn(item.successRate >= 95 ? "text-success" : "text-warning")}>
                           成功率 {item.successRate}%
                         </p>
                       </div>
@@ -480,6 +454,7 @@ export function NotificationsPage() {
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <Switch
                           checked={integration.enabled}
+                          aria-label={`${integration.enabled ? "停用" : "启用"}通知方式 ${integration.name}`}
                           disabled={busy}
                           onCheckedChange={() =>
                             void (async () => {
@@ -569,19 +544,17 @@ export function NotificationsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr]">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  value={keyword}
-                  onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="搜索节点 / 任务 / 错误码"
-                />
-              </div>
+            <FilterPanel className="grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr]">
+              <SearchInput
+                aria-label="告警关键词筛选"
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                placeholder="搜索节点 / 任务 / 错误码"
+              />
 
-              <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppSelect
+                className="w-full"
+                aria-label="告警级别筛选"
                 value={severityFilter}
                 onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
               >
@@ -589,10 +562,11 @@ export function NotificationsPage() {
                 <option value="critical">严重</option>
                 <option value="warning">警告</option>
                 <option value="info">信息</option>
-              </select>
+              </AppSelect>
 
-              <select
-                className="h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+              <AppSelect
+                className="w-full"
+                aria-label="告警状态筛选"
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
               >
@@ -600,14 +574,18 @@ export function NotificationsPage() {
                 <option value="open">待处理</option>
                 <option value="acked">已确认</option>
                 <option value="resolved">已恢复</option>
-              </select>
-            </div>
+              </AppSelect>
+            </FilterPanel>
+
+            <FilterSummary filtered={filteredAlerts.length} total={alerts.length} unit="条告警" />
 
             <div className="space-y-2">
               {filteredAlerts.length ? (
                 filteredAlerts.map((alert) => {
                   const severity = getSeverityMeta(alert.severity);
                   const status = alertStatusMeta(alert.status);
+                  const isDeliveryOpen = deliveryOpenAlertId === alert.id;
+                  const deliveryPanelId = `alert-delivery-panel-${alert.id}`;
                   return (
                     <div key={alert.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -676,14 +654,22 @@ export function NotificationsPage() {
                         <Button
                           size="sm"
                           variant="outline"
+                          aria-expanded={isDeliveryOpen}
+                          aria-controls={deliveryPanelId}
                           onClick={() => toggleDeliveries(alert.id)}
                         >
-                          {deliveryOpenAlertId === alert.id ? "收起投递" : "投递记录"}
+                          {isDeliveryOpen ? "收起投递" : "投递记录"}
                         </Button>
                       </div>
 
-                      {deliveryOpenAlertId === alert.id ? (
-                        <div className="mt-3 rounded-md border border-border/70 bg-muted/25 p-2">
+                      {isDeliveryOpen ? (
+                        <div
+                          id={deliveryPanelId}
+                          role="region"
+                          aria-label={`告警 ${alert.errorCode} 的投递记录`}
+                          aria-busy={deliveryLoadingAlertId === alert.id}
+                          className="mt-3 rounded-md border border-border/70 bg-muted/25 p-2"
+                        >
                           {deliveryLoadingAlertId === alert.id ? (
                             <p className="text-xs text-muted-foreground">投递记录加载中...</p>
                           ) : (deliveryMap[alert.id] ?? []).length ? (
@@ -719,7 +705,7 @@ export function NotificationsPage() {
                                     </Badge>
                                   </div>
                                   <p className="mt-1 text-muted-foreground">时间：{delivery.createdAt}</p>
-                                  {delivery.error ? <p className="mt-1 text-red-500">错误：{delivery.error}</p> : null}
+                                  {delivery.error ? <p className="mt-1 text-destructive">错误：{delivery.error}</p> : null}
                                   {delivery.status === "failed" ? (
                                     <Button
                                       className="mt-2"
@@ -753,10 +739,16 @@ export function NotificationsPage() {
                   );
                 })
               ) : (
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-600 dark:text-emerald-300">
-                  <BellRing className="mb-1 size-4" />
-                  当前筛选条件下没有待处理通知。
-                </div>
+                <FilteredEmptyState
+                  icon={BellRing}
+                  title="当前筛选条件下没有待处理通知"
+                  description="可以重置筛选条件，或等待下一次告警触发。"
+                  onReset={() => {
+                    setKeyword("");
+                    setSeverityFilter("all");
+                    setStatusFilter("all");
+                  }}
+                />
               )}
             </div>
           </CardContent>

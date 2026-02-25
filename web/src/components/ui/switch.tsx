@@ -1,23 +1,33 @@
+import type { ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
-type SwitchProps = {
+type SwitchProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange"> & {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  className?: string;
-  disabled?: boolean;
 };
 
-export function Switch({ checked, onCheckedChange, className, disabled }: SwitchProps) {
+export function Switch({
+  checked,
+  onCheckedChange,
+  className,
+  disabled,
+  onClick,
+  ...props
+}: SwitchProps) {
   return (
     <button
+      {...props}
       type="button"
       role="switch"
       aria-checked={checked}
       disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
+      onClick={(event) => {
+        onCheckedChange(!checked);
+        onClick?.(event);
+      }}
       className={cn(
         "relative inline-flex h-6 w-11 items-center rounded-full border transition-colors",
-        checked ? "border-emerald-500 bg-emerald-500" : "border-input bg-muted",
+        checked ? "border-success bg-success" : "border-input bg-muted",
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         className
       )}

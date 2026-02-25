@@ -57,11 +57,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run frontend lint
-        run: npm run lint
+      - name: Run frontend check
+        run: npm run check
 
-      - name: Run frontend tests
-        run: npm test
-
-      - name: Build frontend
-        run: npm run build
+      - name: Check frontend bundle budget
+        # Requires dist/ produced by 'npm run check' (which includes build)
+        run: node scripts/check-bundle-budget.mjs

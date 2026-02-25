@@ -28,6 +28,14 @@ const emptyDraft: PolicyDraft = {
   enabled: true,
 };
 
+function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function toDraft(policy: PolicyRecord): PolicyDraft {
   return {
     id: policy.id,
@@ -242,7 +250,7 @@ export function PolicyEditorDialog({
           <div className="rounded-md border bg-muted/30 p-3 text-sm">
             <p className="text-xs text-muted-foreground">自然语言</p>
             <p className="mt-1">{cronToNatural(draft.cron)}</p>
-            <p className="mt-1 text-xs text-cyan-600 dark:text-cyan-300">
+            <p className="mt-1 text-xs text-info">
               {nextRunPreview(draft.cron)}
             </p>
           </div>
@@ -289,7 +297,7 @@ export function PolicyEditorDialog({
                 onChange={(event) =>
                   setDraft((prev) => ({
                     ...prev,
-                    criticalThreshold: Number(event.target.value || 1),
+                    criticalThreshold: toBoundedInt(event.target.value, 2, 1, 10),
                   }))
                 }
               />

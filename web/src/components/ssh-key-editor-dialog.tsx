@@ -13,18 +13,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { NewSSHKeyInput, SSHKeyRecord, SSHKeyType } from "@/types/domain";
+import { AppSelect } from "@/components/ui/app-select";
+import { AppTextarea } from "@/components/ui/app-textarea";
+import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
 
 type SSHKeyDraft = NewSSHKeyInput & {
   id?: string;
 };
-
-function toSSHKeyType(value: string): SSHKeyType {
-  if (value === "rsa" || value === "ed25519" || value === "ecdsa") {
-    return value;
-  }
-  return "auto";
-}
 
 const emptyDraft: SSHKeyDraft = {
   name: "",
@@ -149,13 +144,13 @@ export function SSHKeyEditorDialog({
 
           <div>
             <label className="mb-1 block text-sm font-medium">密钥类型</label>
-            <select
-              className="h-10 w-full rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppSelect
+              className="w-full"
               value={draft.keyType}
               onChange={(event) =>
                 setDraft((prev) => ({
                   ...prev,
-                  keyType: toSSHKeyType(event.target.value),
+                  keyType: parseSSHKeyType(event.target.value),
                 }))
               }
             >
@@ -163,7 +158,7 @@ export function SSHKeyEditorDialog({
               <option value="rsa">RSA</option>
               <option value="ed25519">ED25519</option>
               <option value="ecdsa">ECDSA</option>
-            </select>
+            </AppSelect>
             <p className="mt-1 text-xs text-muted-foreground">
               保存时会校验私钥内容与所选类型是否一致。
             </p>
@@ -191,8 +186,8 @@ export function SSHKeyEditorDialog({
                 onChange={handleFileUpload}
               />
             </div>
-            <textarea
-              className="min-h-36 w-full rounded-lg border border-input/80 bg-background/80 p-3 text-xs leading-relaxed text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background placeholder:text-muted-foreground/80 focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60"
+            <AppTextarea
+              className="min-h-36 text-xs"
               placeholder={isEditing
                 ? "留空表示不修改现有私钥；如需更新请粘贴新的 OpenSSH 私钥"
                 : "粘贴 OpenSSH 私钥（支持粘贴带 \\n 转义的内容）"}
