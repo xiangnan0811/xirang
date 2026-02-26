@@ -68,3 +68,8 @@ func SanitizeDeliveryError(channelType string, err error) string {
 	}
 	return err.Error()
 }
+
+// MaskBotToken 对字符串中出现的 bot token 进行掩码替换
+func MaskBotToken(s string) string {
+	return botTokenSanitizer.ReplaceAllString(s, "bot***:***")
+}

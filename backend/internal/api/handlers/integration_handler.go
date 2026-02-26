@@ -149,6 +149,9 @@ func (h *IntegrationHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	for i := range items {
+		maskIntegrationEndpoint(&items[i])
+	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
@@ -162,6 +165,7 @@ func (h *IntegrationHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
 		return
 	}
+	maskIntegrationEndpoint(&item)
 	c.JSON(http.StatusOK, gin.H{"data": item})
 }
 
@@ -204,9 +208,11 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 		CooldownMinutes: req.CooldownMinutes,
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Printf("创建通知通道失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	maskIntegrationEndpoint(&item)
 	c.JSON(http.StatusCreated, gin.H{"data": item})
 }
 
@@ -255,9 +261,11 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	item.CooldownMinutes = req.CooldownMinutes
 
 	if err := h.db.Save(&item).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Printf("更新通知通道失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	maskIntegrationEndpoint(&item)
 	c.JSON(http.StatusOK, gin.H{"data": item})
 }
 
@@ -307,4 +315,11 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 		Message:   "测试发送成功",
 		LatencyMS: latency,
 	}})
+}
+
+// maskIntegrationEndpoint 对 Telegram 类型通道的 endpoint 中 bot token 进行脱敏
+func maskIntegrationEndpoint(item *model.Integration) {
+	if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
+		item.Endpoint = util.MaskBotToken(item.Endpoint)
+	}
 }

@@ -218,7 +218,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 		delivery.Status = "failed"
 		delivery.Error = util.SanitizeDeliveryError(integration.Type, err)
 		if saveErr := h.db.Create(&delivery).Error; saveErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": saveErr.Error()})
+			respondInternalError(c, saveErr)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": retryDeliveryResponse{

@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -68,10 +69,10 @@ func TestSanitizeTelegramErrorRemovesToken(t *testing.T) {
 	if result == "" {
 		t.Fatalf("期望返回脱敏后的消息")
 	}
-	if contains(result, "ABCdef_123") {
+	if strings.Contains(result, "ABCdef_123") {
 		t.Fatalf("期望 token 被脱敏，实际: %s", result)
 	}
-	if !contains(result, "bot***:***") {
+	if !strings.Contains(result, "bot***:***") {
 		t.Fatalf("期望包含脱敏占位符，实际: %s", result)
 	}
 }
@@ -94,7 +95,7 @@ func TestSanitizeTelegramErrorNoToken(t *testing.T) {
 func TestSanitizeDeliveryErrorTelegram(t *testing.T) {
 	err := fmt.Errorf(`Post "https://api.telegram.org/bot999:XYZ/sendMessage": connection refused`)
 	result := SanitizeDeliveryError("telegram", err)
-	if contains(result, "XYZ") {
+	if strings.Contains(result, "XYZ") {
 		t.Fatalf("期望 Telegram 类型错误被脱敏，实际: %s", result)
 	}
 }
@@ -114,15 +115,21 @@ func TestSanitizeDeliveryErrorNilError(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstring(s, substr)
+func TestMaskBotToken(t *testing.T) {
+	input := "https://api.telegram.org/bot123456:ABCdef/sendMessage?chat_id=1"
+	result := MaskBotToken(input)
+	if strings.Contains(result, "ABCdef") {
+		t.Fatalf("期望 token 被掩码，实际: %s", result)
+	}
+	if !strings.Contains(result, "bot***:***") {
+		t.Fatalf("期望包含掩码占位符，实际: %s", result)
+	}
 }
 
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestMaskBotTokenNoToken(t *testing.T) {
+	input := "https://example.com/webhook"
+	result := MaskBotToken(input)
+	if result != input {
+		t.Fatalf("期望无 token 时原样返回，实际: %s", result)
 	}
-	return false
 }
