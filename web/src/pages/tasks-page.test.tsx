@@ -10,6 +10,7 @@ const contextRef: { current: ConsoleOutletContext } = {
   current: {} as ConsoleOutletContext,
 };
 const confirmMock = vi.fn().mockResolvedValue(true);
+const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
@@ -18,6 +19,7 @@ vi.mock("react-router-dom", async () => {
   return {
     ...actual,
     useOutletContext: () => contextRef.current,
+    useNavigate: () => navigateMock,
   };
 });
 
@@ -99,6 +101,7 @@ describe("TasksPage", () => {
   beforeEach(() => {
     localStorage.clear();
     confirmMock.mockClear();
+    navigateMock.mockReset();
     createContext();
   });
 
@@ -128,5 +131,19 @@ describe("TasksPage", () => {
 
     await user.click(screen.getByRole("button", { name: "重置" }));
     expect(screen.getByText("当前筛选 2 / 2 条任务")).toBeInTheDocument();
+  });
+
+  it("点击日志按钮会跳转到对应任务日志页", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "查看任务 #101 日志" }));
+
+    expect(navigateMock).toHaveBeenCalledWith("/app/logs?task=101");
   });
 });

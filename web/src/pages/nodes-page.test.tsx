@@ -12,6 +12,7 @@ const contextRef: { current: ConsoleOutletContext } = {
 const searchParamsRef = { current: new URLSearchParams() };
 const setSearchParamsMock = vi.fn();
 const confirmMock = vi.fn().mockResolvedValue(true);
+const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
@@ -21,6 +22,7 @@ vi.mock("react-router-dom", async () => {
     ...actual,
     useOutletContext: () => contextRef.current,
     useSearchParams: () => [searchParamsRef.current, setSearchParamsMock] as const,
+    useNavigate: () => navigateMock,
   };
 });
 
@@ -124,6 +126,7 @@ describe("NodesPage", () => {
   beforeEach(() => {
     localStorage.clear();
     confirmMock.mockClear();
+    navigateMock.mockReset();
     setSearchParamsMock.mockReset();
     searchParamsRef.current = new URLSearchParams();
     createContext();
@@ -155,5 +158,22 @@ describe("NodesPage", () => {
     expect(localStorage.getItem("xirang.nodes.view")).toBe(
       JSON.stringify("list")
     );
+  });
+
+  it("点击日志按钮会跳转到对应节点日志页", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const logButtons = screen.getAllByRole("button", {
+      name: "查看节点 node-prod-1 日志",
+    });
+    await user.click(logButtons[0]);
+
+    expect(navigateMock).toHaveBeenCalledWith("/app/logs?node=node-prod-1");
   });
 });

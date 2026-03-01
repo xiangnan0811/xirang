@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { LogsPage } from "./logs-page";
@@ -184,5 +184,36 @@ describe("LogsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "进入全屏日志" }));
     expect(screen.getByRole("button", { name: "退出全屏日志" })).toBeInTheDocument();
+  });
+
+  it("当时间字符串不可解析时，按 timestampMs 降序显示日志", () => {
+    liveLogsRef.current.logs = [
+      {
+        id: "log-ms-early",
+        timestamp: "not-a-date-1",
+        timestampMs: 1000,
+        level: "info",
+        message: "ms-early-log",
+        taskId: 1001,
+        nodeName: "node-1",
+      },
+      {
+        id: "log-ms-late",
+        timestamp: "not-a-date-2",
+        timestampMs: 2000,
+        level: "info",
+        message: "ms-late-log",
+        taskId: 1001,
+        nodeName: "node-1",
+      },
+    ];
+
+    render(<LogsPage />);
+
+    const logRegion = screen.getByRole("log", { name: "日志终端，共 1 个分组" });
+    const late = within(logRegion).getByText("ms-late-log");
+    const early = within(logRegion).getByText("ms-early-log");
+
+    expect(late.compareDocumentPosition(early) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
