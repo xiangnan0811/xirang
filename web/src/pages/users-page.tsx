@@ -213,23 +213,26 @@ export function UsersPage() {
           </p>
           <div className="grid gap-3 md:grid-cols-3">
             <Input
-              type="password"
-              placeholder="当前密码"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-            />
+  type="password"
+  placeholder="当前密码"
+  aria-label="当前密码"
+  value={currentPassword}
+  onChange={(event) => setCurrentPassword(event.target.value)}
+/>
             <Input
-              type="password"
-              placeholder="新密码（至少12位，含大小写/数字/符号）"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
+  type="password"
+  placeholder="新密码（至少12位，含大小写/数字/符号）"
+  aria-label="新密码"
+  value={newPassword}
+  onChange={(event) => setNewPassword(event.target.value)}
+/>
             <Input
-              type="password"
-              placeholder="确认新密码"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-            />
+  type="password"
+  placeholder="确认新密码"
+  aria-label="确认新密码"
+  value={confirmPassword}
+  onChange={(event) => setConfirmPassword(event.target.value)}
+/>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button loading={changingPassword} onClick={handleChangePassword}>
@@ -254,16 +257,18 @@ export function UsersPage() {
           <CardContent className="space-y-4">
             <div className="grid gap-2 md:grid-cols-4">
               <Input
-                placeholder="新用户名"
-                value={newUsername}
-                onChange={(event) => setNewUsername(event.target.value)}
-              />
+  placeholder="新用户名"
+  aria-label="新用户名"
+  value={newUsername}
+  onChange={(event) => setNewUsername(event.target.value)}
+/>
               <Input
-                type="password"
-                placeholder="初始密码"
-                value={newUserPassword}
-                onChange={(event) => setNewUserPassword(event.target.value)}
-              />
+  type="password"
+  placeholder="初始密码"
+  aria-label="初始密码"
+  value={newUserPassword}
+  onChange={(event) => setNewUserPassword(event.target.value)}
+/>
               <Select
                 value={newUserRole}
                 onChange={(event) => setNewUserRole(event.target.value as RoleType)}
@@ -284,7 +289,7 @@ export function UsersPage() {
                 {sortedUsers.map((item) => {
                   const isSelf = userId === item.id;
                   return (
-                    <div key={item.id} className="rounded-lg border border-border/70 p-3">
+                    <div key={item.id} className="rounded-xl border border-border/70 p-3">
                       <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_auto] md:items-center">
                         <div>
                           <p className="font-medium">{item.username}</p>

@@ -20,20 +20,20 @@ function EmptyState({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-dashed border-border/70 bg-background/40 px-6 py-12 text-center shadow-sm backdrop-blur-sm",
+        "rounded-xl border border-border/60 bg-background/50 px-6 py-16 text-center shadow-sm backdrop-blur-md transition-all duration-300",
         className
       )}
     >
-      <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-sm">
-        <Icon className="size-6" />
+      <div className="mx-auto mb-6 flex size-20 animate-float items-center justify-center rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5 text-primary shadow-sm relative before:absolute before:-inset-4 before:-z-10 before:rounded-full before:bg-primary/5 before:blur-xl">
+        <Icon className="size-8 opacity-80" />
       </div>
-      <h3 className="text-sm font-semibold tracking-wide text-foreground">{title}</h3>
+      <h3 className="text-lg font-semibold tracking-wide text-foreground">{title}</h3>
       {description ? (
-        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-2.5 max-w-sm text-sm leading-relaxed text-muted-foreground/90">
           {description}
         </p>
       ) : null}
-      {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
+      {action ? <div className="mt-6 flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-500 delay-150">{action}</div> : null}
     </div>
   );
 }

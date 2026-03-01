@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import {
   BellRing,
   Plus,
   RefreshCw,
+  Loader2,
   Wrench,
   Trash2,
 } from "lucide-react";
@@ -47,6 +48,7 @@ export function NotificationsPage() {
     alerts,
     integrations,
     tasks,
+    loading,
     globalSearch,
     retryAlert,
     acknowledgeAlert,
@@ -134,8 +136,9 @@ export function NotificationsPage() {
     });
   }, [alerts]);
 
+  const deferredKeyword = useDeferredValue(keyword || globalSearch);
   const filteredAlerts = useMemo(() => {
-    const effectiveKeyword = (keyword || globalSearch).trim().toLowerCase();
+    const searchKey = deferredKeyword.trim().toLowerCase();
     return sortedAlerts.filter((alert) => {
       if (severityFilter !== "all" && alert.severity !== severityFilter) {
         return false;
@@ -143,13 +146,13 @@ export function NotificationsPage() {
       if (statusFilter !== "all" && alert.status !== statusFilter) {
         return false;
       }
-      if (!effectiveKeyword) {
+      if (!searchKey) {
         return true;
       }
       const candidate = `${alert.nodeName} ${alert.policyName} ${alert.errorCode} ${alert.message}`.toLowerCase();
-      return candidate.includes(effectiveKeyword);
+      return candidate.includes(searchKey);
     });
-  }, [globalSearch, keyword, severityFilter, sortedAlerts, statusFilter]);
+  }, [deferredKeyword, severityFilter, sortedAlerts, statusFilter]);
 
   const mobilePushAlerts = filteredAlerts.filter((alert) => alert.status === "open").slice(0, 6);
 
@@ -333,15 +336,15 @@ export function NotificationsPage() {
           ) : deliveryStats ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-success/30 bg-success/10 p-3 shadow-sm">
+                <div className="rounded-xl border border-success/30 bg-success/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送成功</p>
                   <p className="mt-1 text-2xl font-semibold text-success">{deliveryStats.totalSent}</p>
                 </div>
-                <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 shadow-sm">
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">发送失败</p>
                   <p className="mt-1 text-2xl font-semibold text-destructive">{deliveryStats.totalFailed}</p>
                 </div>
-                <div className="rounded-lg border border-info/30 bg-info/10 p-3 shadow-sm">
+                <div className="rounded-xl border border-info/30 bg-info/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">成功率</p>
                   <p className="mt-1 text-2xl font-semibold text-info">{deliveryStats.successRate}%</p>
                 </div>
@@ -350,7 +353,7 @@ export function NotificationsPage() {
               {deliveryStats.byIntegration.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {deliveryStats.byIntegration.map((item) => (
-                    <div key={item.integrationId} className="rounded-lg border border-border/70 bg-muted/20 p-3">
+                    <div key={item.integrationId} className="rounded-xl border border-border/70 bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-medium">{item.name}</p>
                         <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
@@ -384,7 +387,7 @@ export function NotificationsPage() {
             mobilePushAlerts.map((alert) => {
               const severity = getSeverityMeta(alert.severity);
               return (
-                <div key={`push-${alert.id}`} className="rounded-lg border border-border/75 bg-background/70 p-3 shadow-sm">
+                <div key={`push-${alert.id}`} className="rounded-xl border border-border/75 bg-background/70 p-3 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-medium">{alert.nodeName}</p>
                     <Badge variant={severity.variant}>{severity.label}</Badge>
@@ -484,7 +487,8 @@ export function NotificationsPage() {
                               .finally(() => endIntegrationOp(integration.id, "test"));
                           }}
                         >
-                          {isTesting ? "测试中..." : "测试发送"}
+                          {isTesting && <Loader2 className="mr-1 size-4 animate-spin" />}
+                          测试发送
                         </Button>
                         <Button
                           variant="outline"
@@ -544,8 +548,9 @@ export function NotificationsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <FilterPanel className="grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr]">
+            <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
               <SearchInput
+                containerClassName="w-full"
                 aria-label="告警关键词筛选"
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
@@ -575,6 +580,20 @@ export function NotificationsPage() {
                 <option value="acked">已确认</option>
                 <option value="resolved">已恢复</option>
               </AppSelect>
+
+              <div className="flex items-center justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setKeyword("");
+                    setSeverityFilter("all");
+                    setStatusFilter("all");
+                  }}
+                >
+                  重置
+                </Button>
+              </div>
             </FilterPanel>
 
             <FilterSummary filtered={filteredAlerts.length} total={alerts.length} unit="条告警" />
@@ -690,7 +709,8 @@ export function NotificationsPage() {
                                       .finally(() => setRetryingAllAlertId(null));
                                   }}
                                 >
-                                  {retryingAllAlertId === alert.id ? "批量重发中..." : "重发全部失败投递"}
+                                  {retryingAllAlertId === alert.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                                  重发全部失败投递
                                 </Button>
                               ) : null}
 
@@ -724,7 +744,8 @@ export function NotificationsPage() {
                                           .finally(() => setRetryingDeliveryKey(null));
                                       }}
                                     >
-                                      {retryingDeliveryKey === `${alert.id}:${delivery.integrationId}` ? "重发中..." : "重发通知"}
+                                      {retryingDeliveryKey === `${alert.id}:${delivery.integrationId}` && <Loader2 className="mr-1 size-4 animate-spin" />}
+                                      重发通知
                                     </Button>
                                   ) : null}
                                 </div>
@@ -738,7 +759,7 @@ export function NotificationsPage() {
                     </div>
                   );
                 })
-              ) : (
+              ) : !loading ? (
                 <FilteredEmptyState
                   icon={BellRing}
                   title="当前筛选条件下没有待处理通知"
@@ -749,7 +770,7 @@ export function NotificationsPage() {
                     setStatusFilter("all");
                   }}
                 />
-              )}
+              ) : null}
             </div>
           </CardContent>
         </Card>

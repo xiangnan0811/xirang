@@ -140,7 +140,7 @@ export function SSHKeysPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
+          <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
             私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
             Vault/KMS），并启用审计与最小权限策略。
           </div>
@@ -177,22 +177,24 @@ export function SSHKeysPage() {
                     <p>最后使用：{key.lastUsedAt ?? "未使用"}</p>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border/40 pt-3">
                     <Button
-                      size="sm"
-                      variant="outline"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       onClick={() => openEditDialog(key)}
+                      aria-label="编辑"
                     >
-                      <Wrench className="mr-1 size-4" />
-                      编辑
+                      <Wrench className="size-4" />
                     </Button>
                     <Button
-                      size="sm"
-                      variant="danger"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
                       onClick={() => onDelete(key)}
+                      aria-label="删除"
                     >
-                      <Trash2 className="mr-1 size-4" />
-                      删除
+                      <Trash2 className="size-4" />
                     </Button>
                   </div>
 

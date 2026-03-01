@@ -121,9 +121,8 @@ export function SSHKeyEditorDialog({
 
         <DialogBody className="space-y-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">Key 名称</label>
-            <Input
-              placeholder="例如：prod-deploy-key"
+            <label htmlFor="ssh-key-edit-name" className="mb-1 block text-sm font-medium">Key 名称</label>
+            <Input id="ssh-key-edit-name"               placeholder="例如：prod-deploy-key"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -132,9 +131,8 @@ export function SSHKeyEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">默认用户名</label>
-            <Input
-              placeholder="默认用户名"
+            <label htmlFor="ssh-key-edit-username" className="mb-1 block text-sm font-medium">默认用户名</label>
+            <Input id="ssh-key-edit-username"               placeholder="默认用户名"
               value={draft.username}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, username: event.target.value }))
@@ -143,9 +141,8 @@ export function SSHKeyEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">密钥类型</label>
-            <AppSelect
-              className="w-full"
+            <label htmlFor="ssh-key-edit-type" className="mb-1 block text-sm font-medium">密钥类型</label>
+            <AppSelect id="ssh-key-edit-type"               className="w-full"
               value={draft.keyType}
               onChange={(event) =>
                 setDraft((prev) => ({
@@ -166,12 +163,12 @@ export function SSHKeyEditorDialog({
 
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className="block text-sm font-medium">
+              <label htmlFor="ssh-key-edit-private-key" className="block text-sm font-medium">
                 {isEditing ? "私钥内容（留空表示不修改）" : "私钥内容"}
               </label>
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-200 ease-out hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={saving}
               >
@@ -187,6 +184,7 @@ export function SSHKeyEditorDialog({
               />
             </div>
             <AppTextarea
+              id="ssh-key-edit-private-key"
               className="min-h-36 text-xs"
               placeholder={isEditing
                 ? "留空表示不修改现有私钥；如需更新请粘贴新的 OpenSSH 私钥"

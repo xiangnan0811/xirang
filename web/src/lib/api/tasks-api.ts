@@ -115,6 +115,7 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
     id: `history-${row.task_id}-${row.id}`,
     logId: row.id,
     timestamp: formatTime(row.created_at),
+    timestampMs: new Date(row.created_at).getTime(),
     level: mapLogLevel(row.level),
     message: row.message,
     taskId: row.task_id,

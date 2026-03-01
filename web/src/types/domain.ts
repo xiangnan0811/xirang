@@ -112,6 +112,7 @@ export interface LogEvent {
   id: string;
   logId?: number;
   timestamp: string;
+  timestampMs?: number;
   level: "info" | "warn" | "error";
   message: string;
   nodeName?: string;

@@ -4,19 +4,19 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "touch-target touch-manipulation inline-flex select-none items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/80 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.99]",
+  "touch-target touch-manipulation inline-flex select-none items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-[0_10px_24px_rgba(7,20,17,0.18)] hover:-translate-y-px hover:brightness-110",
+          "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
         secondary:
-          "border border-border/70 bg-secondary/85 text-secondary-foreground shadow-sm hover:border-primary/25 hover:bg-secondary",
+          "border border-border/70 bg-secondary/85 text-secondary-foreground shadow-sm hover:border-primary/25 hover:bg-secondary/70",
         ghost: "hover:bg-accent/70 hover:text-accent-foreground",
         outline:
           "border border-input/90 bg-background/70 backdrop-blur hover:border-primary/35 hover:bg-accent/65 hover:text-accent-foreground",
         destructive:
-          "bg-destructive text-destructive-foreground shadow-[0_10px_24px_rgba(127,29,29,0.22)] hover:-translate-y-px hover:bg-destructive/90",
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
         danger:
           "border border-destructive/45 bg-destructive/10 text-destructive shadow-sm hover:border-destructive/65 hover:bg-destructive/15"
       },

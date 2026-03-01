@@ -213,11 +213,12 @@ export function AuditPage() {
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="pl-9"
-                placeholder="按路径关键字过滤，例如 /nodes /policies"
-                value={keyword}
-                onChange={(event) => setKeyword(event.target.value)}
-              />
+  className="pl-9"
+  placeholder="按路径关键字过滤，例如 /nodes /policies"
+  aria-label="按路径关键字过滤"
+  value={keyword}
+  onChange={(event) => setKeyword(event.target.value)}
+/>
             </div>
             <AppSelect
               value={method}
@@ -279,7 +280,7 @@ export function AuditPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
+            <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm">
               <table className="min-w-[1080px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -294,7 +295,7 @@ export function AuditPage() {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                    <tr key={row.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                       <td className="px-3 py-2.5">{row.createdAt}</td>
                       <td className="px-3 py-2.5">{row.username || "-"}</td>
                       <td className="px-3 py-2.5">{row.role || "-"}</td>

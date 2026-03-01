@@ -66,7 +66,9 @@ function distanceBetweenTouches(touches: React.TouchList) {
   return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
 }
 
-function parseToMillis(timestamp: string) {
+function parseToMillis(log: LogEvent) {
+  if (Number.isFinite(log.timestampMs)) return log.timestampMs as number;
+  const timestamp = log.timestamp;
   const parsed = Date.parse(timestamp);
   if (Number.isNaN(parsed)) {
     return 0;
@@ -184,7 +186,7 @@ export function LogsPage() {
       if (idGap !== 0) {
         return idGap;
       }
-      return parseToMillis(second.timestamp) - parseToMillis(first.timestamp);
+      return parseToMillis(second) - parseToMillis(first);
     });
   }, [historyLogs, logs, tasks]);
 
@@ -226,7 +228,7 @@ export function LogsPage() {
       const taskId = log.taskId ?? null;
       const key = `${nodeName}::${taskId ?? "global"}`;
       const existing = groups.get(key);
-      const currentAt = parseToMillis(log.timestamp);
+      const currentAt = parseToMillis(log);
       if (!existing) {
         groups.set(key, {
           key,
@@ -249,7 +251,7 @@ export function LogsPage() {
           if (idGap !== 0) {
             return idGap;
           }
-          return parseToMillis(second.timestamp) - parseToMillis(first.timestamp);
+          return parseToMillis(second) - parseToMillis(first);
         }),
       }))
       .sort((first, second) => second.latestAt - first.latestAt);
@@ -470,7 +472,7 @@ export function LogsPage() {
               }}
             />
 
-            <div className="flex items-center gap-2 rounded-lg border border-border/75 bg-background/70 px-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-xl border border-border/75 bg-background/70 px-3 text-xs text-muted-foreground">
               <RefreshCw className={cn("size-3.5", (historyLoading || historyPaging) && "animate-spin")} />
               游标 #{cursorLogId || "-"}
             </div>
@@ -497,7 +499,7 @@ export function LogsPage() {
             </div>
           ) : null}
 
-          <div className="rounded-lg border border-border/75 bg-background/60 p-3">
+          <div className="rounded-xl border border-border/75 bg-background/60 p-3">
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
               <span>高对比度执行进度</span>
               <span>{Number.isFinite(progressValue) ? progressValue : 0}%</span>
@@ -534,7 +536,7 @@ export function LogsPage() {
             ) : (
               <div
                 ref={terminalRef}
-                className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-lg p-3 font-mono text-[12px]"
+                className="terminal-surface thin-scrollbar h-[58vh] overflow-auto rounded-xl p-3 font-mono text-[12px]"
                 style={{ fontSize: `${12 * fontScale}px` }}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
@@ -587,7 +589,7 @@ export function LogsPage() {
             )}
 
             {focusedTaskNumber ? (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-border/75 bg-background/60 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-border/75 bg-background/60 px-3 py-2">
                 <p className="text-xs text-muted-foreground">
                   历史回溯：{historyLogs.length} 条
                   {historyCursor ? `，最早游标 #${historyCursor}` : "，已到最早"}

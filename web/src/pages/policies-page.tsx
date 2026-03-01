@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Clock3, LayoutGrid, List, Plus, Trash2 } from "lucide-react";
+import { LayoutGrid, List, Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import {
@@ -147,7 +147,7 @@ export function PoliciesPage() {
               <Badge variant="success">启用 {activeCount}</Badge>
               <Badge variant="outline">停用 {disabledCount}</Badge>
               <Badge variant="secondary" className="hidden lg:inline-flex">筛选 {filteredPolicies.length}</Badge>
-              <div className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/70 p-1">
+              <div className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-background/70 p-1">
                 <Button
                   size="sm"
                   variant={viewMode === "cards" ? "default" : "ghost"}
@@ -176,10 +176,11 @@ export function PoliciesPage() {
         <CardContent className="space-y-3">
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <Input
-              placeholder="搜索策略 / 路径 / cron"
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-            />
+  placeholder="搜索策略 / 路径 / cron"
+  aria-label="搜索策略、路径或cron表达式"
+  value={keyword}
+  onChange={(event) => setKeyword(event.target.value)}
+/>
             <Badge variant="secondary" className="hidden lg:inline-flex">
               启用 {activeCount}/{policies.length}
             </Badge>
@@ -201,7 +202,7 @@ export function PoliciesPage() {
               {filteredPolicies.map((policy) => (
                 <div
                   key={policy.id}
-                  className="interactive-surface p-4"
+                  className="interactive-surface p-4 flex flex-col"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -213,7 +214,7 @@ export function PoliciesPage() {
                     </Badge>
                   </div>
 
-                  <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
+                  <div className="mt-3 grid gap-2 text-sm text-muted-foreground flex-1">
                     <p className="break-all">源路径：{policy.sourcePath}</p>
                     <p className="break-all">目标路径：{policy.targetPath}</p>
                   </div>
@@ -221,6 +222,34 @@ export function PoliciesPage() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Badge variant="outline">Cron: {policy.cron}</Badge>
                     <Badge variant="outline">失败阈值: {policy.criticalThreshold}</Badge>
+                  </div>
+                  
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+                    <Switch
+                      checked={policy.enabled}
+                      aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
+                      onCheckedChange={() => void onTogglePolicy(policy)}
+                    />
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        onClick={() => openEditDialog(policy)}
+                        aria-label="编辑策略"
+                      >
+                        <Wrench className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                        aria-label={`删除策略 ${policy.name}`}
+                        onClick={() => onDelete(policy)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -245,7 +274,7 @@ export function PoliciesPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
+            <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm">
               <table className="min-w-[980px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -260,7 +289,7 @@ export function PoliciesPage() {
                 <tbody>
                   {filteredPolicies.length ? (
                     filteredPolicies.map((policy) => (
-                      <tr key={policy.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                      <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                         <td className="px-3 py-2.5">
                           <p className="font-medium">{policy.name}</p>
                           <p className="text-xs text-muted-foreground">阈值 {policy.criticalThreshold}</p>
@@ -273,19 +302,26 @@ export function PoliciesPage() {
                         <td className="px-3 py-2.5 text-muted-foreground">{policy.targetPath}</td>
                         <td className="px-3 py-2.5">
                           <Switch
-                            checked={policy.enabled}
-                            onCheckedChange={() => void onTogglePolicy(policy)}
-                          />
+  checked={policy.enabled}
+  aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
+  onCheckedChange={() => void onTogglePolicy(policy)}
+/>
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button size="sm" variant="outline" onClick={() => openEditDialog(policy)}>
-                              <Clock3 className="mr-1 size-4" />
-                              编辑
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                              onClick={() => openEditDialog(policy)}
+                              aria-label="编辑策略"
+                            >
+                              <Wrench className="size-4" />
                             </Button>
                             <Button
-                              size="sm"
-                              variant="danger"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
                               aria-label={`删除策略 ${policy.name}`}
                               onClick={() => onDelete(policy)}
                             >

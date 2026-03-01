@@ -162,7 +162,7 @@ export function OverviewPage() {
   return (
     <div className="animate-fade-in space-y-5">
       {!onboardingDismissed && checklistDone < checklistItems.length ? (
-      <section className="glass-card rounded-2xl p-4">
+      <section className="glass-card p-4 animate-slide-up [animation-delay:100ms]">
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">首次接入引导</p>
@@ -181,7 +181,7 @@ export function OverviewPage() {
 
         <div className="mt-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
           {checklistItems.map((item) => (
-            <div key={item.id} className="rounded-lg border border-border/75 bg-background/72 p-3">
+            <div key={item.id} className="glass-panel p-4 interactive-surface">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium">{item.title}</p>
@@ -202,8 +202,8 @@ export function OverviewPage() {
       </section>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card className="border-success/30 bg-gradient-to-br from-success/10 via-transparent to-transparent">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 animate-slide-up [animation-delay:150ms]">
+        <Card className="glass-panel border-success/30 bg-gradient-to-br from-success/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">节点健康率</CardTitle>
           </CardHeader>
@@ -220,7 +220,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-info/30 bg-gradient-to-br from-info/10 via-transparent to-transparent">
+        <Card className="glass-panel border-info/30 bg-gradient-to-br from-info/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">任务成功率</CardTitle>
           </CardHeader>
@@ -230,7 +230,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-warning/30 bg-gradient-to-br from-warning/10 via-transparent to-transparent">
+        <Card className="glass-panel border-warning/30 bg-gradient-to-br from-warning/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">实时吞吐</CardTitle>
           </CardHeader>
@@ -240,7 +240,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-primary/30 bg-gradient-to-br from-primary/10 via-transparent to-transparent">
+        <Card className="glass-panel border-primary/30 bg-gradient-to-br from-primary/10 via-transparent to-transparent">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">策略覆盖</CardTitle>
           </CardHeader>
@@ -251,8 +251,8 @@ export function OverviewPage() {
         </Card>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1.35fr_1fr] xl:grid-cols-[1.45fr_1fr]">
-        <Card className="border-border/70">
+      <section className="grid gap-4 lg:grid-cols-[1.35fr_1fr] xl:grid-cols-[1.45fr_1fr] animate-slide-up [animation-delay:200ms]">
+        <Card className="glass-panel border-border/70">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -278,7 +278,7 @@ export function OverviewPage() {
               />
             ) : null}
             {!loading && matrixNodes.length === 0 ? (
-              <p className="rounded-lg border border-border/70 bg-background/60 px-3 py-4 text-sm text-muted-foreground">
+              <p className="rounded-xl border border-border/70 bg-background/60 px-3 py-4 text-sm text-muted-foreground">
                 暂无可展示节点，请先在节点页完成接入。
               </p>
             ) : (
@@ -287,7 +287,7 @@ export function OverviewPage() {
                   <button
                     key={node.id}
                     type="button"
-                    className="interactive-surface border-border/70 bg-background/75 p-2 text-left text-xs hover:border-primary/45"
+                    className="interactive-surface flex flex-col justify-between p-2.5 text-left text-xs"
                     title={`${node.name} · ${node.ip} · 成功率 ${node.successRate}%`}
                     onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
                     aria-label={`${node.name}，状态${getNodeStatusLabel(node.status)}，磁盘剩余 ${node.diskFreePercent}%，成功率 ${node.successRate}%`}
@@ -344,12 +344,12 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-info/30">
+        <Card className="glass-panel border-info/30">
           <CardHeader>
             <CardTitle className="text-base">流量趋势（近 1 小时）</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="rounded-lg border border-border/70 bg-background/65 p-3">
+            <div className="glass-panel p-4">
               <svg
                 viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
                 className="h-40 w-full"
@@ -410,11 +410,11 @@ export function OverviewPage() {
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">
-              <div className="rounded-lg border border-success/30 bg-success/10 p-3">
+              <div className="rounded-xl border border-success/30 bg-success/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值入站</p>
                 <p className="mt-1 text-xl font-semibold">{chartMetrics.peakIngress} Mbps</p>
               </div>
-              <div className="rounded-lg border border-info/30 bg-info/10 p-3">
+              <div className="rounded-xl border border-info/30 bg-info/10 p-3">
                 <p className="text-xs text-muted-foreground">峰值出站</p>
                 <p className="mt-1 text-xl font-semibold">{chartMetrics.peakEgress} Mbps</p>
               </div>
@@ -423,14 +423,14 @@ export function OverviewPage() {
         </Card>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
-        <Card>
+      <section className="grid gap-4 md:grid-cols-2 animate-slide-up [animation-delay:250ms]">
+        <Card className="glass-panel">
           <CardHeader>
             <CardTitle className="text-base">成功率看板</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {nodes.slice(0, 8).map((node) => (
-              <div key={node.id} className="space-y-1 rounded-lg border border-border/70 bg-background/55 px-3 py-2">
+              <div key={node.id} className="glass-panel space-y-2 px-4 py-3">
                 <div className="flex items-center justify-between text-xs">
                   <span>{node.name}</span>
                   <span className="text-muted-foreground">{node.successRate}%</span>
@@ -453,13 +453,13 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="glass-panel">
           <CardHeader>
             <CardTitle className="text-base">移动端异常优先队列</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {unhealthyNodes.slice(0, 8).map((node) => (
-              <div key={node.id} className="rounded-lg border border-border/75 bg-background/60 p-3">
+              <div key={node.id} className="glass-panel p-3.5 flex flex-col gap-1 interactive-surface">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{node.name}</p>
                   <Badge variant={node.status === "offline" ? "danger" : "warning"}>
@@ -478,7 +478,7 @@ export function OverviewPage() {
               </div>
             ))}
             {!unhealthyNodes.length ? (
-              <div className="rounded-lg border border-success/30 bg-success/10 p-4 text-sm text-success">
+              <div className="rounded-xl border border-success/30 bg-success/10 p-4 text-sm text-success">
                 <Activity className="mb-1 size-4" />
                 当前无异常节点，移动端优先队列为空。
               </div>

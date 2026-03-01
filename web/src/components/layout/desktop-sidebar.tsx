@@ -21,7 +21,7 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
   const navItemActiveClass =
     "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))] shadow-[inset_0_0_0_1px_rgba(16,185,129,0.22)]";
   const navItemIdleClass =
-    "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground";
+    "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground";
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-card/65 backdrop-blur-xl md:flex md:w-20 md:p-3 lg:w-72 lg:p-4">

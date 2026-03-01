@@ -83,6 +83,7 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
     id: logID ? `live-${logID}` : `${taskID ?? "global"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     logId: logID,
     timestamp: new Date(ts).toLocaleString(),
+    timestampMs: new Date(ts).getTime(),
     level,
     message,
     taskId: taskID,

@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
+import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
+  Activity,
   CheckSquare,
   Download,
   FileUp,
+  KeyRound,
+  Loader2,
   Search,
   ServerCog,
-  KeyRound,
+  Terminal,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -99,6 +102,7 @@ export function NodesPage() {
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [showSearchDrawer, setShowSearchDrawer] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
+  const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
@@ -140,8 +144,10 @@ export function NodesPage() {
   }, [nodes]);
 
   const effectiveKeyword = keyword || globalSearch;
+  const deferredKeyword = useDeferredValue(effectiveKeyword);
 
   const filteredNodes = useMemo(() => {
+    const searchKey = deferredKeyword.trim().toLowerCase();
     return nodes.filter((node) => {
       if (statusFilter !== "all" && node.status !== statusFilter) {
         return false;
@@ -149,16 +155,13 @@ export function NodesPage() {
       if (tagFilter !== "all" && !node.tags.includes(tagFilter)) {
         return false;
       }
-      if (!effectiveKeyword.trim()) {
+      if (!searchKey) {
         return true;
       }
-      const candidate =
-        `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status}`
-          .toLowerCase()
-          .trim();
-      return candidate.includes(effectiveKeyword.trim().toLowerCase());
+      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status}`.toLowerCase();
+      return candidate.includes(searchKey);
     });
-  }, [effectiveKeyword, nodes, statusFilter, tagFilter]);
+  }, [deferredKeyword, nodes, statusFilter, tagFilter]);
 
   const sortedNodes = useMemo(() => {
     const list = [...filteredNodes];
@@ -365,10 +368,13 @@ export function NodesPage() {
 
   const handleTriggerBackup = async (nodeId: number, nodeName: string) => {
     try {
+      setTriggeringNodeId(nodeId);
       await triggerNodeBackup(nodeId);
       toast.success(`已触发 ${nodeName} 的手动备份任务。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
+    } finally {
+      setTriggeringNodeId(null);
     }
   };
 
@@ -517,12 +523,14 @@ export function NodesPage() {
                 <Search className="mr-1 size-4" />
                 侧滑搜索
               </Button>
-              <Link to="/app/ssh-keys">
-                <Button variant="outline" size="sm">
-                  <KeyRound className="mr-1 size-4" />
-                  SSH Key 管理
-                </Button>
-              </Link>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/app/ssh-keys")}
+              >
+                <KeyRound className="mr-1 size-4" />
+                SSH Key 管理
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -572,22 +580,22 @@ export function NodesPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-xs text-info shadow-sm">
+          <div className="rounded-xl border border-info/30 bg-info/10 px-3 py-2 text-xs text-info shadow-sm">
             无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次
             SSH 探测（如远程执行
             <code className="mx-1">df</code>）快照。
           </div>
 
-          <FilterPanel className="hidden flex-wrap items-center gap-2 md:flex">
+          <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2.5fr_1fr_1fr_1fr_auto] items-center">
             <SearchInput
-              containerClassName="min-w-[220px] flex-1 md:basis-[280px]"
+              containerClassName="w-full"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               placeholder="按名称 / 标签 / IP / 用户名 / 连接状态筛选"
               aria-label="节点关键词筛选"
             />
             <AppSelect
-              className="w-full md:w-auto"
+              className="w-full"
               aria-label="节点状态筛选"
               value={statusFilter}
               onChange={(event) =>
@@ -600,7 +608,7 @@ export function NodesPage() {
               <option value="offline">离线</option>
             </AppSelect>
             <AppSelect
-              className="w-full md:w-auto"
+              className="w-full"
               aria-label="节点标签筛选"
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
@@ -612,7 +620,7 @@ export function NodesPage() {
               ))}
             </AppSelect>
             <AppSelect
-              className="w-full md:w-auto"
+              className="w-full"
               aria-label="节点排序方式"
               value={sortBy}
               onChange={(event) =>
@@ -625,25 +633,27 @@ export function NodesPage() {
               <option value="disk-low">磁盘余量升序</option>
               <option value="backup-recent">最近备份优先</option>
             </AppSelect>
-            <ViewModeToggle
-              className="md:ml-auto"
-              value={viewMode}
-              onChange={setViewMode}
-              groupLabel="节点视图切换"
-              cardsButtonLabel="节点卡片视图"
-              listButtonLabel="节点列表视图"
-            />
-            <Button size="sm" variant="outline" onClick={resetFilters}>
-              重置筛选
-            </Button>
+            <div className="flex items-center gap-2 justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
+              <ViewModeToggle
+                value={viewMode}
+                onChange={setViewMode}
+                groupLabel="节点视图切换"
+                cardsButtonLabel="节点卡片视图"
+                listButtonLabel="节点列表视图"
+              />
+              <Button size="sm" variant="outline" onClick={resetFilters}>
+                重置
+              </Button>
+            </div>
           </FilterPanel>
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
 
-          <div className="hidden flex-wrap items-center justify-between gap-2 rounded-lg border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
+          <div className="hidden flex-wrap items-center justify-between gap-2 rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
             <div className="inline-flex items-center gap-2">
               <input
                 type="checkbox"
+                aria-label="全选当前页可见节点"
                 className="size-4"
                 checked={allVisibleSelected}
                 onChange={(event) =>
@@ -717,15 +727,35 @@ export function NodesPage() {
                   <div
                     key={node.id}
                     className={cn(
-                      "interactive-surface p-3 transition-colors",
+                      "interactive-surface p-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
                       selectedNode?.id === node.id && "border-primary/45 ring-1 ring-primary/40"
                     )}
-                    onClick={() => setSelectedNodeId(node.id)}
+                    role="button"
+                    aria-label={`节点卡片 ${node.name}`}
+                    tabIndex={0}
+                    onClick={(e) => {
+                      if (
+                        e.target instanceof HTMLElement &&
+                        e.target.closest("button, input, a, label, select, textarea")
+                      ) {
+                        return;
+                      }
+                      setSelectedNodeId(node.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        if (e.target === e.currentTarget) {
+                          e.preventDefault();
+                          setSelectedNodeId(node.id);
+                        }
+                      }
+                    }}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                         <input
                           type="checkbox"
+                          aria-label={`选择节点 ${node.name}`}
                           className="size-4"
                           checked={checked}
                           onChange={(event) =>
@@ -767,66 +797,72 @@ export function NodesPage() {
                       </p>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label="测试连接"
+                          onClick={() => void onTestNode(node)}
+                          disabled={testingNodeId === node.id}
+                        >
+                          {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={`查看节点 ${node.name} 日志`}
+                          onClick={() =>
+                            navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
+                          }
+                        >
+                            <Terminal className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label="编辑节点"
+                          onClick={() => openEditDialog(node)}
+                        >
+                          <Wrench className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                          aria-label="删除节点"
+                          onClick={() => onDeleteNode(node)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
                       <Button
-                        variant="outline"
                         size="sm"
-                        className="h-10"
-                        onClick={() => void onTestNode(node)}
-                        disabled={testingNodeId === node.id}
-                      >
-                        {testingNodeId === node.id ? "探测中" : "测试"}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10"
-                        onClick={() => openEditDialog(node)}
-                      >
-                        编辑
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        className="h-10"
-                        onClick={() => onDeleteNode(node)}
-                      >
-                        删除
-                      </Button>
-                    </div>
-
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <Button
-                        size="sm"
-                        className="h-10"
+                        disabled={triggeringNodeId === node.id}
                         onClick={() =>
                           void handleTriggerBackup(node.id, node.name)
                         }
                       >
+                        {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
                         手动备份
                       </Button>
-                      <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-10 w-full"
-                        >
-                          查看日志
-                        </Button>
-                      </Link>
                     </div>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div className="hidden overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm md:block">
+            <div className="hidden overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm md:block">
               <table className="min-w-[1280px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
                     <th className="px-3 py-2.5">
                       <input
                         type="checkbox"
+                        aria-label="全选当前页可见节点"
                         className="size-4"
                         checked={allVisibleSelected}
                         onChange={(event) =>
@@ -877,10 +913,11 @@ export function NodesPage() {
                         : "未绑定";
 
                       return (
-                        <tr key={node.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                        <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                           <td className="px-3 py-2.5">
                             <input
                               type="checkbox"
+                              aria-label={`选择节点 ${node.name}`}
                               className="size-4"
                               checked={selectedNodeSet.has(node.id)}
                               onChange={(event) =>
@@ -958,48 +995,54 @@ export function NodesPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <div className="flex justify-end gap-2">
+                            <div className="flex items-center justify-end gap-1">
                               <Button
-                                variant="outline"
-                                size="sm"
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label="测试连接"
                                 onClick={() => void onTestNode(node)}
                                 disabled={testingNodeId === node.id}
                               >
-                                {testingNodeId === node.id
-                                  ? "探测中"
-                                  : "测试连接"}
+                                {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
                               </Button>
-                              <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                                <Button variant="outline" size="sm">
-                                  日志
-                                </Button>
-                              </Link>
                               <Button
-                                size="sm"
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label={`查看节点 ${node.name} 日志`}
                                 onClick={() =>
-                                  void handleTriggerBackup(
-                                    node.id,
-                                    node.name
-                                  )
+                                  navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                                 }
                               >
-                                手动备份
+                                  <Terminal className="size-4" />
                               </Button>
                               <Button
-                                variant="outline"
-                                size="sm"
-                                aria-label={`编辑节点 ${node.name}`}
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label="编辑节点"
                                 onClick={() => openEditDialog(node)}
                               >
                                 <Wrench className="size-4" />
                               </Button>
                               <Button
-                                variant="danger"
-                                size="sm"
-                                aria-label={`删除节点 ${node.name}`}
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                                aria-label="删除节点"
                                 onClick={() => onDeleteNode(node)}
                               >
                                 <Trash2 className="size-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="ml-2"
+                                disabled={triggeringNodeId === node.id}
+                                onClick={() => void handleTriggerBackup(node.id, node.name)}
+                              >
+                                {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                                手动备份
                               </Button>
                             </div>
                           </td>
@@ -1012,56 +1055,20 @@ export function NodesPage() {
             </div>
           )}
 
-            <div className="space-y-2 p-2 md:hidden">
-            <div className="grid grid-cols-3 gap-2">
-              <AppSelect
-                className="w-full"
-                aria-label="节点状态筛选"
-                value={statusFilter}
-                onChange={(event) =>
-                  setStatusFilter(event.target.value as typeof statusFilter)
-                }
-              >
-                <option value="all">全部状态</option>
-                <option value="online">在线</option>
-                <option value="warning">告警</option>
-                <option value="offline">离线</option>
-              </AppSelect>
-              <AppSelect
-                className="w-full"
-                aria-label="节点标签筛选"
-                value={tagFilter}
-                onChange={(event) => setTagFilter(event.target.value)}
-              >
-                {tags.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag === "all" ? "全部标签" : tag}
-                  </option>
-                ))}
-              </AppSelect>
-              <AppSelect
-                className="w-full"
-                aria-label="节点排序方式"
-                value={sortBy}
-                onChange={(event) =>
-                  setSortBy(event.target.value as typeof sortBy)
-                }
-              >
-                <option value="status">异常优先</option>
-                <option value="name-asc">名称 A-Z</option>
-                <option value="disk-low">磁盘余量</option>
-                <option value="backup-recent">最近备份</option>
-              </AppSelect>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
-              >
-                {allVisibleSelected ? "取消全选" : "全选当前"}
-              </Button>
+            <div className="space-y-3 p-2 md:hidden">
+            <div className="flex items-center gap-2 justify-between rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              <div className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label="全选当前页可见节点"
+                  className="size-4"
+                  checked={allVisibleSelected}
+                  onChange={(event) =>
+                    toggleSelectAllVisible(event.target.checked)
+                  }
+                />
+                <span>全选</span>
+              </div>
               <Button
                 size="sm"
                 variant="destructive"
@@ -1084,6 +1091,7 @@ export function NodesPage() {
                     <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                       <input
                         type="checkbox"
+                        aria-label={`选择节点 ${node.name}`}
                         className="size-4"
                         checked={checked}
                         onChange={(event) =>
@@ -1114,53 +1122,56 @@ export function NodesPage() {
                     <p className="break-words">标签：{node.tags.join(" / ") || "-"}</p>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label="测试连接"
+                        onClick={() => void onTestNode(node)}
+                        disabled={testingNodeId === node.id}
+                      >
+                        {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`查看节点 ${node.name} 日志`}
+                        onClick={() =>
+                          navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
+                        }
+                      >
+                          <Terminal className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label="编辑节点"
+                        onClick={() => openEditDialog(node)}
+                      >
+                        <Wrench className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                        aria-label="删除节点"
+                        onClick={() => onDeleteNode(node)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                     <Button
-                      variant="outline"
                       size="sm"
-                      className="h-10"
-                      onClick={() => void onTestNode(node)}
-                      disabled={testingNodeId === node.id}
+                      disabled={triggeringNodeId === node.id}
+                      onClick={() => void handleTriggerBackup(node.id, node.name)}
                     >
-                      测试
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-10"
-                      onClick={() => openEditDialog(node)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      className="h-10"
-                      onClick={() => onDeleteNode(node)}
-                    >
-                      删除
-                    </Button>
-                  </div>
-
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <Button
-                      size="sm"
-                      className="h-10"
-                      onClick={() =>
-                        void handleTriggerBackup(node.id, node.name)
-                      }
-                    >
+                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
                       手动备份
                     </Button>
-                    <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10 w-full"
-                      >
-                        查看日志
-                      </Button>
-                    </Link>
                   </div>
                 </div>
               );

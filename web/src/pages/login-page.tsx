@@ -68,47 +68,57 @@ export function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8 animate-fade-in">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,137,92,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.16),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.04),rgba(15,23,42,0.24))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.2),transparent_38%),linear-gradient(180deg,rgba(2,6,23,0.68),rgba(2,6,23,0.9))]" />
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="hidden rounded-2xl border border-border/70 bg-background/60 p-5 shadow-panel backdrop-blur-xl md:block lg:p-6">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border/75 bg-background/70 px-3 py-1 text-xs text-muted-foreground">
-            <img src="/xirang-mark.svg" alt="XiRang" className="size-4 rounded-sm border border-border/70" />
-            XiRang / X-Soil
+        <section className="hidden glass-panel-heavy p-8 md:flex md:flex-col md:justify-center lg:p-12">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border/75 bg-background/70 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms] border-border/75">
+            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-[4px] border border-border/70 bg-background" />
+            <span>XiRang / X-Soil</span>
           </div>
-          <h1 className="mt-4 text-3xl font-semibold leading-tight tracking-tight">息壤集中备份管理平台</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
+            <span className="text-gradient">息壤集中备份管理平台</span>
+          </h1>
+          <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
             如神话中的“息壤”般持续生长，面对不断变化的数据洪流，提供可追踪、可恢复、可审计的增量备份能力。
           </p>
 
-          <div className="mt-5 grid gap-3 text-sm">
-            <div className="rounded-xl border border-border/75 bg-background/65 p-3">
-              <p className="text-xs text-muted-foreground">实时监控</p>
-              <p className="mt-1 font-medium">节点状态矩阵 + 告警分流 + 流式日志</p>
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 animate-slide-up [animation-delay:250ms]">
+            <div className="glass-panel p-4 interactive-surface">
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <ShieldCheck className="size-4" />
+              </div>
+              <p className="text-sm font-semibold">实时监控</p>
+              <p className="mt-1 text-xs text-muted-foreground">节点状态矩阵 + 告警分流 + 流式日志</p>
             </div>
-            <div className="rounded-xl border border-border/75 bg-background/65 p-3">
-              <p className="text-xs text-muted-foreground">统一编排</p>
-              <p className="mt-1 font-medium">策略、任务、通知与 SSH Key 一体化管理</p>
+            <div className="glass-panel p-4 interactive-surface">
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <ShieldCheck className="size-4" />
+              </div>
+              <p className="text-sm font-semibold">统一编排</p>
+              <p className="mt-1 text-xs text-muted-foreground">策略、任务、通知与 SSH Key 管理</p>
             </div>
-            <div className="rounded-xl border border-border/75 bg-background/65 p-3">
-              <p className="text-xs text-muted-foreground">安全合规</p>
-              <p className="mt-1 font-medium">权限控制 + 审计追踪 + 失败快速闭环</p>
+            <div className="glass-panel p-4 interactive-surface sm:col-span-2">
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <ShieldCheck className="size-4" />
+              </div>
+              <p className="text-sm font-semibold">安全合规</p>
+              <p className="mt-1 text-xs text-muted-foreground">权限控制 + 审计追踪 + 失败快速闭环</p>
             </div>
           </div>
         </section>
 
-        <Card className="border-border/75 bg-background/78 backdrop-blur-xl">
-          <CardHeader>
-            <div className="mb-2 flex items-center gap-2 text-primary">
-              <ShieldCheck className="size-5" />
-              <span className="text-sm font-medium">XiRang 备份控制台</span>
+        <Card className="flex flex-col justify-center glass-panel-heavy border-t-4 border-t-primary/80 animate-slide-up [animation-delay:200ms]">
+          <CardHeader className="space-y-3 pb-6 animate-slide-up [animation-delay:250ms]">
+            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
+              <ShieldCheck className="size-6" />
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight md:hidden">登录息壤控制台</h1>
-            <CardTitle>登录</CardTitle>
-            <CardDescription>输入管理员账号，进入节点与任务统一管理。</CardDescription>
+            <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">息壤控制台</h1>
+            <CardTitle className="text-2xl font-bold">欢迎登录</CardTitle>
+            <CardDescription className="text-base">输入管理员账号，进入节点与任务统一管理。</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="animate-slide-up [animation-delay:300ms]">
             <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="username">
@@ -147,7 +157,7 @@ export function LoginPage() {
                 <p
                   id={errorId}
                   role="alert"
-                  className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
                 >
                   {error}
                 </p>

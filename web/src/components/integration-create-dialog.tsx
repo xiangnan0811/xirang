@@ -195,10 +195,11 @@ export function IntegrationCreateDialog({
         <DialogBody className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="create-integration-type" className="mb-1 block text-sm font-medium">
                 通道类型
               </label>
               <AppSelect
+                id="create-integration-type"
                 className="w-full"
                 value={draft.type}
                 onChange={(event) =>
@@ -216,10 +217,11 @@ export function IntegrationCreateDialog({
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="create-integration-name" className="mb-1 block text-sm font-medium">
                 通道名称
               </label>
               <Input
+                id="create-integration-name"
                 placeholder="例如：运维邮箱、值班 Slack"
                 value={draft.name}
                 onChange={(event) =>
@@ -230,10 +232,11 @@ export function IntegrationCreateDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label htmlFor="create-integration-endpoint" className="mb-1 block text-sm font-medium">
               {guide.endpointLabel}
             </label>
             <Input
+              id="create-integration-endpoint"
               placeholder={guide.endpointPlaceholder}
               value={draft.endpoint}
               onChange={(event) =>
@@ -263,10 +266,11 @@ export function IntegrationCreateDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="create-integration-fail-threshold" className="mb-1 block text-sm font-medium">
                 失败阈值（次数）
               </label>
               <Input
+                id="create-integration-fail-threshold"
                 type="number"
                 min={1}
                 max={10}
@@ -281,10 +285,11 @@ export function IntegrationCreateDialog({
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="create-integration-cooldown" className="mb-1 block text-sm font-medium">
                 冷却时间（分钟）
               </label>
               <Input
+                id="create-integration-cooldown"
                 type="number"
                 min={1}
                 max={120}

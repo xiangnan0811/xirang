@@ -123,9 +123,8 @@ export function TaskCreateDialog({
 
         <DialogBody className="space-y-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">任务名称</label>
-            <Input
-              placeholder="例如：每日全量备份-prod-01"
+            <label htmlFor="task-create-name" className="mb-1 block text-sm font-medium">任务名称</label>
+            <Input id="task-create-name"               placeholder="例如：每日全量备份-prod-01"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -134,9 +133,8 @@ export function TaskCreateDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">目标节点</label>
-            <AppSelect
-              className="w-full"
+            <label htmlFor="task-create-node" className="mb-1 block text-sm font-medium">目标节点</label>
+            <AppSelect id="task-create-node"               className="w-full"
               value={draft.nodeId}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -152,10 +150,11 @@ export function TaskCreateDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label htmlFor="task-create-policy" className="mb-1 block text-sm font-medium">
               关联策略（可选）
             </label>
             <AppSelect
+              id="task-create-policy"
               className="w-full"
               value={draft.policyId}
               onChange={(event) =>
@@ -173,18 +172,19 @@ export function TaskCreateDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <div className="mb-1 text-sm font-medium">
                 执行器类型
-              </label>
-              <div className="flex h-10 items-center rounded-lg border border-input/80 bg-muted/50 px-3 text-sm text-muted-foreground">
+              </div>
+              <div className="flex h-10 items-center rounded-xl border border-border/60 bg-background/50 px-3 text-sm text-muted-foreground">
                 Rsync 执行器
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="task-create-cron" className="mb-1 block text-sm font-medium">
                 Cron（可选）
               </label>
               <Input
+                id="task-create-cron"
                 placeholder="例如：0 */2 * * *"
                 value={draft.cronSpec}
                 onChange={(event) =>
@@ -199,10 +199,11 @@ export function TaskCreateDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="task-create-rsync-source" className="mb-1 block text-sm font-medium">
                 Rsync 源路径（可选）
               </label>
               <Input
+                id="task-create-rsync-source"
                 placeholder="/data/source"
                 value={draft.rsyncSource}
                 onChange={(event) =>
@@ -214,10 +215,11 @@ export function TaskCreateDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="task-create-rsync-target" className="mb-1 block text-sm font-medium">
                 Rsync 目标路径（可选）
               </label>
               <Input
+                id="task-create-rsync-target"
                 placeholder="/backup/target"
                 value={draft.rsyncTarget}
                 onChange={(event) =>

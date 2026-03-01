@@ -186,7 +186,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                       "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all duration-200",
                       active
                         ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
-                        : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground"
+                        : "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
                     )}
                   >
                     <Icon className="size-4" />

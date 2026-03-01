@@ -208,9 +208,8 @@ export function PolicyEditorDialog({
 
         <DialogBody className="space-y-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">策略名称</label>
-            <Input
-              placeholder="例如：每日全量备份"
+            <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">策略名称</label>
+            <Input id="policy-edit-name"               placeholder="例如：每日全量备份"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -219,10 +218,11 @@ export function PolicyEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label htmlFor="policy-edit-cron" className="mb-1 block text-sm font-medium">
               Cron 表达式
             </label>
             <Input
+              id="policy-edit-cron"
               placeholder="例如：0 */2 * * *"
               value={draft.cron}
               onChange={(event) =>
@@ -257,9 +257,8 @@ export function PolicyEditorDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">源路径</label>
-              <Input
-                placeholder="/data/source"
+              <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">源路径</label>
+              <Input id="policy-edit-source"                 placeholder="/data/source"
                 value={draft.sourcePath}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -270,9 +269,8 @@ export function PolicyEditorDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">目标路径</label>
-              <Input
-                placeholder="/backup/target"
+              <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">目标路径</label>
+              <Input id="policy-edit-target"                 placeholder="/backup/target"
                 value={draft.targetPath}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -286,10 +284,11 @@ export function PolicyEditorDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label htmlFor="policy-edit-threshold" className="mb-1 block text-sm font-medium">
                 失败阈值（连续失败次数触发告警）
               </label>
               <Input
+                id="policy-edit-threshold"
                 type="number"
                 min={1}
                 max={10}
@@ -303,16 +302,17 @@ export function PolicyEditorDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">策略状态</label>
-              <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+              <div id="policy-status-label" className="mb-1 text-sm font-medium">策略状态</div>
+              <div className="flex h-10 items-center gap-2 rounded-xl border border-border/60 bg-background/50 px-3 text-sm">
                 <Switch
+                  aria-labelledby="policy-status-label"
                   checked={draft.enabled}
                   onCheckedChange={(checked) =>
                     setDraft((prev) => ({ ...prev, enabled: checked }))
                   }
                 />
-                {draft.enabled ? "启用" : "停用"}
-              </label>
+                <span className="text-muted-foreground">{draft.enabled ? "启用" : "停用"}</span>
+              </div>
             </div>
           </div>
         </DialogBody>

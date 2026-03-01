@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import {
-  Clock3,
+  Loader2,
   Play,
   Plus,
   RotateCcw,
   Square,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -58,6 +59,7 @@ function normalizeStatusFilter(value: string): "all" | TaskStatus {
 }
 
 export function TasksPage() {
+  const navigate = useNavigate();
   const {
     tasks,
     nodes,
@@ -84,7 +86,7 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [pendingId, setPendingId] = useState<number | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ id: number; action: "retry" | "cancel" | "delete" | "trigger" } | null>(null);
 
   const resetFilters = () => {
     setKeyword("");
@@ -152,37 +154,37 @@ export function TasksPage() {
 
   const handleTrigger = async (taskId: number) => {
     try {
-      setPendingId(taskId);
+      setPendingAction({ id: taskId, action: "trigger" });
       await triggerTask(taskId);
       toast.success(`已触发任务 #${taskId}。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
-      setPendingId(null);
+      setPendingAction(null);
     }
   };
 
   const handleCancel = async (taskId: number) => {
     try {
-      setPendingId(taskId);
+      setPendingAction({ id: taskId, action: "cancel" });
       await cancelTask(taskId);
       toast.success(`已取消任务 #${taskId}。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
-      setPendingId(null);
+      setPendingAction(null);
     }
   };
 
   const handleRetry = async (taskId: number) => {
     try {
-      setPendingId(taskId);
+      setPendingAction({ id: taskId, action: "retry" });
       await retryTask(taskId);
       toast.success(`已重试任务 #${taskId}。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
-      setPendingId(null);
+      setPendingAction(null);
     }
   };
 
@@ -195,13 +197,13 @@ export function TasksPage() {
       return;
     }
     try {
-      setPendingId(taskId);
+      setPendingAction({ id: taskId, action: "delete" });
       await deleteTask(taskId);
       toast.success(`任务 #${taskId} 已删除。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
-      setPendingId(null);
+      setPendingAction(null);
     }
   };
 
@@ -260,8 +262,9 @@ export function TasksPage() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <FilterPanel className="grid gap-2 md:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_auto]">
+          <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
             <SearchInput
+              containerClassName="w-full"
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
@@ -299,14 +302,15 @@ export function TasksPage() {
               ))}
             </AppSelect>
 
-            <Button
-              size="sm"
-              variant="outline"
-              className="md:col-span-2 lg:col-span-1 lg:justify-self-end"
-              onClick={resetFilters}
-            >
-              重置
-            </Button>
+            <div className="flex items-center gap-2 justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={resetFilters}
+              >
+                重置
+              </Button>
+            </div>
           </FilterPanel>
 
           <FilterSummary filtered={filteredTasks.length} total={tasks.length} unit="条任务" />
@@ -323,7 +327,11 @@ export function TasksPage() {
             <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
               {filteredTasks.map((task) => {
                 const status = getTaskStatusMeta(task.status);
-                const isPending = pendingId === task.id;
+                const isPendingAny = pendingAction?.id === task.id;
+                const isPendingRetry = pendingAction?.id === task.id && pendingAction.action === "retry";
+                const isPendingCancel = pendingAction?.id === task.id && pendingAction.action === "cancel";
+                const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
+                const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
 
                 return (
                   <div
@@ -373,59 +381,62 @@ export function TasksPage() {
                       </div>
                     </div>
 
-                    <div className="mt-auto flex flex-wrap gap-2">
+                    <div className="mt-auto flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label="重试任务"
+                          disabled={task.status !== "failed" || isPendingAny}
+                          onClick={() => void handleRetry(task.id)}
+                        >
+                          {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={`查看任务 #${task.id} 日志`}
+                          onClick={() => navigate(`/app/logs?task=${task.id}`)}
+                        >
+                            <Terminal className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label="取消任务"
+                          disabled={!canCancel(task.status) || isPendingAny}
+                          onClick={() => void handleCancel(task.id)}
+                        >
+                          {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                          aria-label="删除任务"
+                          disabled={isPendingAny}
+                          onClick={() => void handleDelete(task.id)}
+                        >
+                          {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                        </Button>
+                      </div>
                       <Button
                         size="sm"
-                        variant="outline"
-                        disabled={!canTrigger(task.status) || isPending}
+                        disabled={!canTrigger(task.status) || isPendingAny}
                         onClick={() => void handleTrigger(task.id)}
                       >
-                        <Play className="mr-1 size-4" />
+                        {isPendingTrigger ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}
                         触发
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!canCancel(task.status) || isPending}
-                        onClick={() => void handleCancel(task.id)}
-                      >
-                        <Square className="mr-1 size-4" />
-                        取消
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={task.status !== "failed" || isPending}
-                        onClick={() => void handleRetry(task.id)}
-                      >
-                        <RotateCcw className="mr-1 size-4" />
-                        重试
-                      </Button>
-
-                      <Link to={`/app/logs?task=${task.id}`}>
-                        <Button size="sm" variant="outline">
-                          <Clock3 className="mr-1 size-4" />
-                          查看日志
-                        </Button>
-                      </Link>
-
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        aria-label={`删除任务 #${task.id}`}
-                        disabled={isPending}
-                        onClick={() => void handleDelete(task.id)}
-                      >
-                        <Trash2 className="size-4" />
                       </Button>
                     </div>
                   </div>
                 );
               })}
 
-              {!filteredTasks.length ? (
+              {!loading && !filteredTasks.length ? (
                 <FilteredEmptyState
                   className="md:col-span-2 2xl:col-span-3"
                   title="当前筛选条件下没有任务"
@@ -438,7 +449,7 @@ export function TasksPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border border-border/70 bg-background/55 shadow-sm">
+            <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm">
               <table className="min-w-[1100px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -455,9 +466,13 @@ export function TasksPage() {
                   {filteredTasks.length ? (
                     filteredTasks.map((task) => {
                       const status = getTaskStatusMeta(task.status);
-                      const isPending = pendingId === task.id;
+                      const isPendingAny = pendingAction?.id === task.id;
+                      const isPendingRetry = pendingAction?.id === task.id && pendingAction.action === "retry";
+                      const isPendingCancel = pendingAction?.id === task.id && pendingAction.action === "cancel";
+                      const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
+                      const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
                       return (
-                        <tr key={task.id} className="border-b border-border/60 transition-colors hover:bg-accent/35">
+                        <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                           <td className="px-3 py-2.5">
                             <p className="font-medium">{task.policyName}</p>
                             <p className="text-xs text-muted-foreground">ID #{task.id}</p>
@@ -501,51 +516,61 @@ export function TasksPage() {
                             </span>
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <div className="flex justify-end gap-2">
+                            <div className="flex items-center justify-end gap-1">
                               <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!canTrigger(task.status) || isPending}
-                                onClick={() => void handleTrigger(task.id)}
-                              >
-                                <Play className="size-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!canCancel(task.status) || isPending}
-                                onClick={() => void handleCancel(task.id)}
-                              >
-                                <Square className="size-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={task.status !== "failed" || isPending}
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label="重试任务"
+                                disabled={task.status !== "failed" || isPendingAny}
                                 onClick={() => void handleRetry(task.id)}
                               >
-                                <RotateCcw className="size-4" />
+                                {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
                               </Button>
-                              <Link to={`/app/logs?task=${task.id}`}>
-                                <Button size="sm" variant="outline">
-                                  <Clock3 className="size-4" />
-                                </Button>
-                              </Link>
                               <Button
-                                size="sm"
-                                variant="danger"
-                                aria-label={`删除任务 #${task.id}`}
-                                disabled={isPending}
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label={`查看任务 #${task.id} 日志`}
+                                onClick={() => navigate(`/app/logs?task=${task.id}`)}
+                              >
+                                  <Terminal className="size-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                aria-label="取消任务"
+                                disabled={!canCancel(task.status) || isPendingAny}
+                                onClick={() => void handleCancel(task.id)}
+                              >
+                                {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                                aria-label="删除任务"
+                                disabled={isPendingAny}
                                 onClick={() => void handleDelete(task.id)}
                               >
-                                <Trash2 className="size-4" />
+                                {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="ml-2"
+                                disabled={!canTrigger(task.status) || isPendingAny}
+                                onClick={() => void handleTrigger(task.id)}
+                              >
+                                {isPendingTrigger ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Play className="size-4 mr-1" />}
+                                触发
                               </Button>
                             </div>
                           </td>
                         </tr>
                       );
                     })
-                  ) : (
+                  ) : !loading ? (
                     <tr>
                       <td colSpan={7} className="px-3 py-6">
                         <FilteredEmptyState
@@ -559,7 +584,7 @@ export function TasksPage() {
                         />
                       </td>
                     </tr>
-                  )}
+                  ) : null}
                 </tbody>
               </table>
             </div>

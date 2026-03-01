@@ -173,9 +173,8 @@ export function NodeEditorDialog({
 
         <DialogBody className="space-y-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">节点名称</label>
-            <Input
-              placeholder="例如：prod-app-01"
+            <label htmlFor="node-edit-name" className="mb-1 block text-sm font-medium">节点名称</label>
+            <Input id="node-edit-name"               placeholder="例如：prod-app-01"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -185,9 +184,8 @@ export function NodeEditorDialog({
 
           <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
             <div>
-              <label className="mb-1 block text-sm font-medium">主机 / IP</label>
-              <Input
-                placeholder="10.10.0.11"
+              <label htmlFor="node-edit-host" className="mb-1 block text-sm font-medium">主机 / IP</label>
+              <Input id="node-edit-host"                 placeholder="10.10.0.11"
                 value={draft.host}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, host: event.target.value }))
@@ -195,9 +193,8 @@ export function NodeEditorDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">端口</label>
-              <Input
-                type="number"
+              <label htmlFor="node-edit-port" className="mb-1 block text-sm font-medium">端口</label>
+              <Input id="node-edit-port"                 type="number"
                 placeholder="22"
                 value={draft.port}
                 onChange={(event) =>
@@ -211,9 +208,8 @@ export function NodeEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">SSH 用户名</label>
-            <Input
-              placeholder="root"
+            <label htmlFor="node-edit-username" className="mb-1 block text-sm font-medium">SSH 用户名</label>
+            <Input id="node-edit-username"               placeholder="root"
               value={draft.username}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, username: event.target.value }))
@@ -222,9 +218,8 @@ export function NodeEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">认证方式</label>
-            <AppSelect
-              className="w-full"
+            <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">认证方式</label>
+            <AppSelect id="node-edit-auth"               className="w-full"
               value={draft.authType}
               onChange={(event) =>
                   setDraft((prev) => ({
@@ -240,9 +235,8 @@ export function NodeEditorDialog({
 
           {draft.authType === "key" ? (
             <div>
-              <label className="mb-1 block text-sm font-medium">SSH Key</label>
-              <AppSelect
-                className="w-full"
+              <label htmlFor="node-edit-ssh-key" className="mb-1 block text-sm font-medium">SSH Key</label>
+              <AppSelect id="node-edit-ssh-key"                 className="w-full"
                 value={draft.keyId}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, keyId: event.target.value }))
@@ -259,9 +253,8 @@ export function NodeEditorDialog({
             </div>
           ) : (
             <div>
-              <label className="mb-1 block text-sm font-medium">SSH 密码</label>
-              <Input
-                type="password"
+              <label htmlFor="node-edit-password" className="mb-1 block text-sm font-medium">SSH 密码</label>
+              <Input id="node-edit-password"                 type="password"
                 placeholder={isEditing ? "留空则不修改" : "请输入 SSH 密码"}
                 value={draft.password}
                 onChange={(event) =>
@@ -276,15 +269,16 @@ export function NodeEditorDialog({
 
           {draft.authType === "key" && draft.keyId === "__new__" ? (
             <div className="space-y-2 rounded-md border border-dashed bg-muted/20 p-3">
-              <p className="text-xs font-medium text-muted-foreground">
+              <label htmlFor="node-edit-inline-private-key" className="block text-xs font-medium text-muted-foreground">
                 内联新增 SSH Key
-              </p>
+              </label>
               <div className="grid gap-2 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium">
+                  <label htmlFor="node-edit-inline-key-name" className="mb-1 block text-xs font-medium">
                     Key 名称
                   </label>
                   <Input
+                    id="node-edit-inline-key-name"
                     placeholder="新 Key 名称"
                     value={draft.inlineKeyName}
                     onChange={(event) =>
@@ -296,10 +290,11 @@ export function NodeEditorDialog({
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium">
+                  <label htmlFor="node-edit-inline-key-type" className="mb-1 block text-xs font-medium">
                     密钥类型
                   </label>
                   <AppSelect
+                    id="node-edit-inline-key-type"
                     className="w-full"
                     value={draft.inlineKeyType}
                     onChange={(event) =>
@@ -317,6 +312,7 @@ export function NodeEditorDialog({
                 </div>
               </div>
               <AppTextarea
+                id="node-edit-inline-private-key"
                 className="mt-1 min-h-28 text-xs"
                 placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
                 value={draft.inlinePrivateKey}
@@ -331,9 +327,8 @@ export function NodeEditorDialog({
           ) : null}
 
           <div>
-            <label className="mb-1 block text-sm font-medium">基础路径</label>
-            <Input
-              placeholder="/"
+            <label htmlFor="node-edit-base-path" className="mb-1 block text-sm font-medium">基础路径</label>
+            <Input id="node-edit-base-path"               placeholder="/"
               value={draft.basePath}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, basePath: event.target.value }))
@@ -342,9 +337,8 @@ export function NodeEditorDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">标签</label>
-            <Input
-              placeholder="逗号分隔，例如：prod,app"
+            <label htmlFor="node-edit-tags" className="mb-1 block text-sm font-medium">标签</label>
+            <Input id="node-edit-tags"               placeholder="逗号分隔，例如：prod,app"
               value={draft.tags}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, tags: event.target.value }))

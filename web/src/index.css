@@ -142,6 +142,13 @@
     padding: 0.4rem;
   }
 
+  .filter-panel:hover,
+  .filter-panel:focus-within {
+    border-color: hsl(var(--border) / 0.8);
+    background-color: hsl(var(--background) / 0.65);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  }
+
   html[data-density="compact"] .interactive-surface,
   html[data-density="compact"] .glass-card {
     border-radius: 0.65rem;
@@ -216,10 +223,23 @@
       background-color var(--duration-normal) var(--ease-enter);
   }
 
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(to right, hsl(var(--foreground)), hsl(var(--muted-foreground)));
+  }
+
+  .glass-panel {
+    @apply rounded-xl border border-border/60 bg-background/50 shadow-sm backdrop-blur-md;
+  }
+  
+  .glass-panel-heavy {
+    @apply rounded-xl border border-border/40 bg-background/40 shadow-panel backdrop-blur-xl;
+  }
+
   .glass-card-interactive:hover {
     @apply border-primary/25;
     box-shadow: var(--shadow-panel-hover);
-    transform: translateY(-1px);
+    
   }
 
   .interactive-surface {
@@ -233,11 +253,14 @@
   .interactive-surface:hover {
     @apply border-primary/35;
     box-shadow: var(--shadow-panel);
-    transform: translateY(-1px);
+    
   }
 
   .filter-panel {
-    @apply rounded-2xl border border-border/70 bg-background/55 p-2 shadow-sm;
+    @apply rounded-xl border border-border/60 bg-background/50 p-3 shadow-sm;
+    transition: border-color var(--duration-normal) var(--ease-enter),
+      box-shadow var(--duration-normal) var(--ease-enter),
+      background-color var(--duration-normal) var(--ease-enter);
   }
 
   .app-select {
@@ -292,19 +315,19 @@
   }
 
   .animate-in {
-    animation: animate-in var(--duration-normal) var(--ease-enter);
+    animation: animate-in var(--duration-normal) var(--ease-enter) both;
   }
 
   .animate-fade-in {
-    animation: fade-in var(--duration-normal) var(--ease-enter);
+    animation: fade-in var(--duration-normal) var(--ease-enter) both;
   }
 
   .animate-slide-up {
-    animation: slide-up var(--duration-normal) var(--ease-enter);
+    animation: slide-up var(--duration-normal) var(--ease-enter) both;
   }
 
   .animate-slide-down {
-    animation: slide-down var(--duration-normal) var(--ease-enter);
+    animation: slide-down var(--duration-normal) var(--ease-enter) both;
   }
 
   .grid-noise {
@@ -469,3 +492,16 @@
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
+
+@layer utilities {
+  .animate-float {
+    animation: float 4s ease-in-out infinite;
+  }
+}
+
+@keyframes float {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+  100% { transform: translateY(0); }
+}
+
