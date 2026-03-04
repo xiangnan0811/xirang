@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { Activity, ArrowDownCircle, ArrowUpCircle, CheckCircle2, CircleDashed, Radar, TrendingUp, X } from "lucide-react";
+import { Activity, ArrowDownCircle, ArrowUpCircle, Radar, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPulse } from "@/components/status-pulse";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
 import type { NodeStatus } from "@/types/domain";
 
@@ -56,7 +55,7 @@ function getNodeStatusLabel(status: NodeStatus) {
 
 export function OverviewPage() {
   const navigate = useNavigate();
-  const { overview, nodes, tasks, policies, sshKeys, trafficSeries, loading } = useOutletContext<ConsoleOutletContext>();
+  const { overview, nodes, tasks, trafficSeries, loading } = useOutletContext<ConsoleOutletContext>();
 
   const healthRate = overview.totalNodes > 0
     ? Math.round((overview.healthyNodes / overview.totalNodes) * 100)
@@ -88,51 +87,6 @@ export function OverviewPage() {
     };
   }, [trafficSeries]);
 
-  const checklistItems = [
-    {
-      id: "ssh-key",
-      title: "新增 SSH Key",
-      description: "先配置可用密钥，后续节点可直接复用",
-      done: sshKeys.length > 0,
-      actionLabel: "去配置",
-      actionPath: "/app/ssh-keys"
-    },
-    {
-      id: "node",
-      title: "新增节点",
-      description: "添加至少一个节点并完成连接探测",
-      done: nodes.length > 0,
-      actionLabel: "去新增",
-      actionPath: "/app/nodes"
-    },
-    {
-      id: "policy",
-      title: "创建策略",
-      description: "定义 rsync 源/目标路径与执行周期",
-      done: policies.length > 0,
-      actionLabel: "去创建",
-      actionPath: "/app/policies"
-    },
-    {
-      id: "task",
-      title: "创建任务",
-      description: "绑定节点 + 策略，并尝试手动触发",
-      done: tasks.length > 0,
-      actionLabel: "去触发",
-      actionPath: "/app/tasks"
-    }
-  ];
-
-  const checklistDone = checklistItems.filter((item) => item.done).length;
-
-  const [onboardingDismissed, setOnboardingDismissed] = usePersistentState<boolean>(
-    "xirang.onboarding.dismissed",
-    false
-  );
-
-  const dismissOnboarding = () => {
-    setOnboardingDismissed(true);
-  };
 
   const cappedMatrixNodes = useMemo(() => nodes.slice(0, MATRIX_SOFT_LIMIT), [nodes]);
   const [matrixVisibleCount, setMatrixVisibleCount] = useState<number>(MATRIX_CHUNK_SIZE);
@@ -161,47 +115,6 @@ export function OverviewPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      {!onboardingDismissed && checklistDone < checklistItems.length ? (
-      <section className="glass-card p-4 animate-slide-up [animation-delay:100ms]">
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
-          <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">首次接入引导</p>
-            <h4 className="text-base font-semibold tracking-tight">息壤接入检查清单</h4>
-            <p className="mt-0.5 text-xs text-muted-foreground">先 SSH Key，再节点，再策略，再任务</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant={checklistDone === checklistItems.length ? "success" : "warning"}>
-              进度 {checklistDone}/{checklistItems.length}
-            </Badge>
-            <Button size="sm" variant="ghost" onClick={dismissOnboarding} aria-label="关闭引导">
-              <X className="size-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
-          {checklistItems.map((item) => (
-            <div key={item.id} className="glass-panel p-4 interactive-surface">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium">{item.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
-                </div>
-                {item.done ? (
-                  <CheckCircle2 className="size-4 text-success" />
-                ) : (
-                  <CircleDashed className="size-4 text-warning" />
-                )}
-              </div>
-              <Button size="sm" variant="outline" className="mt-3" onClick={() => navigate(item.actionPath)}>
-                {item.actionLabel}
-              </Button>
-            </div>
-          ))}
-        </div>
-      </section>
-      ) : null}
-
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 animate-slide-up [animation-delay:150ms]">
         <Card className="glass-panel border-success/30 bg-gradient-to-br from-success/10 via-transparent to-transparent">
           <CardHeader className="pb-2">

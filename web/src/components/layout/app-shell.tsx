@@ -7,6 +7,7 @@ import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
+import { OnboardingTour } from "@/components/onboarding-tour";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -244,6 +245,8 @@ export function AppShell() {
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
       />
+
+      <OnboardingTour />
     </div>
   );
 }
