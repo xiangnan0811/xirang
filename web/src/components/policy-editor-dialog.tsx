@@ -209,7 +209,7 @@ export function PolicyEditorDialog({
         <DialogBody className="space-y-3">
           <div>
             <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">策略名称</label>
-            <Input id="policy-edit-name"               placeholder="例如：每日全量备份"
+            <Input id="policy-edit-name" placeholder="例如：每日全量备份"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -258,7 +258,7 @@ export function PolicyEditorDialog({
           <div className="grid gap-3 md:grid-cols-2">
             <div>
               <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">源路径</label>
-              <Input id="policy-edit-source"                 placeholder="/data/source"
+              <Input id="policy-edit-source" placeholder="/data/source"
                 value={draft.sourcePath}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -270,7 +270,7 @@ export function PolicyEditorDialog({
             </div>
             <div>
               <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">目标路径</label>
-              <Input id="policy-edit-target"                 placeholder="/backup/target"
+              <Input id="policy-edit-target" placeholder="/backup/target"
                 value={draft.targetPath}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -303,7 +303,7 @@ export function PolicyEditorDialog({
             </div>
             <div>
               <div id="policy-status-label" className="mb-1 text-sm font-medium">策略状态</div>
-              <div className="flex h-10 items-center gap-2 rounded-xl border border-border/60 bg-background/50 px-3 text-sm">
+              <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
                 <Switch
                   aria-labelledby="policy-status-label"
                   checked={draft.enabled}

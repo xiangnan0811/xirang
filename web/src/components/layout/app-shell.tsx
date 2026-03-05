@@ -11,6 +11,7 @@ import { OnboardingTour } from "@/components/onboarding-tour";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ErrorBoundary } from "@/components/error-boundary";
 import {
   Dialog,
   DialogBody,
@@ -235,7 +236,9 @@ export function AppShell() {
 
         <ScrollToTop />
         <main id="main-content" className="mx-auto flex-1 w-full max-w-[1680px] px-4 py-4 pb-24 md:px-6 md:pb-8 lg:px-8">
-          <Outlet context={consoleData as ConsoleOutletContext} />
+          <ErrorBoundary>
+            <Outlet context={consoleData as ConsoleOutletContext} />
+          </ErrorBoundary>
         </main>
       </div>
 

@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
-  Activity,
   CheckSquare,
   Download,
   FileUp,
   KeyRound,
-  Loader2,
   Search,
   ServerCog,
-  Terminal,
-  Trash2,
-  Wrench,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { MobileNodeSearchDrawer } from "@/pages/nodes-page.components";
+import { NodesGrid } from "@/pages/nodes-page.grid";
+import { NodesTable } from "@/pages/nodes-page.table";
 import {
   escapeCSVValue,
   nodeStatusPriority,
@@ -22,7 +19,6 @@ import {
   parseDateTime,
 } from "@/pages/nodes-page.utils";
 import { NodeEditorDialog } from "@/components/node-editor-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -31,18 +27,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
-import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
-import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
 import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
-import { StatusPulse } from "@/components/status-pulse";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { getNodeStatusMeta } from "@/lib/status";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeRecord } from "@/types/domain";
 
 const keywordStorageKey = "xirang.nodes.keyword";
@@ -52,15 +44,6 @@ const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
 const selectedStorageKey = "xirang.nodes.selected";
 
-function getDiskBarToneClass(percent: number) {
-  if (percent < 20) {
-    return "bg-destructive";
-  }
-  if (percent < 40) {
-    return "bg-warning";
-  }
-  return "bg-success";
-}
 
 export function NodesPage() {
   const navigate = useNavigate();
@@ -201,11 +184,6 @@ export function NodesPage() {
       setSelectedNodeId(sortedNodes[0].id);
     }
   }, [selectedNodeId, setSelectedNodeId, sortedNodes]);
-
-  const selectedNode = useMemo(
-    () => sortedNodes.find((node) => node.id === selectedNodeId) ?? null,
-    [selectedNodeId, sortedNodes]
-  );
 
   const selectedNodeSet = useMemo(
     () => new Set(selectedNodeIds),
@@ -484,9 +462,8 @@ export function NodesPage() {
           {
             title: "在线节点",
             value: nodeStats.online,
-            description: `健康率 ${
-              nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0
-            }%`,
+            description: `健康率 ${nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0
+              }%`,
             tone: "success",
           },
           {
@@ -509,7 +486,7 @@ export function NodesPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-base">
-              主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
+                主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
               </CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与节点运维</p>
             </div>
@@ -694,489 +671,50 @@ export function NodesPage() {
           </div>
 
           {viewMode === "cards" ? (
-            <div className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-3">
-              {loading ? (
-                <LoadingState
-                  className="md:col-span-2 lg:col-span-3"
-                  title="节点数据加载中"
-                  description="正在刷新节点探测状态与可用性..."
-                  rows={4}
-                />
-              ) : null}
-
-              {!loading && !sortedNodes.length ? (
-                <FilteredEmptyState
-                  title="当前筛选条件下暂无节点"
-                  description="可以重置筛选条件，或新增一个节点继续测试。"
-                  onReset={resetFilters}
-                  onCreate={openCreateDialog}
-                  createLabel="新增节点"
-                  createIcon={ServerCog}
-                />
-              ) : null}
-
-              {sortedNodes.map((node) => {
-                const status = getNodeStatusMeta(node.status);
-                const keyLabel = node.keyId
-                  ? sshKeys.find((key) => key.id === node.keyId)?.name ||
-                    "已绑定 Key"
-                  : "未绑定";
-                const checked = selectedNodeSet.has(node.id);
-
-                return (
-                  <div
-                    key={node.id}
-                    className={cn(
-                      "interactive-surface p-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
-                      selectedNode?.id === node.id && "border-primary/45 ring-1 ring-primary/40"
-                    )}
-                    role="button"
-                    aria-label={`节点卡片 ${node.name}`}
-                    tabIndex={0}
-                    onClick={(e) => {
-                      if (
-                        e.target instanceof HTMLElement &&
-                        e.target.closest("button, input, a, label, select, textarea")
-                      ) {
-                        return;
-                      }
-                      setSelectedNodeId(node.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        if (e.target === e.currentTarget) {
-                          e.preventDefault();
-                          setSelectedNodeId(node.id);
-                        }
-                      }
-                    }}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                        <input
-                          type="checkbox"
-                          aria-label={`选择节点 ${node.name}`}
-                          className="size-4"
-                          checked={checked}
-                          onChange={(event) =>
-                            toggleNodeSelection(node.id, event.target.checked)
-                          }
-                        />
-                        选择
-                      </label>
-                      <div className="inline-flex items-center gap-1.5">
-                        <StatusPulse tone={node.status} />
-                        <Badge variant={status.variant}>{status.label}</Badge>
-                      </div>
-                    </div>
-
-                    <div className="mt-2">
-                      <p className="font-medium">{node.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        <span className="break-all">{node.host}:{node.port} · {node.username}</span>
-                      </p>
-                    </div>
-
-                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                      <p>
-                        认证：
-                        {node.authType === "key"
-                          ? `密钥 / ${keyLabel}`
-                          : "密码"}
-                      </p>
-                      <p>
-                        磁盘余量：{node.diskFreePercent}% · 延迟{" "}
-                        {node.connectionLatencyMs
-                          ? `${node.connectionLatencyMs}ms`
-                          : "-"}
-                      </p>
-                      <p>探测：{node.diskProbeAt || "未探测"}</p>
-                      <p>最后备份：{node.lastBackupAt}</p>
-                      <p className="break-words">
-                        标签：{node.tags.length ? node.tags.join(" / ") : "-"}
-                      </p>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label="测试连接"
-                          onClick={() => void onTestNode(node)}
-                          disabled={testingNodeId === node.id}
-                        >
-                          {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={`查看节点 ${node.name} 日志`}
-                          onClick={() =>
-                            navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
-                          }
-                        >
-                            <Terminal className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label="编辑节点"
-                          onClick={() => openEditDialog(node)}
-                        >
-                          <Wrench className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                          aria-label="删除节点"
-                          onClick={() => onDeleteNode(node)}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                      <Button
-                        size="sm"
-                        disabled={triggeringNodeId === node.id}
-                        onClick={() =>
-                          void handleTriggerBackup(node.id, node.name)
-                        }
-                      >
-                        {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                        手动备份
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <NodesGrid
+              loading={loading}
+              sortedNodes={sortedNodes}
+              sshKeys={sshKeys}
+              selectedNodeSet={selectedNodeSet}
+              selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIds}
+              allVisibleSelected={allVisibleSelected}
+              testingNodeId={testingNodeId}
+              triggeringNodeId={triggeringNodeId}
+              toggleNodeSelection={toggleNodeSelection}
+              toggleSelectAllVisible={toggleSelectAllVisible}
+              setSelectedNodeId={setSelectedNodeId}
+              handleBulkDelete={handleBulkDelete}
+              resetFilters={resetFilters}
+              openCreateDialog={openCreateDialog}
+              openEditDialog={openEditDialog}
+              onTestNode={onTestNode}
+              onDeleteNode={onDeleteNode}
+              handleTriggerBackup={handleTriggerBackup}
+            />
           ) : (
-            <div className="hidden overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm md:block">
-              <table className="min-w-[1280px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-3 py-2.5">
-                      <input
-                        type="checkbox"
-                        aria-label="全选当前页可见节点"
-                        className="size-4"
-                        checked={allVisibleSelected}
-                        onChange={(event) =>
-                          toggleSelectAllVisible(event.target.checked)
-                        }
-                      />
-                    </th>
-                    <th className="px-3 py-2.5">节点</th>
-                    <th className="px-3 py-2.5">地址</th>
-                    <th className="px-3 py-2.5">认证</th>
-                    <th className="px-3 py-2.5">状态</th>
-                    <th className="px-3 py-2.5">磁盘探测</th>
-                    <th className="px-3 py-2.5">最后备份</th>
-                    <th className="px-3 py-2.5">标签</th>
-                    <th className="px-3 py-2.5 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td
-                        className="px-3 py-4 text-muted-foreground"
-                        colSpan={9}
-                      >
-                        节点数据加载中...
-                      </td>
-                    </tr>
-                  ) : !sortedNodes.length ? (
-                    <tr>
-                      <td colSpan={9} className="px-3 py-6">
-                        <FilteredEmptyState
-                          className="py-8"
-                          title="当前筛选条件下暂无节点"
-                          description="可以重置筛选条件，或新增一个节点继续测试。"
-                          onReset={resetFilters}
-                          onCreate={openCreateDialog}
-                          createLabel="新增节点"
-                          createIcon={ServerCog}
-                        />
-                      </td>
-                    </tr>
-                  ) : (
-                    sortedNodes.map((node) => {
-                      const status = getNodeStatusMeta(node.status);
-                      const keyLabel = node.keyId
-                        ? sshKeys.find((key) => key.id === node.keyId)?.name ||
-                          "已绑定 Key"
-                        : "未绑定";
-
-                      return (
-                        <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
-                          <td className="px-3 py-2.5">
-                            <input
-                              type="checkbox"
-                              aria-label={`选择节点 ${node.name}`}
-                              className="size-4"
-                              checked={selectedNodeSet.has(node.id)}
-                              onChange={(event) =>
-                                toggleNodeSelection(
-                                  node.id,
-                                  event.target.checked
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <p className="font-medium">{node.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              成功率 {node.successRate}%
-                            </p>
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground">
-                            <p>
-                              {node.host}:{node.port}
-                            </p>
-                            <p className="text-xs">{node.username}</p>
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                            <p>
-                              {node.authType === "key" ? "密钥" : "密码"}
-                            </p>
-                            <p>
-                              {node.authType === "key" ? keyLabel : "-"}
-                            </p>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="inline-flex items-center gap-1.5">
-                              <StatusPulse tone={node.status} />
-                              <Badge variant={status.variant}>
-                                {status.label}
-                              </Badge>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="w-44">
-                              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                                <span>{node.diskFreePercent}% 可用</span>
-                                <span>
-                                  {node.connectionLatencyMs
-                                    ? `${node.connectionLatencyMs} ms`
-                                    : "-"}
-                                </span>
-                              </div>
-                              <div className="h-2 rounded-full bg-muted">
-                                <div
-                                  className={cn(
-                                    "h-2 rounded-full",
-                                    getDiskBarToneClass(node.diskFreePercent)
-                                  )}
-                                  style={{
-                                    width: `${Math.max(4, node.diskFreePercent)}%`,
-                                  }}
-                                />
-                              </div>
-                              <p className="mt-1 text-[11px] text-muted-foreground">
-                                探测：{node.diskProbeAt || "未探测"}
-                              </p>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground">
-                            {node.lastBackupAt}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex flex-wrap gap-1">
-                              {node.tags.map((tag) => (
-                                <Badge key={tag} variant="outline">
-                                  {tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label="测试连接"
-                                onClick={() => void onTestNode(node)}
-                                disabled={testingNodeId === node.id}
-                              >
-                                {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label={`查看节点 ${node.name} 日志`}
-                                onClick={() =>
-                                  navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
-                                }
-                              >
-                                  <Terminal className="size-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label="编辑节点"
-                                onClick={() => openEditDialog(node)}
-                              >
-                                <Wrench className="size-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                                aria-label="删除节点"
-                                onClick={() => onDeleteNode(node)}
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="ml-2"
-                                disabled={triggeringNodeId === node.id}
-                                onClick={() => void handleTriggerBackup(node.id, node.name)}
-                              >
-                                {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                                手动备份
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <NodesTable
+              loading={loading}
+              sortedNodes={sortedNodes}
+              sshKeys={sshKeys}
+              selectedNodeSet={selectedNodeSet}
+              selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIds}
+              allVisibleSelected={allVisibleSelected}
+              testingNodeId={testingNodeId}
+              triggeringNodeId={triggeringNodeId}
+              toggleNodeSelection={toggleNodeSelection}
+              toggleSelectAllVisible={toggleSelectAllVisible}
+              setSelectedNodeId={setSelectedNodeId}
+              handleBulkDelete={handleBulkDelete}
+              resetFilters={resetFilters}
+              openCreateDialog={openCreateDialog}
+              openEditDialog={openEditDialog}
+              onTestNode={onTestNode}
+              onDeleteNode={onDeleteNode}
+              handleTriggerBackup={handleTriggerBackup}
+            />
           )}
-
-            <div className="space-y-3 p-2 md:hidden">
-            <div className="flex items-center gap-2 justify-between rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-              <div className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  aria-label="全选当前页可见节点"
-                  className="size-4"
-                  checked={allVisibleSelected}
-                  onChange={(event) =>
-                    toggleSelectAllVisible(event.target.checked)
-                  }
-                />
-                <span>全选</span>
-              </div>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={!selectedNodeIds.length}
-                onClick={() => void handleBulkDelete()}
-              >
-                删除 {selectedNodeIds.length}
-              </Button>
-            </div>
-
-            {sortedNodes.map((node) => {
-              const status = getNodeStatusMeta(node.status);
-              const checked = selectedNodeSet.has(node.id);
-              return (
-                <div
-                  key={node.id}
-                  className="rounded-xl border border-border/75 bg-background/70 p-3 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        aria-label={`选择节点 ${node.name}`}
-                        className="size-4"
-                        checked={checked}
-                        onChange={(event) =>
-                          toggleNodeSelection(node.id, event.target.checked)
-                        }
-                      />
-                      选择
-                    </label>
-                    <div className="inline-flex items-center gap-1.5">
-                      <StatusPulse tone={node.status} />
-                      <Badge variant={status.variant}>{status.label}</Badge>
-                    </div>
-                  </div>
-
-                  <div className="mt-2">
-                    <p className="font-medium">{node.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      <span className="break-all">{node.host}:{node.port} · {node.username}</span>
-                    </p>
-                  </div>
-
-                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                    <p>
-                      磁盘余量：{node.diskFreePercent}%（探测：
-                      {node.diskProbeAt || "未探测"}）
-                    </p>
-                    <p>最后备份：{node.lastBackupAt}</p>
-                    <p className="break-words">标签：{node.tags.join(" / ") || "-"}</p>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
-                    <div className="flex flex-wrap items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="测试连接"
-                        onClick={() => void onTestNode(node)}
-                        disabled={testingNodeId === node.id}
-                      >
-                        {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`查看节点 ${node.name} 日志`}
-                        onClick={() =>
-                          navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
-                        }
-                      >
-                          <Terminal className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="编辑节点"
-                        onClick={() => openEditDialog(node)}
-                      >
-                        <Wrench className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                        aria-label="删除节点"
-                        onClick={() => onDeleteNode(node)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                    <Button
-                      size="sm"
-                      disabled={triggeringNodeId === node.id}
-                      onClick={() => void handleTriggerBackup(node.id, node.name)}
-                    >
-                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                      手动备份
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </CardContent>
       </Card>
 

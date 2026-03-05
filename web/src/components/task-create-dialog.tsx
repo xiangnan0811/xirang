@@ -124,7 +124,7 @@ export function TaskCreateDialog({
         <DialogBody className="space-y-3">
           <div>
             <label htmlFor="task-create-name" className="mb-1 block text-sm font-medium">任务名称</label>
-            <Input id="task-create-name"               placeholder="例如：每日全量备份-prod-01"
+            <Input id="task-create-name" placeholder="例如：每日全量备份-prod-01"
               value={draft.name}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -134,7 +134,7 @@ export function TaskCreateDialog({
 
           <div>
             <label htmlFor="task-create-node" className="mb-1 block text-sm font-medium">目标节点</label>
-            <AppSelect id="task-create-node"               className="w-full"
+            <AppSelect id="task-create-node" className="w-full"
               value={draft.nodeId}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -175,7 +175,7 @@ export function TaskCreateDialog({
               <div className="mb-1 text-sm font-medium">
                 执行器类型
               </div>
-              <div className="flex h-10 items-center rounded-xl border border-border/60 bg-background/50 px-3 text-sm text-muted-foreground">
+              <div className="glass-panel flex h-10 items-center px-3 text-sm text-muted-foreground">
                 Rsync 执行器
               </div>
             </div>

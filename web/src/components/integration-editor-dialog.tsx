@@ -188,11 +188,11 @@ export function IntegrationEditorDialog({
           <div className="grid gap-3 md:grid-cols-2">
             <div>
               <label htmlFor="int-edit-type" className="mb-1 block text-sm font-medium">通道类型</label>
-              <Input id="int-edit-type" value={typeLabel} disabled className="rounded-xl border-border/60 bg-background/50" />
+              <Input id="int-edit-type" value={typeLabel} disabled className="glass-panel" />
             </div>
             <div>
               <label htmlFor="int-edit-name" className="mb-1 block text-sm font-medium">通道名称</label>
-              <Input id="int-edit-name"                 placeholder="例如：值班 Slack"
+              <Input id="int-edit-name" placeholder="例如：值班 Slack"
                 value={draft.name}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -203,7 +203,7 @@ export function IntegrationEditorDialog({
 
           <div>
             <label htmlFor="int-edit-endpoint" className="mb-1 block text-sm font-medium">Endpoint / 地址</label>
-            <Input id="int-edit-endpoint"               value={draft.endpoint}
+            <Input id="int-edit-endpoint" value={draft.endpoint}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, endpoint: event.target.value }))
               }
@@ -213,7 +213,7 @@ export function IntegrationEditorDialog({
           <div className="grid gap-3 md:grid-cols-2">
             <div>
               <label htmlFor="int-edit-threshold" className="mb-1 block text-sm font-medium">告警阈值（失败次数）</label>
-              <Input id="int-edit-threshold"                 type="number"
+              <Input id="int-edit-threshold" type="number"
                 min={1}
                 max={10}
                 value={draft.failThreshold}
@@ -227,7 +227,7 @@ export function IntegrationEditorDialog({
             </div>
             <div>
               <label htmlFor="int-edit-cooldown" className="mb-1 block text-sm font-medium">冷却时间（分钟）</label>
-              <Input id="int-edit-cooldown"                 type="number"
+              <Input id="int-edit-cooldown" type="number"
                 min={1}
                 max={120}
                 value={draft.cooldownMinutes}

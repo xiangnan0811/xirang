@@ -1,4 +1,4 @@
-import type { NodeRecord } from "@/types/domain";
+import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
 
 export const nodeStatusPriority: Record<NodeRecord["status"], number> = {
   offline: 3,
@@ -59,3 +59,34 @@ export function parseCSVRows(content: string): CSVNodeRow[] {
     .filter((item): item is CSVNodeRow => Boolean(item));
 }
 
+export function getDiskBarToneClass(percent: number) {
+  if (percent < 20) {
+    return "bg-destructive";
+  }
+  if (percent < 40) {
+    return "bg-warning";
+  }
+  return "bg-success";
+}
+
+export type NodesViewProps = {
+  loading: boolean;
+  sortedNodes: NodeRecord[];
+  sshKeys: SSHKeyRecord[];
+  selectedNodeSet: Set<number>;
+  selectedNodeId: number | null;
+  selectedNodeIds: number[];
+  allVisibleSelected: boolean;
+  testingNodeId: number | null;
+  triggeringNodeId: number | null;
+  toggleNodeSelection: (id: number, checked: boolean) => void;
+  toggleSelectAllVisible: (checked: boolean) => void;
+  setSelectedNodeId: (id: number) => void;
+  handleBulkDelete: () => void;
+  resetFilters: () => void;
+  openCreateDialog: () => void;
+  openEditDialog: (node: NodeRecord) => void;
+  onTestNode: (node: NodeRecord) => void;
+  onDeleteNode: (node: NodeRecord) => void;
+  handleTriggerBackup: (id: number, name: string) => void;
+};

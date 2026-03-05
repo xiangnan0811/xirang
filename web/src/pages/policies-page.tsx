@@ -176,11 +176,11 @@ export function PoliciesPage() {
         <CardContent className="space-y-3">
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <Input
-  placeholder="搜索策略 / 路径 / cron"
-  aria-label="搜索策略、路径或cron表达式"
-  value={keyword}
-  onChange={(event) => setKeyword(event.target.value)}
-/>
+              placeholder="搜索策略 / 路径 / cron"
+              aria-label="搜索策略、路径或cron表达式"
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+            />
             <Badge variant="secondary" className="hidden lg:inline-flex">
               启用 {activeCount}/{policies.length}
             </Badge>
@@ -223,7 +223,7 @@ export function PoliciesPage() {
                     <Badge variant="outline">Cron: {policy.cron}</Badge>
                     <Badge variant="outline">失败阈值: {policy.criticalThreshold}</Badge>
                   </div>
-                  
+
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
                     <Switch
                       checked={policy.enabled}
@@ -274,7 +274,7 @@ export function PoliciesPage() {
               ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm">
+            <div className="glass-panel overflow-x-auto">
               <table className="min-w-[980px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -302,10 +302,10 @@ export function PoliciesPage() {
                         <td className="px-3 py-2.5 text-muted-foreground">{policy.targetPath}</td>
                         <td className="px-3 py-2.5">
                           <Switch
-  checked={policy.enabled}
-  aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
-  onCheckedChange={() => void onTogglePolicy(policy)}
-/>
+                            checked={policy.enabled}
+                            aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
+                            onCheckedChange={() => void onTogglePolicy(policy)}
+                          />
                         </td>
                         <td className="px-3 py-2.5 text-right">
                           <div className="flex items-center justify-end gap-1">

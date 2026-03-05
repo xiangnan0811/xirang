@@ -24,7 +24,7 @@ function LoadingState({
       role="status"
       aria-live="polite"
       className={cn(
-        "rounded-xl border border-border/60 bg-background/50 px-4 py-4 shadow-sm backdrop-blur-sm animate-fade-in",
+        "glass-panel px-4 py-4 backdrop-blur-sm animate-fade-in",
         className
       )}
     >

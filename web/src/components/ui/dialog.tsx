@@ -40,7 +40,7 @@ const DialogContent = React.forwardRef<
           "relative w-full max-h-[92vh] rounded-t-2xl border-t border-border/60 bg-background/90 backdrop-blur-xl shadow-mobile-sheet will-change-transform",
           "data-[state=open]:animate-slide-up data-[state=closed]:animate-none",
           // 桌面端：居中弹窗，缩放淡入
-          "md:max-h-[85vh] md:rounded-xl md:border md:border-border/60 md:bg-background/50 md:backdrop-blur-xl md:shadow-panel md:data-[state=open]:animate-animate-in",
+          "md:max-h-[85vh] md:glass-panel md:shadow-panel md:data-[state=open]:animate-animate-in",
           size === "sm" && "md:max-w-[480px]",
           size === "md" && "md:max-w-[560px]",
           size === "lg" && "md:max-w-[640px]",
@@ -65,7 +65,7 @@ function DialogHeader({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("space-y-1.5 border-b px-6 pb-4 pt-4", className)}
+      className={cn("space-y-1.5 border-b border-border/40 px-6 pb-4 pt-4 relative z-10", className)}
       {...props}
     />
   );
@@ -78,7 +78,7 @@ function DialogBody({
   return (
     <div
       className={cn(
-        "max-h-[calc(85vh-8rem)] overflow-y-auto px-6 py-4",
+        "max-h-[calc(85vh-8rem)] overflow-y-auto px-6 py-4 thin-scrollbar relative z-10",
         className
       )}
       {...props}

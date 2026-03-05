@@ -1,22 +1,12 @@
-import { useMemo, useState } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
-import {
-  Loader2,
-  Play,
-  Plus,
-  RotateCcw,
-  Square,
-  Terminal,
-  Trash2,
-} from "lucide-react";
+import { useMemo, useState, useDeferredValue } from "react";
+import { useOutletContext } from "react-router-dom";
+import { Plus } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { TaskCreateDialog } from "@/components/task-create-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
-import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -24,9 +14,12 @@ import { toast } from "@/components/ui/toast";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { getTaskStatusMeta } from "@/lib/status";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/utils";
 import type { NewTaskInput, TaskStatus } from "@/types/domain";
+import { TasksGrid } from "@/pages/tasks-page.grid";
+import type { PendingActionType } from "@/pages/tasks-page.utils";
+import { TasksTable } from "@/pages/tasks-page.table";
+import { normalizeStatusFilter } from "@/pages/tasks-page.utils";
 
 const keywordStorageKey = "xirang.tasks.keyword";
 const statusStorageKey = "xirang.tasks.status";
@@ -35,31 +28,7 @@ const viewStorageKey = "xirang.tasks.view";
 
 type TasksViewMode = "cards" | "list";
 
-function canTrigger(status: TaskStatus) {
-  return status !== "running" && status !== "retrying";
-}
-
-function canCancel(status: TaskStatus) {
-  return status === "running" || status === "retrying";
-}
-
-function normalizeStatusFilter(value: string): "all" | TaskStatus {
-  if (
-    value === "all" ||
-    value === "pending" ||
-    value === "running" ||
-    value === "retrying" ||
-    value === "failed" ||
-    value === "success" ||
-    value === "canceled"
-  ) {
-    return value;
-  }
-  return "all";
-}
-
 export function TasksPage() {
-  const navigate = useNavigate();
   const {
     tasks,
     nodes,
@@ -86,7 +55,7 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<{ id: number; action: "retry" | "cancel" | "delete" | "trigger" } | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
 
   const resetFilters = () => {
     setKeyword("");
@@ -94,8 +63,11 @@ export function TasksPage() {
     setNodeFilter("all");
   };
 
+  const deferredKeyword = useDeferredValue(keyword);
+  const deferredGlobalSearch = useDeferredValue(globalSearch);
+
   const filteredTasks = useMemo(() => {
-    const effectiveKeyword = (keyword || globalSearch).trim().toLowerCase();
+    const effectiveKeyword = (deferredKeyword || deferredGlobalSearch).trim().toLowerCase();
 
     return [...tasks]
       .filter((task) => {
@@ -116,7 +88,7 @@ export function TasksPage() {
         return text.includes(effectiveKeyword);
       })
       .sort((first, second) => second.id - first.id);
-  }, [globalSearch, keyword, nodeFilter, statusFilter, tasks]);
+  }, [deferredGlobalSearch, deferredKeyword, nodeFilter, statusFilter, tasks]);
 
   const taskStats = useMemo(() => {
     let pending = 0;
@@ -324,270 +296,29 @@ export function TasksPage() {
           ) : null}
 
           {viewMode === "cards" ? (
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-              {filteredTasks.map((task) => {
-                const status = getTaskStatusMeta(task.status);
-                const isPendingAny = pendingAction?.id === task.id;
-                const isPendingRetry = pendingAction?.id === task.id && pendingAction.action === "retry";
-                const isPendingCancel = pendingAction?.id === task.id && pendingAction.action === "cancel";
-                const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
-                const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
-
-                return (
-                  <div
-                    key={task.id}
-                    className={cn(
-                      "interactive-surface flex h-full flex-col gap-2 p-4",
-                      task.status === "failed" && "border-destructive/35 bg-destructive/10",
-                      task.status === "running" && "border-info/30 bg-info/5"
-                    )}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="font-medium">{task.policyName}</p>
-                        <p className="text-xs text-muted-foreground">任务 ID：{task.id}</p>
-                      </div>
-                      <Badge variant={status.variant}>{status.label}</Badge>
-                    </div>
-
-                    <div className="space-y-0.5 text-sm text-muted-foreground">
-                      <p>执行节点：{task.nodeName}</p>
-                      <p>开始时间：{task.startedAt}</p>
-                      {task.nextRunAt ? <p>下次调度：{task.nextRunAt}</p> : null}
-                      {task.lastError ? (
-                        <p className="break-all text-destructive">失败信息：{task.lastError}</p>
-                      ) : null}
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>进度</span>
-                        <span>{task.progress}%</span>
-                      </div>
-                      <div className="h-2 rounded-full bg-muted">
-                        <div
-                          className={cn(
-                            "h-2 rounded-full transition-all",
-                            task.status === "success"
-                              ? "bg-success"
-                              : task.status === "failed"
-                                ? "bg-destructive"
-                                : task.status === "running" || task.status === "retrying"
-                                  ? "bg-info"
-                                  : "bg-muted-foreground"
-                          )}
-                          style={{ width: `${task.progress}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-auto flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label="重试任务"
-                          disabled={task.status !== "failed" || isPendingAny}
-                          onClick={() => void handleRetry(task.id)}
-                        >
-                          {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={`查看任务 #${task.id} 日志`}
-                          onClick={() => navigate(`/app/logs?task=${task.id}`)}
-                        >
-                            <Terminal className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label="取消任务"
-                          disabled={!canCancel(task.status) || isPendingAny}
-                          onClick={() => void handleCancel(task.id)}
-                        >
-                          {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                          aria-label="删除任务"
-                          disabled={isPendingAny}
-                          onClick={() => void handleDelete(task.id)}
-                        >
-                          {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                        </Button>
-                      </div>
-                      <Button
-                        size="sm"
-                        disabled={!canTrigger(task.status) || isPendingAny}
-                        onClick={() => void handleTrigger(task.id)}
-                      >
-                        {isPendingTrigger ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}
-                        触发
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {!loading && !filteredTasks.length ? (
-                <FilteredEmptyState
-                  className="md:col-span-2 2xl:col-span-3"
-                  title="当前筛选条件下没有任务"
-                  description="可重置筛选条件，或直接新建一个任务。"
-                  onReset={resetFilters}
-                  onCreate={() => setCreateDialogOpen(true)}
-                  createLabel="新建任务"
-                  createIcon={Plus}
-                />
-              ) : null}
-            </div>
+            <TasksGrid
+              loading={loading}
+              filteredTasks={filteredTasks}
+              pendingAction={pendingAction}
+              resetFilters={resetFilters}
+              setCreateDialogOpen={setCreateDialogOpen}
+              handleRetry={handleRetry}
+              handleCancel={handleCancel}
+              handleDelete={handleDelete}
+              handleTrigger={handleTrigger}
+            />
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/50 shadow-sm">
-              <table className="min-w-[1100px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-3 py-2.5">任务</th>
-                    <th className="px-3 py-2.5">节点</th>
-                    <th className="px-3 py-2.5">状态</th>
-                    <th className="px-3 py-2.5">进度</th>
-                    <th className="px-3 py-2.5">调度</th>
-                    <th className="px-3 py-2.5">错误</th>
-                    <th className="px-3 py-2.5 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTasks.length ? (
-                    filteredTasks.map((task) => {
-                      const status = getTaskStatusMeta(task.status);
-                      const isPendingAny = pendingAction?.id === task.id;
-                      const isPendingRetry = pendingAction?.id === task.id && pendingAction.action === "retry";
-                      const isPendingCancel = pendingAction?.id === task.id && pendingAction.action === "cancel";
-                      const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
-                      const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
-                      return (
-                        <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
-                          <td className="px-3 py-2.5">
-                            <p className="font-medium">{task.policyName}</p>
-                            <p className="text-xs text-muted-foreground">ID #{task.id}</p>
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground">{task.nodeName}</td>
-                          <td className="px-3 py-2.5">
-                            <Badge variant={status.variant}>{status.label}</Badge>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="w-36 space-y-1">
-                              <p className="text-xs text-muted-foreground">{task.progress}%</p>
-                              <div className="h-2 rounded-full bg-muted">
-                                <div
-                                  className={cn(
-                                    "h-2 rounded-full",
-                                    task.status === "success"
-                                      ? "bg-success"
-                                      : task.status === "failed"
-                                        ? "bg-destructive"
-                                        : task.status === "running" || task.status === "retrying"
-                                          ? "bg-info"
-                                          : "bg-muted-foreground"
-                                  )}
-                                  style={{ width: `${task.progress}%` }}
-                                />
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                            <p>开始：{task.startedAt}</p>
-                            <p>下次：{task.nextRunAt ?? "-"}</p>
-                          </td>
-                          <td className="px-3 py-2.5 text-xs">
-                            <span
-                              className={cn(
-                                "line-clamp-2 break-all",
-                                task.lastError ? "text-destructive" : "text-muted-foreground"
-                              )}
-                            >
-                              {task.lastError || "-"}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label="重试任务"
-                                disabled={task.status !== "failed" || isPendingAny}
-                                onClick={() => void handleRetry(task.id)}
-                              >
-                                {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label={`查看任务 #${task.id} 日志`}
-                                onClick={() => navigate(`/app/logs?task=${task.id}`)}
-                              >
-                                  <Terminal className="size-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                                aria-label="取消任务"
-                                disabled={!canCancel(task.status) || isPendingAny}
-                                onClick={() => void handleCancel(task.id)}
-                              >
-                                {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                                aria-label="删除任务"
-                                disabled={isPendingAny}
-                                onClick={() => void handleDelete(task.id)}
-                              >
-                                {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="ml-2"
-                                disabled={!canTrigger(task.status) || isPendingAny}
-                                onClick={() => void handleTrigger(task.id)}
-                              >
-                                {isPendingTrigger ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Play className="size-4 mr-1" />}
-                                触发
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : !loading ? (
-                    <tr>
-                      <td colSpan={7} className="px-3 py-6">
-                        <FilteredEmptyState
-                          className="py-8"
-                          title="当前筛选条件下没有任务"
-                          description="可重置筛选条件，或直接新建一个任务。"
-                          onReset={resetFilters}
-                          onCreate={() => setCreateDialogOpen(true)}
-                          createLabel="新建任务"
-                          createIcon={Plus}
-                        />
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+            <TasksTable
+              loading={loading}
+              filteredTasks={filteredTasks}
+              pendingAction={pendingAction}
+              resetFilters={resetFilters}
+              setCreateDialogOpen={setCreateDialogOpen}
+              handleRetry={handleRetry}
+              handleCancel={handleCancel}
+              handleDelete={handleDelete}
+              handleTrigger={handleTrigger}
+            />
           )}
         </CardContent>
       </Card>

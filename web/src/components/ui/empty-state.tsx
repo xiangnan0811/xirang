@@ -20,7 +20,7 @@ function EmptyState({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/60 bg-background/50 px-6 py-16 text-center shadow-sm backdrop-blur-md transition-all duration-300",
+        "glass-panel px-6 py-16 text-center transition-all duration-300",
         className
       )}
     >
