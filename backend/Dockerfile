@@ -1,13 +1,18 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
+ARG TARGETOS
+ARG TARGETARCH
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
+RUN set -eux; \
+    target_os="${TARGETOS:-$(go env GOOS)}"; \
+    target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
+    CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

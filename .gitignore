@@ -33,7 +33,7 @@ tmp/
 docs/
 
 # deploy
-deploy/
+deploy/certs/
 
 # local build artifacts
 backend/.env.production

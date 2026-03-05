@@ -133,13 +133,22 @@ deploy/certs/fullchain.pem
 deploy/certs/privkey.pem
 ```
 
-3. 启动生产编排：
+3. 设置镜像参数（DockerHub）：
 
 ```bash
+export IMAGE_REGISTRY=docker.io
+export IMAGE_NAMESPACE=你的 DockerHub 用户名
+export IMAGE_TAG=latest
+```
+
+4. 拉取并启动生产编排：
+
+```bash
+make prod-pull
 make prod-up
 ```
 
-4. 停止生产编排：
+5. 停止生产编排：
 
 ```bash
 make prod-down
@@ -148,9 +157,10 @@ make prod-down
 说明：
 
 - `backend/Dockerfile`：后端生产镜像
-- `deploy/nginx/Dockerfile`：前端静态资源 + Nginx 网关镜像
-- `docker-compose.prod.yml`：生产编排文件（默认 `ENABLE_TLS=true`）
+- `deploy/allinone/Dockerfile`：前后端一体化生产镜像
+- `docker-compose.prod.yml`：生产编排文件（单镜像模式，从镜像仓库拉取）
 - `deploy/nginx/README.md`：网关与证书说明
+- 回滚示例：`IMAGE_TAG=v0.1.0 make prod-pull prod-up`
 
 ---
 
@@ -269,16 +279,15 @@ curl -H "Authorization: Bearer <jwt>" \
 
 常用入口：
 
-- 健康检查：`curl -fsS http://127.0.0.1:8080/healthz`
-- 后端日志：`docker compose -f docker-compose.prod.yml logs -f xirang-backend`
-- 网关日志：`docker compose -f docker-compose.prod.yml logs -f xirang-gateway`
+- 健康检查：`curl -kfsS https://127.0.0.1/healthz`
+- 容器日志：`docker compose -f docker-compose.prod.yml logs -f xirang`
 - 服务状态：`docker compose -f docker-compose.prod.yml ps`
 
 常见排查命令：
 
 ```bash
-# 1) 快速看最近 200 行后端日志
-docker compose -f docker-compose.prod.yml logs --tail=200 xirang-backend
+# 1) 快速看最近 200 行日志
+docker compose -f docker-compose.prod.yml logs --tail=200 xirang
 
 # 2) 检查失败任务
 curl -H "Authorization: Bearer <jwt>" \
@@ -293,7 +302,7 @@ curl -H "Authorization: Bearer <jwt>" \
   "http://localhost:8080/api/v1/alerts/<alert_id>/deliveries"
 
 # 5)（SQLite）容器内直接查看投递失败明细
-docker exec -it xirang-backend sh -lc \
+docker exec -it xirang sh -lc \
   "sqlite3 /data/xirang.db \"SELECT id,alert_id,integration_id,status,error,created_at FROM alert_deliveries ORDER BY id DESC LIMIT 20;\""
 ```
 
@@ -306,7 +315,57 @@ docker exec -it xirang-backend sh -lc \
 - 工作流文件：`.github/workflows/ci.yml`
 - 触发事件：`push`、`pull_request`
 - 后端阶段：`go test ./...` + `go build ./...`
-- 前端阶段：`npm test` + `npm run build`
+- 前端阶段：`npm run check`（含 `typecheck + test + build`）
+
+---
+
+## 自动化发布闭环（开源推荐）
+
+### 1) 自动版本发布（Release Please）
+
+- 工作流：`.github/workflows/release-please.yml`
+- 触发：`master` 分支 push
+- 行为：自动维护 Release PR，合并后自动打 Tag、创建 GitHub Release、更新 `CHANGELOG.md`
+- 配置：
+  - `release-please-config.json`
+  - `.release-please-manifest.json`
+
+### 2) DockerHub 镜像自动发布
+
+- 工作流：`.github/workflows/publish-images.yml`
+- 触发：`release.published` 或手动 `workflow_dispatch`
+- 镜像：`docker.io/<DOCKERHUB_USERNAME>/xirang`
+- 标签策略：`vX.Y.Z`、`X.Y.Z`、`latest`
+- 多架构：`linux/amd64`、`linux/arm64`
+
+### 3) 自动部署
+
+- 工作流：`.github/workflows/deploy.yml`
+- 触发：
+  - 发布后自动部署到 `staging`
+  - 手动部署到 `staging/production`
+- 部署动作：远程执行 `docker compose -f docker-compose.prod.yml pull && up -d`
+- 标签策略：使用统一 `image_tag`
+- 前置条件：远端部署目录必须存在 `backend/.env.production`（可基于 `backend/.env.production.example` 初始化）
+
+### 4) GitHub Secrets / Variables
+
+仓库级 Secrets：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Environment（`staging` / `production`）级 Secrets：
+
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_PATH`（远端部署目录，需包含本仓库与 `docker-compose.prod.yml`）
+
+Environment（可选）Variables：
+
+- `DOCKERHUB_NAMESPACE`（默认回退到 `DOCKERHUB_USERNAME`）
+- `DEPLOY_SSH_PORT`（默认 22）
 
 ---
 

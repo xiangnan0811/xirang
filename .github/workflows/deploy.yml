@@ -1,0 +1,80 @@
+name: Deploy
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "部署环境"
+        required: true
+        default: production
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "镜像标签（默认 latest，可填 v0.2.0）"
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy (${{ github.event_name == 'release' && 'staging' || github.event.inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'release' && 'staging' || github.event.inputs.environment }}
+    env:
+      IMAGE_REGISTRY: docker.io
+      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+      IMAGE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.image_tag }}
+      IMAGE_WAIT_MAX_ATTEMPTS: ${{ vars.IMAGE_WAIT_MAX_ATTEMPTS || 90 }}
+      IMAGE_WAIT_INTERVAL_SECONDS: ${{ vars.IMAGE_WAIT_INTERVAL_SECONDS || 10 }}
+    steps:
+      - name: DockerHub login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Wait for image ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/xirang:${IMAGE_TAG}"
+          i=1
+          while [[ "${i}" -le "${IMAGE_WAIT_MAX_ATTEMPTS}" ]]; do
+            if docker manifest inspect "${image}" >/dev/null 2>&1; then
+              echo "image ready: ${image}"
+              exit 0
+            fi
+
+            if [[ "${i}" -eq "${IMAGE_WAIT_MAX_ATTEMPTS}" ]]; then
+              echo "image not found after ${IMAGE_WAIT_MAX_ATTEMPTS} attempts: ${image}" >&2
+              exit 1
+            fi
+
+            sleep "${IMAGE_WAIT_INTERVAL_SECONDS}"
+            i=$((i + 1))
+          done
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f # v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ vars.DEPLOY_SSH_PORT || secrets.DEPLOY_SSH_PORT || 22 }}
+          script_stop: true
+          envs: IMAGE_REGISTRY,IMAGE_NAMESPACE,IMAGE_TAG
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+            docker compose -f docker-compose.prod.yml ps
