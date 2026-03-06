@@ -26,6 +26,7 @@ function createMemoryStorage() {
     },
   } satisfies Storage;
 }
+
 const liveLogsRef: {
   current: {
     connected: boolean;
@@ -239,25 +240,45 @@ describe("LogsPage", () => {
     expect(late.compareDocumentPosition(early) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("收到运行中实时日志时不会刷新当前任务状态", async () => {
+  it("首次进入聚焦运行中任务日志页时会先对齐一次任务状态", async () => {
     searchParamsRef.current = new URLSearchParams("task=1001");
-    liveLogsRef.current.logs = [
-      {
-        id: "log-terminal-running",
-        logId: 87,
-        timestamp: "2026-02-24 10:19:00",
-        level: "info",
-        message: "任务仍在执行",
-        taskId: 1001,
-        nodeName: "node-1",
-        status: "running",
-      },
-    ];
 
     render(<LogsPage />);
 
     await waitFor(() => {
-      expect(refreshTaskMock).not.toHaveBeenCalled();
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
+      expect(refreshTaskMock).toHaveBeenCalledWith(1001);
+    });
+  });
+
+  it("收到运行中实时日志时不会额外刷新当前任务状态", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    const view = render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
+    });
+
+    liveLogsRef.current = {
+      ...liveLogsRef.current,
+      logs: [
+        {
+          id: "log-terminal-running",
+          logId: 87,
+          timestamp: "2026-02-24 10:19:00",
+          level: "info",
+          message: "任务仍在执行",
+          taskId: 1001,
+          nodeName: "node-1",
+          status: "running",
+        },
+      ],
+    };
+
+    view.rerender(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -279,7 +300,96 @@ describe("LogsPage", () => {
     render(<LogsPage />);
 
     await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
       expect(refreshTaskMock).toHaveBeenCalledWith(1001);
+    });
+  });
+
+  it("首次状态对齐失败后允许后续重试", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    refreshTaskMock
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValueOnce(undefined);
+
+    const view = render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
+    });
+
+    liveLogsRef.current = {
+      ...liveLogsRef.current,
+      logs: [],
+    };
+    view.rerender(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("终态日志刷新失败后允许同一日志后续重试", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    refreshTaskMock
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValueOnce(undefined);
+    const terminalLog: LogEvent = {
+      id: "log-terminal-success",
+      logId: 88,
+      timestamp: "2026-02-24 10:20:00",
+      level: "info",
+      message: "任务执行成功",
+      taskId: 1001,
+      nodeName: "node-1",
+      status: "success",
+    };
+    liveLogsRef.current.logs = [terminalLog];
+
+    const view = render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
+    });
+
+    liveLogsRef.current = {
+      ...liveLogsRef.current,
+      logs: [{ ...terminalLog }],
+    };
+    view.rerender(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("同一条终态实时日志重复出现时只刷新一次", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    const terminalLog: LogEvent = {
+      id: "log-terminal-success",
+      logId: 88,
+      timestamp: "2026-02-24 10:20:00",
+      level: "info",
+      message: "任务执行成功",
+      taskId: 1001,
+      nodeName: "node-1",
+      status: "success",
+    };
+    liveLogsRef.current.logs = [terminalLog];
+
+    const view = render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
+    });
+
+    liveLogsRef.current = {
+      ...liveLogsRef.current,
+      logs: [{ ...terminalLog }],
+    };
+    view.rerender(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledTimes(1);
     });
   });
 });

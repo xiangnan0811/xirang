@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   Maximize2,
@@ -33,6 +33,10 @@ const singleErrorCodeRegex = /^XR-[A-Z]+-\d+$/;
 
 function isTerminalTaskStatus(status?: TaskStatus) {
   return status === "success" || status === "failed" || status === "canceled";
+}
+
+function isActiveTaskStatus(status?: TaskStatus) {
+  return status === "running" || status === "retrying";
 }
 
 function highlightErrorCode(message: string) {
@@ -126,6 +130,9 @@ export function LogsPage() {
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef(0);
   const historyRequestIdRef = useRef(0);
+  const lastHandledTerminalLogKeyRef = useRef<string | null>(null);
+  const initialAlignmentTaskIdRef = useRef<number | null>(null);
+  const refreshInFlightTaskIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     const nextTask = searchParams.get("task");
@@ -289,6 +296,56 @@ export function LogsPage() {
       ? null
       : tasks.find((task) => String(task.id) === selectedTask);
 
+  const refreshFocusedTaskStatus = useCallback(async () => {
+    if (!focusedTaskNumber) {
+      return false;
+    }
+    if (refreshInFlightTaskIdRef.current === focusedTaskNumber) {
+      return false;
+    }
+
+    refreshInFlightTaskIdRef.current = focusedTaskNumber;
+    try {
+      await refreshTask(focusedTaskNumber);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (refreshInFlightTaskIdRef.current === focusedTaskNumber) {
+        refreshInFlightTaskIdRef.current = null;
+      }
+    }
+  }, [focusedTaskNumber, refreshTask]);
+
+  useEffect(() => {
+    lastHandledTerminalLogKeyRef.current = null;
+    initialAlignmentTaskIdRef.current = null;
+    refreshInFlightTaskIdRef.current = null;
+  }, [focusedTaskNumber]);
+
+  useEffect(() => {
+    if (!focusedTaskNumber || !isActiveTaskStatus(focusedTask?.status)) {
+      return;
+    }
+
+    const hasTerminalLiveLog = logs.some(
+      (log) => log.taskId === focusedTaskNumber && isTerminalTaskStatus(log.status)
+    );
+    if (hasTerminalLiveLog) {
+      return;
+    }
+    if (initialAlignmentTaskIdRef.current === focusedTaskNumber) {
+      return;
+    }
+
+    void (async () => {
+      const refreshed = await refreshFocusedTaskStatus();
+      if (refreshed) {
+        initialAlignmentTaskIdRef.current = focusedTaskNumber;
+      }
+    })();
+  }, [focusedTask?.status, focusedTaskNumber, logs, refreshFocusedTaskStatus]);
+
   useEffect(() => {
     if (!focusedTaskNumber) {
       return;
@@ -297,13 +354,22 @@ export function LogsPage() {
     const terminalLog = logs.find(
       (log) => log.taskId === focusedTaskNumber && isTerminalTaskStatus(log.status)
     );
-
     if (!terminalLog?.status || focusedTask?.status === terminalLog.status) {
       return;
     }
 
-    void refreshTask(focusedTaskNumber);
-  }, [focusedTask?.status, focusedTaskNumber, logs, refreshTask]);
+    const terminalLogKey = `${focusedTaskNumber}:${terminalLog.logId ? `log-${terminalLog.logId}` : terminalLog.id}`;
+    if (lastHandledTerminalLogKeyRef.current === terminalLogKey) {
+      return;
+    }
+
+    void (async () => {
+      const refreshed = await refreshFocusedTaskStatus();
+      if (refreshed) {
+        lastHandledTerminalLogKeyRef.current = terminalLogKey;
+      }
+    })();
+  }, [focusedTask?.status, focusedTaskNumber, logs, refreshFocusedTaskStatus]);
 
   const runningTasks = tasks.filter(
     (task) => task.status === "running" || task.status === "retrying"

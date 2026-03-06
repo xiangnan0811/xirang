@@ -215,6 +215,29 @@ func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint) ([]LogEvent, error)
 		return nil, err
 	}
 
+	taskIDs := make(map[uint]struct{})
+	for _, item := range logs {
+		if item.TaskID > 0 {
+			taskIDs[item.TaskID] = struct{}{}
+		}
+	}
+
+	taskStatusByID := make(map[uint]string, len(taskIDs))
+	if len(taskIDs) > 0 {
+		ids := make([]uint, 0, len(taskIDs))
+		for id := range taskIDs {
+			ids = append(ids, id)
+		}
+
+		var tasks []model.Task
+		if err := h.db.Model(&model.Task{}).Select("id", "status").Where("id IN ?", ids).Find(&tasks).Error; err != nil {
+			return nil, err
+		}
+		for _, item := range tasks {
+			taskStatusByID[item.ID] = item.Status
+		}
+	}
+
 	events := make([]LogEvent, 0, len(logs))
 	for _, item := range logs {
 		events = append(events, LogEvent{
@@ -222,6 +245,7 @@ func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint) ([]LogEvent, error)
 			TaskID:    item.TaskID,
 			Level:     item.Level,
 			Message:   item.Message,
+			Status:    taskStatusByID[item.TaskID],
 			Timestamp: item.CreatedAt,
 		})
 	}

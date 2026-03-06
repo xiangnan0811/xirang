@@ -30,6 +30,7 @@ type UseNodeOperationsParams = {
   setSSHKeys: Dispatch<SetStateAction<SSHKeyRecord[]>>;
   setWarning: Dispatch<SetStateAction<string | null>>;
   markInventoryMutated: () => void;
+  markTasksMutated: () => void;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
 };
@@ -46,6 +47,7 @@ export function useNodeOperations({
   setSSHKeys,
   setWarning,
   markInventoryMutated,
+  markTasksMutated,
   ensureDemoWriteAllowed,
   handleWriteApiError
 }: UseNodeOperationsParams) {
@@ -204,10 +206,11 @@ export function useNodeOperations({
   const deleteNode = useCallback(async (nodeID: number) => {
     await exec("删除节点", (t) => apiClient.deleteNode(t, nodeID));
     markInventoryMutated();
+    markTasksMutated();
     setNodes((prev) => prev.filter((node) => node.id !== nodeID));
     setTasks((prev) => prev.filter((task) => task.nodeId !== nodeID));
     setAlerts((prev) => prev.filter((alert) => alert.nodeId !== nodeID));
-  }, [exec, markInventoryMutated, setAlerts, setNodes, setTasks]);
+  }, [exec, markInventoryMutated, markTasksMutated, setAlerts, setNodes, setTasks]);
 
   const deleteNodes = useCallback(async (nodeIDs: number[]): Promise<{ deleted: number; notFoundIds: number[] }> => {
     const normalized = Array.from(new Set(nodeIDs.filter((item) => Number.isFinite(item) && item > 0)));
@@ -220,6 +223,7 @@ export function useNodeOperations({
       if (result.ok) {
         const deletedSet = new Set(normalized.filter((id) => !result.data.notFoundIds.includes(id)));
         markInventoryMutated();
+        markTasksMutated();
         setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
         setTasks((prev) => prev.filter((task) => !deletedSet.has(task.nodeId)));
         setAlerts((prev) => prev.filter((alert) => !deletedSet.has(alert.nodeId)));
@@ -230,11 +234,12 @@ export function useNodeOperations({
 
     const deletedSet = new Set(normalized);
     markInventoryMutated();
+    markTasksMutated();
     setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
     setTasks((prev) => prev.filter((task) => !deletedSet.has(task.nodeId)));
     setAlerts((prev) => prev.filter((alert) => !deletedSet.has(alert.nodeId)));
     return { deleted: normalized.length, notFoundIds: [] };
-  }, [exec, markInventoryMutated, setAlerts, setNodes, setTasks]);
+  }, [exec, markInventoryMutated, markTasksMutated, setAlerts, setNodes, setTasks]);
 
   const testNodeConnection = useCallback(async (nodeID: number): Promise<{ ok: boolean; message: string }> => {
     const result = await exec("节点连通性探测", (t) => apiClient.testNodeConnection(t, nodeID));
@@ -302,11 +307,13 @@ export function useNodeOperations({
     );
     if (result) {
       if (result.ok) {
+        markTasksMutated();
         setTasks((prev) => [result.data, ...prev]);
       }
       return;
     }
 
+    markTasksMutated();
     setTasks((prev) => [buildDemoBackupTask(node, tasks, policies), ...prev]);
     setNodes((prev) =>
       prev.map((item) =>
@@ -315,7 +322,7 @@ export function useNodeOperations({
           : item
       )
     );
-  }, [exec, nodes, policies, setNodes, setTasks, tasks]);
+  }, [exec, markTasksMutated, nodes, policies, setNodes, setTasks, tasks]);
 
   return {
     createSSHKey,

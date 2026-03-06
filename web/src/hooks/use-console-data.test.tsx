@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NodeRecord, TaskRecord } from "@/types/domain";
+import type { NewTaskInput, NodeRecord, TaskRecord } from "@/types/domain";
 import { useConsoleData } from "./use-console-data";
 
 const { apiClientMock } = vi.hoisted(() => ({
@@ -127,6 +127,16 @@ function createTask(id: number, status: TaskRecord["status"], progress: number):
   };
 }
 
+function createTaskInput(id: number): NewTaskInput {
+  return {
+    name: `task-${id}`,
+    nodeId: 1,
+    executorType: "rsync",
+    rsyncSource: "/data/src",
+    rsyncTarget: "/data/dst",
+  };
+}
+
 describe("useConsoleData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -193,5 +203,69 @@ describe("useConsoleData", () => {
 
     expect(result.current.tasks[0]?.status).toBe("success");
     expect(result.current.tasks[0]?.progress).toBe(100);
+  });
+
+  it("不会让旧的任务加载结果覆盖 refreshTask 更新后的终态", async () => {
+    const pendingTasks = createDeferred<TaskRecord[]>();
+    const createdTask = createTask(101, "pending", 0);
+
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getTasks.mockReturnValueOnce(pendingTasks.promise);
+    apiClientMock.createTask.mockResolvedValue(createdTask);
+    apiClientMock.getTask.mockResolvedValue(createTask(101, "success", 100));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+
+    await act(async () => {
+      await result.current.createTask(createTaskInput(101));
+    });
+    await act(async () => {
+      await result.current.refreshTask(101);
+    });
+
+    expect(result.current.tasks[0]?.status).toBe("success");
+
+    await act(async () => {
+      pendingTasks.resolve([createTask(101, "running", 18)]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.tasks[0]?.status).toBe("success");
+    expect(result.current.tasks[0]?.progress).toBe(100);
+  });
+
+  it("不会让旧的任务加载结果覆盖 triggerTask 更新后的本地状态", async () => {
+    const pendingTasks = createDeferred<TaskRecord[]>();
+    const createdTask = createTask(202, "pending", 0);
+
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getTasks.mockReturnValueOnce(pendingTasks.promise);
+    apiClientMock.createTask.mockResolvedValue(createdTask);
+    apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.getTask.mockResolvedValue(createTask(202, "running", 12));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+
+    await act(async () => {
+      await result.current.createTask(createTaskInput(202));
+    });
+    await act(async () => {
+      await result.current.triggerTask(202);
+    });
+
+    expect(result.current.tasks[0]?.status).toBe("running");
+
+    await act(async () => {
+      pendingTasks.resolve([createTask(202, "pending", 0)]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.tasks[0]?.status).toBe("running");
   });
 });

@@ -16,6 +16,7 @@ type UsePolicyOperationsParams = {
   setPolicies: Dispatch<SetStateAction<PolicyRecord[]>>;
   setTasks: Dispatch<SetStateAction<TaskRecord[]>>;
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
+  markTasksMutated: () => void;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
 };
@@ -26,6 +27,7 @@ export function usePolicyOperations({
   setPolicies,
   setTasks,
   setAlerts,
+  markTasksMutated,
   ensureDemoWriteAllowed,
   handleWriteApiError
 }: UsePolicyOperationsParams) {
@@ -80,11 +82,12 @@ export function usePolicyOperations({
     await exec("删除策略", (t) => apiClient.deletePolicy(t, policyID));
     const policyName = policies.find((policy) => policy.id === policyID)?.name;
     setPolicies((prev) => prev.filter((policy) => policy.id !== policyID));
+    markTasksMutated();
     setTasks((prev) => prev.filter((task) => task.policyId !== policyID));
     if (policyName) {
       setAlerts((prev) => prev.filter((alert) => alert.policyName !== policyName));
     }
-  }, [exec, policies, setAlerts, setPolicies, setTasks]);
+  }, [exec, markTasksMutated, policies, setAlerts, setPolicies, setTasks]);
 
   const togglePolicy = useCallback(async (policyID: number) => {
     const current = policies.find((policy) => policy.id === policyID);

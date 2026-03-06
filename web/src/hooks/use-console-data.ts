@@ -100,9 +100,14 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date().toLocaleTimeString("zh-CN"));
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
+  const taskVersionRef = useRef(0);
 
   const markInventoryMutated = useCallback(() => {
     inventoryVersionRef.current += 1;
+  }, []);
+
+  const markTasksMutated = useCallback(() => {
+    taskVersionRef.current += 1;
   }, []);
 
   const ensureDemoWriteAllowed = useCallback(
@@ -136,6 +141,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     const controller = new AbortController();
     loadAbortRef.current = controller;
     const inventoryVersionAtStart = inventoryVersionRef.current;
+    const taskVersionAtStart = taskVersionRef.current;
 
     if (!token) {
       setNodes([]);
@@ -187,9 +193,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       failedInterfaces.push("策略");
     }
 
-    if (tasksResult.status === "fulfilled") {
+    if (tasksResult.status === "fulfilled" && taskVersionAtStart === taskVersionRef.current) {
       setTasks(tasksResult.value);
-    } else {
+    } else if (tasksResult.status !== "fulfilled") {
       failedInterfaces.push("任务");
     }
 
@@ -278,6 +284,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setSSHKeys,
     setWarning,
     markInventoryMutated,
+    markTasksMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError
   });
@@ -299,6 +306,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setTasks,
     setAlerts,
     setWarning,
+    markTasksMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError
   });
@@ -315,6 +323,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setPolicies,
     setTasks,
     setAlerts,
+    markTasksMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError
   });
