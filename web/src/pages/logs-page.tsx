@@ -20,7 +20,7 @@ import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
 import { cn } from "@/lib/utils";
-import type { LogEvent } from "@/types/domain";
+import type { LogEvent, TaskStatus } from "@/types/domain";
 
 const selectedNodeStorageKey = "xirang.logs.selected-node";
 const selectedTaskStorageKey = "xirang.logs.selected-task";
@@ -30,6 +30,10 @@ const fullScreenStorageKey = "xirang.logs.full-screen";
 
 const splitByErrorCodeRegex = /(XR-[A-Z]+-\d+)/g;
 const singleErrorCodeRegex = /^XR-[A-Z]+-\d+$/;
+
+function isTerminalTaskStatus(status?: TaskStatus) {
+  return status === "success" || status === "failed" || status === "canceled";
+}
 
 function highlightErrorCode(message: string) {
   const parts = message.split(splitByErrorCodeRegex);
@@ -88,7 +92,7 @@ function minLogId(logs: LogEvent[]) {
 
 export function LogsPage() {
   const { token } = useAuth();
-  const { tasks, nodes, fetchTaskLogs } = useOutletContext<ConsoleOutletContext>();
+  const { tasks, nodes, fetchTaskLogs, refreshTask } = useOutletContext<ConsoleOutletContext>();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const initialTask = searchParams.get("task") ?? "all";
@@ -107,7 +111,7 @@ export function LogsPage() {
   const [historyPaging, setHistoryPaging] = useState(false);
   const [fontScale, setFontScale] = usePersistentState<number>(fontScaleStorageKey, 1);
   const [fullScreen, setFullScreen] = usePersistentState<boolean>(fullScreenStorageKey, false);
-  const [shortcutEcho, setShortcutEcho] = useState("");
+
 
   const focusedTaskID = selectedTask !== "all" ? Number(selectedTask) : undefined;
   const focusedTaskNumber =
@@ -285,6 +289,22 @@ export function LogsPage() {
       ? null
       : tasks.find((task) => String(task.id) === selectedTask);
 
+  useEffect(() => {
+    if (!focusedTaskNumber) {
+      return;
+    }
+
+    const terminalLog = logs.find(
+      (log) => log.taskId === focusedTaskNumber && isTerminalTaskStatus(log.status)
+    );
+
+    if (!terminalLog?.status || focusedTask?.status === terminalLog.status) {
+      return;
+    }
+
+    void refreshTask(focusedTaskNumber);
+  }, [focusedTask?.status, focusedTaskNumber, logs, refreshTask]);
+
   const runningTasks = tasks.filter(
     (task) => task.status === "running" || task.status === "retrying"
   );
@@ -411,6 +431,24 @@ export function LogsPage() {
               <Button variant="outline" size="sm" onClick={exportAsText}>
                 <Download className="mr-1 size-4" />
                 导出 TXT
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="缩小日志字体"
+                title="缩小字体"
+                onClick={() => setFontScale((prev) => Math.max(0.75, Number((prev - 0.1).toFixed(2))))}
+              >
+                A-
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="放大日志字体"
+                title="放大字体"
+                onClick={() => setFontScale((prev) => Math.min(1.6, Number((prev + 0.1).toFixed(2))))}
+              >
+                A+
               </Button>
               <Button
                 variant="outline"
@@ -606,29 +644,16 @@ export function LogsPage() {
             ) : null}
           </div>
 
-          <div className="md:hidden">
-            <p className="mb-2 text-xs text-muted-foreground">虚拟快捷键（移动端终端增强）</p>
-            <div className="grid grid-cols-4 gap-2">
-              {["Ctrl", "C", "Esc", "全屏"].map((key) => (
-                <Button
-                  key={key}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    if (key === "全屏") {
-                      setFullScreen((prev) => !prev);
-                      return;
-                    }
-                    setShortcutEcho(`已发送快捷键：${key}`);
-                  }}
-                >
-                  {key}
-                </Button>
-              ))}
-            </div>
-            {shortcutEcho ? <p className="mt-2 text-xs text-success">{shortcutEcho}</p> : null}
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              支持双指缩放日志字体（Pinch-to-zoom）与双击重置
+          <div className="flex items-center gap-2 md:hidden">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFullScreen((prev) => !prev)}
+            >
+              全屏
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              支持双指缩放与双击重置
             </p>
           </div>
         </CardContent>

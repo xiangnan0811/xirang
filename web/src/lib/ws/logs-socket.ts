@@ -78,6 +78,16 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
   const levelRaw = payload.level;
   const level = levelRaw === "warn" || levelRaw === "error" ? levelRaw : "info";
   const message = typeof payload.message === "string" ? payload.message : "";
+  const statusRaw = payload.status;
+  const status =
+    statusRaw === "pending" ||
+    statusRaw === "running" ||
+    statusRaw === "retrying" ||
+    statusRaw === "failed" ||
+    statusRaw === "success" ||
+    statusRaw === "canceled"
+      ? statusRaw
+      : undefined;
 
   return {
     id: logID ? `live-${logID}` : `${taskID ?? "global"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -87,7 +97,8 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
     level,
     message,
     taskId: taskID,
-    nodeName
+    nodeName,
+    status
   };
 }
 

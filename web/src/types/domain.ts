@@ -119,6 +119,7 @@ export interface LogEvent {
   taskId?: number;
   errorCode?: string;
   progress?: number;
+  status?: TaskStatus;
 }
 
 export interface TrafficPoint {

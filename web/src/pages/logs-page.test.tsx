@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { LogsPage } from "./logs-page";
@@ -8,9 +8,24 @@ import type { LogEvent } from "@/types/domain";
 
 const setSearchParamsMock = vi.fn();
 const searchParamsRef = { current: new URLSearchParams() };
+const refreshTaskMock = vi.fn().mockResolvedValue(undefined);
 const contextRef: { current: ConsoleOutletContext } = {
   current: {} as ConsoleOutletContext,
 };
+
+function createMemoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, value),
+    get length() {
+      return store.size;
+    },
+  } satisfies Storage;
+}
 const liveLogsRef: {
   current: {
     connected: boolean;
@@ -94,14 +109,21 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
       },
     ],
     fetchTaskLogs: vi.fn().mockResolvedValue([]),
+    refreshTask: refreshTaskMock,
   };
   contextRef.current = base as ConsoleOutletContext;
 }
 
 describe("LogsPage", () => {
   beforeEach(() => {
-    localStorage.clear();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    window.localStorage.clear();
     setSearchParamsMock.mockReset();
+    refreshTaskMock.mockReset();
+    refreshTaskMock.mockResolvedValue(undefined);
     searchParamsRef.current = new URLSearchParams();
     liveLogsRef.current = {
       connected: true,
@@ -215,5 +237,49 @@ describe("LogsPage", () => {
     const early = within(logRegion).getByText("ms-early-log");
 
     expect(late.compareDocumentPosition(early) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("收到运行中实时日志时不会刷新当前任务状态", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    liveLogsRef.current.logs = [
+      {
+        id: "log-terminal-running",
+        logId: 87,
+        timestamp: "2026-02-24 10:19:00",
+        level: "info",
+        message: "任务仍在执行",
+        taskId: 1001,
+        nodeName: "node-1",
+        status: "running",
+      },
+    ];
+
+    render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("收到终态实时日志后会刷新当前任务状态", async () => {
+    searchParamsRef.current = new URLSearchParams("task=1001");
+    liveLogsRef.current.logs = [
+      {
+        id: "log-terminal-success",
+        logId: 88,
+        timestamp: "2026-02-24 10:20:00",
+        level: "info",
+        message: "任务执行成功",
+        taskId: 1001,
+        nodeName: "node-1",
+        status: "success",
+      },
+    ];
+
+    render(<LogsPage />);
+
+    await waitFor(() => {
+      expect(refreshTaskMock).toHaveBeenCalledWith(1001);
+    });
   });
 });
