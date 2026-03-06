@@ -36,6 +36,7 @@ function shouldTryDirectFallback(baseUrl: string): boolean {
 
 async function doFetch(baseUrl: string, path: string, options: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = {};
+  const method = options.method ?? "GET";
   if (options.body) {
     headers["Content-Type"] = "application/json";
   }
@@ -43,10 +44,11 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
     headers["Authorization"] = `Bearer ${options.token}`;
   }
   return fetch(`${baseUrl}${path}`, {
-    method: options.method ?? "GET",
+    method,
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: options.signal
+    signal: options.signal,
+    cache: method === "GET" ? "no-store" : undefined
   });
 }
 

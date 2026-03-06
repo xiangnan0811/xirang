@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   CheckSquare,
   Download,
   FileUp,
   KeyRound,
-  Search,
+  MoreHorizontal,
   ServerCog,
+  Trash2,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { MobileNodeSearchDrawer } from "@/pages/nodes-page.components";
 import { NodesGrid } from "@/pages/nodes-page.grid";
 import { NodesTable } from "@/pages/nodes-page.table";
 import {
@@ -32,7 +32,15 @@ import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
 import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useConfirm } from "@/hooks/use-confirm";
+import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeRecord } from "@/types/domain";
@@ -62,19 +70,19 @@ export function NodesPage() {
   } = useOutletContext<ConsoleOutletContext>();
 
   const queryKeyword = searchParams.get("keyword") ?? "";
-  const [keyword, setKeyword] =
-    usePersistentState<string>(keywordStorageKey, queryKeyword || "");
-  const [statusFilter, setStatusFilter] =
-    usePersistentState<"all" | "online" | "warning" | "offline">(
-      statusStorageKey,
-      "all"
-    );
-  const [tagFilter, setTagFilter] = usePersistentState<string>(tagStorageKey, "all");
-  const [sortBy, setSortBy] =
-    usePersistentState<"status" | "name-asc" | "name-desc" | "disk-low" | "backup-recent">(
-      sortStorageKey,
-      "status"
-    );
+  const {
+    keyword, setKeyword,
+    status: statusFilter, setStatus: setStatusFilter,
+    tag: tagFilter, setTag: setTagFilter,
+    sort: sortBy, setSort: setSortBy,
+    deferredKeyword,
+    reset: resetFilters,
+  } = usePageFilters({
+    keyword: { key: keywordStorageKey, default: "" },
+    status: { key: statusStorageKey, default: "all" },
+    tag: { key: tagStorageKey, default: "all" },
+    sort: { key: sortStorageKey, default: "status" },
+  }, globalSearch);
   const [viewMode, setViewMode] = usePersistentState<ViewMode>(
     viewStorageKey,
     "cards"
@@ -83,7 +91,6 @@ export function NodesPage() {
   const { confirm, dialog } = useConfirm();
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
-  const [showSearchDrawer, setShowSearchDrawer] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
@@ -125,9 +132,6 @@ export function NodesPage() {
     }
     return { online, warning, offline };
   }, [nodes]);
-
-  const effectiveKeyword = keyword || globalSearch;
-  const deferredKeyword = useDeferredValue(effectiveKeyword);
 
   const filteredNodes = useMemo(() => {
     const searchKey = deferredKeyword.trim().toLowerCase();
@@ -193,13 +197,6 @@ export function NodesPage() {
     sortedNodes.length > 0 &&
     sortedNodes.every((node) => selectedNodeSet.has(node.id));
 
-  const resetFilters = () => {
-    setKeyword("");
-    setStatusFilter("all");
-    setTagFilter("all");
-    setSortBy("status");
-  };
-
   const openCreateDialog = () => {
     setEditingNode(null);
     setEditorOpen(true);
@@ -242,7 +239,11 @@ export function NodesPage() {
         setTestingNodeId(savedNodeId);
         const result = await testNodeConnection(savedNodeId);
         setTestingNodeId(null);
-        toast.success(result.message);
+        if (result.ok) {
+          toast.success(result.message);
+        } else {
+          toast.error(result.message);
+        }
       }
     } catch (error) {
       setTestingNodeId(null);
@@ -337,7 +338,11 @@ export function NodesPage() {
       setTestingNodeId(node.id);
       const result = await testNodeConnection(node.id);
       setTestingNodeId(null);
-      toast.success(`${node.name}：${result.message}`);
+      if (result.ok) {
+        toast.success(`${node.name}：${result.message}`);
+      } else {
+        toast.error(`${node.name}：${result.message}`);
+      }
     } catch (error) {
       setTestingNodeId(null);
       toast.error(getErrorMessage(error));
@@ -494,15 +499,6 @@ export function NodesPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="md:hidden"
-                onClick={() => setShowSearchDrawer(true)}
-              >
-                <Search className="mr-1 size-4" />
-                侧滑搜索
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
                 onClick={() => navigate("/app/ssh-keys")}
               >
                 <KeyRound className="mr-1 size-4" />
@@ -618,6 +614,35 @@ export function NodesPage() {
                 cardsButtonLabel="节点卡片视图"
                 listButtonLabel="节点列表视图"
               />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" aria-label="批量操作">
+                    <MoreHorizontal className="mr-1 size-4" />
+                    批量{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ""}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
+                    <CheckSquare className="mr-2 size-4" />
+                    {allVisibleSelected ? "取消全选" : "全选当前筛选"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!selectedNodeIds.length}
+                    onClick={() => setSelectedNodeIds([])}
+                  >
+                    清空选择
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={!selectedNodeIds.length}
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => void handleBulkDelete()}
+                  >
+                    <Trash2 className="mr-2 size-4" />
+                    批量删除 ({selectedNodeIds.length})
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button size="sm" variant="outline" onClick={resetFilters}>
                 重置
               </Button>
@@ -625,50 +650,6 @@ export function NodesPage() {
           </FilterPanel>
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
-
-          <div className="hidden flex-wrap items-center justify-between gap-2 rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground md:flex">
-            <div className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                aria-label="全选当前页可见节点"
-                className="size-4"
-                checked={allVisibleSelected}
-                onChange={(event) =>
-                  toggleSelectAllVisible(event.target.checked)
-                }
-              />
-              <span>
-                已选 {selectedNodeIds.length} 个 · 当前筛选{" "}
-                {sortedNodes.length} 个节点
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
-              >
-                <CheckSquare className="mr-1 size-4" />
-                {allVisibleSelected ? "取消全选" : "全选当前筛选"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!selectedNodeIds.length}
-                onClick={() => setSelectedNodeIds([])}
-              >
-                清空选择
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={!selectedNodeIds.length}
-                onClick={() => void handleBulkDelete()}
-              >
-                批量删除 ({selectedNodeIds.length})
-              </Button>
-            </div>
-          </div>
 
           {viewMode === "cards" ? (
             <NodesGrid
@@ -717,18 +698,6 @@ export function NodesPage() {
           )}
         </CardContent>
       </Card>
-
-      <MobileNodeSearchDrawer
-        open={showSearchDrawer}
-        keyword={keyword}
-        nodes={sortedNodes}
-        onKeywordChange={setKeyword}
-        onClose={() => setShowSearchDrawer(false)}
-        onPickNode={(name) => {
-          setKeyword(name);
-          setShowSearchDrawer(false);
-        }}
-      />
 
       <NodeEditorDialog
         open={editorOpen}

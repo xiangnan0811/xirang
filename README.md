@@ -263,7 +263,7 @@ curl -H "Authorization: Bearer <jwt>" \
 - 生产禁用演示模式开关：建议关闭（示例：`VITE_ENABLE_DEMO_MODE=false`）
 - endpoint 协议校验内置开启（webhook/slack/telegram 仅允许 http/https）
 - 私网/回环阻断开关：建议开启（示例：`INTEGRATION_BLOCK_PRIVATE_ENDPOINTS=true`）
-- SSH 严格主机校验开关：建议开启（示例：`SSH_STRICT_HOST_KEY_CHECKING=true`，可配 `SSH_KNOWN_HOSTS_PATH`）
+- SSH 严格主机校验开关：建议开启（示例：`SSH_STRICT_HOST_KEY_CHECKING=true`，可配 `SSH_KNOWN_HOSTS_PATH`）；首次探测未知主机时会自动写入 `known_hosts`，后续仍严格校验主机密钥变更
 
 说明：
 

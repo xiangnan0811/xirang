@@ -1,13 +1,18 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/alerting"
@@ -50,6 +55,7 @@ type nodeBatchDeleteRequest struct {
 const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+var knownHostsWriteMu sync.Mutex
 
 func sanitizeNode(node model.Node) model.Node {
 	copyNode := node
@@ -532,14 +538,100 @@ func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 	if strings.TrimSpace(knownHostsPath) == "" {
 		return nil, fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
 	}
+	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
+		return nil, fmt.Errorf("准备 known_hosts 失败")
+	}
 
 	callback, err := knownhosts.New(knownHostsPath)
 	if err != nil {
 		return nil, fmt.Errorf("加载 known_hosts 失败")
 	}
-	return callback, nil
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		if callbackErr := callback(hostname, remote, key); callbackErr != nil {
+			var keyErr *knownhosts.KeyError
+			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
+				if appendErr := appendKnownHost(knownHostsPath, hostname, key); appendErr != nil {
+					return fmt.Errorf("knownhosts: accept new host failed: %w", appendErr)
+				}
+				refreshedCallback, refreshErr := knownhosts.New(knownHostsPath)
+				if refreshErr != nil {
+					return fmt.Errorf("加载 known_hosts 失败")
+				}
+				callback = refreshedCallback
+				return callback(hostname, remote, key)
+			}
+			return callbackErr
+		}
+		return nil
+	}, nil
 }
 
+func ensureKnownHostsFile(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
+	knownHostsWriteMu.Lock()
+	defer knownHostsWriteMu.Unlock()
+
+	if err := ensureKnownHostsFile(path); err != nil {
+		return err
+	}
+	entry := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if knownHostEntryExists(content, hostname, key) {
+		return nil
+	}
+	prefix := ""
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		prefix = "\n"
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(prefix + entry + "\n")
+	return err
+}
+
+func knownHostEntryExists(content []byte, hostname string, key ssh.PublicKey) bool {
+	normalizedHost := knownhosts.Normalize(hostname)
+	keyFields := strings.Fields(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))))
+	if len(keyFields) < 2 {
+		return false
+	}
+
+	for _, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		hosts := strings.Split(fields[0], ",")
+		if !slices.Contains(hosts, normalizedHost) {
+			continue
+		}
+		if fields[1] == keyFields[0] && fields[2] == keyFields[1] {
+			return true
+		}
+	}
+	return false
+}
 func (h *NodeHandler) Exec(c *gin.Context) {
 	c.JSON(http.StatusForbidden, gin.H{
 		"error": "节点远程执行能力已禁用",

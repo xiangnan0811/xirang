@@ -6,6 +6,25 @@ import { MemoryRouter } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { NodesPage } from "./nodes-page";
 
+const { toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
+  toastSuccessMock: vi.fn(),
+  toastErrorMock: vi.fn(),
+}));
+
+function createMemoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, value),
+    get length() {
+      return store.size;
+    },
+  } satisfies Storage;
+}
+
 const contextRef: { current: ConsoleOutletContext } = {
   current: {} as ConsoleOutletContext,
 };
@@ -37,14 +56,10 @@ vi.mock("@/components/node-editor-dialog", () => ({
   NodeEditorDialog: () => null,
 }));
 
-vi.mock("@/pages/nodes-page.components", () => ({
-  MobileNodeSearchDrawer: () => null,
-}));
-
 vi.mock("@/components/ui/toast", () => ({
   toast: {
-    success: vi.fn(),
-    error: vi.fn(),
+    success: toastSuccessMock,
+    error: toastErrorMock,
   },
 }));
 
@@ -124,10 +139,16 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
 
 describe("NodesPage", () => {
   beforeEach(() => {
-    localStorage.clear();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    window.localStorage.clear();
     confirmMock.mockClear();
     navigateMock.mockReset();
     setSearchParamsMock.mockReset();
+    toastSuccessMock.mockReset();
+    toastErrorMock.mockReset();
     searchParamsRef.current = new URLSearchParams();
     createContext();
   });
@@ -155,7 +176,7 @@ describe("NodesPage", () => {
 
     expect(cardsButton).toHaveAttribute("aria-checked", "false");
     expect(listButton).toHaveAttribute("aria-checked", "true");
-    expect(localStorage.getItem("xirang.nodes.view")).toBe(
+    expect(window.localStorage.getItem("xirang.nodes.view")).toBe(
       JSON.stringify("list")
     );
   });
@@ -175,5 +196,32 @@ describe("NodesPage", () => {
     await user.click(logButtons[0]);
 
     expect(navigateMock).toHaveBeenCalledWith("/app/logs?node=node-prod-1");
+  });
+
+  it("测试连接失败时走错误提示而不是成功提示", async () => {
+    const user = userEvent.setup();
+
+    createContext({
+      testNodeConnection: vi.fn().mockResolvedValue({
+        ok: false,
+        message: "连接失败：ssh: handshake failed: knownhosts: key is unknown",
+      }),
+    });
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const testButtons = screen.getAllByRole("button", { name: "测试连接" });
+    await user.click(testButtons[0]);
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
+    );
   });
 });

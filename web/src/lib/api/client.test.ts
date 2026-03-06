@@ -107,4 +107,20 @@ describe("apiClient 任务请求约束", () => {
     expect(raw.execNodeCommand).toBeUndefined();
     expect("execNodeCommand" in raw).toBe(false);
   });
+
+  it("getNodes 会禁用浏览器缓存，避免刷新拿到旧节点列表", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(
+        200,
+        JSON.stringify({
+          data: [],
+        })
+      )
+    );
+
+    await apiClient.getNodes("token-task");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.cache).toBe("no-store");
+  });
 });
