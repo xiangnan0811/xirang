@@ -1,18 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBody,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
@@ -162,22 +154,10 @@ export function PolicyEditorDialog({
   editingPolicy,
   onSave,
 }: PolicyEditorDialogProps) {
-  const [draft, setDraft] = useState<PolicyDraft>(emptyDraft);
+  const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
 
   const isEditing = Boolean(draft.id);
-
-  useEffect(() => {
-    if (!open) {
-      setDraft(emptyDraft);
-      return;
-    }
-    setDraft(editingPolicy ? toDraft(editingPolicy) : emptyDraft);
-  }, [editingPolicy, open]);
-
-  const handleOpenChange = (next: boolean) => {
-    onOpenChange(next);
-  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -189,144 +169,127 @@ export function PolicyEditorDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent size="md">
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <Clock3 className="size-5 text-primary" />
-            <DialogTitle>
-              {isEditing ? `编辑策略 - ${draft.name}` : "新增策略"}
-            </DialogTitle>
-          </div>
-          <DialogDescription>
-            {isEditing
-              ? `修改策略 ${draft.name} 的调度规则和路径配置。`
-              : "创建新的备份策略，配置 Cron 调度和同步路径。"}
-          </DialogDescription>
-          <DialogCloseButton />
-        </DialogHeader>
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      icon={<Clock3 className="size-5 text-primary" />}
+      title={isEditing ? `编辑策略 - ${draft.name}` : "新增策略"}
+      description={isEditing
+        ? `修改策略 ${draft.name} 的调度规则和路径配置。`
+        : "创建新的备份策略，配置 Cron 调度和同步路径。"}
+      saving={saving}
+      onSubmit={handleSave}
+      submitLabel={isEditing ? "更新策略" : "保存策略"}
+    >
+      <div>
+        <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">策略名称</label>
+        <Input id="policy-edit-name" placeholder="例如：每日全量备份"
+          value={draft.name}
+          onChange={(event) =>
+            setDraft((prev) => ({ ...prev, name: event.target.value }))
+          }
+        />
+      </div>
 
-        <DialogBody className="space-y-3">
-          <div>
-            <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">策略名称</label>
-            <Input id="policy-edit-name" placeholder="例如：每日全量备份"
-              value={draft.name}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, name: event.target.value }))
+      <div>
+        <label htmlFor="policy-edit-cron" className="mb-1 block text-sm font-medium">
+          Cron 表达式
+        </label>
+        <Input
+          id="policy-edit-cron"
+          placeholder="例如：0 */2 * * *"
+          value={draft.cron}
+          onChange={(event) =>
+            setDraft((prev) => ({ ...prev, cron: event.target.value }))
+          }
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {policyTemplates.map((template) => (
+          <Button
+            key={template.label}
+            size="sm"
+            variant={draft.cron === template.cron ? "default" : "outline"}
+            onClick={() =>
+              setDraft((prev) => ({ ...prev, cron: template.cron }))
+            }
+            title={template.hint}
+          >
+            {template.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="rounded-md border bg-muted/30 p-3 text-sm">
+        <p className="text-xs text-muted-foreground">自然语言</p>
+        <p className="mt-1">{cronToNatural(draft.cron)}</p>
+        <p className="mt-1 text-xs text-info">
+          {nextRunPreview(draft.cron)}
+        </p>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">源路径</label>
+          <Input id="policy-edit-source" placeholder="/data/source"
+            value={draft.sourcePath}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                sourcePath: event.target.value,
+              }))
+            }
+          />
+        </div>
+        <div>
+          <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">目标路径</label>
+          <Input id="policy-edit-target" placeholder="/backup/target"
+            value={draft.targetPath}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                targetPath: event.target.value,
+              }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label htmlFor="policy-edit-threshold" className="mb-1 block text-sm font-medium">
+            失败阈值（连续失败次数触发告警）
+          </label>
+          <Input
+            id="policy-edit-threshold"
+            type="number"
+            min={1}
+            max={10}
+            value={draft.criticalThreshold}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                criticalThreshold: toBoundedInt(event.target.value, 2, 1, 10),
+              }))
+            }
+          />
+        </div>
+        <div>
+          <div id="policy-status-label" className="mb-1 text-sm font-medium">策略状态</div>
+          <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
+            <Switch
+              aria-labelledby="policy-status-label"
+              checked={draft.enabled}
+              onCheckedChange={(checked) =>
+                setDraft((prev) => ({ ...prev, enabled: checked }))
               }
             />
+            <span className="text-muted-foreground">{draft.enabled ? "启用" : "停用"}</span>
           </div>
-
-          <div>
-            <label htmlFor="policy-edit-cron" className="mb-1 block text-sm font-medium">
-              Cron 表达式
-            </label>
-            <Input
-              id="policy-edit-cron"
-              placeholder="例如：0 */2 * * *"
-              value={draft.cron}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, cron: event.target.value }))
-              }
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {policyTemplates.map((template) => (
-              <Button
-                key={template.label}
-                size="sm"
-                variant={draft.cron === template.cron ? "default" : "outline"}
-                onClick={() =>
-                  setDraft((prev) => ({ ...prev, cron: template.cron }))
-                }
-                title={template.hint}
-              >
-                {template.label}
-              </Button>
-            ))}
-          </div>
-
-          <div className="rounded-md border bg-muted/30 p-3 text-sm">
-            <p className="text-xs text-muted-foreground">自然语言</p>
-            <p className="mt-1">{cronToNatural(draft.cron)}</p>
-            <p className="mt-1 text-xs text-info">
-              {nextRunPreview(draft.cron)}
-            </p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">源路径</label>
-              <Input id="policy-edit-source" placeholder="/data/source"
-                value={draft.sourcePath}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    sourcePath: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div>
-              <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">目标路径</label>
-              <Input id="policy-edit-target" placeholder="/backup/target"
-                value={draft.targetPath}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    targetPath: event.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="policy-edit-threshold" className="mb-1 block text-sm font-medium">
-                失败阈值（连续失败次数触发告警）
-              </label>
-              <Input
-                id="policy-edit-threshold"
-                type="number"
-                min={1}
-                max={10}
-                value={draft.criticalThreshold}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    criticalThreshold: toBoundedInt(event.target.value, 2, 1, 10),
-                  }))
-                }
-              />
-            </div>
-            <div>
-              <div id="policy-status-label" className="mb-1 text-sm font-medium">策略状态</div>
-              <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
-                <Switch
-                  aria-labelledby="policy-status-label"
-                  checked={draft.enabled}
-                  onCheckedChange={(checked) =>
-                    setDraft((prev) => ({ ...prev, enabled: checked }))
-                  }
-                />
-                <span className="text-muted-foreground">{draft.enabled ? "启用" : "停用"}</span>
-              </div>
-            </div>
-          </div>
-        </DialogBody>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>
-            取消
-          </Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? "保存中..." : isEditing ? "更新策略" : "保存策略"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </FormDialog>
   );
 }
 

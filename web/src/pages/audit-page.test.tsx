@@ -30,6 +30,20 @@ const {
   };
 });
 
+function createMemoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, value),
+    get length() {
+      return store.size;
+    },
+  } satisfies Storage;
+}
+
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({
     token: "test-token",
@@ -70,7 +84,11 @@ function createAuditLogRecord(id: number, method = "GET"): AuditLogRecord {
 
 describe("AuditPage", () => {
   beforeEach(() => {
-    localStorage.clear();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    window.localStorage.clear();
     getAuditLogsMock.mockReset();
     exportAuditLogsCSVMock.mockReset();
     toastSuccessMock.mockReset();
@@ -131,7 +149,7 @@ describe("AuditPage", () => {
     );
   });
 
-  it("支持分页并持久化视图模式", async () => {
+  it("支持分页操作", async () => {
     const user = userEvent.setup();
 
     getAuditLogsMock.mockImplementation(async (_token: string, options?: { offset?: number }) => {
@@ -151,7 +169,7 @@ describe("AuditPage", () => {
       };
     });
 
-    const { unmount } = render(<AuditPage />);
+    render(<AuditPage />);
 
     expect(await screen.findByText("第 1 页 · 共 60 条")).toBeInTheDocument();
 
@@ -167,14 +185,6 @@ describe("AuditPage", () => {
       );
     });
     expect(screen.getByText("第 2 页 · 共 60 条")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("radio", { name: "列表" }));
-    expect(localStorage.getItem("xirang.audit.view")).toBe("list");
-    expect(screen.getByText("来源 IP")).toBeInTheDocument();
-
-    unmount();
-    render(<AuditPage />);
-    expect(await screen.findByText("来源 IP")).toBeInTheDocument();
   });
 
   it("无数据时显示空态提示", async () => {
@@ -187,7 +197,8 @@ describe("AuditPage", () => {
 
     render(<AuditPage />);
 
-    expect(await screen.findByText("当前筛选条件下没有审计记录。")).toBeInTheDocument();
+    const emptyHints = await screen.findAllByText("当前筛选条件下没有审计记录。");
+    expect(emptyHints.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("第 1 页 · 共 0 条")).toBeInTheDocument();
   });
 

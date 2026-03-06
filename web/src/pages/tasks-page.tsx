@@ -1,4 +1,4 @@
-import { useMemo, useState, useDeferredValue } from "react";
+import { useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { Plus } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -13,6 +13,7 @@ import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useConfirm } from "@/hooks/use-confirm";
+import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewTaskInput, TaskStatus } from "@/types/domain";
@@ -44,10 +45,17 @@ export function TasksPage() {
 
   const { confirm, dialog } = useConfirm();
 
-  const [keyword, setKeyword] = usePersistentState<string>(keywordStorageKey, "");
-  const [statusFilterRaw, setStatusFilterRaw] =
-    usePersistentState<string>(statusStorageKey, "all");
-  const [nodeFilter, setNodeFilter] = usePersistentState<string>(nodeStorageKey, "all");
+  const {
+    keyword, setKeyword,
+    status: statusFilterRaw, setStatus: setStatusFilterRaw,
+    node: nodeFilter, setNode: setNodeFilter,
+    deferredKeyword,
+    reset: resetFilters,
+  } = usePageFilters({
+    keyword: { key: keywordStorageKey, default: "" },
+    status: { key: statusStorageKey, default: "all" },
+    node: { key: nodeStorageKey, default: "all" },
+  }, globalSearch);
   const [viewModeRaw, setViewModeRaw] =
     usePersistentState<string>(viewStorageKey, "cards");
 
@@ -57,17 +65,8 @@ export function TasksPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
 
-  const resetFilters = () => {
-    setKeyword("");
-    setStatusFilterRaw("all");
-    setNodeFilter("all");
-  };
-
-  const deferredKeyword = useDeferredValue(keyword);
-  const deferredGlobalSearch = useDeferredValue(globalSearch);
-
   const filteredTasks = useMemo(() => {
-    const effectiveKeyword = (deferredKeyword || deferredGlobalSearch).trim().toLowerCase();
+    const effectiveKeyword = deferredKeyword.trim().toLowerCase();
 
     return [...tasks]
       .filter((task) => {
@@ -88,7 +87,7 @@ export function TasksPage() {
         return text.includes(effectiveKeyword);
       })
       .sort((first, second) => second.id - first.id);
-  }, [deferredGlobalSearch, deferredKeyword, nodeFilter, statusFilter, tasks]);
+  }, [deferredKeyword, nodeFilter, statusFilter, tasks]);
 
   const taskStats = useMemo(() => {
     let pending = 0;

@@ -1,20 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBody,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
+import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
 
 type IntegrationGuide = {
@@ -134,21 +126,11 @@ export function IntegrationCreateDialog({
   onOpenChange,
   onSave,
 }: IntegrationCreateDialogProps) {
-  const [draft, setDraft] = useState<NewIntegrationInput>({ ...defaultDraft });
+  const [draft, setDraft] = useDialogDraft<NewIntegrationInput>(open, defaultDraft);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setDraft({ ...defaultDraft });
-    }
-  }, [open]);
 
   const guide = integrationGuideMap[draft.type];
   const TypeIcon = typeIconMap[draft.type];
-
-  const handleOpenChange = (next: boolean) => {
-    onOpenChange(next);
-  };
 
   const handleSave = async () => {
     if (!draft.name.trim()) {
@@ -179,141 +161,126 @@ export function IntegrationCreateDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent size="md">
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <TypeIcon className="size-5 text-primary" />
-            <DialogTitle>新增通知方式</DialogTitle>
-          </div>
-          <DialogDescription>
-            配置告警通知通道，支持邮件、Slack、Telegram 及自定义 Webhook。
-          </DialogDescription>
-          <DialogCloseButton />
-        </DialogHeader>
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      icon={<TypeIcon className="size-5 text-primary" />}
+      title="新增通知方式"
+      description="配置告警通知通道，支持邮件、Slack、Telegram 及自定义 Webhook。"
+      saving={saving}
+      onSubmit={handleSave}
+      submitLabel="保存通道"
+    >
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label htmlFor="create-integration-type" className="mb-1 block text-sm font-medium">
+            通道类型
+          </label>
+          <AppSelect
+            id="create-integration-type"
+            className="w-full"
+            value={draft.type}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                type: toIntegrationType(event.target.value),
+              }))
+            }
+          >
+            <option value="email">邮件</option>
+            <option value="slack">Slack</option>
+            <option value="telegram">Telegram</option>
+            <option value="webhook">Webhook</option>
+          </AppSelect>
+        </div>
 
-        <DialogBody className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="create-integration-type" className="mb-1 block text-sm font-medium">
-                通道类型
-              </label>
-              <AppSelect
-                id="create-integration-type"
-                className="w-full"
-                value={draft.type}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    type: toIntegrationType(event.target.value),
-                  }))
-                }
-              >
-                <option value="email">邮件</option>
-                <option value="slack">Slack</option>
-                <option value="telegram">Telegram</option>
-                <option value="webhook">Webhook</option>
-              </AppSelect>
-            </div>
+        <div>
+          <label htmlFor="create-integration-name" className="mb-1 block text-sm font-medium">
+            通道名称
+          </label>
+          <Input
+            id="create-integration-name"
+            placeholder="例如：运维邮箱、值班 Slack"
+            value={draft.name}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, name: event.target.value }))
+            }
+          />
+        </div>
+      </div>
 
-            <div>
-              <label htmlFor="create-integration-name" className="mb-1 block text-sm font-medium">
-                通道名称
-              </label>
-              <Input
-                id="create-integration-name"
-                placeholder="例如：运维邮箱、值班 Slack"
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, name: event.target.value }))
-                }
-              />
-            </div>
-          </div>
+      <div>
+        <label htmlFor="create-integration-endpoint" className="mb-1 block text-sm font-medium">
+          {guide.endpointLabel}
+        </label>
+        <Input
+          id="create-integration-endpoint"
+          placeholder={guide.endpointPlaceholder}
+          value={draft.endpoint}
+          onChange={(event) =>
+            setDraft((prev) => ({
+              ...prev,
+              endpoint: event.target.value,
+            }))
+          }
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {guide.endpointHint}
+        </p>
+      </div>
 
-          <div>
-            <label htmlFor="create-integration-endpoint" className="mb-1 block text-sm font-medium">
-              {guide.endpointLabel}
-            </label>
-            <Input
-              id="create-integration-endpoint"
-              placeholder={guide.endpointPlaceholder}
-              value={draft.endpoint}
-              onChange={(event) =>
-                setDraft((prev) => ({
-                  ...prev,
-                  endpoint: event.target.value,
-                }))
-              }
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              {guide.endpointHint}
-            </p>
-          </div>
+      <div className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        <span>可直接套用示例地址后再修改。</span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            setDraft((prev) => ({ ...prev, endpoint: guide.sample }))
+          }
+        >
+          套用示例
+        </Button>
+      </div>
 
-          <div className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-            <span>可直接套用示例地址后再修改。</span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setDraft((prev) => ({ ...prev, endpoint: guide.sample }))
-              }
-            >
-              套用示例
-            </Button>
-          </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label htmlFor="create-integration-fail-threshold" className="mb-1 block text-sm font-medium">
+            失败阈值（次数）
+          </label>
+          <Input
+            id="create-integration-fail-threshold"
+            type="number"
+            min={1}
+            max={10}
+            value={draft.failThreshold}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                failThreshold: toBoundedInt(event.target.value, 1, 1, 10),
+              }))
+            }
+          />
+        </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="create-integration-fail-threshold" className="mb-1 block text-sm font-medium">
-                失败阈值（次数）
-              </label>
-              <Input
-                id="create-integration-fail-threshold"
-                type="number"
-                min={1}
-                max={10}
-                value={draft.failThreshold}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    failThreshold: toBoundedInt(event.target.value, 1, 1, 10),
-                  }))
-                }
-              />
-            </div>
-
-            <div>
-              <label htmlFor="create-integration-cooldown" className="mb-1 block text-sm font-medium">
-                冷却时间（分钟）
-              </label>
-              <Input
-                id="create-integration-cooldown"
-                type="number"
-                min={1}
-                max={120}
-                value={draft.cooldownMinutes}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    cooldownMinutes: toBoundedInt(event.target.value, 1, 1, 120),
-                  }))
-                }
-              />
-            </div>
-          </div>
-        </DialogBody>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>
-            取消
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
-            {saving ? "保存中..." : "保存通道"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div>
+          <label htmlFor="create-integration-cooldown" className="mb-1 block text-sm font-medium">
+            冷却时间（分钟）
+          </label>
+          <Input
+            id="create-integration-cooldown"
+            type="number"
+            min={1}
+            max={120}
+            value={draft.cooldownMinutes}
+            onChange={(event) =>
+              setDraft((prev) => ({
+                ...prev,
+                cooldownMinutes: toBoundedInt(event.target.value, 1, 1, 120),
+              }))
+            }
+          />
+        </div>
+      </div>
+    </FormDialog>
   );
 }

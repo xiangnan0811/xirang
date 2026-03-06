@@ -3,9 +3,10 @@ import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { useIntegrationAlertOperations } from "@/hooks/use-console-integration-alert-operations";
 import { useNodeOperations } from "@/hooks/use-console-node-operations";
+import { usePolicyOperations } from "@/hooks/use-console-policy-operations";
+import { useTaskOperations } from "@/hooks/use-console-task-operations";
 import {
-  deriveOverview,
-  describeCron
+  deriveOverview
 } from "@/hooks/use-console-data.utils";
 import type {
   AlertDeliveryRecord,
@@ -60,6 +61,7 @@ export interface ConsoleDataState {
   triggerTask: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
   retryTask: (taskId: number) => Promise<void>;
+  refreshTask: (taskId: number) => Promise<void>;
   fetchTaskLogs: (taskId: number, options?: { beforeId?: number; limit?: number }) => Promise<LogEvent[]>;
   togglePolicy: (policyId: number) => Promise<void>;
   updatePolicySchedule: (policyId: number, cron: string, naturalLanguage: string) => Promise<void>;
@@ -97,6 +99,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const [globalSearch, setGlobalSearch] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date().toLocaleTimeString("zh-CN"));
   const loadAbortRef = useRef<AbortController | null>(null);
+  const inventoryVersionRef = useRef(0);
+
+  const markInventoryMutated = useCallback(() => {
+    inventoryVersionRef.current += 1;
+  }, []);
 
   const ensureDemoWriteAllowed = useCallback(
     (action: string) => {
@@ -128,6 +135,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     loadAbortRef.current?.abort();
     const controller = new AbortController();
     loadAbortRef.current = controller;
+    const inventoryVersionAtStart = inventoryVersionRef.current;
 
     if (!token) {
       setNodes([]);
@@ -167,9 +175,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
     const failedInterfaces: string[] = [];
 
-    if (nodesResult.status === "fulfilled") {
+    if (nodesResult.status === "fulfilled" && inventoryVersionAtStart === inventoryVersionRef.current) {
       setNodes(nodesResult.value);
-    } else {
+    } else if (nodesResult.status !== "fulfilled") {
       failedInterfaces.push("节点");
     }
 
@@ -191,9 +199,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       failedInterfaces.push("告警");
     }
 
-    if (sshKeysResult.status === "fulfilled") {
+    if (sshKeysResult.status === "fulfilled" && inventoryVersionAtStart === inventoryVersionRef.current) {
       setSSHKeys(sshKeysResult.value);
-    } else {
+    } else if (sshKeysResult.status !== "fulfilled") {
       failedInterfaces.push("SSH Key");
     }
 
@@ -269,315 +277,47 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setAlerts,
     setSSHKeys,
     setWarning,
+    markInventoryMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError
   });
 
-  const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
-    if (token) {
-      try {
-        const created = await apiClient.createTask(token, input);
-        setTasks((prev) => [created, ...prev]);
-        return created.id;
-      } catch (error) {
-        handleWriteApiError("创建任务", error);
-        return -1;
-      }
-    } else {
-      ensureDemoWriteAllowed("创建任务");
-    }
+  const {
+    createTask,
+    deleteTask,
+    triggerTask,
+    cancelTask,
+    retryTask,
+    refreshTask,
+    fetchTaskLogs
+  } = useTaskOperations({
+    token,
+    nodes,
+    policies,
+    tasks,
+    alerts,
+    setTasks,
+    setAlerts,
+    setWarning,
+    ensureDemoWriteAllowed,
+    handleWriteApiError
+  });
 
-    const node = nodes.find((item) => item.id === input.nodeId);
-    const policy = input.policyId ? policies.find((item) => item.id === input.policyId) : undefined;
-    const nextTaskID = tasks.length > 0 ? Math.max(...tasks.map((task) => task.id)) + 1 : 3001;
-
-    const nextTask: TaskRecord = {
-      id: nextTaskID,
-      name: input.name,
-      policyName: policy?.name ?? input.name,
-      policyId: policy?.id ?? input.policyId ?? null,
-      nodeName: node?.name ?? `节点-${input.nodeId}`,
-      nodeId: input.nodeId,
-      status: "pending",
-      progress: 0,
-      startedAt: "-",
-      rsyncSource: input.rsyncSource ?? policy?.sourcePath,
-      rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
-      executorType: input.executorType ?? "rsync",
-      cronSpec: input.cronSpec ?? policy?.cron,
-      speedMbps: 0
-    };
-
-    setTasks((prev) => [nextTask, ...prev]);
-    return nextTaskID;
-  }, [ensureDemoWriteAllowed, handleWriteApiError, nodes, policies, tasks, token]);
-
-  const deleteTask = useCallback(async (taskID: number) => {
-    if (token) {
-      try {
-        await apiClient.deleteTask(token, taskID);
-      } catch (error) {
-        handleWriteApiError("删除任务", error);
-      }
-    } else {
-      ensureDemoWriteAllowed("删除任务");
-    }
-
-    setTasks((prev) => prev.filter((task) => task.id !== taskID));
-    setAlerts((prev) => prev.filter((alert) => alert.taskId !== taskID));
-  }, [ensureDemoWriteAllowed, handleWriteApiError, token]);
-
-  const triggerTask = useCallback(async (taskID: number) => {
-    if (token) {
-      try {
-        await apiClient.triggerTask(token, taskID);
-        const latest = await apiClient.getTask(token, taskID).catch(() => null);
-        setTasks((prev) =>
-          prev.map((task) =>
-            task.id === taskID
-              ? latest ?? {
-                  ...task,
-                  status: "running",
-                  progress: 12,
-                  errorCode: undefined,
-                  lastError: undefined,
-                  startedAt: new Date().toLocaleString("zh-CN", { hour12: false })
-                }
-              : task
-          )
-        );
-        return;
-      } catch (error) {
-        handleWriteApiError("触发任务", error);
-        return;
-      }
-    } else {
-      ensureDemoWriteAllowed("触发任务");
-    }
-
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskID
-          ? {
-              ...task,
-              status: "running",
-              progress: 12,
-              errorCode: undefined,
-              lastError: undefined,
-              startedAt: new Date().toLocaleString("zh-CN", { hour12: false })
-            }
-          : task
-        )
-    );
-  }, [ensureDemoWriteAllowed, handleWriteApiError, token]);
-
-  const cancelTask = useCallback(async (taskID: number) => {
-    if (token) {
-      try {
-        await apiClient.cancelTask(token, taskID);
-        const latest = await apiClient.getTask(token, taskID).catch(() => null);
-        setTasks((prev) =>
-          prev.map((task) =>
-            task.id === taskID
-              ? latest ?? {
-                  ...task,
-                  status: "canceled",
-                  progress: 0,
-                  speedMbps: 0
-                }
-              : task
-          )
-        );
-        return;
-      } catch (error) {
-        handleWriteApiError("取消任务", error);
-        return;
-      }
-    } else {
-      ensureDemoWriteAllowed("取消任务");
-    }
-
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskID
-          ? {
-              ...task,
-              status: "canceled",
-              progress: 0,
-              speedMbps: 0
-            }
-          : task
-        )
-    );
-  }, [ensureDemoWriteAllowed, handleWriteApiError, token]);
-
-  const retryTask = useCallback(async (taskID: number) => {
-    await triggerTask(taskID);
-
-    const relatedAlerts = alerts.filter((alert) => alert.taskId === taskID && alert.status !== "resolved");
-    if (token && relatedAlerts.length > 0) {
-      void Promise.allSettled(relatedAlerts.map((alert) => apiClient.resolveAlert(token, alert.id)));
-    }
-
-    setAlerts((prev) =>
-      prev.map((alert) =>
-        alert.taskId === taskID
-          ? {
-              ...alert,
-              status: "resolved",
-              retryable: false,
-              message: "已触发重试，等待任务结果回传"
-            }
-          : alert
-      )
-    );
-  }, [alerts, token, triggerTask]);
-
-  const fetchTaskLogs = useCallback(async (taskID: number, options?: { beforeId?: number; limit?: number }): Promise<LogEvent[]> => {
-    if (token) {
-      try {
-        return await apiClient.getTaskLogs(token, taskID, options);
-      } catch (error) {
-        setWarning(getErrorMessage(error, "获取任务日志失败"));
-        return [];
-      }
-    }
-
-    return [];
-  }, [token]);
-
-  const createPolicy = useCallback(async (input: NewPolicyInput) => {
-    if (token) {
-      try {
-        const created = await apiClient.createPolicy(token, input);
-        const merged = {
-          ...created,
-          criticalThreshold: input.criticalThreshold,
-          naturalLanguage: describeCron(created.cron)
-        };
-        setPolicies((prev) => [merged, ...prev]);
-        return;
-      } catch (error) {
-        handleWriteApiError("创建策略", error);
-        return;
-      }
-    } else {
-      ensureDemoWriteAllowed("创建策略");
-    }
-
-    const nextID = policies.length > 0 ? Math.max(...policies.map((policy) => policy.id)) + 1 : 1;
-    const next: PolicyRecord = {
-      id: nextID,
-      name: input.name,
-      sourcePath: input.sourcePath,
-      targetPath: input.targetPath,
-      cron: input.cron,
-      naturalLanguage: describeCron(input.cron),
-      enabled: input.enabled,
-      criticalThreshold: Math.max(1, input.criticalThreshold)
-    };
-    setPolicies((prev) => [next, ...prev]);
-  }, [ensureDemoWriteAllowed, handleWriteApiError, policies, token]);
-
-  const updatePolicy = useCallback(async (policyID: number, input: NewPolicyInput) => {
-    if (token) {
-      try {
-        const updated = await apiClient.updatePolicy(token, policyID, input);
-        const merged = {
-          ...updated,
-          criticalThreshold: input.criticalThreshold,
-          naturalLanguage: describeCron(updated.cron)
-        };
-        setPolicies((prev) => prev.map((policy) => (policy.id === policyID ? merged : policy)));
-        return;
-      } catch (error) {
-        handleWriteApiError("更新策略", error);
-        return;
-      }
-    } else {
-      ensureDemoWriteAllowed("更新策略");
-    }
-
-    setPolicies((prev) =>
-      prev.map((policy) =>
-        policy.id === policyID
-          ? {
-              ...policy,
-              name: input.name,
-              sourcePath: input.sourcePath,
-              targetPath: input.targetPath,
-              cron: input.cron,
-              naturalLanguage: describeCron(input.cron),
-              enabled: input.enabled,
-              criticalThreshold: Math.max(1, input.criticalThreshold)
-            }
-          : policy
-      )
-    );
-  }, [ensureDemoWriteAllowed, handleWriteApiError, token]);
-
-  const deletePolicy = useCallback(async (policyID: number) => {
-    if (token) {
-      try {
-        await apiClient.deletePolicy(token, policyID);
-      } catch (error) {
-        handleWriteApiError("删除策略", error);
-      }
-    } else {
-      ensureDemoWriteAllowed("删除策略");
-    }
-
-    const policyName = policies.find((policy) => policy.id === policyID)?.name;
-    setPolicies((prev) => prev.filter((policy) => policy.id !== policyID));
-    if (policyName) {
-      setTasks((prev) => prev.filter((task) => task.policyName !== policyName));
-      setAlerts((prev) => prev.filter((alert) => alert.policyName !== policyName));
-    }
-  }, [ensureDemoWriteAllowed, handleWriteApiError, policies, token]);
-
-  const togglePolicy = useCallback(async (policyID: number) => {
-    const current = policies.find((policy) => policy.id === policyID);
-    if (!current) {
-      return;
-    }
-
-    const input: NewPolicyInput = {
-      name: current.name,
-      sourcePath: current.sourcePath,
-      targetPath: current.targetPath,
-      cron: current.cron,
-      criticalThreshold: current.criticalThreshold,
-      enabled: !current.enabled
-    };
-
-    await updatePolicy(policyID, input);
-  }, [policies, updatePolicy]);
-
-  const updatePolicySchedule = useCallback(async (policyID: number, cron: string, naturalLanguage: string) => {
-    const current = policies.find((policy) => policy.id === policyID);
-    if (!current) {
-      return;
-    }
-    await updatePolicy(policyID, {
-      name: current.name,
-      sourcePath: current.sourcePath,
-      targetPath: current.targetPath,
-      criticalThreshold: current.criticalThreshold,
-      enabled: current.enabled,
-      cron
-    });
-
-    setPolicies((prev) =>
-      prev.map((policy) =>
-        policy.id === policyID
-          ? {
-              ...policy,
-              naturalLanguage
-            }
-          : policy
-      )
-    );
-  }, [policies, updatePolicy]);
+  const {
+    createPolicy,
+    updatePolicy,
+    deletePolicy,
+    togglePolicy,
+    updatePolicySchedule
+  } = usePolicyOperations({
+    token,
+    policies,
+    setPolicies,
+    setTasks,
+    setAlerts,
+    ensureDemoWriteAllowed,
+    handleWriteApiError
+  });
 
   const {
     addIntegration,
@@ -637,6 +377,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     triggerTask,
     cancelTask,
     retryTask,
+    refreshTask,
     fetchTaskLogs,
     togglePolicy,
     updatePolicySchedule,

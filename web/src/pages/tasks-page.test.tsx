@@ -12,6 +12,20 @@ const contextRef: { current: ConsoleOutletContext } = {
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
 
+function createMemoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, value),
+    get length() {
+      return store.size;
+    },
+  } satisfies Storage;
+}
+
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
@@ -99,7 +113,11 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
 
 describe("TasksPage", () => {
   beforeEach(() => {
-    localStorage.clear();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    window.localStorage.clear();
     confirmMock.mockClear();
     navigateMock.mockReset();
     createContext();

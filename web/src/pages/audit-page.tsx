@@ -11,10 +11,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
-import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
 
 const pageSize = 30;
-const auditViewStorageKey = "xirang.audit.view";
 
 type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
 
@@ -63,10 +61,6 @@ export function AuditPage() {
   const [keyword, setKeyword] = useState("");
   const [method, setMethod] = useState("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    const stored = localStorage.getItem(auditViewStorageKey);
-    return stored === "list" ? "list" : "cards";
-  });
 
   const autoLoadKeyRef = useRef("");
 
@@ -173,10 +167,6 @@ export function AuditPage() {
     void load(0);
   }, [keyword, method, timeRange, token]);
 
-  useEffect(() => {
-    localStorage.setItem(auditViewStorageKey, viewMode);
-  }, [viewMode]);
-
   return (
     <div className="space-y-5 animate-fade-in">
       <Card className="border-border/75">
@@ -199,12 +189,6 @@ export function AuditPage() {
                 <Download className="mr-1 size-4" />
                 {exporting ? "导出中..." : "导出 CSV"}
               </Button>
-              <ViewModeToggle
-                className="bg-background/70"
-                value={viewMode}
-                onChange={setViewMode}
-                groupLabel="审计视图切换"
-              />
             </div>
           </div>
         </CardHeader>
@@ -255,8 +239,8 @@ export function AuditPage() {
             ))}
           </div>
 
-          {viewMode === "cards" ? (
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {/* 小屏卡片，大屏表格 */}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 md:hidden">
               {rows.map((row) => (
                 <div
                   key={row.id}
@@ -279,8 +263,8 @@ export function AuditPage() {
                 <EmptyState title="当前筛选条件下没有审计记录。" />
               ) : null}
             </div>
-          ) : (
-            <div className="glass-panel overflow-x-auto">
+
+          <div className="glass-panel hidden overflow-x-auto md:block">
               <table className="min-w-[1080px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -313,7 +297,6 @@ export function AuditPage() {
                 <div className="px-3 py-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
               ) : null}
             </div>
-          )}
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { LayoutGrid, List, Plus, Trash2, Wrench } from "lucide-react";
+import { Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import {
@@ -20,9 +20,6 @@ import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
 const keywordStorageKey = "xirang.policies.keyword";
-const viewStorageKey = "xirang.policies.view";
-
-type PoliciesViewMode = "cards" | "list";
 
 export function PoliciesPage() {
   const {
@@ -36,9 +33,6 @@ export function PoliciesPage() {
   } = useOutletContext<ConsoleOutletContext>();
 
   const [keyword, setKeyword] = usePersistentState<string>(keywordStorageKey, "");
-  const [viewModeRaw, setViewModeRaw] = usePersistentState<string>(viewStorageKey, "cards");
-
-  const viewMode: PoliciesViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
@@ -140,31 +134,13 @@ export function PoliciesPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">策略配置中枢（平板双栏 + 视图持久化）</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">卡片视图适合管理，列表视图适合批量审阅</p>
+              <CardTitle className="text-base">策略配置中枢</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">小屏卡片布局，大屏表格布局，自动适配</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="success">启用 {activeCount}</Badge>
               <Badge variant="outline">停用 {disabledCount}</Badge>
               <Badge variant="secondary" className="hidden lg:inline-flex">筛选 {filteredPolicies.length}</Badge>
-              <div className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-background/70 p-1">
-                <Button
-                  size="sm"
-                  variant={viewMode === "cards" ? "default" : "ghost"}
-                  onClick={() => setViewModeRaw("cards")}
-                >
-                  <LayoutGrid className="mr-1 size-4" />
-                  卡片
-                </Button>
-                <Button
-                  size="sm"
-                  variant={viewMode === "list" ? "default" : "ghost"}
-                  onClick={() => setViewModeRaw("list")}
-                >
-                  <List className="mr-1 size-4" />
-                  列表
-                </Button>
-              </div>
               <Button size="sm" onClick={openCreateDialog}>
                 <Plus className="mr-1 size-4" />
                 新增策略
@@ -197,8 +173,8 @@ export function PoliciesPage() {
             />
           ) : null}
 
-          {viewMode === "cards" ? (
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {/* 小屏卡片，大屏表格 */}
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 md:hidden">
               {filteredPolicies.map((policy) => (
                 <div
                   key={policy.id}
@@ -254,27 +230,27 @@ export function PoliciesPage() {
                 </div>
               ))}
 
-              {!filteredPolicies.length ? (
-                <EmptyState
-                  className="md:col-span-2 lg:col-span-3"
-                  title="暂无匹配策略"
-                  description="可调整关键词筛选，或新增策略模板。"
-                  action={(
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <Button size="sm" variant="outline" onClick={resetFilters}>
-                        清空筛选
-                      </Button>
-                      <Button size="sm" onClick={openCreateDialog}>
-                        <Plus className="mr-1 size-4" />
-                        新增策略
-                      </Button>
-                    </div>
-                  )}
-                />
-              ) : null}
-            </div>
-          ) : (
-            <div className="glass-panel overflow-x-auto">
+            {!filteredPolicies.length ? (
+              <EmptyState
+                className="md:col-span-2 lg:col-span-3"
+                title="暂无匹配策略"
+                description="可调整关键词筛选，或新增策略模板。"
+                action={(
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <Button size="sm" variant="outline" onClick={resetFilters}>
+                      清空筛选
+                    </Button>
+                    <Button size="sm" onClick={openCreateDialog}>
+                      <Plus className="mr-1 size-4" />
+                      新增策略
+                    </Button>
+                  </div>
+                )}
+              />
+            ) : null}
+          </div>
+
+          <div className="glass-panel hidden overflow-x-auto md:block">
               <table className="min-w-[980px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -356,7 +332,6 @@ export function PoliciesPage() {
                 </tbody>
               </table>
             </div>
-          )}
         </CardContent>
       </Card>
 

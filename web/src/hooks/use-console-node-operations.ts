@@ -1,10 +1,13 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { parseTags } from "@/hooks/use-console-data.utils";
+import { useApiAction } from "@/hooks/use-api-action";
 import {
-  buildFingerprint,
-  createKeyId,
-  parseTags
-} from "@/hooks/use-console-data.utils";
+  buildDemoBackupTask,
+  buildDemoNode,
+  buildDemoSSHKey,
+  simulateDemoConnection
+} from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
   NewNodeInput,
@@ -26,6 +29,7 @@ type UseNodeOperationsParams = {
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
   setSSHKeys: Dispatch<SetStateAction<SSHKeyRecord[]>>;
   setWarning: Dispatch<SetStateAction<string | null>>;
+  markInventoryMutated: () => void;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
 };
@@ -41,51 +45,38 @@ export function useNodeOperations({
   setAlerts,
   setSSHKeys,
   setWarning,
+  markInventoryMutated,
   ensureDemoWriteAllowed,
   handleWriteApiError
 }: UseNodeOperationsParams) {
-  const createSSHKey = useCallback(async (input: NewSSHKeyInput): Promise<string> => {
-    if (token) {
-      try {
-        const created = await apiClient.createSSHKey(token, input);
-        setSSHKeys((prev) => [created, ...prev]);
-        return created.id;
-      } catch (error) {
-        handleWriteApiError("创建 SSH Key", error);
-        return "";
-      }
-    } else {
-      ensureDemoWriteAllowed("创建 SSH Key");
-    }
+  const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
-    const nextId = createKeyId(input.name || input.username || "ssh-key");
-    const item: SSHKeyRecord = {
-      id: nextId,
-      name: input.name,
-      username: input.username,
-      keyType: input.keyType,
-      privateKey: input.privateKey,
-      fingerprint: buildFingerprint(input.privateKey),
-      createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
-    };
+  const createSSHKey = useCallback(async (input: NewSSHKeyInput): Promise<string> => {
+    const result = await exec("创建 SSH Key", (t) => apiClient.createSSHKey(t, input));
+    if (result) {
+      if (result.ok) {
+        markInventoryMutated();
+        setSSHKeys((prev) => [result.data, ...prev]);
+        return result.data.id;
+      }
+      return "";
+    }
+    const item = buildDemoSSHKey(input);
+    markInventoryMutated();
     setSSHKeys((prev) => [item, ...prev]);
-    return nextId;
-  }, [ensureDemoWriteAllowed, handleWriteApiError, setSSHKeys, token]);
+    return item.id;
+  }, [exec, markInventoryMutated, setSSHKeys]);
 
   const updateSSHKey = useCallback(async (keyId: string, input: NewSSHKeyInput) => {
-    if (token) {
-      try {
-        const updated = await apiClient.updateSSHKey(token, keyId, input);
-        setSSHKeys((prev) => prev.map((item) => (item.id === keyId ? updated : item)));
-        return;
-      } catch (error) {
-        handleWriteApiError("更新 SSH Key", error);
-        return;
+    const result = await exec("更新 SSH Key", (t) => apiClient.updateSSHKey(t, keyId, input));
+    if (result) {
+      if (result.ok) {
+        markInventoryMutated();
+        setSSHKeys((prev) => prev.map((item) => (item.id === keyId ? result.data : item)));
       }
-    } else {
-      ensureDemoWriteAllowed("更新 SSH Key");
+      return;
     }
-
+    markInventoryMutated();
     setSSHKeys((prev) =>
       prev.map((item) =>
         item.id === keyId
@@ -95,13 +86,14 @@ export function useNodeOperations({
               username: input.username,
               keyType: input.keyType,
               privateKey: input.privateKey,
-              fingerprint: buildFingerprint(input.privateKey)
+              fingerprint: buildDemoSSHKey(input).fingerprint
             }
           : item
       )
     );
-  }, [ensureDemoWriteAllowed, handleWriteApiError, setSSHKeys, token]);
+  }, [exec, markInventoryMutated, setSSHKeys]);
 
+  // deleteSSHKey 有自定义 ApiError 处理，不使用 exec
   const deleteSSHKey = useCallback(async (keyId: string): Promise<boolean> => {
     const usedByNodes = nodes.some((node) => node.keyId === keyId);
     if (usedByNodes) {
@@ -132,9 +124,10 @@ export function useNodeOperations({
       ensureDemoWriteAllowed("删除 SSH Key");
     }
 
+    markInventoryMutated();
     setSSHKeys((prev) => prev.filter((item) => item.id !== keyId));
     return true;
-  }, [demoModeEnabled, ensureDemoWriteAllowed, handleWriteApiError, nodes, setSSHKeys, setWarning, token]);
+  }, [demoModeEnabled, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setSSHKeys, setWarning, token]);
 
   const createNode = useCallback(async (input: NewNodeInput): Promise<number> => {
     let keyId = input.keyId ?? null;
@@ -148,48 +141,22 @@ export function useNodeOperations({
       });
     }
 
-    const finalInput: NewNodeInput = {
-      ...input,
-      keyId
-    };
+    const finalInput: NewNodeInput = { ...input, keyId };
 
-    if (token) {
-      try {
-        const created = await apiClient.createNode(token, finalInput);
-        setNodes((prev) => [created, ...prev]);
-        return created.id;
-      } catch (error) {
-        handleWriteApiError("创建节点", error);
-        return -1;
+    const result = await exec("创建节点", (t) => apiClient.createNode(t, finalInput));
+    if (result) {
+      if (result.ok) {
+        markInventoryMutated();
+        setNodes((prev) => [result.data, ...prev]);
+        return result.data.id;
       }
-    } else {
-      ensureDemoWriteAllowed("创建节点");
+      return -1;
     }
-
-    const maxNodeID = nodes.length > 0 ? Math.max(...nodes.map((node) => node.id)) : 0;
-    const nextNode: NodeRecord = {
-      id: maxNodeID + 1,
-      name: input.name,
-      host: input.host,
-      address: input.host,
-      ip: input.host,
-      port: input.port || 22,
-      username: input.username,
-      authType: input.authType,
-      keyId,
-      basePath: input.basePath || "/",
-      status: "warning",
-      tags: parseTags(input.tags),
-      lastSeenAt: "尚未探测",
-      lastBackupAt: "尚未执行",
-      diskFreePercent: 100,
-      diskUsedGb: 0,
-      diskTotalGb: 800,
-      successRate: 100
-    };
+    const nextNode = buildDemoNode(input, nodes, keyId);
+    markInventoryMutated();
     setNodes((prev) => [nextNode, ...prev]);
     return nextNode.id;
-  }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, nodes, setNodes, token]);
+  }, [createSSHKey, exec, markInventoryMutated, nodes, setNodes]);
 
   const updateNode = useCallback(async (nodeID: number, input: NewNodeInput) => {
     let keyId = input.keyId ?? null;
@@ -202,24 +169,17 @@ export function useNodeOperations({
       });
     }
 
-    const finalInput: NewNodeInput = {
-      ...input,
-      keyId
-    };
+    const finalInput: NewNodeInput = { ...input, keyId };
 
-    if (token) {
-      try {
-        const updated = await apiClient.updateNode(token, nodeID, finalInput);
-        setNodes((prev) => prev.map((node) => (node.id === nodeID ? updated : node)));
-        return;
-      } catch (error) {
-        handleWriteApiError("更新节点", error);
-        return;
+    const result = await exec("更新节点", (t) => apiClient.updateNode(t, nodeID, finalInput));
+    if (result) {
+      if (result.ok) {
+        markInventoryMutated();
+        setNodes((prev) => prev.map((node) => (node.id === nodeID ? result.data : node)));
       }
-    } else {
-      ensureDemoWriteAllowed("更新节点");
+      return;
     }
-
+    markInventoryMutated();
     setNodes((prev) =>
       prev.map((node) =>
         node.id === nodeID
@@ -239,85 +199,67 @@ export function useNodeOperations({
           : node
       )
     );
-  }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, setNodes, token]);
+  }, [createSSHKey, exec, markInventoryMutated, setNodes]);
 
   const deleteNode = useCallback(async (nodeID: number) => {
-    if (token) {
-      try {
-        await apiClient.deleteNode(token, nodeID);
-      } catch (error) {
-        handleWriteApiError("删除节点", error);
-      }
-    } else {
-      ensureDemoWriteAllowed("删除节点");
-    }
-
-    const nodeName = nodes.find((node) => node.id === nodeID)?.name;
+    await exec("删除节点", (t) => apiClient.deleteNode(t, nodeID));
+    markInventoryMutated();
     setNodes((prev) => prev.filter((node) => node.id !== nodeID));
     setTasks((prev) => prev.filter((task) => task.nodeId !== nodeID));
-    if (nodeName) {
-      setAlerts((prev) => prev.filter((alert) => alert.nodeName !== nodeName));
-    }
-  }, [ensureDemoWriteAllowed, handleWriteApiError, nodes, setAlerts, setNodes, setTasks, token]);
+    setAlerts((prev) => prev.filter((alert) => alert.nodeId !== nodeID));
+  }, [exec, markInventoryMutated, setAlerts, setNodes, setTasks]);
 
   const deleteNodes = useCallback(async (nodeIDs: number[]): Promise<{ deleted: number; notFoundIds: number[] }> => {
     const normalized = Array.from(new Set(nodeIDs.filter((item) => Number.isFinite(item) && item > 0)));
     if (!normalized.length) {
-      return {
-        deleted: 0,
-        notFoundIds: []
-      };
+      return { deleted: 0, notFoundIds: [] };
     }
 
-    if (token) {
-      try {
-        const result = await apiClient.deleteNodes(token, normalized);
-        const deletedSet = new Set(normalized.filter((id) => !result.notFoundIds.includes(id)));
+    const result = await exec("批量删除节点", (t) => apiClient.deleteNodes(t, normalized));
+    if (result) {
+      if (result.ok) {
+        const deletedSet = new Set(normalized.filter((id) => !result.data.notFoundIds.includes(id)));
+        markInventoryMutated();
         setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
         setTasks((prev) => prev.filter((task) => !deletedSet.has(task.nodeId)));
         setAlerts((prev) => prev.filter((alert) => !deletedSet.has(alert.nodeId)));
-        return result;
-      } catch (error) {
-        handleWriteApiError("批量删除节点", error);
-        return { deleted: 0, notFoundIds: normalized };
+        return result.data;
       }
-    } else {
-      ensureDemoWriteAllowed("批量删除节点");
+      return { deleted: 0, notFoundIds: normalized };
     }
 
     const deletedSet = new Set(normalized);
+    markInventoryMutated();
     setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
     setTasks((prev) => prev.filter((task) => !deletedSet.has(task.nodeId)));
     setAlerts((prev) => prev.filter((alert) => !deletedSet.has(alert.nodeId)));
-
-    return {
-      deleted: normalized.length,
-      notFoundIds: []
-    };
-  }, [ensureDemoWriteAllowed, handleWriteApiError, setAlerts, setNodes, setTasks, token]);
+    return { deleted: normalized.length, notFoundIds: [] };
+  }, [exec, markInventoryMutated, setAlerts, setNodes, setTasks]);
 
   const testNodeConnection = useCallback(async (nodeID: number): Promise<{ ok: boolean; message: string }> => {
-    if (token) {
-      try {
-        const result = await apiClient.testNodeConnection(token, nodeID);
+    const result = await exec("节点连通性探测", (t) => apiClient.testNodeConnection(t, nodeID));
+    if (result) {
+      if (result.ok) {
+        const r = result.data;
         const probeTime = new Date().toLocaleString("zh-CN", { hour12: false });
+        markInventoryMutated();
         setNodes((prev) =>
           prev.map((node) =>
             node.id === nodeID
               ? {
                   ...node,
-                  status: result.ok ? "online" : "offline",
+                  status: r.ok ? "online" : "offline",
                   lastSeenAt: probeTime,
                   diskProbeAt: probeTime,
-                  connectionLatencyMs: result.ok ? result.latency_ms : undefined,
-                  diskUsedGb: result.disk_used_gb ?? node.diskUsedGb,
-                  diskTotalGb: result.disk_total_gb ?? node.diskTotalGb,
-                  diskFreePercent: result.disk_total_gb
+                  connectionLatencyMs: r.ok ? r.latency_ms : undefined,
+                  diskUsedGb: r.disk_used_gb ?? node.diskUsedGb,
+                  diskTotalGb: r.disk_total_gb ?? node.diskTotalGb,
+                  diskFreePercent: r.disk_total_gb
                     ? Math.max(
                         1,
                         Math.round(
-                          ((result.disk_total_gb - (result.disk_used_gb ?? node.diskUsedGb)) /
-                            result.disk_total_gb) *
+                          ((r.disk_total_gb - (r.disk_used_gb ?? node.diskUsedGb)) /
+                            r.disk_total_gb) *
                             100
                         )
                       )
@@ -326,117 +268,54 @@ export function useNodeOperations({
               : node
           )
         );
-        return {
-          ok: result.ok,
-          message: result.message
-        };
-      } catch (error) {
-        handleWriteApiError("节点连通性探测", error);
-        return { ok: false, message: "探测请求失败" };
+        return { ok: r.ok, message: r.message };
       }
-    } else {
-      ensureDemoWriteAllowed("节点连通性探测");
+      return { ok: false, message: "探测请求失败" };
     }
 
+    // Demo 模式模拟
     await new Promise((resolve) => setTimeout(resolve, 650));
+    const sim = simulateDemoConnection(nodeID);
+    markInventoryMutated();
+    setNodes((prev) => prev.map((node) => (node.id === nodeID ? sim.nodeUpdate(node) : node)));
+    return sim.result;
+  }, [exec, markInventoryMutated, setNodes]);
 
-    const now = new Date();
-    const seed = (now.getSeconds() + nodeID * 17) % 10;
-    const ok = seed >= 2;
-    const probeTime = now.toLocaleString("zh-CN", { hour12: false });
+  const triggerNodeBackup = useCallback(async (nodeID: number) => {
+    const node = nodes.find((item) => item.id === nodeID);
+    if (!node) {
+      return;
+    }
 
-    setNodes((prev) =>
-      prev.map((node) => {
-        if (node.id !== nodeID) {
-          return node;
-        }
-        if (!ok) {
-          return {
-            ...node,
-            status: "offline",
-            lastSeenAt: probeTime,
-            diskProbeAt: probeTime,
-            connectionLatencyMs: undefined
-          };
-        }
+    const targetPolicy = policies.find((policy) => policy.enabled) ?? policies[0];
 
-        const total = node.diskTotalGb || 800;
-        const used = Math.max(10, Math.min(total - 5, node.diskUsedGb + ((seed % 3) - 1) * 8));
-
-        return {
-          ...node,
-          status: used / total >= 0.9 ? "warning" : "online",
-          lastSeenAt: probeTime,
-          diskProbeAt: probeTime,
-          connectionLatencyMs: 18 + (seed * 11) % 120,
-          diskUsedGb: used,
-          diskFreePercent: Math.max(1, Math.round(((total - used) / total) * 100))
-        };
+    const result = await exec("触发节点手动备份", (t) =>
+      apiClient.createTask(t, {
+        name: `${node.name} 手动备份`,
+        nodeId: nodeID,
+        policyId: targetPolicy?.id ?? null,
+        executorType: "rsync",
+        rsyncSource: targetPolicy?.sourcePath,
+        rsyncTarget: targetPolicy?.targetPath,
+        cronSpec: targetPolicy?.cron
       })
     );
-
-    return ok
-      ? { ok: true, message: "SSH 握手成功，已更新磁盘探测信息。" }
-      : { ok: false, message: "连接失败：SSH 握手超时或认证失败。" };
-  }, [ensureDemoWriteAllowed, handleWriteApiError, setNodes, token]);
-
-  const triggerNodeBackup = useCallback(
-    async (nodeID: number) => {
-      const node = nodes.find((item) => item.id === nodeID);
-      if (!node) {
-        return;
+    if (result) {
+      if (result.ok) {
+        setTasks((prev) => [result.data, ...prev]);
       }
+      return;
+    }
 
-      const nextTaskID = tasks.length > 0 ? Math.max(...tasks.map((task) => task.id)) + 1 : 5000;
-      const targetPolicy = policies.find((policy) => policy.enabled) ?? policies[0];
-
-      if (token) {
-        try {
-          const created = await apiClient.createTask(token, {
-            name: `${node.name} 手动备份`,
-            nodeId: nodeID,
-            policyId: targetPolicy?.id ?? null,
-            executorType: "rsync",
-            rsyncSource: targetPolicy?.sourcePath,
-            rsyncTarget: targetPolicy?.targetPath,
-            cronSpec: targetPolicy?.cron
-          });
-          setTasks((prev) => [created, ...prev]);
-          return;
-        } catch (error) {
-          handleWriteApiError("触发节点手动备份", error);
-          return;
-        }
-      } else {
-        ensureDemoWriteAllowed("触发节点手动备份");
-      }
-
-      const nextTask: TaskRecord = {
-        id: nextTaskID,
-        policyName: targetPolicy?.name ?? "手动备份",
-        nodeName: node.name,
-        nodeId: nodeID,
-        status: "running",
-        progress: 6,
-        startedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-        speedMbps: 96
-      };
-
-      setTasks((prev) => [nextTask, ...prev]);
-      setNodes((prev) =>
-        prev.map((item) =>
-          item.id === nodeID
-            ? {
-                ...item,
-                status: "online",
-                lastSeenAt: "刚刚"
-              }
-            : item
-        )
-      );
-    },
-    [ensureDemoWriteAllowed, handleWriteApiError, nodes, policies, setNodes, setTasks, tasks, token]
-  );
+    setTasks((prev) => [buildDemoBackupTask(node, tasks, policies), ...prev]);
+    setNodes((prev) =>
+      prev.map((item) =>
+        item.id === nodeID
+          ? { ...item, status: "online", lastSeenAt: "刚刚" }
+          : item
+      )
+    );
+  }, [exec, nodes, policies, setNodes, setTasks, tasks]);
 
   return {
     createSSHKey,

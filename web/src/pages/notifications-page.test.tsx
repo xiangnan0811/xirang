@@ -18,6 +18,20 @@ const {
 const contextRef: { current: ConsoleOutletContext } = {
   current: {} as ConsoleOutletContext,
 };
+function createMemoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, value),
+    get length() {
+      return store.size;
+    },
+  } satisfies Storage;
+}
+
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
@@ -175,7 +189,11 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
 
 describe("NotificationsPage", () => {
   beforeEach(() => {
-    localStorage.clear();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    window.localStorage.clear();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     confirmMock.mockClear();
@@ -200,33 +218,35 @@ describe("NotificationsPage", () => {
     expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
   });
 
-  it("投递记录按钮暴露展开语义且按需加载", async () => {
+  it("投递记录通过更多菜单展开且按需加载", async () => {
     const user = userEvent.setup();
     const ctx = createContext();
 
     render(<NotificationsPage />);
     expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
 
-    const toggleButton = screen.getAllByRole("button", { name: "投递记录" })[0];
-    expect(toggleButton).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(toggleButton);
+    // 打开第一个告警的更多操作菜单
+    const moreButtons = screen.getAllByRole("button", { name: "更多操作" });
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
 
     await waitFor(() => {
       expect(ctx.fetchAlertDeliveries).toHaveBeenCalledWith("alert-open");
     });
-    const expandedButton = screen.getByRole("button", { name: "收起投递" });
-    expect(expandedButton).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByRole("region", { name: "告警 E_CONN 的投递记录" })
     ).toBeInTheDocument();
 
-    await user.click(expandedButton);
+    // 再次打开菜单收起投递
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "收起投递" }));
     expect(
       screen.queryByRole("region", { name: "告警 E_CONN 的投递记录" })
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getAllByRole("button", { name: "投递记录" })[0]);
+    // 再次展开不应重复请求
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
     expect(
       await screen.findByRole("region", { name: "告警 E_CONN 的投递记录" })
     ).toBeInTheDocument();
@@ -240,7 +260,9 @@ describe("NotificationsPage", () => {
     render(<NotificationsPage />);
     expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole("button", { name: "投递记录" })[0]);
+    const moreButtons = screen.getAllByRole("button", { name: "更多操作" });
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
     expect(
       await screen.findByRole("button", { name: "重发通知" })
     ).toBeInTheDocument();
@@ -263,7 +285,9 @@ describe("NotificationsPage", () => {
     render(<NotificationsPage />);
     expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole("button", { name: "投递记录" })[0]);
+    const moreButtons = screen.getAllByRole("button", { name: "更多操作" });
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
     expect(
       await screen.findByRole("button", { name: "重发全部失败投递" })
     ).toBeInTheDocument();
