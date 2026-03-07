@@ -50,7 +50,6 @@ export interface NodeRecord {
   diskFreePercent: number;
   diskUsedGb: number;
   diskTotalGb: number;
-  successRate: number;
   diskProbeAt?: string;
   connectionLatencyMs?: number;
 }
@@ -82,6 +81,7 @@ export interface TaskRecord {
   policyId?: number | null;
   nodeName: string;
   nodeId: number;
+  createdAt?: string;
   status: TaskStatus;
   progress: number;
   startedAt: string;

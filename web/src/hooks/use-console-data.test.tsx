@@ -96,7 +96,6 @@ function createNode(id: number, name: string): NodeRecord {
     diskFreePercent: 0,
     diskUsedGb: 0,
     diskTotalGb: 0,
-    successRate: 0,
     diskProbeAt: "-",
     connectionLatencyMs: undefined,
   };

@@ -13,7 +13,7 @@ import {
 } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import {
   DropdownMenu,
@@ -124,17 +124,17 @@ export function AlertCenter({
 
   return (
     <Card className="border-border/75">
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-base">通知中心（按节点 / 任务分流）</CardTitle>
+      <CardContent className="space-y-4 pt-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2 font-medium">
+            通知中心（按节点 / 任务分流）
+          </div>
           <Button size="sm" variant="outline" onClick={resetFilters}>
-            <RefreshCw className="mr-1 size-4" />
+            <RefreshCw className="mr-1 size-3.5" />
             重置筛选
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
+        <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
           <SearchInput
             containerClassName="w-full"
             aria-label="告警关键词筛选"

@@ -68,7 +68,6 @@ function mapNode(row: NodeResponse): NodeRecord {
     diskFreePercent: freePercent,
     diskUsedGb,
     diskTotalGb,
-    successRate: row.status === "online" ? 100 : row.status === "warning" ? 75 : 0,
     diskProbeAt: formatTime(row.last_seen_at),
     connectionLatencyMs: row.connection_latency_ms
   };

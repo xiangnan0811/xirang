@@ -93,6 +93,7 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     policyId: row.policy?.id ?? row.policy_id ?? null,
     nodeName: row.node?.name ?? `节点-${row.node_id ?? 0}`,
     nodeId: row.node?.id ?? row.node_id ?? 0,
+    createdAt: formatTime(row.created_at),
     status,
     progress: deriveTaskProgress(status, retryCount, index),
     startedAt: formatTime(row.last_run_at ?? row.created_at),

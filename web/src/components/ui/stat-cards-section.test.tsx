@@ -5,7 +5,7 @@ import { StatCardsSection } from "@/components/ui/stat-cards-section";
 
 describe("StatCardsSection", () => {
   it("渲染统计卡片内容并应用 tone 样式", () => {
-    render(
+    const { container } = render(
       <StatCardsSection
         items={[
           {
@@ -32,6 +32,15 @@ describe("StatCardsSection", () => {
 
     expect(screen.getByText("失败任务")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+
+    const layout = container.querySelector("section");
+    expect(layout).not.toBeNull();
+    expect(layout).toHaveStyle({
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    });
+
+    const description = screen.getByText("健康率 92%");
+    expect(description).toHaveClass("hidden", "sm:block");
 
     const infoCard = screen.getByText("失败任务").closest(".glass-card");
     expect(infoCard).not.toBeNull();

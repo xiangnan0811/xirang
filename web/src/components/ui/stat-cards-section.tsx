@@ -33,8 +33,13 @@ export function StatCardsSection({
   className,
   cardClassName,
 }: StatCardsSectionProps) {
+  const columnCount = Math.max(items.length, 1);
+
   return (
-    <section className={cn("grid gap-3 sm:grid-cols-2 lg:grid-cols-4", className)}>
+    <section
+      className={cn("grid gap-1.5 sm:gap-3", className)}
+      style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+    >
       {items.map((item) => (
         <Card
           key={item.id ?? item.title}
@@ -45,17 +50,17 @@ export function StatCardsSection({
           )}
         >
           <div className="absolute inset-0 bg-gradient-to-t from-background/40 to-transparent pointer-events-none" />
-          <CardHeader className="relative pb-2">
-            <CardTitle className="text-sm font-medium tracking-wide text-muted-foreground/90 uppercase">
+          <CardHeader className="relative px-3 pb-1 sm:px-5 sm:pb-2">
+            <CardTitle className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/90 sm:text-sm">
               {item.title}
             </CardTitle>
           </CardHeader>
-          <CardContent className="relative">
-            <p className={cn("text-4xl font-extrabold tracking-tight drop-shadow-sm", item.valueClassName)}>
+          <CardContent className="relative px-3 pt-0 sm:px-5">
+            <p className={cn("text-lg font-extrabold tracking-tight drop-shadow-sm sm:text-4xl", item.valueClassName)}>
               {item.value}
             </p>
             {item.description ? (
-              <p className="mt-1.5 text-xs font-medium text-muted-foreground/80">{item.description}</p>
+              <p className="mt-1 hidden text-xs font-medium text-muted-foreground/80 sm:block">{item.description}</p>
             ) : null}
           </CardContent>
         </Card>

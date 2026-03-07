@@ -6,7 +6,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { AuditLogRecord } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
@@ -170,29 +170,25 @@ export function AuditPage() {
   return (
     <div className="space-y-5 animate-fade-in">
       <Card className="border-border/75">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">审计日志（管理员只读）</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">支持卡片/列表切换与多维筛选</p>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
+                <RefreshCw className="mr-1 size-3.5" />
+                刷新
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void exportCSV()} disabled={exporting || loading}>
+                <Download className="mr-1 size-3.5" />
+                {exporting ? "导出中..." : "导出 CSV"}
+              </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">读操作 {auditStats.readOps}</Badge>
               <Badge variant="warning">写操作 {auditStats.writeOps}</Badge>
               <Badge variant="danger">异常状态 {auditStats.errorStatus}</Badge>
               <Badge variant="secondary">总计 {total}</Badge>
-              <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
-                <RefreshCw className="mr-1 size-4" />
-                刷新
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void exportCSV()} disabled={exporting || loading}>
-                <Download className="mr-1 size-4" />
-                {exporting ? "导出中..." : "导出 CSV"}
-              </Button>
             </div>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -241,62 +237,62 @@ export function AuditPage() {
 
           {/* 小屏卡片，大屏表格 */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 md:hidden">
-              {rows.map((row) => (
-                <div
-                  key={row.id}
-                  className="interactive-surface p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium">{row.username || "-"}</p>
-                    <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
-                  </div>
-                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                    <p>时间：{row.createdAt}</p>
-                    <p>角色：{row.role || "-"}</p>
-                    <p>路径：<span className="break-all font-mono">{row.path}</span></p>
-                    <p>状态码：{row.statusCode}</p>
-                    <p>来源 IP：{row.clientIP}</p>
-                  </div>
+            {rows.map((row) => (
+              <div
+                key={row.id}
+                className="interactive-surface p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">{row.username || "-"}</p>
+                  <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
                 </div>
-              ))}
-              {!rows.length && !loading ? (
-                <EmptyState title="当前筛选条件下没有审计记录。" />
-              ) : null}
-            </div>
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  <p>时间：{row.createdAt}</p>
+                  <p>角色：{row.role || "-"}</p>
+                  <p>路径：<span className="break-all font-mono">{row.path}</span></p>
+                  <p>状态码：{row.statusCode}</p>
+                  <p>来源 IP：{row.clientIP}</p>
+                </div>
+              </div>
+            ))}
+            {!rows.length && !loading ? (
+              <EmptyState title="当前筛选条件下没有审计记录。" />
+            ) : null}
+          </div>
 
           <div className="glass-panel hidden overflow-x-auto md:block">
-              <table className="min-w-[1080px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-3 py-2.5">时间</th>
-                    <th className="px-3 py-2.5">用户</th>
-                    <th className="px-3 py-2.5">角色</th>
-                    <th className="px-3 py-2.5">方法</th>
-                    <th className="px-3 py-2.5">路径</th>
-                    <th className="px-3 py-2.5">状态码</th>
-                    <th className="px-3 py-2.5">来源 IP</th>
+            <table className="min-w-[1080px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <th className="px-3 py-2.5">时间</th>
+                  <th className="px-3 py-2.5">用户</th>
+                  <th className="px-3 py-2.5">角色</th>
+                  <th className="px-3 py-2.5">方法</th>
+                  <th className="px-3 py-2.5">路径</th>
+                  <th className="px-3 py-2.5">状态码</th>
+                  <th className="px-3 py-2.5">来源 IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
+                    <td className="px-3 py-2.5">{row.createdAt}</td>
+                    <td className="px-3 py-2.5">{row.username || "-"}</td>
+                    <td className="px-3 py-2.5">{row.role || "-"}</td>
+                    <td className="px-3 py-2.5">
+                      <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{row.path}</td>
+                    <td className="px-3 py-2.5">{row.statusCode}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground">{row.clientIP}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
-                      <td className="px-3 py-2.5">{row.createdAt}</td>
-                      <td className="px-3 py-2.5">{row.username || "-"}</td>
-                      <td className="px-3 py-2.5">{row.role || "-"}</td>
-                      <td className="px-3 py-2.5">
-                        <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{row.path}</td>
-                      <td className="px-3 py-2.5">{row.statusCode}</td>
-                      <td className="px-3 py-2.5 text-muted-foreground">{row.clientIP}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!rows.length && !loading ? (
-                <div className="px-3 py-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
-              ) : null}
-            </div>
+                ))}
+              </tbody>
+            </table>
+            {!rows.length && !loading ? (
+              <div className="px-3 py-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
+            ) : null}
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>

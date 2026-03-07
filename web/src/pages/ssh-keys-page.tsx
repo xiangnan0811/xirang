@@ -8,7 +8,7 @@ import {
 } from "@/components/ssh-key-editor-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -121,25 +121,20 @@ export function SSHKeysPage() {
   return (
     <div className="animate-fade-in space-y-5">
       <Card className="border-border/75">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">SSH Key 管理（第 0 步）</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">支持新增、编辑、删除，并提示密钥使用依赖关系</p>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={openCreateDialog}>
+                <Plus className="mr-1 size-3.5" />
+                新增 Key
+              </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="success">使用中 {keyStats.inUse}</Badge>
               <Badge variant="outline">未使用 {keyStats.unused}</Badge>
               <Badge variant="secondary">绑定节点 {keyStats.bindingCount}</Badge>
-              <Button size="sm" onClick={openCreateDialog}>
-                <Plus className="mr-1 size-4" />
-                新增 Key
-              </Button>
             </div>
           </div>
-        </CardHeader>
-
-        <CardContent className="space-y-3">
           <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
             私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
             Vault/KMS），并启用审计与最小权限策略。

@@ -49,8 +49,7 @@ export function buildDemoNode(input: NewNodeInput, nodes: NodeRecord[], keyId: s
     lastBackupAt: "尚未执行",
     diskFreePercent: 100,
     diskUsedGb: 0,
-    diskTotalGb: 800,
-    successRate: 100
+    diskTotalGb: 800
   };
 }
 

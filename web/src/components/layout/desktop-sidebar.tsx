@@ -1,19 +1,19 @@
 import { Link, useLocation } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ThemeToggle } from "@/components/theme-toggle";
 import type { UserRecord } from "@/types/domain";
 
 type DesktopSidebarProps = {
-  username: string | null;
   role: UserRecord["role"] | null;
-  onLogout: () => void;
+  isCollapsed: boolean;
+  hasWarning?: boolean;
+  onToggleCollapse: () => void;
 };
 
-export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps) {
+export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggleCollapse }: DesktopSidebarProps) {
   const location = useLocation();
   const navItems = getVisibleNavItems(role);
   const navItemBaseClass =
@@ -24,24 +24,14 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
     "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground";
 
   return (
-    <aside className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-card/65 backdrop-blur-xl md:flex md:w-20 md:p-3 lg:w-72 lg:p-4">
-      <div className="flex items-center justify-center gap-2 px-1 py-3 lg:justify-between lg:px-2">
-        <div className="flex items-center gap-2">
-          <img
-            src="/xirang-mark.svg"
-            alt="XiRang"
-            className="size-10 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-sm lg:size-9"
-          />
-          <div className="hidden lg:block">
-            <p className="text-sm text-muted-foreground">XiRang</p>
-            <p className="text-lg font-semibold tracking-tight">集中备份中枢</p>
-          </div>
-        </div>
-      </div>
-
-      <Separator className="my-3" />
-
-      <nav className="flex flex-1 flex-col gap-1">
+    <aside
+      className={cn(
+        "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-card/65 backdrop-blur-xl md:flex pb-4 transition-[width] duration-200",
+        hasWarning ? "pt-[92px]" : "pt-[60px]",
+        isCollapsed ? "w-20 px-2" : "w-64 px-4"
+      )}
+    >
+      <nav className="flex flex-1 flex-col gap-1.5 pt-2 overflow-y-auto thin-scrollbar pb-2">
         {navItems.map((item) => {
           const active = location.pathname === item.path;
           const Icon = item.icon;
@@ -54,13 +44,12 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
               aria-current={active ? "page" : undefined}
               className={cn(
                 navItemBaseClass,
-                active
-                  ? navItemActiveClass
-                  : navItemIdleClass
+                isCollapsed ? "justify-center px-2" : "",
+                active ? navItemActiveClass : navItemIdleClass
               )}
             >
-              <Icon className="size-4 shrink-0" />
-              <span className="hidden lg:inline">{item.title}</span>
+              <Icon className={cn("shrink-0", isCollapsed ? "size-5" : "size-4")} />
+              <span className={cn("hidden", isCollapsed ? "" : "md:inline text-[13px] font-medium")}>{item.title}</span>
             </Link>
           );
         })}
@@ -68,29 +57,24 @@ export function DesktopSidebar({ username, role, onLogout }: DesktopSidebarProps
 
       <Separator className="my-3" />
 
-      <div className="space-y-2 px-1 lg:px-2">
-        <p className="hidden text-xs text-muted-foreground lg:block">当前用户：{username ?? "未知"}</p>
-
-        <div className="flex items-center justify-center gap-2 lg:block">
-          <div className="lg:hidden">
-            <ThemeToggle />
-          </div>
-
-          <Button variant="outline" className="hidden w-full lg:inline-flex" onClick={onLogout}>
-            退出登录
-          </Button>
-
-          <Button
-            variant="outline"
-            size="icon"
-            className="lg:hidden"
-            aria-label="退出登录"
-            title="退出登录"
-            onClick={onLogout}
-          >
-            <LogOut className="size-4" />
-          </Button>
-        </div>
+      <div className={cn("shrink-0", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
+        <Button
+          variant="ghost"
+          size={isCollapsed ? "icon" : "default"}
+          className={cn("text-muted-foreground", isCollapsed ? "size-10" : "w-full justify-start px-3 h-10")}
+          onClick={onToggleCollapse}
+          aria-label={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
+          title={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
+        >
+          {isCollapsed ? (
+            <PanelLeftOpen className="size-5" />
+          ) : (
+            <>
+              <PanelLeftClose className="mr-3 size-[18px]" />
+              <span className="text-[13px] font-medium">收起面板</span>
+            </>
+          )}
+        </Button>
       </div>
     </aside>
   );

@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { TaskCreateDialog } from "@/components/task-create-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -210,13 +210,15 @@ export function TasksPage() {
       />
 
       <Card className="border-border/75">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">任务列表（卡片 / 列表双模式）</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">视图与筛选条件自动持久化，刷新后不丢失</p>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="mr-1 size-3.5" />
+                新建任务
+              </Button>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
               <ViewModeToggle
                 value={viewMode}
                 onChange={(mode) => setViewModeRaw(mode)}
@@ -224,16 +226,10 @@ export function TasksPage() {
                 cardsButtonLabel="任务卡片视图"
                 listButtonLabel="任务列表视图"
               />
-              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="mr-1 size-4" />
-                新建任务
-              </Button>
             </div>
           </div>
-        </CardHeader>
 
-        <CardContent className="space-y-3">
-          <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
+          <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
             <SearchInput
               containerClassName="w-full"
               placeholder="搜索任务 ID / 节点 / 策略 / 错误码"

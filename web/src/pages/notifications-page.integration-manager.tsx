@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { integrationIcon } from "@/pages/notifications-page.utils";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
@@ -73,16 +73,16 @@ export function IntegrationManager({
   return (
     <>
       <Card className="border-border/75">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">通知与集成设置</CardTitle>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2 font-medium">
+              通知与集成设置
+            </div>
             <Button size="sm" onClick={onOpenCreate}>
-              <Plus className="mr-1 size-4" />
+              <Plus className="mr-1 size-3.5" />
               新增通知方式
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
           {integrations.length ? (
             integrations.map((integration) => {
               const Icon = integrationIcon(integration.type);

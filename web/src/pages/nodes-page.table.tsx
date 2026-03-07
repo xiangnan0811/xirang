@@ -98,9 +98,6 @@ export const NodesTable = React.memo(function NodesTable({
                   </td>
                   <td className="px-3 py-2.5">
                     <p className="font-medium">{node.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      成功率 {node.successRate}%
-                    </p>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
                     <p>

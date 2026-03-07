@@ -23,8 +23,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
@@ -487,21 +485,19 @@ export function NodesPage() {
       />
 
       <Card className="overflow-hidden border-border/75">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">
-                主机资产管理（新增 / 编辑 / 删除 / 排序 / 测试连接）
-              </CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">支持卡片与列表双视图，覆盖批量管理与节点运维</p>
-            </div>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" onClick={openCreateDialog}>
+                <ServerCog className="mr-1 size-3.5" />
+                新增节点
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => navigate("/app/ssh-keys")}
               >
-                <KeyRound className="mr-1 size-4" />
+                <KeyRound className="mr-1 size-3.5" />
                 SSH Key 管理
               </Button>
               <Button
@@ -511,24 +507,23 @@ export function NodesPage() {
                   csvInputRef.current?.click();
                 }}
               >
-                <FileUp className="mr-1 size-4" />
+                <FileUp className="mr-1 size-3.5" />
                 CSV 导入
               </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleDownloadTemplate}
               >
-                <Download className="mr-1 size-4" />
+                <Download className="mr-1 size-3.5" />
                 模板
               </Button>
               <Button variant="outline" size="sm" onClick={handleExportCSV}>
-                <Download className="mr-1 size-4" />
-                CSV 导出
-              </Button>
-              <Button size="sm" onClick={openCreateDialog}>
-                <ServerCog className="mr-1 size-4" />
-                新增节点
+                <Download className="mr-1 size-3.5" />
+                导出
               </Button>
               <input
                 ref={csvInputRef}
@@ -551,15 +546,8 @@ export function NodesPage() {
               />
             </div>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="rounded-xl border border-info/30 bg-info/10 px-3 py-2 text-xs text-info shadow-sm">
-            无需在目标服务器安装客户端：仅依赖 SSH + rsync。页面中的磁盘余量来自最近一次
-            SSH 探测（如远程执行
-            <code className="mx-1">df</code>）快照。
-          </div>
 
-          <FilterPanel className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2.5fr_1fr_1fr_1fr_auto] items-center">
+          <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[2.5fr_1fr_1fr_1fr_auto] items-center">
             <SearchInput
               containerClassName="w-full"
               value={keyword}
@@ -638,8 +626,8 @@ export function NodesPage() {
                     className="text-destructive focus:text-destructive"
                     onClick={() => void handleBulkDelete()}
                   >
-                    <Trash2 className="mr-2 size-4" />
-                    批量删除 ({selectedNodeIds.length})
+                    <Trash2 className="mr-2 size-3.5" />
+                    删除 ({selectedNodeIds.length})
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

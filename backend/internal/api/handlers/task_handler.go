@@ -374,7 +374,7 @@ func validateTaskRequest(req taskRequest) error {
 }
 
 func parseTaskSort(raw string) string {
-	const defaultOrder = "id asc"
+	const defaultOrder = "created_at desc, id desc"
 
 	field := strings.ToLower(strings.TrimSpace(raw))
 	if field == "" {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
 
@@ -114,6 +115,60 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	}
 	if result.Data[0].ID != task2.ID || result.Data[1].ID != task1.ID {
 		t.Fatalf("排序或偏移不符合预期，实际 id 顺序: %d, %d", result.Data[0].ID, result.Data[1].ID)
+	}
+}
+
+func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-recent", Host: "10.0.0.9", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	base := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	tasks := []model.Task{
+		{Name: "oldest", NodeID: node.ID, ExecutorType: "local", Status: "pending", CreatedAt: base.Add(-2 * time.Hour), UpdatedAt: base.Add(-2 * time.Hour)},
+		{Name: "middle", NodeID: node.ID, ExecutorType: "local", Status: "pending", CreatedAt: base.Add(-1 * time.Hour), UpdatedAt: base.Add(-1 * time.Hour)},
+		{Name: "latest", NodeID: node.ID, ExecutorType: "local", Status: "pending", CreatedAt: base, UpdatedAt: base},
+	}
+	for i := range tasks {
+		if err := db.Create(&tasks[i]).Error; err != nil {
+			t.Fatalf("创建任务失败: %v", err)
+		}
+	}
+
+	r := gin.New()
+	handler := NewTaskHandler(db, nil)
+	r.GET("/tasks", handler.List)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d", resp.Code)
+	}
+
+	var result struct {
+		Data []model.Task `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if len(result.Data) != len(tasks) {
+		t.Fatalf("返回任务数量不符合预期，期望 %d，实际 %d", len(tasks), len(result.Data))
+	}
+
+	gotNames := []string{result.Data[0].Name, result.Data[1].Name, result.Data[2].Name}
+	wantNames := []string{"latest", "middle", "oldest"}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("默认排序不符合预期，实际顺序: %v", gotNames)
+		}
 	}
 }
 

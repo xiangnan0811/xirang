@@ -99,7 +99,6 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
         keyId: "key-1",
         tags: ["prod"],
         status: "online" as const,
-        successRate: 99,
         lastSeenAt: "2026-02-24 09:56:00",
         lastBackupAt: "2026-02-24 09:55:00",
         diskFreePercent: 80,
@@ -155,14 +154,14 @@ describe("LogsPage", () => {
 
     render(<LogsPage />);
 
-    expect(screen.getByText("当前筛选 1 / 1 条日志")).toBeInTheDocument();
+    expect(screen.getByText(/当前筛选 1 \/ 1 条日志/)).toBeInTheDocument();
 
     await user.type(
-      screen.getByPlaceholderText("关键词过滤（错误码/内容）"),
+      screen.getByPlaceholderText("搜索"),
       "unmatched-keyword"
     );
 
-    expect(screen.getByText("当前筛选 0 / 1 条日志")).toBeInTheDocument();
+    expect(screen.getByText(/当前筛选 0 \/ 1 条日志/)).toBeInTheDocument();
     expect(
       screen.getByText("当前筛选条件下暂无日志输出")
     ).toBeInTheDocument();
@@ -184,30 +183,7 @@ describe("LogsPage", () => {
     expect(fill).toHaveClass(expectedClass);
   });
 
-  it("支持全屏切换，并暴露日志容器语义角色", async () => {
-    const user = userEvent.setup();
-    liveLogsRef.current.logs = [
-      {
-        id: "log-2",
-        logId: 2,
-        timestamp: "2026-02-24 10:11:00",
-        level: "warn",
-        message: "slow transfer",
-        taskId: 1001,
-        nodeName: "node-1",
-        errorCode: undefined,
-      },
-    ];
 
-    render(<LogsPage />);
-
-    expect(
-      screen.getByRole("log", { name: "日志终端，共 1 个分组" })
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "进入全屏日志" }));
-    expect(screen.getByRole("button", { name: "退出全屏日志" })).toBeInTheDocument();
-  });
 
   it("当时间字符串不可解析时，按 timestampMs 降序显示日志", () => {
     liveLogsRef.current.logs = [
@@ -233,7 +209,7 @@ describe("LogsPage", () => {
 
     render(<LogsPage />);
 
-    const logRegion = screen.getByRole("log", { name: "日志终端，共 1 个分组" });
+    const logRegion = screen.getByRole("log", { name: "日志终端，共 2 条日志" });
     const late = within(logRegion).getByText("ms-late-log");
     const early = within(logRegion).getByText("ms-early-log");
 

@@ -75,7 +75,6 @@ export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
   const status = nodeStatusByIndex(id);
   const usedGb = 180 + (id * 13) % 420;
   const totalGb = 800;
-  const successRate = Math.max(61, Math.min(100, 96 - (id % 9) * 3));
   const host = `10.30.${Math.floor(id / 10) + 1}.${(id * 7) % 255}`;
 
   return {
@@ -96,7 +95,6 @@ export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
     diskFreePercent: Math.max(4, Math.round(((totalGb - usedGb) / totalGb) * 100)),
     diskUsedGb: usedGb,
     diskTotalGb: totalGb,
-    successRate,
     diskProbeAt: formatDate(5 + (id % 8)),
     connectionLatencyMs: 22 + (id * 9) % 78
   };
