@@ -25,7 +25,7 @@ func TestFactoryRejectsLocalExecutor(t *testing.T) {
 		ExecutorType: "local",
 		Command:      "echo hello",
 	}
-	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, nil)
 	if err == nil {
 		t.Fatalf("期望 local 执行器被拒绝")
 	}
@@ -44,7 +44,7 @@ func TestFactoryRejectsUnknownExecutor(t *testing.T) {
 	task := model.Task{
 		ExecutorType: "custom",
 	}
-	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, nil)
 	if err == nil {
 		t.Fatalf("期望未知执行器被拒绝")
 	}
@@ -100,7 +100,7 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	var lines []string
 	exitCode, runErr := exec.Run(context.Background(), task, func(_ string, message string) {
 		lines = append(lines, message)
-	})
+	}, nil)
 	if runErr != nil {
 		t.Fatalf("期望执行成功，实际失败: %v", runErr)
 	}
@@ -141,7 +141,7 @@ func TestRsyncExecutorRejectsStaleNodePrivateKeyWhenSSHKeyIDPresent(t *testing.T
 		},
 	}
 
-	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, nil)
 	if err == nil {
 		t.Fatalf("期望在 SSHKey 关联缺失时失败")
 	}
@@ -171,7 +171,7 @@ func TestRsyncExecutorFailsWhenKeyAuthHasNoKey(t *testing.T) {
 		},
 	}
 
-	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, nil)
 	if err == nil {
 		t.Fatalf("期望密钥缺失时报错")
 	}
@@ -199,7 +199,7 @@ func TestRsyncExecutorRejectsPasswordAuthForRemoteNode(t *testing.T) {
 		},
 	}
 
-	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {})
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, nil)
 	if err == nil {
 		t.Fatalf("期望密码认证被拒绝")
 	}
@@ -252,5 +252,77 @@ func TestPreparePrivateKeyForSSHRejectsInvalidContent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "私钥格式无效") {
 		t.Fatalf("期望返回私钥格式错误提示，实际: %v", err)
+	}
+}
+
+func TestParseProgressSampleParsesRsyncProgress2Line(t *testing.T) {
+	sample, ok := parseProgressSample("1,258,291,200  64%   12.50MB/s    0:00:12 (xfr#3, to-chk=1/5)")
+	if !ok {
+		t.Fatalf("期望解析 progress2 行成功")
+	}
+	if sample.ThroughputMbps != 100 {
+		t.Fatalf("期望吞吐为 100 Mbps，实际: %v", sample.ThroughputMbps)
+	}
+}
+
+func TestParseProgressSampleRejectsNonCanonicalLine(t *testing.T) {
+	if _, ok := parseProgressSample("report file-999MB/s.txt uploaded"); ok {
+		t.Fatalf("期望非 canonical progress2 行不被解析")
+	}
+}
+
+func TestRsyncExecutorEmitsProgressSamplesFromCarriageReturnStream(t *testing.T) {
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-progress-cr.sh")
+	script := "#!/bin/sh\nprintf '100  10%%   1.00MB/s    0:00:12 (xfr#1, to-chk=3/5)\r200  20%%   2.00MB/s    0:00:12 (xfr#1, to-chk=2/5)\r300  30%%   3.00MB/s    0:00:12 (xfr#1, to-chk=1/5)\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假进度脚本失败: %v", err)
+	}
+
+	exec := &RsyncExecutor{binary: scriptPath}
+	task := model.Task{ExecutorType: "rsync", RsyncSource: "/tmp/src", RsyncTarget: t.TempDir()}
+
+	var samples []ProgressSample
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, func(sample ProgressSample) {
+		samples = append(samples, sample)
+	})
+	if err != nil {
+		t.Fatalf("期望执行成功，实际失败: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("期望退出码=0，实际=%d", exitCode)
+	}
+	if len(samples) != 3 {
+		t.Fatalf("期望从 \r 刷新流中采到 3 个样本，实际: %d", len(samples))
+	}
+	if samples[0].ThroughputMbps != 8 || samples[1].ThroughputMbps != 16 || samples[2].ThroughputMbps != 24 {
+		t.Fatalf("样本吞吐不符合预期: %+v", samples)
+	}
+}
+
+func TestRsyncExecutorEmitsProgressSamples(t *testing.T) {
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-progress.sh")
+	script := "#!/bin/sh\nprintf '1,258,291,200  64%%   12.50MB/s    0:00:12 (xfr#3, to-chk=1/5)\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假进度脚本失败: %v", err)
+	}
+
+	exec := &RsyncExecutor{binary: scriptPath}
+	task := model.Task{ExecutorType: "rsync", RsyncSource: "/tmp/src", RsyncTarget: t.TempDir()}
+
+	var samples []ProgressSample
+	exitCode, err := exec.Run(context.Background(), task, func(_ string, _ string) {}, func(sample ProgressSample) {
+		samples = append(samples, sample)
+	})
+	if err != nil {
+		t.Fatalf("期望执行成功，实际失败: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("期望退出码=0，实际=%d", exitCode)
+	}
+	if len(samples) != 1 {
+		t.Fatalf("期望产生 1 个样本，实际: %d", len(samples))
+	}
+	if samples[0].ThroughputMbps != 100 {
+		t.Fatalf("期望样本吞吐为 100 Mbps，实际: %v", samples[0].ThroughputMbps)
 	}
 }

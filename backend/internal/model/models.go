@@ -150,6 +150,16 @@ type TaskLog struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type TaskTrafficSample struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	TaskID         uint      `gorm:"not null;index:idx_task_traffic_task_run_sample,priority:1" json:"task_id"`
+	NodeID         uint      `gorm:"not null;index:idx_task_traffic_node_sample,priority:1" json:"node_id"`
+	RunStartedAt   time.Time `gorm:"not null;index:idx_task_traffic_task_run_sample,priority:2" json:"run_started_at"`
+	SampledAt      time.Time `gorm:"not null;index:idx_task_traffic_task_run_sample,priority:3;index:idx_task_traffic_sampled_at;index:idx_task_traffic_node_sample,priority:2" json:"sampled_at"`
+	ThroughputMbps float64   `gorm:"not null;default:0" json:"throughput_mbps"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 func (s *SSHKey) BeforeSave(_ *gorm.DB) error {
 	if s.PrivateKey == "" {
 		return nil

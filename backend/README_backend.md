@@ -63,6 +63,13 @@ go run ./cmd/server
 - 策略 CRUD：`/api/v1/policies`
 - 任务 CRUD：`/api/v1/tasks`
 - 概览统计：`GET /api/v1/overview`
+- 流量趋势：`GET /api/v1/overview/traffic?window=1h|24h|7d`
+
+## 流量趋势采样与保留
+
+- 后端会在任务执行期间记录吞吐采样，用于概览页 `1h / 24h / 7d` 趋势展示。
+- 采样保留天数由 `TASK_TRAFFIC_RETENTION_DAYS` 控制，默认 `8` 天。
+- 设置为 `0` 可禁用自动清理。
 - 手动触发任务：`POST /api/v1/tasks/:id/trigger`
 - 取消任务：`POST /api/v1/tasks/:id/cancel`
 - 任务日志：`GET /api/v1/tasks/:id/logs`

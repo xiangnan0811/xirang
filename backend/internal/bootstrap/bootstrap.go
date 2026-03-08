@@ -22,6 +22,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AlertDelivery{},
 		&model.Task{},
 		&model.TaskLog{},
+		&model.TaskTrafficSample{},
 		&model.AuditLog{},
 	)
 }

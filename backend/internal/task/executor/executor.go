@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -19,8 +22,15 @@ import (
 
 type LogFunc func(level, message string)
 
+type ProgressSample struct {
+	ObservedAt     time.Time
+	ThroughputMbps float64
+}
+
+type ProgressFunc func(sample ProgressSample)
+
 type Executor interface {
-	Run(ctx context.Context, task model.Task, logf LogFunc) (int, error)
+	Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
 }
 
 type Factory interface {
@@ -51,18 +61,20 @@ type DisabledExecutor struct {
 	executorType string
 }
 
-func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc) (int, error) {
+func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc, _ ProgressFunc) (int, error) {
 	if e.executorType == "" || e.executorType == "local" {
 		return -1, fmt.Errorf("local 执行器已禁用")
 	}
 	return -1, fmt.Errorf("不支持的 executor_type: %s", e.executorType)
 }
 
+var progressLinePattern = regexp.MustCompile(`(?i)^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+[0-9]+%\s+([0-9][0-9,]*(?:\.[0-9]+)?)([kmgt]?)(?:i?b|b)/s\s+`)
+
 type RsyncExecutor struct {
 	binary string
 }
 
-func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) (int, error) {
+func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
 		return -1, fmt.Errorf("rsync 执行需要 rsync_source 与 rsync_target")
 	}
@@ -73,7 +85,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 		}
 	}
 
-	args := []string{"-avz"}
+	args := []string{"-avz", "--info=progress2"}
 	source := task.RsyncSource
 
 	cleanup := func() {}
@@ -173,13 +185,22 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 	stream := func(scanner *bufio.Scanner, level string) {
 		defer wg.Done()
 		for scanner.Scan() {
-			logf(level, scanner.Text())
+			message := scanner.Text()
+			if strings.TrimSpace(message) == "" {
+				continue
+			}
+			logf(level, message)
+			if level == "info" && progressf != nil {
+				if sample, ok := parseProgressSample(message); ok {
+					progressf(sample)
+				}
+			}
 		}
 	}
 
 	wg.Add(2)
-	go stream(bufio.NewScanner(stdout), "info")
-	go stream(bufio.NewScanner(stderr), "error")
+	go stream(newProgressScanner(stdout), "info")
+	go stream(newProgressScanner(stderr), "error")
 
 	waitErr := cmd.Wait()
 	wg.Wait()
@@ -191,6 +212,75 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc) 
 		return exitErr.ExitCode(), waitErr
 	}
 	return -1, waitErr
+}
+
+func newProgressScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Split(splitProgressTokens)
+	return scanner
+}
+
+func splitProgressTokens(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	start := 0
+	for start < len(data) && (data[start] == '\r' || data[start] == '\n') {
+		start += 1
+	}
+	if start > 0 {
+		if start == len(data) && !atEOF {
+			return start, nil, nil
+		}
+		data = data[start:]
+		advance += start
+	}
+	for index, value := range data {
+		if value == '\r' || value == '\n' {
+			if index == 0 {
+				return advance + 1, nil, nil
+			}
+			return advance + index + 1, data[:index], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return advance + len(data), data, nil
+	}
+	return advance, nil, nil
+}
+
+func parseProgressSample(message string) (ProgressSample, bool) {
+	normalized := strings.TrimSpace(message)
+	matches := progressLinePattern.FindStringSubmatch(normalized)
+	if len(matches) != 3 {
+		return ProgressSample{}, false
+	}
+	throughputMbps, ok := parseThroughputMbps(matches[1], matches[2])
+	if !ok {
+		return ProgressSample{}, false
+	}
+	return ProgressSample{
+		ObservedAt:     time.Now().UTC(),
+		ThroughputMbps: throughputMbps,
+	}, true
+}
+
+func parseThroughputMbps(valueField string, unitField string) (float64, bool) {
+	value, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(valueField), ",", ""), 64)
+	if err != nil {
+		return 0, false
+	}
+	multiplier := 1.0
+	switch strings.ToLower(strings.TrimSpace(unitField)) {
+	case "k":
+		multiplier = 1_000
+	case "m":
+		multiplier = 1_000_000
+	case "g":
+		multiplier = 1_000_000_000
+	case "t":
+		multiplier = 1_000_000_000_000
+	}
+	bytesPerSecond := value * multiplier
+	return bytesPerSecond * 8 / 1_000_000, true
 }
 
 func ensureLocalTargetReady(target string) error {

@@ -72,6 +72,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
+	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	nodeHandler := handlers.NewNodeHandler(dep.DB)
 	policyHandler := handlers.NewPolicyHandler(dep.DB)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager)
@@ -92,6 +93,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/auth/logout", authHandler.Logout)
 	secured.POST("/auth/change-password", authHandler.ChangePassword)
 	secured.GET("/overview", overviewHandler.Get)
+	secured.GET("/overview/traffic", middleware.RBAC("tasks:read"), overviewTrafficHandler.Get)
 	secured.GET("/users", middleware.RBAC("users:manage"), userHandler.List)
 	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
 	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)

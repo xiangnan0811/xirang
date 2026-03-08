@@ -58,6 +58,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/alerts/delivery-stats") {
 		t.Fatalf("未注册告警投递统计接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/overview/traffic") {
+		t.Fatalf("未注册概览流量趋势接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/integrations/:id/test") {
 		t.Fatalf("未注册通知通道测试接口")
 	}

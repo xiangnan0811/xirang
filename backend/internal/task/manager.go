@@ -20,9 +20,15 @@ import (
 )
 
 const (
-	defaultLogQueueCapacity = 1024
-	defaultLogBatchSize     = 50
-	defaultLogFlushInterval = 500 * time.Millisecond
+	defaultLogQueueCapacity       = 1024
+	defaultLogBatchSize           = 50
+	defaultLogFlushInterval       = 500 * time.Millisecond
+	defaultSampleQueueCapacity    = 1024
+	defaultSampleBatchSize        = 50
+	defaultSampleFlushInterval    = 500 * time.Millisecond
+	defaultSampleThrottleWindow   = 10 * time.Second
+	defaultSampleCleanupInterval  = time.Hour
+	defaultSampleCleanupBatchSize = 500
 )
 
 type queuedTaskLog struct {
@@ -30,6 +36,14 @@ type queuedTaskLog struct {
 	level   string
 	message string
 	status  string
+}
+
+type queuedTaskSample struct {
+	taskID         uint
+	nodeID         uint
+	runStartedAt   time.Time
+	sampledAt      time.Time
+	throughputMbps float64
 }
 
 type Manager struct {
@@ -52,23 +66,39 @@ type Manager struct {
 	logWorkerCancel  context.CancelFunc
 	logWorkerDone    chan struct{}
 
+	sampleQueue            chan queuedTaskSample
+	sampleBatchSize        int
+	sampleFlushInterval    time.Duration
+	sampleWorkerCancel     context.CancelFunc
+	sampleWorkerDone       chan struct{}
+	lastSampleBucketByTask sync.Map
+	sampleRetentionDays    int
+	lastSampleCleanupAt    time.Time
+	sampleCleanupMu        sync.Mutex
+
 	shuttingDown atomic.Bool
 }
 
-func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler) *Manager {
+func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, sampleRetentionDays int) *Manager {
 	m := &Manager{
-		db:               db,
-		stateMachine:     NewStateMachine(),
-		executorFactory:  executorFactory,
-		hub:              hub,
-		scheduler:        scheduler,
-		semaphore:        make(chan struct{}, 8),
-		logQueue:         make(chan queuedTaskLog, defaultLogQueueCapacity),
-		logBatchSize:     defaultLogBatchSize,
-		logFlushInterval: defaultLogFlushInterval,
-		logWorkerDone:    make(chan struct{}),
+		db:                  db,
+		stateMachine:        NewStateMachine(),
+		executorFactory:     executorFactory,
+		hub:                 hub,
+		scheduler:           scheduler,
+		semaphore:           make(chan struct{}, 8),
+		logQueue:            make(chan queuedTaskLog, defaultLogQueueCapacity),
+		logBatchSize:        defaultLogBatchSize,
+		logFlushInterval:    defaultLogFlushInterval,
+		logWorkerDone:       make(chan struct{}),
+		sampleQueue:         make(chan queuedTaskSample, defaultSampleQueueCapacity),
+		sampleBatchSize:     defaultSampleBatchSize,
+		sampleFlushInterval: defaultSampleFlushInterval,
+		sampleWorkerDone:    make(chan struct{}),
+		sampleRetentionDays: sampleRetentionDays,
 	}
 	m.startLogWorker()
+	m.startSampleWorker()
 	return m
 }
 
@@ -76,6 +106,12 @@ func (m *Manager) startLogWorker() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.logWorkerCancel = cancel
 	go m.runLogWorker(ctx)
+}
+
+func (m *Manager) startSampleWorker() {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sampleWorkerCancel = cancel
+	go m.runSampleWorker(ctx)
 }
 
 func (m *Manager) runLogWorker(ctx context.Context) {
@@ -114,6 +150,48 @@ func (m *Manager) runLogWorker(ctx context.Context) {
 				flush()
 			}
 		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+func (m *Manager) runSampleWorker(ctx context.Context) {
+	defer close(m.sampleWorkerDone)
+
+	ticker := time.NewTicker(m.sampleFlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]queuedTaskSample, 0, m.sampleBatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		m.persistSampleBatch(batch)
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			for {
+				select {
+				case item := <-m.sampleQueue:
+					batch = append(batch, item)
+					if len(batch) >= m.sampleBatchSize {
+						flush()
+					}
+				default:
+					flush()
+					return
+				}
+			}
+		case item := <-m.sampleQueue:
+			batch = append(batch, item)
+			if len(batch) >= m.sampleBatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			m.cleanupExpiredTrafficSamples()
 			flush()
 		}
 	}
@@ -263,6 +341,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	}
 
 	now := time.Now()
+	m.lastSampleBucketByTask.Delete(taskID)
 	if err := m.updateStatus(&taskEntity, StatusRunning, map[string]interface{}{
 		"last_run_at": now,
 		"next_run_at": nil,
@@ -278,8 +357,11 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	defer m.runningCancels.Delete(taskID)
 
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
+	runStartedAt := now.UTC()
 	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
 		m.emitLog(taskID, level, message, string(StatusRunning))
+	}, func(sample executor.ProgressSample) {
+		m.emitTrafficSample(taskID, taskEntity.NodeID, runStartedAt, sample)
 	})
 
 	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID)
@@ -404,6 +486,42 @@ func (m *Manager) emitLog(taskID uint, level, message, status string) {
 	}
 }
 
+func (m *Manager) emitTrafficSample(taskID uint, nodeID uint, runStartedAt time.Time, sample executor.ProgressSample) {
+	if sample.ThroughputMbps <= 0 {
+		return
+	}
+	sampledAt := sample.ObservedAt.UTC()
+	if sampledAt.IsZero() {
+		sampledAt = time.Now().UTC()
+	}
+	bucket := sampledAt.Truncate(defaultSampleThrottleWindow)
+	if lastRaw, ok := m.lastSampleBucketByTask.Load(taskID); ok {
+		if lastBucket, castOK := lastRaw.(time.Time); castOK && !bucket.After(lastBucket) {
+			return
+		}
+	}
+	m.lastSampleBucketByTask.Store(taskID, bucket)
+
+	entry := queuedTaskSample{
+		taskID:         taskID,
+		nodeID:         nodeID,
+		runStartedAt:   runStartedAt,
+		sampledAt:      sampledAt,
+		throughputMbps: sample.ThroughputMbps,
+	}
+
+	if m.sampleQueue == nil {
+		m.persistSampleBatch([]queuedTaskSample{entry})
+		return
+	}
+
+	select {
+	case m.sampleQueue <- entry:
+	default:
+		log.Printf("warn: task traffic sample queue full, dropping sample(task_id=%d)", taskID)
+	}
+}
+
 func (m *Manager) persistLogBatch(batch []queuedTaskLog) {
 	if len(batch) == 0 || m.db == nil {
 		return
@@ -438,6 +556,67 @@ func (m *Manager) persistLogBatch(batch []queuedTaskLog) {
 	for i := range records {
 		m.publishLogEvent(records[i], batch[i].status)
 	}
+}
+
+func (m *Manager) persistSampleBatch(batch []queuedTaskSample) {
+	if len(batch) == 0 || m.db == nil {
+		return
+	}
+	m.cleanupExpiredTrafficSamples()
+
+	records := make([]model.TaskTrafficSample, 0, len(batch))
+	for _, item := range batch {
+		records = append(records, model.TaskTrafficSample{
+			TaskID:         item.taskID,
+			NodeID:         item.nodeID,
+			RunStartedAt:   item.runStartedAt,
+			SampledAt:      item.sampledAt,
+			ThroughputMbps: item.throughputMbps,
+		})
+	}
+
+	if err := m.db.CreateInBatches(&records, m.sampleBatchSize).Error; err != nil {
+		log.Printf("warn: 批量写入吞吐采样失败，回退单条写入: %v", err)
+		for i := range records {
+			if oneErr := m.db.Create(&records[i]).Error; oneErr != nil {
+				log.Printf("error: 写入吞吐采样失败(task_id=%d, batch_index=%d): %v", records[i].TaskID, i, oneErr)
+			}
+		}
+	}
+}
+
+func (m *Manager) cleanupExpiredTrafficSamples() {
+	if m.sampleRetentionDays <= 0 || m.db == nil {
+		return
+	}
+
+	m.sampleCleanupMu.Lock()
+	defer m.sampleCleanupMu.Unlock()
+
+	now := time.Now().UTC()
+	if !m.lastSampleCleanupAt.IsZero() && now.Sub(m.lastSampleCleanupAt) < defaultSampleCleanupInterval {
+		return
+	}
+
+	cutoff := now.AddDate(0, 0, -m.sampleRetentionDays)
+	for {
+		var ids []uint
+		if err := m.db.Model(&model.TaskTrafficSample{}).Where("sampled_at < ?", cutoff).Order("id asc").Limit(defaultSampleCleanupBatchSize).Pluck("id", &ids).Error; err != nil {
+			log.Printf("warn: 查询过期吞吐采样失败: %v", err)
+			return
+		}
+		if len(ids) == 0 {
+			break
+		}
+		if err := m.db.Where("id IN ?", ids).Delete(&model.TaskTrafficSample{}).Error; err != nil {
+			log.Printf("warn: 清理过期吞吐采样失败: %v", err)
+			return
+		}
+		if len(ids) < defaultSampleCleanupBatchSize {
+			break
+		}
+	}
+	m.lastSampleCleanupAt = now
 }
 
 func (m *Manager) publishLogEvent(record model.TaskLog, status string) {
@@ -608,6 +787,16 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.logWorkerDone != nil {
 		select {
 		case <-m.logWorkerDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if m.sampleWorkerCancel != nil {
+		m.sampleWorkerCancel()
+	}
+	if m.sampleWorkerDone != nil {
+		select {
+		case <-m.sampleWorkerDone:
 		case <-ctx.Done():
 			return ctx.Err()
 		}

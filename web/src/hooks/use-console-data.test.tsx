@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewTaskInput, NodeRecord, TaskRecord } from "@/types/domain";
+import type { NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
 import { useConsoleData } from "./use-console-data";
 
 const { apiClientMock } = vi.hoisted(() => ({
@@ -11,6 +11,8 @@ const { apiClientMock } = vi.hoisted(() => ({
     getAlerts: vi.fn(),
     getSSHKeys: vi.fn(),
     getIntegrations: vi.fn(),
+    getOverviewSummary: vi.fn(),
+    getOverviewTraffic: vi.fn(),
     createNode: vi.fn(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
@@ -136,6 +138,27 @@ function createTaskInput(id: number): NewTaskInput {
   };
 }
 
+function createTrafficSeries(window: OverviewTrafficSeries["window"] = "1h"): OverviewTrafficSeries {
+  return {
+    window,
+    bucketMinutes: window === "1h" ? 5 : window === "24h" ? 60 : 360,
+    hasRealSamples: true,
+    generatedAt: "2026-03-08T00:30:00Z",
+    points: [
+      {
+        timestamp: "2026-03-08T00:00:00Z",
+        timestampMs: 1741392000000,
+        label: "00:00",
+        throughputMbps: 128,
+        sampleCount: 2,
+        activeTaskCount: 1,
+        startedCount: 0,
+        failedCount: 0,
+      }
+    ]
+  };
+}
+
 describe("useConsoleData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -144,6 +167,14 @@ describe("useConsoleData", () => {
     apiClientMock.getAlerts.mockResolvedValue([]);
     apiClientMock.getSSHKeys.mockResolvedValue([]);
     apiClientMock.getIntegrations.mockResolvedValue([]);
+    apiClientMock.getOverviewSummary.mockResolvedValue({
+      totalNodes: 0,
+      healthyNodes: 0,
+      activePolicies: 0,
+      runningTasks: 0,
+      failedTasks24h: 0,
+    });
+    apiClientMock.getOverviewTraffic.mockResolvedValue(createTrafficSeries());
   });
 
   it("不会让旧的节点加载结果覆盖刚新增的节点", async () => {
@@ -266,5 +297,60 @@ describe("useConsoleData", () => {
     });
 
     expect(result.current.tasks[0]?.status).toBe("running");
+  });
+
+  it("会用服务端概览摘要覆盖 failedTasks24h", async () => {
+    apiClientMock.getNodes.mockResolvedValue([createNode(1, "node-1")]);
+    apiClientMock.getTasks.mockResolvedValue([createTask(1, "failed", 10)]);
+    apiClientMock.getOverviewSummary.mockResolvedValue({
+      totalNodes: 1,
+      healthyNodes: 0,
+      activePolicies: 0,
+      runningTasks: 0,
+      failedTasks24h: 7,
+    });
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.overview.failedTasks24h).toBe(7);
+  });
+
+  it("refresh 会推进 refreshVersion", async () => {
+    const { result } = renderHook(() => useConsoleData("token-1"));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    const before = result.current.refreshVersion;
+    await act(async () => {
+      result.current.refresh();
+    });
+
+    expect(result.current.refreshVersion).toBeGreaterThan(before);
+  });
+
+  it("demo 模式且无 token 时会返回 mock 数据与 mock 趋势", async () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
+
+    const { result } = renderHook(() => useConsoleData(null));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.warning).toBeNull();
+    expect(result.current.nodes.length).toBeGreaterThan(0);
+    expect(result.current.tasks.length).toBeGreaterThan(0);
+
+    const traffic = await result.current.fetchOverviewTraffic("24h");
+    expect(traffic.window).toBe("24h");
+    expect(traffic.points.length).toBeGreaterThan(0);
+
+    vi.unstubAllEnvs();
   });
 });

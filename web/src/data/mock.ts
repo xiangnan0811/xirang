@@ -3,11 +3,13 @@ import type {
   IntegrationChannel,
   LogEvent,
   NodeRecord,
+  OverviewSummary,
+  OverviewTrafficSeries,
+  OverviewTrafficWindow,
   OverviewStats,
   PolicyRecord,
   SSHKeyRecord,
-  TaskRecord,
-  TrafficPoint
+  TaskRecord
 } from "@/types/domain";
 
 const nodeNames = [
@@ -260,20 +262,7 @@ export const mockTasks: TaskRecord[] = Array.from({ length: 18 }, (_, idx) => {
   };
 });
 
-export const mockTrafficSeries: TrafficPoint[] = [
-  { label: "10:00", ingressMbps: 186, egressMbps: 122 },
-  { label: "10:05", ingressMbps: 204, egressMbps: 144 },
-  { label: "10:10", ingressMbps: 198, egressMbps: 132 },
-  { label: "10:15", ingressMbps: 225, egressMbps: 165 },
-  { label: "10:20", ingressMbps: 248, egressMbps: 182 },
-  { label: "10:25", ingressMbps: 239, egressMbps: 176 },
-  { label: "10:30", ingressMbps: 261, egressMbps: 190 },
-  { label: "10:35", ingressMbps: 246, egressMbps: 173 },
-  { label: "10:40", ingressMbps: 272, egressMbps: 201 },
-  { label: "10:45", ingressMbps: 283, egressMbps: 212 },
-  { label: "10:50", ingressMbps: 274, egressMbps: 205 },
-  { label: "10:55", ingressMbps: 289, egressMbps: 219 }
-];
+const mockTrafficTotals = [308, 348, 330, 390, 430, 415, 451, 419, 473, 495, 479, 508];
 
 export const mockOverview: OverviewStats = {
   totalNodes: mockNodes.length,
@@ -284,6 +273,66 @@ export const mockOverview: OverviewStats = {
   overallSuccessRate: 95.7,
   avgSyncMbps: 182
 };
+
+export const mockOverviewSummary: OverviewSummary = {
+  totalNodes: mockOverview.totalNodes,
+  healthyNodes: mockOverview.healthyNodes,
+  activePolicies: mockOverview.activePolicies,
+  runningTasks: mockOverview.runningTasks,
+  failedTasks24h: mockOverview.failedTasks24h
+};
+
+function generateTrafficValues(count: number, base: number, step: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const wave = Math.sin(index / 3) * step;
+    const drift = (index % 5) * 4;
+    return Math.max(0, Math.round(base + wave + drift));
+  });
+}
+
+export function buildMockOverviewTrafficSeries(window: OverviewTrafficWindow): OverviewTrafficSeries {
+  const now = new Date();
+  const config = window === "1h"
+    ? {
+        count: 12,
+        bucketMinutes: 5,
+        format: (date: Date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+        values: mockTrafficTotals
+      }
+    : window === "24h"
+      ? {
+          count: 24,
+          bucketMinutes: 60,
+          format: (date: Date) => `${String(date.getHours()).padStart(2, "0")}:00`,
+          values: generateTrafficValues(24, 180, 42)
+        }
+      : {
+          count: 28,
+          bucketMinutes: 360,
+          format: (date: Date) => `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`,
+          values: generateTrafficValues(28, 210, 55)
+        };
+
+  return {
+    window,
+    bucketMinutes: config.bucketMinutes,
+    hasRealSamples: true,
+    generatedAt: now.toISOString(),
+    points: Array.from({ length: config.count }, (_, index) => {
+      const pointTime = new Date(now.getTime() - (config.count - 1 - index) * config.bucketMinutes * 60_000);
+      return {
+        timestamp: pointTime.toISOString(),
+        timestampMs: pointTime.getTime(),
+        label: config.format(pointTime),
+        throughputMbps: config.values[index] ?? config.values[config.values.length - 1] ?? 0,
+        sampleCount: 1,
+        activeTaskCount: 1,
+        startedCount: index % 6 == 0 ? 1 : 0,
+        failedCount: index % 11 == 0 ? 1 : 0
+      };
+    })
+  };
+}
 
 export const mockSeedLogs: LogEvent[] = [
   {

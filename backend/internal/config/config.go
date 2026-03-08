@@ -19,6 +19,7 @@ type Config struct {
 	JWTSecret                 string
 	JWTTTL                    time.Duration
 	RsyncBinary               string
+	TaskTrafficRetentionDays  int
 	AllowedOrigins            []string
 	WSAllowEmptyOrigin        bool
 	LoginRateLimit            int
@@ -42,8 +43,16 @@ func Load() (Config, error) {
 		PostgresDSN:    util.GetEnvOrDefault("DB_DSN", ""),
 		JWTSecret:      util.GetEnvOrDefault("JWT_SECRET", "xirang-dev-secret"),
 		RsyncBinary:    util.GetEnvOrDefault("RSYNC_BINARY", "rsync"),
+		TaskTrafficRetentionDays: 8,
 		AllowedOrigins: splitCSV(allowedOriginsRaw),
 	}
+
+	retentionDaysRaw := util.GetEnvOrDefault("TASK_TRAFFIC_RETENTION_DAYS", "8")
+	retentionDays, err := strconv.Atoi(retentionDaysRaw)
+	if err != nil || retentionDays < 0 {
+		return Config{}, fmt.Errorf("解析 TASK_TRAFFIC_RETENTION_DAYS 失败")
+	}
+	cfg.TaskTrafficRetentionDays = retentionDays
 
 	ttlRaw := util.GetEnvOrDefault("JWT_TTL", "24h")
 	ttl, err := time.ParseDuration(ttlRaw)

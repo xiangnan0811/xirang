@@ -86,3 +86,15 @@ func TestSeedUsersAllowsMissingPasswordWhenAdminAlreadyExists(t *testing.T) {
 		t.Fatalf("admin 已存在时不应强制要求 ADMIN_INITIAL_PASSWORD，实际: %v", err)
 	}
 }
+
+func TestAutoMigrateIncludesTaskTrafficSample(t *testing.T) {
+	db := openBootstrapTestDB(t)
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("AutoMigrate 失败: %v", err)
+	}
+
+	if !db.Migrator().HasTable(&model.TaskTrafficSample{}) {
+		t.Fatalf("期望 AutoMigrate 创建 task_traffic_samples 表")
+	}
+}

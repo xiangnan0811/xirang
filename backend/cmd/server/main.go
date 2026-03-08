@@ -48,7 +48,7 @@ func main() {
 	defer cronScheduler.Stop()
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
-	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler)
+	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, cfg.TaskTrafficRetentionDays)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatalf("加载定时任务失败: %v", err)
 	}

@@ -232,3 +232,41 @@ func TestLoadUsesSafeDefaultCORSOriginsWhenUnset(t *testing.T) {
 		t.Fatalf("默认跨域白名单不符合预期，实际: %+v", cfg.AllowedOrigins)
 	}
 }
+
+func TestLoadParsesTaskTrafficRetentionDays(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("TASK_TRAFFIC_RETENTION_DAYS", "12")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.TaskTrafficRetentionDays != 12 {
+		t.Fatalf("期望保留天数为 12，实际: %d", cfg.TaskTrafficRetentionDays)
+	}
+}
+
+func TestLoadRejectsInvalidTaskTrafficRetentionDays(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("TASK_TRAFFIC_RETENTION_DAYS", "-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望非法保留天数配置返回错误")
+	}
+}

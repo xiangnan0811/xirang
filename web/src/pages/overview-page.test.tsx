@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { OverviewPage } from "./overview-page";
@@ -43,7 +43,9 @@ function createNodes(total: number) {
   });
 }
 
-function setContext(nodeCount: number, withTraffic = true) {
+const fetchOverviewTrafficMock = vi.fn();
+
+function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
   const nodes = createNodes(nodeCount);
   const base: ConsoleOutletContext = {
     overview: {
@@ -86,13 +88,8 @@ function setContext(nodeCount: number, withTraffic = true) {
     ],
     policies: [],
     sshKeys: [],
-    trafficSeries: withTraffic
-      ? [
-        { label: "10:00", ingressMbps: 120, egressMbps: 88 },
-        { label: "10:05", ingressMbps: 160, egressMbps: 96 },
-        { label: "10:10", ingressMbps: 90, egressMbps: 72 }
-      ]
-      : [],
+    refreshVersion,
+    fetchOverviewTraffic: fetchOverviewTrafficMock,
     loading: false
   } as unknown as ConsoleOutletContext;
   mockContextRef.current = base;
@@ -101,6 +98,17 @@ function setContext(nodeCount: number, withTraffic = true) {
 describe("OverviewPage", () => {
   beforeEach(() => {
     mockNavigate.mockReset();
+    fetchOverviewTrafficMock.mockReset();
+    fetchOverviewTrafficMock.mockResolvedValue({
+      window: "1h",
+      bucketMinutes: 5,
+      hasRealSamples: true,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: [
+        { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        { timestamp: "2026-03-08T00:05:00Z", timestampMs: Date.parse("2026-03-08T00:05:00Z"), label: "00:05", throughputMbps: 160, sampleCount: 1, activeTaskCount: 2, startedCount: 0, failedCount: 0 },
+      ]
+    });
   });
 
   it("状态矩阵默认仅渲染预览节点，全屏后可查看全部并跳转", async () => {
@@ -130,27 +138,172 @@ describe("OverviewPage", () => {
     expect(mockNavigate).toHaveBeenCalledWith("/app/nodes?keyword=Node-001");
   });
 
-  it("无数据时显示空提示并输出图表可访问名称", () => {
+  it("无数据时显示空提示并输出图表可访问名称", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "1h",
+      bucketMinutes: 5,
+      hasRealSamples: false,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: Array.from({ length: 12 }, (_, index) => ({
+        timestamp: `2026-03-08T00:${String(index * 5).padStart(2, "0")}:00Z`,
+        label: `00:${String(index * 5).padStart(2, "0")}`,
+        throughputMbps: 0,
+        sampleCount: 0,
+        activeTaskCount: 0,
+        startedCount: 0,
+        failedCount: 0,
+      }))
+    });
     setContext(0, false);
 
     render(<OverviewPage />);
 
     expect(screen.getByText("暂无可展示节点，请先在节点页完成接入。")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "近一小时流量趋势图，暂无数据" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "近 1 小时流量与活动趋势图，暂无真实样本" })).toBeInTheDocument();
   });
 
-  it("全屏查看按钮存在且可点击", () => {
+  it("常量非零吞吐曲线不会贴在底轴", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "1h",
+      bucketMinutes: 5,
+      hasRealSamples: true,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: Array.from({ length: 3 }, (_, index) => ({
+        timestamp: `2026-03-08T00:0${index}:00Z`,
+        label: `00:0${index}`,
+        throughputMbps: 120,
+        sampleCount: 1,
+        activeTaskCount: 1,
+        startedCount: 1,
+        failedCount: 0,
+      }))
+    });
+    setContext(2, true, 1);
+
+    render(<OverviewPage />);
+
+    const chart = await screen.findByRole("img", { name: /峰值平均总吞吐 120 Mbps/ });
+    const paths = chart.querySelectorAll("path");
+    const linePath = Array.from(paths).find((path) => path.getAttribute("fill") === "none");
+    expect(linePath).toBeTruthy();
+    expect(linePath?.getAttribute("d")).not.toContain(",120.00");
+  });
+
+  it("切换时间窗时会 abort 前一个趋势请求", async () => {
+    const user = userEvent.setup();
+    const seenSignals: AbortSignal[] = [];
+    fetchOverviewTrafficMock.mockImplementation((window: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) {
+        seenSignals.push(options.signal);
+      }
+      if (window === "1h") {
+        return new Promise((_, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        });
+      }
+      return Promise.resolve({
+        window: "24h",
+        bucketMinutes: 60,
+        hasRealSamples: true,
+        generatedAt: "2026-03-08T00:00:00Z",
+        points: [
+          { timestamp: "2026-03-07T23:00:00Z", timestampMs: Date.parse("2026-03-07T23:00:00Z"), label: "23:00", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 }
+        ]
+      });
+    });
+
+    setContext(2, true, 1);
+    render(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole("button", { name: "24h" }));
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(seenSignals[0]?.aborted).toBe(true);
+    expect(seenSignals[1]?.aborted).toBe(false);
+  });
+
+  it("图例位于图表下方且可切换图层", async () => {
+    setContext(2, true, 1);
+    const { container } = render(<OverviewPage />);
+
+    const activityToggle = await screen.findByRole("button", { name: /活动/ });
+    const legendRow = activityToggle.parentElement;
+    expect(legendRow?.className).toContain("border-t");
+    expect(container.querySelector('.absolute.right-2.top-2')).toBeNull();
+  });
+
+  it("图例按钮可开启或关闭图层", async () => {
+    setContext(2, true, 1);
+    render(<OverviewPage />);
+
+    const activityToggle = await screen.findByRole("button", { name: /活动/ });
+    expect(activityToggle).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.setup().click(activityToggle);
+    expect(activityToggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("支持切换 1h/24h/7d 并按 refreshVersion 重新拉取趋势", async () => {
+    const user = userEvent.setup();
+    setContext(2, true, 1);
+    const { rerender } = render(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock.mock.calls[0]?.[0]).toBe("1h");
+      expect(fetchOverviewTrafficMock.mock.calls[0]?.[1]?.signal).toBeTruthy();
+    });
+
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 60,
+      hasRealSamples: true,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: [
+        { timestamp: "2026-03-07T23:00:00Z", timestampMs: Date.parse("2026-03-07T23:00:00Z"), label: "23:00", throughputMbps: 80, sampleCount: 2, activeTaskCount: 1, startedCount: 1, failedCount: 0 }
+      ]
+    });
+    await user.click(screen.getByRole("button", { name: "24h" }));
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[0]).toBe("24h");
+      expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[1]?.signal).toBeTruthy();
+    });
+
+    setContext(2, true, 2);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("全屏查看按钮存在且可点击", async () => {
     setContext(5, true);
 
     render(<OverviewPage />);
 
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
+    });
+
     expect(screen.getByRole("button", { name: "全屏查看状态矩阵" })).toBeInTheDocument();
   });
 
-  it("能正确渲染最近同步任务框及预计传输量", () => {
+  it("能正确渲染最近同步任务框及预计传输量", async () => {
     setContext(2, true);
 
     render(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
+    });
 
     // Basic structure
     expect(screen.getByText("最近同步任务")).toBeInTheDocument();
@@ -169,7 +322,7 @@ describe("OverviewPage", () => {
 
     // Status text (mapped from 'success' and 'failed')
     expect(screen.getByText("成功")).toBeInTheDocument();
-    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.getAllByText("失败").length).toBeGreaterThan(0);
 
     // Transfer Data text (testing the Math calculation `80 Mbps / 8 = 10.0 MB/s`) 
     // and testing placeholder `-` for 0 Mbps.
@@ -183,7 +336,7 @@ describe("OverviewPage", () => {
     expect(screen.getByText("2026-03-01 10:05:00")).toBeInTheDocument();
   });
 
-  it("最近同步任务按创建时间倒序展示最近 5 条", () => {
+  it("最近同步任务按创建时间倒序展示最近 5 条", async () => {
     const nodes = createNodes(2);
     mockContextRef.current = {
       overview: {
@@ -206,11 +359,16 @@ describe("OverviewPage", () => {
       ],
       policies: [],
       sshKeys: [],
-      trafficSeries: [],
+      refreshVersion: 0,
+      fetchOverviewTraffic: fetchOverviewTrafficMock,
       loading: false,
     } as unknown as ConsoleOutletContext;
 
     render(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
+    });
 
     expect(screen.getByText("最新任务")).toBeInTheDocument();
     expect(screen.queryByText("最早任务")).not.toBeInTheDocument();

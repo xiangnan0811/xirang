@@ -32,6 +32,35 @@ export interface OverviewStats {
   avgSyncMbps: number;
 }
 
+export interface OverviewSummary {
+  totalNodes: number;
+  healthyNodes: number;
+  activePolicies: number;
+  runningTasks: number;
+  failedTasks24h: number;
+}
+
+export type OverviewTrafficWindow = "1h" | "24h" | "7d";
+
+export interface OverviewTrafficPoint {
+  timestamp: string;
+  timestampMs: number;
+  label: string;
+  throughputMbps: number;
+  sampleCount: number;
+  activeTaskCount: number;
+  startedCount: number;
+  failedCount: number;
+}
+
+export interface OverviewTrafficSeries {
+  window: OverviewTrafficWindow;
+  bucketMinutes: number;
+  hasRealSamples: boolean;
+  generatedAt: string;
+  points: OverviewTrafficPoint[];
+}
+
 export interface NodeRecord {
   id: number;
   name: string;
@@ -120,12 +149,6 @@ export interface LogEvent {
   errorCode?: string;
   progress?: number;
   status?: TaskStatus;
-}
-
-export interface TrafficPoint {
-  label: string;
-  ingressMbps: number;
-  egressMbps: number;
 }
 
 export interface AlertRecord {

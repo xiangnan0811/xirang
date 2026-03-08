@@ -180,6 +180,7 @@ make prod-down
 - `POST /api/v1/auth/login`
 - `GET /api/v1/me`
 - `GET /api/v1/overview`
+- `GET /api/v1/overview/traffic?window=1h|24h|7d`
 - `GET|POST|PUT|DELETE /api/v1/nodes`
 - `POST /api/v1/nodes/:id/test-connection`
 - `GET|POST|PUT|DELETE /api/v1/ssh-keys`

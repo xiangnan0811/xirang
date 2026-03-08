@@ -1,21 +1,25 @@
-import type { NodeRecord, OverviewStats, PolicyRecord, TaskRecord } from "@/types/domain";
+import type { NodeRecord, OverviewStats, OverviewSummary, PolicyRecord, TaskRecord } from "@/types/domain";
 
-export function deriveOverview(nodes: NodeRecord[], policies: PolicyRecord[], tasks: TaskRecord[]): OverviewStats {
-  const healthy = nodes.filter((node) => node.status === "online").length;
-  const failed = tasks.filter((task) => task.status === "failed").length;
+export function deriveOverview(
+  nodes: NodeRecord[],
+  policies: PolicyRecord[],
+  tasks: TaskRecord[],
+  summary?: OverviewSummary | null
+): OverviewStats {
+  const localHealthy = nodes.filter((node) => node.status === "online").length;
+  const localFailed = tasks.filter((task) => task.status === "failed").length;
   const successCount = tasks.filter((task) => task.status === "success").length;
   const successRate = tasks.length > 0 ? Number(((successCount / tasks.length) * 100).toFixed(1)) : 100;
-  const avgSyncMbps =
-    tasks.length > 0
-      ? Math.round(tasks.reduce((sum, task) => sum + task.speedMbps, 0) / tasks.length)
-      : 0;
+  const avgSyncMbps = tasks
+    .filter((task) => task.status === "running" || task.status === "retrying")
+    .reduce((sum, task) => sum + task.speedMbps, 0);
 
   return {
-    totalNodes: nodes.length,
-    healthyNodes: healthy,
-    activePolicies: policies.filter((policy) => policy.enabled).length,
-    runningTasks: tasks.filter((task) => task.status === "running" || task.status === "retrying").length,
-    failedTasks24h: failed,
+    totalNodes: summary?.totalNodes ?? nodes.length,
+    healthyNodes: summary?.healthyNodes ?? localHealthy,
+    activePolicies: summary?.activePolicies ?? policies.filter((policy) => policy.enabled).length,
+    runningTasks: summary?.runningTasks ?? tasks.filter((task) => task.status === "running" || task.status === "retrying").length,
+    failedTasks24h: summary?.failedTasks24h ?? localFailed,
     overallSuccessRate: successRate,
     avgSyncMbps
   };
