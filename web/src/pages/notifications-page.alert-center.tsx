@@ -36,6 +36,7 @@ type AlertCenterProps = {
   integrations: { id: string; name: string }[];
   loading: boolean;
   globalSearch: string;
+  setGlobalSearch: (value: string) => void;
   retryAlert: (id: string) => Promise<void>;
   acknowledgeAlert: (id: string) => Promise<void>;
   resolveAlert: (id: string) => Promise<void>;
@@ -49,6 +50,7 @@ export function AlertCenter({
   integrations,
   loading,
   globalSearch,
+  setGlobalSearch,
   retryAlert,
   acknowledgeAlert,
   resolveAlert,
@@ -66,7 +68,7 @@ export function AlertCenter({
     keyword: { key: "xirang.notifications.keyword", default: "" },
     severity: { key: "xirang.notifications.severity", default: "all" },
     status: { key: "xirang.notifications.status", default: "all" },
-  }, globalSearch);
+  }, globalSearch, setGlobalSearch);
   const [deliveryOpenAlertId, setDeliveryOpenAlertId] = useState<string | null>(null);
   const [deliveryLoadingAlertId, setDeliveryLoadingAlertId] = useState<string | null>(null);
   const [deliveryMap, setDeliveryMap] = useState<Record<string, AlertDeliveryRecord[]>>({});

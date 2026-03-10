@@ -98,6 +98,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     policies: [],
     loading: false,
     globalSearch: "",
+    setGlobalSearch: vi.fn(),
     createTask: vi.fn().mockResolvedValue(201),
     deleteTask: vi.fn().mockResolvedValue(undefined),
     triggerTask: vi.fn().mockResolvedValue(undefined),
@@ -163,5 +164,42 @@ describe("TasksPage", () => {
     await user.click(screen.getByRole("button", { name: "查看任务 #101 日志" }));
 
     expect(navigateMock).toHaveBeenCalledWith("/app/logs?task=101");
+  });
+
+  it("重置筛选时会同时清空全局搜索并恢复任务列表", async () => {
+    const user = userEvent.setup();
+    const setGlobalSearchMock = vi.fn((value: string) => {
+      createContext({
+        globalSearch: value,
+        setGlobalSearch: setGlobalSearchMock,
+      });
+    });
+
+    createContext({
+      globalSearch: "does-not-match",
+      setGlobalSearch: setGlobalSearchMock,
+    });
+
+    const view = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("当前筛选 0 / 2 条任务")).toBeInTheDocument();
+    expect(screen.getByText("当前筛选条件下没有任务")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重置" }));
+
+    expect(setGlobalSearchMock).toHaveBeenCalledWith("");
+
+    view.rerender(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("当前筛选 2 / 2 条任务")).toBeInTheDocument();
+    expect(screen.getByText("每日备份")).toBeInTheDocument();
   });
 });

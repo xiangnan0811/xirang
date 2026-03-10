@@ -15,7 +15,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
-import { usePersistentState } from "@/hooks/use-persistent-state";
+import { usePageFilters } from "@/hooks/use-page-filters";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
@@ -26,20 +26,28 @@ export function PoliciesPage() {
     policies,
     loading,
     globalSearch,
+    setGlobalSearch,
     createPolicy,
     updatePolicy,
     deletePolicy,
     togglePolicy,
   } = useOutletContext<ConsoleOutletContext>();
 
-  const [keyword, setKeyword] = usePersistentState<string>(keywordStorageKey, "");
+  const {
+    keyword,
+    setKeyword,
+    deferredKeyword,
+    reset: resetFilters,
+  } = usePageFilters({
+    keyword: { key: keywordStorageKey, default: "" },
+  }, globalSearch, setGlobalSearch);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
   const { confirm, dialog } = useConfirm();
 
   const filteredPolicies = useMemo(() => {
-    const effectiveKeyword = (keyword || globalSearch).trim().toLowerCase();
+    const effectiveKeyword = deferredKeyword.trim().toLowerCase();
     if (!effectiveKeyword) {
       return policies;
     }
@@ -48,14 +56,10 @@ export function PoliciesPage() {
         .toLowerCase()
         .includes(effectiveKeyword)
     );
-  }, [globalSearch, keyword, policies]);
+  }, [deferredKeyword, policies]);
 
   const activeCount = policies.filter((policy) => policy.enabled).length;
   const disabledCount = policies.length - activeCount;
-
-  const resetFilters = () => {
-    setKeyword("");
-  };
 
   const openCreateDialog = () => {
     setEditingPolicy(null);

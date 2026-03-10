@@ -36,6 +36,7 @@ export function TasksPage() {
     policies,
     loading,
     globalSearch,
+    setGlobalSearch,
     createTask,
     deleteTask,
     triggerTask,
@@ -55,7 +56,7 @@ export function TasksPage() {
     keyword: { key: keywordStorageKey, default: "" },
     status: { key: statusStorageKey, default: "all" },
     node: { key: nodeStorageKey, default: "all" },
-  }, globalSearch);
+  }, globalSearch, setGlobalSearch);
   const [viewModeRaw, setViewModeRaw] =
     usePersistentState<string>(viewStorageKey, "cards");
 

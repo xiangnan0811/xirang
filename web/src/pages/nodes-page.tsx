@@ -58,6 +58,7 @@ export function NodesPage() {
     sshKeys,
     loading,
     globalSearch,
+    setGlobalSearch,
     createNode,
     updateNode,
     deleteNode,
@@ -79,7 +80,7 @@ export function NodesPage() {
     status: { key: statusStorageKey, default: "all" },
     tag: { key: tagStorageKey, default: "all" },
     sort: { key: sortStorageKey, default: "status" },
-  }, globalSearch);
+  }, globalSearch, setGlobalSearch);
   const [viewMode, setViewMode] = usePersistentState<ViewMode>(
     viewStorageKey,
     "cards"

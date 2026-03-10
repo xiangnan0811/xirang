@@ -120,6 +120,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
       },
     ],
     globalSearch: "",
+    setGlobalSearch: vi.fn(),
     retryAlert: vi.fn().mockResolvedValue(undefined),
     acknowledgeAlert: vi.fn().mockResolvedValue(undefined),
     resolveAlert: vi.fn().mockResolvedValue(undefined),
@@ -385,5 +386,34 @@ describe("NotificationsPage", () => {
       expect(ctx.toggleIntegration).toHaveBeenCalledWith("int-1");
     });
     expect(toastErrorMock).toHaveBeenCalledWith("启停失败");
+  });
+
+  it("重置筛选时会同时清空全局搜索并恢复告警列表", async () => {
+    const user = userEvent.setup();
+    const setGlobalSearchMock = vi.fn((value: string) => {
+      createContext({
+        globalSearch: value,
+        setGlobalSearch: setGlobalSearchMock,
+      });
+    });
+
+    createContext({
+      globalSearch: "does-not-match",
+      setGlobalSearch: setGlobalSearchMock,
+    });
+
+    const view = render(<NotificationsPage />);
+
+    expect(await screen.findByText("当前筛选 0 / 2 条告警")).toBeInTheDocument();
+    expect(screen.getByText("当前筛选条件下没有待处理通知")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "重置筛选" })[0]);
+
+    expect(setGlobalSearchMock).toHaveBeenCalledWith("");
+
+    view.rerender(<NotificationsPage />);
+
+    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
+    expect(screen.getByText("连接失败")).toBeInTheDocument();
   });
 });

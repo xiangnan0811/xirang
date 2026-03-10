@@ -53,7 +53,8 @@ function writeStorage(key: string, value: string): void {
  */
 export function usePageFilters<C extends FilterConfig>(
   config: C,
-  globalSearch?: string
+  globalSearch?: string,
+  setGlobalSearch?: (value: string) => void,
 ): UsePageFiltersReturn<C> {
   type StateShape = Record<string, string>;
 
@@ -105,7 +106,8 @@ export function usePageFilters<C extends FilterConfig>(
       defaults[name] = field.default;
     }
     setState(defaults);
-  }, [entries]);
+    setGlobalSearch?.("");
+  }, [entries, setGlobalSearch]);
 
   // Build the return object with individual setters
   return useMemo(() => {

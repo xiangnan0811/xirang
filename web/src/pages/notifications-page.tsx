@@ -18,6 +18,7 @@ export function NotificationsPage() {
     tasks,
     loading,
     globalSearch,
+    setGlobalSearch,
     retryAlert,
     acknowledgeAlert,
     resolveAlert,
@@ -122,6 +123,7 @@ export function NotificationsPage() {
           integrations={integrations}
           loading={loading}
           globalSearch={globalSearch}
+          setGlobalSearch={setGlobalSearch}
           retryAlert={retryAlert}
           acknowledgeAlert={acknowledgeAlert}
           resolveAlert={resolveAlert}

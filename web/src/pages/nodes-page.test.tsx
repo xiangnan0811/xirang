@@ -115,6 +115,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     ],
     loading: false,
     globalSearch: "",
+    setGlobalSearch: vi.fn(),
     createNode: vi.fn().mockResolvedValue(3),
     updateNode: vi.fn().mockResolvedValue(undefined),
     deleteNode: vi.fn().mockResolvedValue(undefined),
@@ -263,5 +264,42 @@ describe("NodesPage", () => {
     expect(toastSuccessMock).not.toHaveBeenCalledWith(
       expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
     );
+  });
+
+  it("重置筛选时会同时清空全局搜索并恢复节点列表", async () => {
+    const user = userEvent.setup();
+    const setGlobalSearchMock = vi.fn((value: string) => {
+      createContext({
+        globalSearch: value,
+        setGlobalSearch: setGlobalSearchMock,
+      });
+    });
+
+    createContext({
+      globalSearch: "does-not-match",
+      setGlobalSearch: setGlobalSearchMock,
+    });
+
+    const view = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("当前筛选 0 / 2 个节点")).toBeInTheDocument();
+    expect(screen.getAllByText("当前筛选条件下暂无节点")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "重置" }));
+
+    expect(setGlobalSearchMock).toHaveBeenCalledWith("");
+
+    view.rerender(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("当前筛选 2 / 2 个节点")).toBeInTheDocument();
+    expect(screen.getAllByText("node-prod-1")).toHaveLength(2);
   });
 });
