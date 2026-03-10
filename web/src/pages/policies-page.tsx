@@ -214,7 +214,7 @@ export function PoliciesPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                       aria-label={`删除策略 ${policy.name}`}
                       onClick={() => onDelete(policy)}
                     >
@@ -292,7 +292,7 @@ export function PoliciesPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                            className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                             aria-label={`删除策略 ${policy.name}`}
                             onClick={() => onDelete(policy)}
                           >

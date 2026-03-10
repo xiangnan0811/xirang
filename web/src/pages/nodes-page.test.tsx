@@ -196,6 +196,48 @@ describe("NodesPage", () => {
     expect(navigateMock).toHaveBeenCalledWith("/app/logs?node=node-prod-1");
   });
 
+  it("持久化列表视图时移动端仍展示卡片视图", () => {
+    window.localStorage.setItem(
+      "xirang.nodes.view",
+      JSON.stringify("list")
+    );
+    createContext();
+
+    const { container } = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    // list 模式下 NodesGrid 包裹 div 应带 md:hidden，移动端仅展示卡片
+    const gridWrapper = container.querySelector(".md\\:hidden");
+    expect(gridWrapper).not.toBeNull();
+
+    // 同时应渲染 NodesTable（仅桌面可见）
+    expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+
+  it("移动端「更多」菜单可展开导入导出操作", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    // 移动端「更多」按钮存在
+    const moreButton = screen.getByRole("button", { name: "更多" });
+    expect(moreButton).toBeInTheDocument();
+
+    await user.click(moreButton);
+
+    // 菜单项可见
+    expect(screen.getByRole("menuitem", { name: /CSV 导入/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /下载模板/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
+  });
+
   it("测试连接失败时走错误提示而不是成功提示", async () => {
     const user = userEvent.setup();
 
@@ -212,7 +254,7 @@ describe("NodesPage", () => {
       </MemoryRouter>
     );
 
-    const testButtons = screen.getAllByRole("button", { name: "测试连接" });
+    const testButtons = screen.getAllByRole("button", { name: /测试节点.*连接/ });
     await user.click(testButtons[0]);
 
     expect(toastErrorMock).toHaveBeenCalledWith(

@@ -4,7 +4,6 @@ import {
   CheckSquare,
   Download,
   FileUp,
-  KeyRound,
   MoreHorizontal,
   ServerCog,
   Trash2,
@@ -455,6 +454,7 @@ export function NodesPage() {
   return (
     <div className="animate-fade-in space-y-5">
       <StatCardsSection
+        className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
             title: "节点总数",
@@ -486,77 +486,133 @@ export function NodesPage() {
 
       <Card className="overflow-hidden border-border/75">
         <CardContent className="space-y-4 pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={openCreateDialog}>
-                <ServerCog className="mr-1 size-3.5" />
-                新增节点
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/app/ssh-keys")}
-              >
-                <KeyRound className="mr-1 size-3.5" />
-                SSH Key 管理
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  csvInputRef.current?.click();
-                }}
-              >
-                <FileUp className="mr-1 size-3.5" />
-                CSV 导入
-              </Button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDownloadTemplate}
-              >
-                <Download className="mr-1 size-3.5" />
-                模板
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleExportCSV}>
-                <Download className="mr-1 size-3.5" />
-                导出
-              </Button>
-              <input
-                ref={csvInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (!file) {
-                    return;
-                  }
-                  void file
-                    .text()
-                    .then((content) => handleImportCSV(content))
-                    .catch((error) =>
-                      toast.error(getErrorMessage(error))
-                    );
-                  event.target.value = "";
-                }}
-              />
-            </div>
+          {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
+              <ServerCog className="mr-1 size-3.5" />
+              新增节点
+            </Button>
+            {/* 移动端：收纳导入/模板/导出到下拉菜单 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="shrink-0 md:hidden">
+                  <MoreHorizontal className="mr-1 size-3.5" />
+                  更多
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => csvInputRef.current?.click()}>
+                  <FileUp className="mr-2 size-3.5" />
+                  CSV 导入
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleDownloadTemplate}>
+                  <Download className="mr-2 size-3.5" />
+                  下载模板
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportCSV}>
+                  <Download className="mr-2 size-3.5" />
+                  导出节点
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {/* 平板/桌面端：展示独立按钮 */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden shrink-0 md:inline-flex"
+              onClick={() => {
+                csvInputRef.current?.click();
+              }}
+            >
+              <FileUp className="mr-1 size-3.5" />
+              CSV 导入
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden shrink-0 md:inline-flex"
+              onClick={handleDownloadTemplate}
+            >
+              <Download className="mr-1 size-3.5" />
+              模板
+            </Button>
+            <Button variant="outline" size="sm" className="hidden shrink-0 md:inline-flex" onClick={handleExportCSV}>
+              <Download className="mr-1 size-3.5" />
+              导出
+            </Button>
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) {
+                  return;
+                }
+                void file
+                  .text()
+                  .then((content) => handleImportCSV(content))
+                  .catch((error) =>
+                    toast.error(getErrorMessage(error))
+                  );
+                event.target.value = "";
+              }}
+            />
+            {/* 分隔线：区分操作与视图/工具 */}
+            <div className="hidden h-6 w-px bg-border/60 md:block" aria-hidden="true" />
+            <ViewModeToggle
+              className="hidden md:inline-flex"
+              value={viewMode}
+              onChange={setViewMode}
+              groupLabel="节点视图切换"
+              cardsButtonLabel="节点卡片视图"
+              listButtonLabel="节点列表视图"
+            />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" aria-label="批量操作">
+                  <MoreHorizontal className="mr-1 size-4" />
+                  批量{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ""}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
+                  <CheckSquare className="mr-2 size-4" />
+                  {allVisibleSelected ? "取消全选" : "全选当前筛选"}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!selectedNodeIds.length}
+                  onClick={() => setSelectedNodeIds([])}
+                >
+                  清空选择
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={!selectedNodeIds.length}
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => void handleBulkDelete()}
+                >
+                  <Trash2 className="mr-2 size-3.5" />
+                  删除 ({selectedNodeIds.length})
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button size="sm" variant="outline" onClick={resetFilters}>
+              重置
+            </Button>
           </div>
 
-          <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[2.5fr_1fr_1fr_1fr_auto] items-center">
+          <FilterPanel sticky={false} className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-[2fr_1fr_1fr_1fr] items-center">
             <SearchInput
-              containerClassName="w-full"
+              containerClassName="w-full col-span-2 md:col-span-3 xl:col-span-1"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               placeholder="按名称 / 标签 / IP / 用户名 / 连接状态筛选"
               aria-label="节点关键词筛选"
             />
             <AppSelect
-              className="w-full"
+              containerClassName="w-full"
               aria-label="节点状态筛选"
               value={statusFilter}
               onChange={(event) =>
@@ -569,7 +625,7 @@ export function NodesPage() {
               <option value="offline">离线</option>
             </AppSelect>
             <AppSelect
-              className="w-full"
+              containerClassName="w-full"
               aria-label="节点标签筛选"
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
@@ -581,7 +637,7 @@ export function NodesPage() {
               ))}
             </AppSelect>
             <AppSelect
-              className="w-full"
+              containerClassName="w-full col-span-2 md:col-span-1"
               aria-label="节点排序方式"
               value={sortBy}
               onChange={(event) =>
@@ -594,52 +650,12 @@ export function NodesPage() {
               <option value="disk-low">磁盘余量升序</option>
               <option value="backup-recent">最近备份优先</option>
             </AppSelect>
-            <div className="flex items-center gap-2 justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
-              <ViewModeToggle
-                value={viewMode}
-                onChange={setViewMode}
-                groupLabel="节点视图切换"
-                cardsButtonLabel="节点卡片视图"
-                listButtonLabel="节点列表视图"
-              />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="outline" aria-label="批量操作">
-                    <MoreHorizontal className="mr-1 size-4" />
-                    批量{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ""}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
-                    <CheckSquare className="mr-2 size-4" />
-                    {allVisibleSelected ? "取消全选" : "全选当前筛选"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!selectedNodeIds.length}
-                    onClick={() => setSelectedNodeIds([])}
-                  >
-                    清空选择
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={!selectedNodeIds.length}
-                    className="text-destructive focus:text-destructive"
-                    onClick={() => void handleBulkDelete()}
-                  >
-                    <Trash2 className="mr-2 size-3.5" />
-                    删除 ({selectedNodeIds.length})
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button size="sm" variant="outline" onClick={resetFilters}>
-                重置
-              </Button>
-            </div>
           </FilterPanel>
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
 
-          {viewMode === "cards" ? (
+          {/* 移动端始终显示卡片视图（viewMode 可能从桌面端持久化为 list） */}
+          <div className={viewMode === "list" ? "md:hidden" : undefined}>
             <NodesGrid
               loading={loading}
               sortedNodes={sortedNodes}
@@ -661,7 +677,8 @@ export function NodesPage() {
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
             />
-          ) : (
+          </div>
+          {viewMode === "list" && (
             <NodesTable
               loading={loading}
               sortedNodes={sortedNodes}

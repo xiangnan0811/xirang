@@ -264,7 +264,7 @@
   }
 
   .app-select {
-    @apply h-10 rounded-lg border border-input/80 bg-background/80 px-3 text-sm text-foreground;
+    @apply h-10 appearance-none rounded-lg border border-input/80 bg-background/80 pl-3 pr-9 text-sm text-foreground;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     transition: border-color var(--duration-normal) var(--ease-enter),
       box-shadow var(--duration-normal) var(--ease-enter),

@@ -112,7 +112,7 @@ export function TaskCreateDialog({
 
       <div>
         <label htmlFor="task-create-node" className="mb-1 block text-sm font-medium">目标节点</label>
-        <AppSelect id="task-create-node" className="w-full"
+        <AppSelect id="task-create-node" containerClassName="w-full"
           value={draft.nodeId}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -133,7 +133,7 @@ export function TaskCreateDialog({
         </label>
         <AppSelect
           id="task-create-policy"
-          className="w-full"
+          containerClassName="w-full"
           value={draft.policyId}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, policyId: event.target.value }))

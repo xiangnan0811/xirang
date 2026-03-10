@@ -395,7 +395,7 @@ export function LogsPage() {
         <CardContent className="space-y-4 pt-6">
           <FilterPanel sticky={false} className="flex flex-wrap items-center gap-3">
             <AppSelect
-              className="w-[140px]"
+              containerClassName="w-[140px]"
               aria-label="日志节点筛选"
               value={selectedNode}
               onChange={(event) => {
@@ -413,7 +413,7 @@ export function LogsPage() {
             </AppSelect>
 
             <AppSelect
-              className="w-[160px]"
+              containerClassName="w-[160px]"
               aria-label="日志任务筛选"
               value={selectedTask}
               onChange={(event) => {

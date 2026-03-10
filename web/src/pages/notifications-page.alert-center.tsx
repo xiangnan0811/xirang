@@ -143,7 +143,7 @@ export function AlertCenter({
             placeholder="搜索节点 / 任务 / 错误码"
           />
           <AppSelect
-            className="w-full"
+            containerClassName="w-full"
             aria-label="告警级别筛选"
             value={severityFilter}
             onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
@@ -154,7 +154,7 @@ export function AlertCenter({
             <option value="info">信息</option>
           </AppSelect>
           <AppSelect
-            className="w-full"
+            containerClassName="w-full"
             aria-label="告警状态筛选"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}

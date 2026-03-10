@@ -178,7 +178,7 @@ export function IntegrationCreateDialog({
           </label>
           <AppSelect
             id="create-integration-type"
-            className="w-full"
+            containerClassName="w-full"
             value={draft.type}
             onChange={(event) =>
               setDraft((prev) => ({

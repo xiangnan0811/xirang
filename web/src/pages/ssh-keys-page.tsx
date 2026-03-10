@@ -185,7 +185,7 @@ export function SSHKeysPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => onDelete(key)}
                       aria-label="删除"
                     >

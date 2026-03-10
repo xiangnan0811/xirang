@@ -116,7 +116,7 @@ export function SSHKeyEditorDialog({
 
       <div>
         <label htmlFor="ssh-key-edit-type" className="mb-1 block text-sm font-medium">密钥类型</label>
-        <AppSelect id="ssh-key-edit-type" className="w-full"
+        <AppSelect id="ssh-key-edit-type" containerClassName="w-full"
           value={draft.keyType}
           onChange={(event) =>
             setDraft((prev) => ({

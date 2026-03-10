@@ -202,7 +202,7 @@ export function AppShell() {
               variant="ghost"
               size="icon"
               onClick={consoleData.refresh}
-              className="hidden md:inline-flex size-8 text-muted-foreground hover:text-foreground"
+              className="size-8 text-muted-foreground hover:text-foreground"
               disabled={consoleData.loading}
               aria-busy={consoleData.loading}
               title="刷新数据"

@@ -181,6 +181,7 @@ export function TasksPage() {
   return (
     <div className="animate-fade-in space-y-5">
       <StatCardsSection
+        className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
             title: "待执行",
@@ -239,7 +240,7 @@ export function TasksPage() {
             />
 
             <AppSelect
-              className="w-full"
+              containerClassName="w-full"
               aria-label="任务状态筛选"
               value={statusFilter}
               onChange={(event) =>
@@ -256,7 +257,7 @@ export function TasksPage() {
             </AppSelect>
 
             <AppSelect
-              className="w-full"
+              containerClassName="w-full"
               aria-label="任务节点筛选"
               value={nodeFilter}
               onChange={(event) => setNodeFilter(event.target.value)}

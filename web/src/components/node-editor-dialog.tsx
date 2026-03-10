@@ -203,7 +203,7 @@ export function NodeEditorDialog({
 
       <div>
         <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">认证方式</label>
-        <AppSelect id="node-edit-auth" className="w-full"
+        <AppSelect id="node-edit-auth" containerClassName="w-full"
           value={draft.authType}
           onChange={(event) =>
               setDraft((prev) => ({
@@ -220,7 +220,7 @@ export function NodeEditorDialog({
       {draft.authType === "key" ? (
         <div>
           <label htmlFor="node-edit-ssh-key" className="mb-1 block text-sm font-medium">SSH Key</label>
-          <AppSelect id="node-edit-ssh-key" className="w-full"
+          <AppSelect id="node-edit-ssh-key" containerClassName="w-full"
             value={draft.keyId}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, keyId: event.target.value }))
@@ -279,7 +279,7 @@ export function NodeEditorDialog({
               </label>
               <AppSelect
                 id="node-edit-inline-key-type"
-                className="w-full"
+                containerClassName="w-full"
                 value={draft.inlineKeyType}
                 onChange={(event) =>
                   setDraft((prev) => ({

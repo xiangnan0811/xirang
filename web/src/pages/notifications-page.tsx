@@ -76,6 +76,7 @@ export function NotificationsPage() {
   return (
     <div className="space-y-5 animate-fade-in">
       <StatCardsSection
+        className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
             title: "待处理告警",

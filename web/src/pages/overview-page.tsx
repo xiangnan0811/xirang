@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { TrendingUp, Clock, AlertTriangle, CheckCircle2, Maximize2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -201,54 +202,41 @@ export function OverviewPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <section className="grid gap-1.5 sm:gap-3 grid-cols-4 animate-slide-up [animation-delay:150ms]">
-        <Card className="glass-panel border-success/30 bg-gradient-to-br from-success/10 via-transparent to-transparent">
-          <CardHeader className="pb-1 sm:pb-2 px-3 sm:px-6">
-            <CardTitle className="text-[10px] sm:text-sm font-medium text-muted-foreground truncate">节点健康率</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 sm:px-6">
-            <div className="flex items-center gap-1 sm:gap-2">
-              <p className="text-lg sm:text-3xl font-semibold">{healthRate}<span className="text-[10px] sm:text-sm font-normal text-muted-foreground ml-0.5 sm:ml-1">%</span></p>
-              {healthRate >= 90 ? (
-                <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" />
-              ) : null}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground hidden sm:block">
-              {overview.healthyNodes}/{overview.totalNodes} 节点在线
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-info/30 bg-gradient-to-br from-info/10 via-transparent to-transparent">
-          <CardHeader className="pb-1 sm:pb-2 px-3 sm:px-6">
-            <CardTitle className="text-[10px] sm:text-sm font-medium text-muted-foreground truncate">任务成功率</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 sm:px-6">
-            <p className="text-lg sm:text-3xl font-semibold">{overview.overallSuccessRate}<span className="text-[10px] sm:text-sm font-normal text-muted-foreground ml-0.5 sm:ml-1">%</span></p>
-            <p className="mt-1 text-sm text-muted-foreground hidden sm:block">过去 24h 失败 {overview.failedTasks24h} 次</p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-warning/30 bg-gradient-to-br from-warning/10 via-transparent to-transparent">
-          <CardHeader className="pb-1 sm:pb-2 px-3 sm:px-6">
-            <CardTitle className="text-[10px] sm:text-sm font-medium text-muted-foreground truncate">当前吞吐</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 sm:px-6">
-            <p className="text-lg sm:text-3xl font-semibold">{overview.avgSyncMbps}<span className="text-[10px] sm:text-sm font-normal text-muted-foreground ml-0.5 sm:ml-1">Mbps</span></p>
-            <p className="mt-1 text-sm text-muted-foreground hidden sm:block">执行中任务 {overview.runningTasks} 个</p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-primary/30 bg-gradient-to-br from-primary/10 via-transparent to-transparent">
-          <CardHeader className="pb-1 sm:pb-2 px-3 sm:px-6">
-            <CardTitle className="text-[10px] sm:text-sm font-medium text-muted-foreground truncate">策略覆盖</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 sm:px-6">
-            <p className="text-lg sm:text-3xl font-semibold">{overview.activePolicies}</p>
-            <p className="mt-1 text-sm text-muted-foreground hidden sm:block">已启用策略（共 {tasks.length} 任务）</p>
-          </CardContent>
-        </Card>
-      </section>
+      <StatCardsSection
+        className="grid-cols-4 animate-slide-up [animation-delay:150ms]"
+        items={[
+          {
+            title: "节点健康率",
+            value: healthRate,
+            unit: "%",
+            icon: healthRate >= 90 ? (
+              <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" />
+            ) : undefined,
+            description: `${overview.healthyNodes}/${overview.totalNodes} 节点在线`,
+            tone: "success",
+          },
+          {
+            title: "任务成功率",
+            value: overview.overallSuccessRate,
+            unit: "%",
+            description: `过去 24h 失败 ${overview.failedTasks24h} 次`,
+            tone: "info",
+          },
+          {
+            title: "当前吞吐",
+            value: overview.avgSyncMbps,
+            unit: "Mbps",
+            description: `执行中任务 ${overview.runningTasks} 个`,
+            tone: "warning",
+          },
+          {
+            title: "策略覆盖",
+            value: overview.activePolicies,
+            description: `已启用策略（共 ${tasks.length} 任务）`,
+            tone: "primary",
+          },
+        ]}
+      />
 
       <section className="grid gap-4 grid-cols-1 lg:grid-cols-2 animate-slide-up [animation-delay:200ms]">
         <div className="flex flex-col gap-2 w-full min-w-0">
@@ -284,7 +272,7 @@ export function OverviewPage() {
                   暂无可展示节点，请先在节点页完成接入。
                 </p>
               ) : (
-                  <div className="flex flex-col flex-1 min-h-0 h-full">
+                <div className="flex flex-col flex-1 min-h-0 h-full">
                   <div
                     role="group"
                     aria-label={`主机状态矩阵预览，共显示 ${previewNodes.length} / ${nodes.length} 台`}
@@ -332,7 +320,7 @@ export function OverviewPage() {
         </div>
 
         <div className="flex flex-col w-full min-w-0">
-              <Card className="glass-panel border-border/70 flex-1 flex flex-col min-h-0">
+          <Card className="glass-panel border-border/70 flex-1 flex flex-col min-h-0">
             <CardHeader className="pb-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-base">流量与活动趋势（{TRAFFIC_WINDOW_LABELS[trafficWindow]}）</CardTitle>
@@ -550,55 +538,55 @@ export function OverviewPage() {
                   </thead>
                   <tbody className="divide-y divide-border/30">
                     {recentTasks.map((task) => {
-                        // Estimate transfer size if speed exists and it's not pending/retrying
-                        let transferData = "-";
-                        if (task.speedMbps > 0) {
-                          // Rough estimation for display purposes during active transfer
-                          transferData = `≈ ${(task.speedMbps / 8).toFixed(1)} MB/s`;
-                        }
+                      // Estimate transfer size if speed exists and it's not pending/retrying
+                      let transferData = "-";
+                      if (task.speedMbps > 0) {
+                        // Rough estimation for display purposes during active transfer
+                        transferData = `≈ ${(task.speedMbps / 8).toFixed(1)} MB/s`;
+                      }
 
-                        let StatusIcon = Clock;
-                        let statusColor = "text-muted-foreground";
-                        let statusLabel = "队列中";
+                      let StatusIcon = Clock;
+                      let statusColor = "text-muted-foreground";
+                      let statusLabel = "队列中";
 
-                        switch (task.status) {
-                          case "success":
-                            StatusIcon = CheckCircle2;
-                            statusColor = "text-success";
-                            statusLabel = "成功";
-                            break;
-                          case "failed":
-                            StatusIcon = AlertTriangle;
-                            statusColor = "text-destructive";
-                            statusLabel = "失败";
-                            break;
-                          case "running":
-                            StatusIcon = TrendingUp;
-                            statusColor = "text-info";
-                            statusLabel = "同步中";
-                            break;
-                          case "retrying":
-                            StatusIcon = AlertTriangle;
-                            statusColor = "text-warning";
-                            statusLabel = "重试中";
-                            break;
-                        }
+                      switch (task.status) {
+                        case "success":
+                          StatusIcon = CheckCircle2;
+                          statusColor = "text-success";
+                          statusLabel = "成功";
+                          break;
+                        case "failed":
+                          StatusIcon = AlertTriangle;
+                          statusColor = "text-destructive";
+                          statusLabel = "失败";
+                          break;
+                        case "running":
+                          StatusIcon = TrendingUp;
+                          statusColor = "text-info";
+                          statusLabel = "同步中";
+                          break;
+                        case "retrying":
+                          StatusIcon = AlertTriangle;
+                          statusColor = "text-warning";
+                          statusLabel = "重试中";
+                          break;
+                      }
 
-                        return (
-                          <tr key={task.id} className="hover:bg-muted/10 transition-colors">
-                            <td className="px-4 py-2.5 font-medium">{task.nodeName}</td>
-                            <td className="px-4 py-2.5 text-muted-foreground">{task.name || task.policyName}</td>
-                            <td className="px-4 py-2.5">
-                              <span className={`inline-flex items-center gap-1.5 ${statusColor}`}>
-                                <StatusIcon className="size-3.5" />
-                                {statusLabel}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2.5 font-mono text-xs">{transferData}</td>
-                            <td className="px-4 py-2.5 text-right text-muted-foreground text-xs">{task.updatedAt || "-"}</td>
-                          </tr>
-                        );
-                      })}
+                      return (
+                        <tr key={task.id} className="hover:bg-muted/10 transition-colors">
+                          <td className="px-4 py-2.5 font-medium">{task.nodeName}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{task.name || task.policyName}</td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-flex items-center gap-1.5 ${statusColor}`}>
+                              <StatusIcon className="size-3.5" />
+                              {statusLabel}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-xs">{transferData}</td>
+                          <td className="px-4 py-2.5 text-right text-muted-foreground text-xs">{task.updatedAt || "-"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

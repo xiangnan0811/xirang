@@ -26,7 +26,7 @@ describe("StatCardsSection", () => {
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByText("健康率 92%")).toBeInTheDocument();
 
-    const successCard = screen.getByText("在线节点").closest(".glass-card");
+    const successCard = screen.getByText("在线节点").closest(".glass-panel");
     expect(successCard).not.toBeNull();
     expect(successCard).toHaveClass("border-success/30");
 
@@ -42,8 +42,53 @@ describe("StatCardsSection", () => {
     const description = screen.getByText("健康率 92%");
     expect(description).toHaveClass("hidden", "sm:block");
 
-    const infoCard = screen.getByText("失败任务").closest(".glass-card");
+    const infoCard = screen.getByText("失败任务").closest(".glass-panel");
     expect(infoCard).not.toBeNull();
     expect(infoCard).toHaveClass("border-info/30");
+  });
+
+  it("渲染 unit 后缀标注", () => {
+    render(
+      <StatCardsSection
+        items={[
+          {
+            title: "节点健康率",
+            value: 95,
+            unit: "%",
+            tone: "success",
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText("节点健康率")).toBeInTheDocument();
+    expect(screen.getByText("95")).toBeInTheDocument();
+    expect(screen.getByText("%")).toBeInTheDocument();
+  });
+
+  it("渲染 icon + unit + description 组合", () => {
+    render(
+      <StatCardsSection
+        items={[
+          {
+            title: "当前吞吐",
+            value: 128,
+            unit: "Mbps",
+            icon: <span data-testid="throughput-icon">📊</span>,
+            description: "近 5 分钟平均值",
+            tone: "primary",
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText("当前吞吐")).toBeInTheDocument();
+    expect(screen.getByText("128")).toBeInTheDocument();
+    expect(screen.getByText("Mbps")).toBeInTheDocument();
+    expect(screen.getByTestId("throughput-icon")).toBeInTheDocument();
+    expect(screen.getByText("近 5 分钟平均值")).toBeInTheDocument();
+
+    const card = screen.getByText("当前吞吐").closest(".glass-panel");
+    expect(card).toHaveClass("border-primary/30");
   });
 });

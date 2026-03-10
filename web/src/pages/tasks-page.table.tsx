@@ -123,7 +123,7 @@ export const TasksTable = React.memo(function TasksTable({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
+                        className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                         aria-label="删除任务"
                         disabled={isPendingAny}
                         onClick={() => void handleDelete(task.id)}

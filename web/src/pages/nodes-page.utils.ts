@@ -20,10 +20,16 @@ export type CSVNodeRow = {
 };
 
 export function escapeCSVValue(value: string): string {
-  if (value.includes(",") || value.includes("\"") || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`;
+  // Prevent spreadsheet formula injection: detect formula prefixes (=, +, -, @, tab, CR)
+  // even after leading whitespace or control characters that spreadsheets may strip.
+  let safe = value;
+  if (/^[\s\x00-\x1f]*[=+\-@\t\r]/.test(safe)) {
+    safe = `'${safe}`;
   }
-  return value;
+  if (safe.includes(",") || safe.includes("\"") || safe.includes("\n") || safe !== value) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
 }
 
 export function parseCSVRows(content: string): CSVNodeRow[] {

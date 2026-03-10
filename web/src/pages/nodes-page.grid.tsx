@@ -60,6 +60,25 @@ export const NodesGrid = React.memo(function NodesGrid({
           </Button>
         </div>
 
+        {loading ? (
+          <LoadingState
+            title="节点数据加载中"
+            description="正在刷新节点探测状态与可用性..."
+            rows={3}
+          />
+        ) : null}
+
+        {!loading && !sortedNodes.length ? (
+          <FilteredEmptyState
+            title="当前筛选条件下暂无节点"
+            description="可以重置筛选条件，或新增一个节点继续测试。"
+            onReset={resetFilters}
+            onCreate={openCreateDialog}
+            createLabel="新增节点"
+            createIcon={ServerCog}
+          />
+        ) : null}
+
         {sortedNodes.map((node) => {
           const status = getNodeStatusMeta(node.status);
           const checked = selectedNodeSet.has(node.id);
@@ -109,7 +128,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label="测试连接"
+                    aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
@@ -119,7 +138,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`查看节点 ${node.name} 日志`}
+                    aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
                     onClick={() =>
                       navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                     }
@@ -130,7 +149,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label="编辑节点"
+                    aria-label={`编辑节点 ${node.name}`} title="编辑节点"
                     onClick={() => openEditDialog(node)}
                   >
                     <Wrench className="size-4" />
@@ -138,8 +157,8 @@ export const NodesGrid = React.memo(function NodesGrid({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                    aria-label="删除节点"
+                    className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                    aria-label={`删除节点 ${node.name}`} title="删除节点"
                     onClick={() => onDeleteNode(node)}
                   >
                     <Trash2 className="size-4" />
@@ -268,7 +287,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label="测试连接"
+                    aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
@@ -278,7 +297,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`查看节点 ${node.name} 日志`}
+                    aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
                     onClick={() =>
                       navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                     }
@@ -289,7 +308,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label="编辑节点"
+                    aria-label={`编辑节点 ${node.name}`} title="编辑节点"
                     onClick={() => openEditDialog(node)}
                   >
                     <Wrench className="size-4" />
@@ -297,8 +316,8 @@ export const NodesGrid = React.memo(function NodesGrid({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                    aria-label="删除节点"
+                    className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                    aria-label={`删除节点 ${node.name}`} title="删除节点"
                     onClick={() => onDeleteNode(node)}
                   >
                     <Trash2 className="size-4" />

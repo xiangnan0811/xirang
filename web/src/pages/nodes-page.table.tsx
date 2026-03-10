@@ -165,7 +165,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="测试连接"
+                        aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
                         onClick={() => void onTestNode(node)}
                         disabled={testingNodeId === node.id}
                       >
@@ -175,7 +175,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`查看节点 ${node.name} 日志`}
+                        aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
                         onClick={() =>
                           navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                         }
@@ -186,7 +186,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="编辑节点"
+                        aria-label={`编辑节点 ${node.name}`} title="编辑节点"
                         onClick={() => openEditDialog(node)}
                       >
                         <Wrench className="size-4" />
@@ -194,8 +194,8 @@ export const NodesTable = React.memo(function NodesTable({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="size-8 text-danger/80 hover:bg-danger/10 hover:text-danger"
-                        aria-label="删除节点"
+                        className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={`删除节点 ${node.name}`} title="删除节点"
                         onClick={() => onDeleteNode(node)}
                       >
                         <Trash2 className="size-4" />
