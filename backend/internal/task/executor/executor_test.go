@@ -145,8 +145,8 @@ func TestRsyncExecutorRejectsStaleNodePrivateKeyWhenSSHKeyIDPresent(t *testing.T
 	if err == nil {
 		t.Fatalf("期望在 SSHKey 关联缺失时失败")
 	}
-	if !strings.Contains(err.Error(), "ssh_key_id=42") {
-		t.Fatalf("期望错误信息包含 ssh_key_id，实际: %v", err)
+	if !strings.Contains(err.Error(), "节点绑定的密钥不存在") {
+		t.Fatalf("期望错误信息提示密钥不存在，实际: %v", err)
 	}
 	if strings.Contains(err.Error(), "私钥格式无效") {
 		t.Fatalf("不应回退使用 node.private_key 触发私钥格式错误，实际: %v", err)
@@ -175,7 +175,7 @@ func TestRsyncExecutorFailsWhenKeyAuthHasNoKey(t *testing.T) {
 	if err == nil {
 		t.Fatalf("期望密钥缺失时报错")
 	}
-	if !strings.Contains(err.Error(), "密钥认证未配置 private_key 或 ssh_key_id") {
+	if !strings.Contains(err.Error(), "密钥认证未配置") {
 		t.Fatalf("期望返回密钥缺失错误，实际: %v", err)
 	}
 	if exitCode != -1 {

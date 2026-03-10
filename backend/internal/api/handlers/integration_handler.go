@@ -92,22 +92,22 @@ func validatePublicEndpointHost(host string) error {
 		return fmt.Errorf("主机地址不能为空")
 	}
 	if normalizedHost == "localhost" || strings.HasSuffix(normalizedHost, ".localhost") {
-		return fmt.Errorf("禁止使用回环地址: %s", host)
+		return fmt.Errorf("禁止使用本地回环地址")
 	}
 
 	if ip, err := netip.ParseAddr(normalizedHost); err == nil {
 		if isPrivateOrLoopback(ip.Unmap()) {
-			return fmt.Errorf("禁止使用私网或回环地址: %s", normalizedHost)
+			return fmt.Errorf("禁止使用内网或回环地址")
 		}
 		return nil
 	}
 
 	resolved, err := resolveHostAddrs(normalizedHost)
 	if err != nil {
-		return fmt.Errorf("解析主机失败: %v", err)
+		return fmt.Errorf("无法解析主机地址，请检查域名是否正确")
 	}
 	if len(resolved) == 0 {
-		return fmt.Errorf("主机未解析到可用 IP")
+		return fmt.Errorf("主机地址无法解析，请检查域名是否正确")
 	}
 	for _, ip := range resolved {
 		addr, ok := netip.AddrFromSlice(ip)
@@ -115,7 +115,7 @@ func validatePublicEndpointHost(host string) error {
 			continue
 		}
 		if isPrivateOrLoopback(addr.Unmap()) {
-			return fmt.Errorf("主机解析到私网或回环地址: %s", ip.String())
+			return fmt.Errorf("该地址指向内网或回环地址，不允许使用")
 		}
 	}
 	return nil

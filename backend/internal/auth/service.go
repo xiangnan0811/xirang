@@ -114,12 +114,12 @@ func (s *Service) CreateUser(username, password, role string) (*model.User, erro
 	if err := s.db.Where("username = ?", normalizedUsername).First(&existing).Error; err == nil {
 		return nil, fmt.Errorf("用户名 %s 已存在", normalizedUsername)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("检查用户名是否存在失败: %w", err)
+		return nil, fmt.Errorf("操作失败，请稍候重试")
 	}
 
 	hash, err := HashPassword(password)
 	if err != nil {
-		return nil, fmt.Errorf("生成用户密码哈希失败: %w", err)
+		return nil, fmt.Errorf("操作失败，请稍候重试")
 	}
 
 	user := &model.User{
@@ -153,7 +153,7 @@ func (s *Service) UpdateUser(userID uint, role *string, password *string) (*mode
 		}
 		hash, err := HashPassword(*password)
 		if err != nil {
-			return nil, fmt.Errorf("生成用户密码哈希失败: %w", err)
+			return nil, fmt.Errorf("操作失败，请稍候重试")
 		}
 		updates["password_hash"] = hash
 	}
@@ -199,7 +199,7 @@ func (s *Service) ChangePassword(userID uint, currentPassword string, newPasswor
 
 	hash, err := HashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("生成用户密码哈希失败: %w", err)
+		return fmt.Errorf("操作失败，请稍候重试")
 	}
 	return s.db.Model(&user).Update("password_hash", hash).Error
 }
@@ -210,6 +210,6 @@ func normalizeRole(role string) (string, error) {
 	case "admin", "operator", "viewer":
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("不支持的角色: %s", role)
+		return "", fmt.Errorf("不支持的角色类型")
 	}
 }

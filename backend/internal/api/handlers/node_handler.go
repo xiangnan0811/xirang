@@ -102,22 +102,22 @@ func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
 	switch req.AuthType {
 	case "password":
 		if req.Password == "" {
-			return fmt.Errorf("密码认证模式下 password 不能为空")
+			return fmt.Errorf("密码认证模式下请填写密码")
 		}
 		return nil
 	case "key":
 		if req.SSHKeyID == nil && req.PrivateKey == "" {
-			return fmt.Errorf("密钥认证模式下需要提供 ssh_key_id 或 private_key")
+			return fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
 		}
 		if req.SSHKeyID != nil {
 			var key model.SSHKey
 			if err := h.db.First(&key, *req.SSHKeyID).Error; err != nil {
-				return fmt.Errorf("ssh key 不存在")
+				return fmt.Errorf("所选密钥不存在，请重新选择")
 			}
 		}
 		return nil
 	default:
-		return fmt.Errorf("不支持的 auth_type")
+		return fmt.Errorf("不支持的认证方式")
 	}
 }
 
@@ -475,12 +475,12 @@ func (h *NodeHandler) resolveKeyContent(node model.Node) (string, string, error)
 		keyID := *node.SSHKeyID
 		var key model.SSHKey
 		if err := h.db.First(&key, keyID).Error; err != nil {
-			return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的 SSH Key 不存在（id=%d），请重新选择", keyID)
+			return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥不存在，请重新选择")
 		}
 		if content := strings.TrimSpace(key.PrivateKey); content != "" {
 			return content, fmt.Sprintf("ssh_key_id=%d", keyID), nil
 		}
-		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的 SSH Key 内容为空（id=%d），请重新保存", keyID)
+		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥内容为空，请重新配置")
 	}
 
 	if content := strings.TrimSpace(node.PrivateKey); content != "" {
@@ -493,7 +493,7 @@ func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, e
 	switch node.AuthType {
 	case "password":
 		if node.Password == "" {
-			return nil, "", fmt.Errorf("密码认证未配置 password")
+			return nil, "", fmt.Errorf("密码认证模式下请填写密码")
 		}
 		return []ssh.AuthMethod{ssh.Password(node.Password)}, "", nil
 	case "key":
@@ -502,14 +502,14 @@ func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, e
 			return nil, "", resolveErr
 		}
 		if keyContent == "" {
-			return nil, "", fmt.Errorf("密钥认证未配置 private_key 或 ssh_key_id")
+			return nil, "", fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
 		}
 		preparedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
 		if err != nil {
 			if strings.TrimSpace(keySource) == "" {
 				keySource = "unknown"
 			}
-			return nil, "", fmt.Errorf("%s（来源: %s）", err.Error(), keySource)
+			return nil, "", fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
 		}
 		signer, err := ssh.ParsePrivateKey([]byte(preparedKey))
 		if err != nil {
@@ -517,7 +517,7 @@ func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, e
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, preparedKey, nil
 	default:
-		return nil, "", fmt.Errorf("不支持的认证模式")
+		return nil, "", fmt.Errorf("不支持的认证方式")
 	}
 }
 

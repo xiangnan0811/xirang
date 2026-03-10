@@ -241,14 +241,14 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 		if reason == "retry" || reason == "cron" {
 			return nil
 		}
-		return fmt.Errorf("服务正在关闭，任务触发已拒绝")
+		return fmt.Errorf("系统维护中，请稍候再试")
 	}
 
 	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
 		if reason == "retry" || reason == "cron" {
 			return nil
 		}
-		return fmt.Errorf("任务已在队列或运行中")
+		return fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
 	defer func() {
@@ -272,11 +272,11 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 	if reason == "retry" {
 		current := ParseStatus(taskEntity.Status)
 		if current != StatusRetrying {
-			return fmt.Errorf("任务当前状态为 %s，已跳过重试", taskEntity.Status)
+			return fmt.Errorf("当前任务状态不支持重试，请稍候再试")
 		}
 	}
 	if ParseStatus(taskEntity.Status) == StatusRunning {
-		return fmt.Errorf("任务正在运行")
+		return fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
@@ -284,7 +284,7 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 		return err
 	}
 	if conflicted {
-		return fmt.Errorf("同节点同策略任务正在运行")
+		return fmt.Errorf("同节点有任务正在运行，请稍候再试")
 	}
 
 	m.stopRetryTimer(taskID)
@@ -329,7 +329,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		return
 	}
 	if conflicted {
-		m.emitLog(taskID, "warn", "同节点同策略任务已在运行，忽略重复执行", taskEntity.Status)
+		m.emitLog(taskID, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
 		return
 	}
 

@@ -26,6 +26,14 @@ type TaskHandler struct {
 	runner TaskRunner
 }
 
+type taskRefValidationError struct {
+	message string
+}
+
+func (e *taskRefValidationError) Error() string {
+	return e.message
+}
+
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
 	return &TaskHandler{db: db, runner: runner}
 }
@@ -112,6 +120,14 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := h.validateTaskRefs(req); err != nil {
+		if isTaskRefValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			respondInternalError(c, err)
+		}
+		return
+	}
 	req.Command = ""
 
 	taskEntity := model.Task{
@@ -126,17 +142,17 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		Status:       string(task.StatusPending),
 	}
 	if err := h.db.Create(&taskEntity).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	if h.runner != nil {
 		if err := h.runner.SyncSchedule(taskEntity); err != nil {
 			h.runner.RemoveSchedule(taskEntity.ID)
 			if rollbackErr := h.db.Delete(&model.Task{}, taskEntity.ID).Error; rollbackErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿删除失败: %v", rollbackErr)})
+				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿删除失败: %v", rollbackErr))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "任务调度失败，请检查 Cron 表达式是否正确"})
 			return
 		}
 	}
@@ -193,6 +209,14 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := h.validateTaskRefs(req); err != nil {
+		if isTaskRefValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			respondInternalError(c, err)
+		}
+		return
+	}
 	req.Command = ""
 
 	taskEntity.Name = req.Name
@@ -205,22 +229,22 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	taskEntity.CronSpec = req.CronSpec
 
 	if err := h.db.Save(&taskEntity).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondInternalError(c, err)
 		return
 	}
 	if h.runner != nil {
 		if err := h.runner.SyncSchedule(taskEntity); err != nil {
 			h.runner.RemoveSchedule(taskEntity.ID)
 			if restoreErr := h.db.Save(&previous).Error; restoreErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿回滚失败: %v", restoreErr)})
+				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿回滚失败: %v", restoreErr))
 				return
 			}
 			if restoreScheduleErr := h.runner.SyncSchedule(previous); restoreScheduleErr != nil {
 				h.runner.RemoveSchedule(taskEntity.ID)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("任务调度同步失败且补偿调度失败: %v", restoreScheduleErr)})
+				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿调度失败: %v", restoreScheduleErr))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "任务调度失败，请检查 Cron 表达式是否正确"})
 			return
 		}
 	}
@@ -333,18 +357,49 @@ func inferTaskExecutor(req *taskRequest, _ string) {
 	req.ExecutorType = "rsync"
 }
 
+func newTaskRefValidationError(message string) error {
+	return &taskRefValidationError{message: message}
+}
+
+func isTaskRefValidationError(err error) bool {
+	_, ok := err.(*taskRefValidationError)
+	return ok
+}
+
+func (h *TaskHandler) validateTaskRefs(req taskRequest) error {
+	if req.NodeID != 0 {
+		var count int64
+		if err := h.db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
+			return fmt.Errorf("校验节点失败: %w", err)
+		}
+		if count == 0 {
+			return newTaskRefValidationError("所选节点不存在，请重新选择")
+		}
+	}
+	if req.PolicyID != nil {
+		var count int64
+		if err := h.db.Model(&model.Policy{}).Where("id = ?", *req.PolicyID).Count(&count).Error; err != nil {
+			return fmt.Errorf("校验策略失败: %w", err)
+		}
+		if count == 0 {
+			return newTaskRefValidationError("所选策略不存在，请重新选择")
+		}
+	}
+	return nil
+}
+
 func validateTaskRequest(req taskRequest) error {
 	if req.Name == "" {
 		return fmt.Errorf("任务名称不能为空")
 	}
 	if req.NodeID == 0 {
-		return fmt.Errorf("node_id 不能为空")
+		return fmt.Errorf("请选择目标节点")
 	}
 	if req.ExecutorType != "rsync" {
-		return fmt.Errorf("仅支持 rsync executor_type")
+		return fmt.Errorf("仅支持 rsync 同步类型")
 	}
 	if strings.TrimSpace(req.Command) != "" {
-		return fmt.Errorf("command 执行已禁用，请使用 rsync_source 与 rsync_target")
+		return fmt.Errorf("命令执行已禁用，请配置同步源路径与目标路径")
 	}
 	if req.CronSpec != "" {
 		if err := validateCronSpec(req.CronSpec); err != nil {
@@ -353,7 +408,7 @@ func validateTaskRequest(req taskRequest) error {
 	}
 
 	if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
-		return fmt.Errorf("rsync 任务必须提供 rsync_source 和 rsync_target")
+		return fmt.Errorf("同步任务必须填写源路径和目标路径")
 	}
 
 	sourceAllowList := parseCSVEnvList("RSYNC_ALLOWED_SOURCE_PREFIXES")

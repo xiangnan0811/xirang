@@ -63,9 +63,9 @@ type DisabledExecutor struct {
 
 func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc, _ ProgressFunc) (int, error) {
 	if e.executorType == "" || e.executorType == "local" {
-		return -1, fmt.Errorf("local 执行器已禁用")
+		return -1, fmt.Errorf("本地执行器已禁用")
 	}
-	return -1, fmt.Errorf("不支持的 executor_type: %s", e.executorType)
+	return -1, fmt.Errorf("不支持的执行器类型")
 }
 
 var progressLinePattern = regexp.MustCompile(`(?i)^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+[0-9]+%\s+([0-9][0-9,]*(?:\.[0-9]+)?)([kmgt]?)(?:i?b|b)/s\s+`)
@@ -76,7 +76,7 @@ type RsyncExecutor struct {
 
 func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
-		return -1, fmt.Errorf("rsync 执行需要 rsync_source 与 rsync_target")
+		return -1, fmt.Errorf("同步任务缺少源路径或目标路径")
 	}
 
 	if !util.IsRemotePathSpec(task.RsyncTarget) {
@@ -104,7 +104,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			return -1, fmt.Errorf("rsync 远程执行暂不支持密码认证，请为节点配置 SSH key")
 		}
 		if authType != "key" {
-			return -1, fmt.Errorf("不支持的认证模式: %s", authType)
+			return -1, fmt.Errorf("不支持的认证方式")
 		}
 
 		keyContent, keySource, keyResolveErr := resolveNodePrivateKey(task.Node)
@@ -112,7 +112,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			return -1, keyResolveErr
 		}
 		if keyContent == "" {
-			return -1, fmt.Errorf("密钥认证未配置 private_key 或 ssh_key_id")
+			return -1, fmt.Errorf("密钥认证未配置，请为节点设置密钥")
 		}
 
 		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
@@ -120,7 +120,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			if strings.TrimSpace(keySource) == "" {
 				keySource = "unknown"
 			}
-			return -1, fmt.Errorf("%s（来源: %s）", err.Error(), keySource)
+			return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
 		}
 
 		sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
@@ -132,7 +132,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			knownHosts := util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")
 			expandedKnownHosts, err := util.ExpandHomePath(knownHosts)
 			if err != nil {
-				return -1, fmt.Errorf("展开 SSH_KNOWN_HOSTS_PATH 失败: %w", err)
+				return -1, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 			}
 			sshParts = append(sshParts,
 				"-o", "StrictHostKeyChecking=yes",
@@ -145,12 +145,12 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		if normalizedKey != "" {
 			keyFile, err := os.CreateTemp("", "xirang-key-*.pem")
 			if err != nil {
-				return -1, fmt.Errorf("创建临时密钥文件失败: %w", err)
+				return -1, fmt.Errorf("准备密钥文件失败，请稍候重试")
 			}
 			if _, err = keyFile.WriteString(normalizedKey); err != nil {
 				_ = keyFile.Close()
 				_ = os.Remove(keyFile.Name())
-				return -1, fmt.Errorf("写入临时密钥文件失败: %w", err)
+				return -1, fmt.Errorf("准备密钥文件失败，请稍候重试")
 			}
 			_ = keyFile.Close()
 			_ = os.Chmod(keyFile.Name(), 0o600)
@@ -286,7 +286,7 @@ func parseThroughputMbps(valueField string, unitField string) (float64, bool) {
 func ensureLocalTargetReady(target string) error {
 	dir := strings.TrimSpace(target)
 	if dir == "" {
-		return fmt.Errorf("rsync_target 不能为空")
+		return fmt.Errorf("目标路径不能为空")
 	}
 
 	cleanPath := filepath.Clean(dir)
@@ -302,12 +302,12 @@ func ensureLocalTargetReady(target string) error {
 	}
 
 	if err := os.MkdirAll(cleanPath, 0o755); err != nil {
-		return fmt.Errorf("目标目录不可用: %w", err)
+		return fmt.Errorf("目标目录不可用，请检查路径是否正确")
 	}
 
 	probe, err := os.CreateTemp(cleanPath, ".xirang-rsync-write-check-*")
 	if err != nil {
-		return fmt.Errorf("目标目录不可写: %w", err)
+		return fmt.Errorf("目标目录不可写，请检查权限")
 	}
 	probePath := probe.Name()
 	_ = probe.Close()
@@ -323,7 +323,7 @@ func ensureLocalTargetReady(target string) error {
 
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(cleanPath, &stat); err != nil {
-		return fmt.Errorf("读取目标目录磁盘信息失败: %w", err)
+		return fmt.Errorf("读取目标目录磁盘信息失败")
 	}
 	freeBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
 	freeGB := int(freeBytes / (1024 * 1024 * 1024))
@@ -360,7 +360,7 @@ func resolveNodePrivateKey(node model.Node) (string, string, error) {
 
 	if node.SSHKeyID != nil {
 		keyID := *node.SSHKeyID
-		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点已配置 ssh_key_id=%d，但未加载到对应 SSH Key，请检查密钥是否存在", keyID)
+		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥不存在，请检查密钥配置")
 	}
 
 	if key := strings.TrimSpace(node.PrivateKey); key != "" {

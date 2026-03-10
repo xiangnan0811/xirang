@@ -362,8 +362,60 @@ func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "仅支持 rsync executor_type") {
+	if !strings.Contains(resp.Body.String(), "仅支持 rsync 同步类型") {
 		t.Fatalf("期望返回 local 拒绝错误，实际: %s", resp.Body.String())
+	}
+}
+
+func TestTaskCreateRejectsUnknownNodeReference(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.POST("/tasks", handler.Create)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"name":"task-a","node_id":999,"rsync_source":"/data/src","rsync_target":"/backup/dst"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "所选节点不存在，请重新选择") {
+		t.Fatalf("期望返回节点不存在错误，实际: %s", resp.Body.String())
+	}
+
+	var count int64
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("非法节点引用不应写入任务记录，实际数量: %d", count)
+	}
+}
+
+func TestTaskCreateReturnsInternalErrorWhenTaskRefValidationQueryFails(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	// 不执行 AutoMigrate，触发引用校验查询失败，验证返回 500 而非 400。
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.POST("/tasks", handler.Create)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"name":"task-a","node_id":1,"rsync_source":"/data/src","rsync_target":"/backup/dst"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("期望状态码 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "服务器内部错误") {
+		t.Fatalf("期望返回内部错误提示，实际: %s", resp.Body.String())
 	}
 }
 
@@ -516,6 +568,60 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 	}
 	if updated.Command != "" {
 		t.Fatalf("期望更新后 command 被清空，实际: %q", updated.Command)
+	}
+}
+
+func TestTaskUpdateRejectsUnknownPolicyReference(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	taskEntity := model.Task{
+		Name:         "task-old",
+		NodeID:       node.ID,
+		Command:      "",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+		ExecutorType: "rsync",
+		CronSpec:     "*/5 * * * *",
+		Status:       "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.PUT("/tasks/:id", handler.Update)
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/tasks/%d", taskEntity.ID),
+		strings.NewReader(fmt.Sprintf(`{"name":"task-old","node_id":%d,"policy_id":999,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "所选策略不存在，请重新选择") {
+		t.Fatalf("期望返回策略不存在错误，实际: %s", resp.Body.String())
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
+		t.Fatalf("查询任务失败: %v", err)
+	}
+	if updated.PolicyID != nil {
+		t.Fatalf("非法策略引用不应写入任务，实际 policy_id=%v", *updated.PolicyID)
 	}
 }
 
