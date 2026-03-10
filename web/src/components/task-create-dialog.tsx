@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
+import { CronGenerator } from "@/components/cron-generator";
 import type {
   NewTaskInput,
   NodeRecord,
@@ -179,24 +180,30 @@ export function TaskEditorDialog({
           </div>
         </div>
         <div>
-          <label htmlFor="task-editor-cron" className="mb-1 block text-sm font-medium">
-            Cron（可选）
-          </label>
-          <Input
-            id="task-editor-cron"
-            placeholder="例如：0 */2 * * *"
-            value={draft.cronSpec}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                cronSpec: event.target.value,
-              }))
-            }
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            留空则为手动触发任务，不会自动调度执行。
-          </p>
+          <div className="mb-1 text-sm font-medium">
+            调度方式
+          </div>
+          <div className="glass-panel flex h-10 items-center px-3 text-sm text-muted-foreground">
+            {draft.cronSpec ? "定时调度" : "手动触发"}
+          </div>
         </div>
+      </div>
+
+      <div>
+        <label htmlFor="task-editor-cron" className="mb-1 block text-sm font-medium">
+          Cron（可选）
+        </label>
+        <CronGenerator
+          id="task-editor-cron"
+          value={draft.cronSpec}
+          onChange={(val) =>
+            setDraft((prev) => ({ ...prev, cronSpec: val }))
+          }
+          disabled={saving}
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          留空则为手动触发任务，不会自动调度执行。
+        </p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
