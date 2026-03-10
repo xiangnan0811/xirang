@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
@@ -10,6 +10,7 @@ import type {
   NodeRecord,
   PolicyRecord,
   TaskExecutorType,
+  TaskRecord,
 } from "@/types/domain";
 
 type TaskDraft = {
@@ -32,6 +33,18 @@ const defaultDraft: TaskDraft = {
   cronSpec: "",
 };
 
+function taskRecordToDraft(task: TaskRecord): TaskDraft {
+  return {
+    name: task.name ?? task.policyName ?? "",
+    nodeId: task.nodeId ? String(task.nodeId) : "",
+    policyId: task.policyId ? String(task.policyId) : "",
+    executorType: task.executorType ?? "rsync",
+    rsyncSource: task.rsyncSource ?? "",
+    rsyncTarget: task.rsyncTarget ?? "",
+    cronSpec: task.cronSpec ?? "",
+  };
+}
+
 function toNumberOrNull(value: string): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -40,33 +53,41 @@ function toNumberOrNull(value: string): number | null {
   return parsed;
 }
 
-type TaskCreateDialogProps = {
+type TaskEditorDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   onSave: (input: NewTaskInput) => Promise<void>;
+  editingTask?: TaskRecord | null;
 };
 
-export function TaskCreateDialog({
+export function TaskEditorDialog({
   open,
   onOpenChange,
   nodes,
   policies,
   onSave,
-}: TaskCreateDialogProps) {
-  const [draft, setDraft] = useDialogDraft<TaskDraft>(open, defaultDraft);
+  editingTask,
+}: TaskEditorDialogProps) {
+  const isEditing = Boolean(editingTask);
+  const [draft, setDraft] = useDialogDraft<TaskDraft, TaskRecord>(
+    open,
+    defaultDraft,
+    editingTask,
+    taskRecordToDraft,
+  );
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     const nodeId = toNumberOrNull(draft.nodeId);
     if (!nodeId) {
-      toast.error("创建失败：请选择目标节点。", { id: "task-create-node-required" });
+      toast.error("保存失败：请选择目标节点。", { id: "task-editor-node-required" });
       return;
     }
 
     if (!draft.name.trim()) {
-      toast.error("创建失败：请输入任务名称。", { id: "task-create-name-required" });
+      toast.error("保存失败：请输入任务名称。", { id: "task-editor-name-required" });
       return;
     }
 
@@ -92,17 +113,17 @@ export function TaskCreateDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      icon={<Plus className="size-5 text-primary" />}
-      title="新建任务"
-      description="创建新的备份或同步任务，选择目标节点和执行策略。"
+      icon={isEditing ? <Pencil className="size-5 text-primary" /> : <Plus className="size-5 text-primary" />}
+      title={isEditing ? "编辑任务" : "新建任务"}
+      description={isEditing ? "修改任务配置，保存后立即生效。" : "创建新的备份或同步任务，选择目标节点和执行策略。"}
       saving={saving}
       onSubmit={handleSave}
-      submitLabel="创建任务"
-      savingLabel="创建中..."
+      submitLabel={isEditing ? "保存修改" : "创建任务"}
+      savingLabel={isEditing ? "保存中..." : "创建中..."}
     >
       <div>
-        <label htmlFor="task-create-name" className="mb-1 block text-sm font-medium">任务名称</label>
-        <Input id="task-create-name" placeholder="例如：每日全量备份-prod-01"
+        <label htmlFor="task-editor-name" className="mb-1 block text-sm font-medium">任务名称</label>
+        <Input id="task-editor-name" placeholder="例如：每日全量备份-prod-01"
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -111,8 +132,8 @@ export function TaskCreateDialog({
       </div>
 
       <div>
-        <label htmlFor="task-create-node" className="mb-1 block text-sm font-medium">目标节点</label>
-        <AppSelect id="task-create-node" containerClassName="w-full"
+        <label htmlFor="task-editor-node" className="mb-1 block text-sm font-medium">目标节点</label>
+        <AppSelect id="task-editor-node" containerClassName="w-full"
           value={draft.nodeId}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -128,11 +149,11 @@ export function TaskCreateDialog({
       </div>
 
       <div>
-        <label htmlFor="task-create-policy" className="mb-1 block text-sm font-medium">
+        <label htmlFor="task-editor-policy" className="mb-1 block text-sm font-medium">
           关联策略（可选）
         </label>
         <AppSelect
-          id="task-create-policy"
+          id="task-editor-policy"
           containerClassName="w-full"
           value={draft.policyId}
           onChange={(event) =>
@@ -158,11 +179,11 @@ export function TaskCreateDialog({
           </div>
         </div>
         <div>
-          <label htmlFor="task-create-cron" className="mb-1 block text-sm font-medium">
+          <label htmlFor="task-editor-cron" className="mb-1 block text-sm font-medium">
             Cron（可选）
           </label>
           <Input
-            id="task-create-cron"
+            id="task-editor-cron"
             placeholder="例如：0 */2 * * *"
             value={draft.cronSpec}
             onChange={(event) =>
@@ -172,16 +193,19 @@ export function TaskCreateDialog({
               }))
             }
           />
+          <p className="mt-1 text-xs text-muted-foreground">
+            留空则为手动触发任务，不会自动调度执行。
+          </p>
         </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <label htmlFor="task-create-rsync-source" className="mb-1 block text-sm font-medium">
+          <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
             Rsync 源路径（可选）
           </label>
           <Input
-            id="task-create-rsync-source"
+            id="task-editor-rsync-source"
             placeholder="/data/source"
             value={draft.rsyncSource}
             onChange={(event) =>
@@ -193,11 +217,11 @@ export function TaskCreateDialog({
           />
         </div>
         <div>
-          <label htmlFor="task-create-rsync-target" className="mb-1 block text-sm font-medium">
+          <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
             Rsync 目标路径（可选）
           </label>
           <Input
-            id="task-create-rsync-target"
+            id="task-editor-rsync-target"
             placeholder="/backup/target"
             value={draft.rsyncTarget}
             onChange={(event) =>
@@ -212,5 +236,7 @@ export function TaskCreateDialog({
     </FormDialog>
   );
 }
+
+export { TaskEditorDialog as TaskCreateDialog };
 
 export type { TaskDraft };

@@ -22,6 +22,7 @@ const { apiClientMock } = vi.hoisted(() => ({
     updateSSHKey: vi.fn(),
     deleteSSHKey: vi.fn(),
     createTask: vi.fn(),
+    updateTask: vi.fn(),
     deleteTask: vi.fn(),
     triggerTask: vi.fn(),
     cancelTask: vi.fn(),
@@ -297,6 +298,71 @@ describe("useConsoleData", () => {
     });
 
     expect(result.current.tasks[0]?.status).toBe("running");
+  });
+
+  it("demo 模式下 updateTask 会重算策略与节点派生字段", async () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
+
+    const { result } = renderHook(() => useConsoleData(null));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.nodes.length).toBeGreaterThan(1);
+    expect(result.current.policies.length).toBeGreaterThan(0);
+    expect(result.current.tasks.length).toBeGreaterThan(0);
+
+    const task = result.current.tasks[0]!;
+    const targetNode = result.current.nodes[1]!;
+    const targetPolicy = result.current.policies[0]!;
+
+    await act(async () => {
+      await result.current.updateTask(task.id, {
+        name: "重新命名后的任务",
+        nodeId: targetNode.id,
+        policyId: targetPolicy.id,
+        executorType: "rsync",
+      });
+    });
+
+    const updatedTask = result.current.tasks.find((item) => item.id === task.id);
+    expect(updatedTask).toMatchObject({
+      id: task.id,
+      name: "重新命名后的任务",
+      nodeId: targetNode.id,
+      nodeName: targetNode.name,
+      policyId: targetPolicy.id,
+      policyName: targetPolicy.name,
+      rsyncSource: targetPolicy.sourcePath,
+      rsyncTarget: targetPolicy.targetPath,
+      cronSpec: targetPolicy.cron,
+    });
+
+    vi.unstubAllEnvs();
+  });
+
+  it("demo 模式下带 token 且 API 更新失败时，updateTask 会抛错", async () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
+    apiClientMock.updateTask.mockRejectedValueOnce(new Error("boom"));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await expect(
+        result.current.updateTask(101, {
+          name: "task-101",
+          nodeId: 1,
+          executorType: "rsync",
+        })
+      ).rejects.toThrow("更新任务失败");
+    });
+
+    vi.unstubAllEnvs();
   });
 
   it("会用服务端概览摘要覆盖 failedTasks24h", async () => {

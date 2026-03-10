@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ export const TasksTable = React.memo(function TasksTable({
   handleCancel,
   handleDelete,
   handleTrigger,
+  onEdit,
 }: TasksViewProps) {
   const navigate = useNavigate();
 
@@ -30,6 +31,7 @@ export const TasksTable = React.memo(function TasksTable({
             <th className="px-3 py-2.5">任务</th>
             <th className="px-3 py-2.5">节点</th>
             <th className="px-3 py-2.5">状态</th>
+            <th className="px-3 py-2.5">类型</th>
             <th className="px-3 py-2.5">进度</th>
             <th className="px-3 py-2.5">调度</th>
             <th className="px-3 py-2.5">错误</th>
@@ -48,12 +50,17 @@ export const TasksTable = React.memo(function TasksTable({
               return (
                 <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                   <td className="px-3 py-2.5">
-                    <p className="font-medium">{task.policyName}</p>
+                    <p className="font-medium">{task.name || task.policyName}</p>
                     <p className="text-xs text-muted-foreground">ID #{task.id}</p>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">{task.nodeName}</td>
                   <td className="px-3 py-2.5">
                     <Badge variant={status.variant}>{status.label}</Badge>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <Badge variant={task.cronSpec ? "secondary" : "outline"} className="text-[10px]">
+                      {task.cronSpec ? "定时" : "手动"}
+                    </Badge>
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="w-36 space-y-1">
@@ -114,6 +121,16 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label="编辑任务"
+                        disabled={isPendingAny}
+                        onClick={() => onEdit(task)}
+                      >
+                        <Pencil className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label="取消任务"
                         disabled={!canCancel(task.status) || isPendingAny}
                         onClick={() => void handleCancel(task.id)}
@@ -146,7 +163,7 @@ export const TasksTable = React.memo(function TasksTable({
             })
           ) : !loading ? (
             <tr>
-              <td colSpan={7} className="px-3 py-6">
+              <td colSpan={8} className="px-3 py-6">
                 <FilteredEmptyState
                   className="py-8"
                   title="当前筛选条件下没有任务"

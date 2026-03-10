@@ -46,6 +46,22 @@ vi.mock("@/hooks/use-confirm", () => ({
 
 vi.mock("@/components/task-create-dialog", () => ({
   TaskCreateDialog: () => null,
+  TaskEditorDialog: ({ open, onSave, editingTask }: {
+    open: boolean;
+    onSave: (input: Record<string, unknown>) => Promise<void>;
+    editingTask?: { id: number; name?: string } | null;
+  }) =>
+    open && editingTask ? (
+      <div data-testid="edit-dialog">
+        <span data-testid="editing-task-id">{editingTask.id}</span>
+        <button
+          data-testid="edit-save-btn"
+          onClick={() => void onSave({ name: "新名称", nodeId: editingTask.id })}
+        >
+          保存
+        </button>
+      </div>
+    ) : null,
 }));
 
 vi.mock("@/components/ui/toast", () => ({
@@ -60,6 +76,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     tasks: [
       {
         id: 101,
+        name: "每日备份任务",
         policyId: 1,
         policyName: "每日备份",
         nodeId: 1,
@@ -70,10 +87,12 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         nextRunAt: "2026-02-24 22:00:00",
         errorCode: "E_CONN",
         lastError: "连接失败",
+        cronSpec: "0 0 * * *",
         speedMbps: 32,
       },
       {
         id: 102,
+        name: "手动同步",
         policyId: 2,
         policyName: "每小时备份",
         nodeId: 2,
@@ -100,6 +119,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     globalSearch: "",
     setGlobalSearch: vi.fn(),
     createTask: vi.fn().mockResolvedValue(201),
+    updateTask: vi.fn().mockResolvedValue(undefined),
     deleteTask: vi.fn().mockResolvedValue(undefined),
     triggerTask: vi.fn().mockResolvedValue(undefined),
     cancelTask: vi.fn().mockResolvedValue(undefined),
@@ -200,6 +220,118 @@ describe("TasksPage", () => {
     );
 
     expect(screen.getByText("当前筛选 2 / 2 条任务")).toBeInTheDocument();
-    expect(screen.getByText("每日备份")).toBeInTheDocument();
+    expect(screen.getByText("每日备份任务")).toBeInTheDocument();
+  });
+
+  it("任务标题优先显示 task.name，搜索也命中 task.name", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 标题显示 task.name 而非 policyName
+    expect(screen.getByText("每日备份任务")).toBeInTheDocument();
+    expect(screen.getByText("手动同步")).toBeInTheDocument();
+
+    // 搜索 task.name 能命中
+    const searchInput = screen.getByRole("textbox", { name: "任务关键词筛选" });
+    await user.type(searchInput, "手动同步");
+    expect(screen.getByText("当前筛选 1 / 2 条任务")).toBeInTheDocument();
+  });
+
+  it("无 cronSpec 的任务显示手动标识", () => {
+    createContext({
+      tasks: [
+        {
+          id: 201,
+          name: "手动任务",
+          policyName: "手动任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "pending" as const,
+          progress: 0,
+          startedAt: "-",
+          speedMbps: 0,
+        },
+        {
+          id: 202,
+          name: "定时任务",
+          policyName: "定时任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          cronSpec: "0 */2 * * *",
+          speedMbps: 0,
+        },
+      ] as unknown as ConsoleOutletContext["tasks"],
+    });
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    const badges = screen.getAllByText("手动");
+    expect(badges.length).toBeGreaterThanOrEqual(1);
+    const scheduledBadges = screen.getAllByText("定时");
+    expect(scheduledBadges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("点击编辑按钮打开编辑弹窗，保存成功后调用 updateTask", async () => {
+    const updateTaskMock = vi.fn().mockResolvedValue(undefined);
+    createContext({ updateTask: updateTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 点击第一个编辑按钮
+    const editButtons = screen.getAllByRole("button", { name: "编辑任务" });
+    await user.click(editButtons[0]);
+
+    // 编辑弹窗打开并显示任务 ID（任务按 ID 降序排列，第一个是 102）
+    expect(screen.getByTestId("edit-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("editing-task-id")).toHaveTextContent("102");
+
+    // 点击保存
+    await user.click(screen.getByTestId("edit-save-btn"));
+    expect(updateTaskMock).toHaveBeenCalledWith(102, expect.objectContaining({ name: "新名称" }));
+  });
+
+  it("updateTask 失败时不关闭弹窗且显示错误 toast", async () => {
+    const { toast } = await import("@/components/ui/toast");
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    const updateTaskMock = vi.fn().mockRejectedValue(new Error("更新任务失败"));
+    createContext({ updateTask: updateTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    const editButtons = screen.getAllByRole("button", { name: "编辑任务" });
+    await user.click(editButtons[0]);
+
+    expect(screen.getByTestId("edit-dialog")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("edit-save-btn"));
+
+    // 弹窗仍然存在（未关闭）
+    expect(screen.getByTestId("edit-dialog")).toBeInTheDocument();
+    // 显示错误 toast，不显示成功 toast
+    expect(toast.error).toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("已更新"));
   });
 });

@@ -23,7 +23,7 @@ export function normalizeStatusFilter(value: string): "all" | TaskStatus {
   return "all";
 }
 
-export type PendingActionType = { id: number; action: "retry" | "cancel" | "delete" | "trigger" } | null;
+export type PendingActionType = { id: number; action: "retry" | "cancel" | "delete" | "trigger" | "edit" } | null;
 
 export type TasksViewProps = {
   loading: boolean;
@@ -35,4 +35,5 @@ export type TasksViewProps = {
   handleCancel: (taskId: number) => Promise<void>;
   handleDelete: (taskId: number) => Promise<void>;
   handleTrigger: (taskId: number) => Promise<void>;
+  onEdit: (task: TaskRecord) => void;
 };

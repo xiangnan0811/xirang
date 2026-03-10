@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
+import { Loader2, Pencil, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ export const TasksGrid = React.memo(function TasksGrid({
   handleCancel,
   handleDelete,
   handleTrigger,
+  onEdit,
 }: TasksViewProps) {
   const navigate = useNavigate();
 
@@ -44,10 +45,18 @@ export const TasksGrid = React.memo(function TasksGrid({
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="font-medium">{task.policyName}</p>
+                <p className="font-medium">{task.name || task.policyName}</p>
                 <p className="text-xs text-muted-foreground">任务 ID：{task.id}</p>
               </div>
-              <Badge variant={status.variant}>{status.label}</Badge>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {!task.cronSpec && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">手动</Badge>
+                )}
+                {task.cronSpec && (
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">定时</Badge>
+                )}
+                <Badge variant={status.variant}>{status.label}</Badge>
+              </div>
             </div>
 
             <div className="space-y-0.5 text-sm text-muted-foreground">
@@ -101,6 +110,16 @@ export const TasksGrid = React.memo(function TasksGrid({
                   onClick={() => navigate(`/app/logs?task=${task.id}`)}
                 >
                   <Terminal className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="编辑任务"
+                  disabled={isPendingAny}
+                  onClick={() => onEdit(task)}
+                >
+                  <Pencil className="size-4" />
                 </Button>
                 <Button
                   variant="ghost"

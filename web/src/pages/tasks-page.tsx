@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { Plus } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { TaskCreateDialog } from "@/components/task-create-dialog";
+import { TaskEditorDialog } from "@/components/task-create-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
@@ -16,7 +16,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewTaskInput, TaskStatus } from "@/types/domain";
+import type { NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
@@ -38,6 +38,7 @@ export function TasksPage() {
     globalSearch,
     setGlobalSearch,
     createTask,
+    updateTask,
     deleteTask,
     triggerTask,
     cancelTask,
@@ -64,6 +65,8 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
 
   const filteredTasks = useMemo(() => {
@@ -82,7 +85,7 @@ export function TasksPage() {
         }
 
         const text =
-          `${task.id} ${task.policyName} ${task.nodeName} ${task.status} ${task.errorCode ?? ""} ${task.lastError ?? ""}`
+          `${task.id} ${task.name ?? ""} ${task.policyName} ${task.nodeName} ${task.status} ${task.errorCode ?? ""} ${task.lastError ?? ""}`
             .toLowerCase()
             .trim();
         return text.includes(effectiveKeyword);
@@ -119,6 +122,27 @@ export function TasksPage() {
       const taskId = await createTask(input);
       setCreateDialogOpen(false);
       toast.success(`任务 #${taskId} 已创建。`);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const handleEdit = (task: TaskRecord) => {
+    setEditingTask(task);
+    setEditDialogOpen(true);
+  };
+
+  const handleUpdateTask = async (input: NewTaskInput) => {
+    if (!editingTask) return;
+    if (!input.name.trim() || !input.nodeId) {
+      toast.error("保存失败：任务名称与节点必填。");
+      return;
+    }
+    try {
+      await updateTask(editingTask.id, input);
+      setEditDialogOpen(false);
+      setEditingTask(null);
+      toast.success(`任务 #${editingTask.id} 已更新。`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -234,7 +258,7 @@ export function TasksPage() {
           <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
             <SearchInput
               containerClassName="w-full"
-              placeholder="搜索任务 ID / 节点 / 策略 / 错误码"
+              placeholder="搜索任务名称 / ID / 节点 / 策略 / 错误码"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               aria-label="任务关键词筛选"
@@ -303,6 +327,7 @@ export function TasksPage() {
               handleCancel={handleCancel}
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
+              onEdit={handleEdit}
             />
           ) : (
             <TasksTable
@@ -315,17 +340,30 @@ export function TasksPage() {
               handleCancel={handleCancel}
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
+              onEdit={handleEdit}
             />
           )}
         </CardContent>
       </Card>
 
-      <TaskCreateDialog
+      <TaskEditorDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
         nodes={nodes}
         policies={policies}
         onSave={handleCreateTask}
+      />
+
+      <TaskEditorDialog
+        open={editDialogOpen}
+        onOpenChange={(open) => {
+          setEditDialogOpen(open);
+          if (!open) setEditingTask(null);
+        }}
+        nodes={nodes}
+        policies={policies}
+        onSave={handleUpdateTask}
+        editingTask={editingTask}
       />
 
       {dialog}

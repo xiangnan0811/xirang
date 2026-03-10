@@ -57,6 +57,40 @@ export function useTaskOperations({
     return nextTask.id;
   }, [exec, markTasksMutated, nodes, policies, setTasks, tasks]);
 
+  const updateTask = useCallback(async (taskID: number, input: NewTaskInput): Promise<void> => {
+    const result = await exec("更新任务", (t) => apiClient.updateTask(t, taskID, input));
+    if (result) {
+      if (result.ok) {
+        markTasksMutated();
+        setTasks((prev) => prev.map((task) => (task.id === taskID ? result.data : task)));
+        return;
+      }
+      throw new Error("更新任务失败");
+    }
+    // demo mode fallback: update in-memory (与 buildDemoTask 保持一致的派生逻辑)
+    const node = nodes.find((n) => n.id === input.nodeId);
+    const policy = input.policyId ? policies.find((p) => p.id === input.policyId) : null;
+    markTasksMutated();
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskID
+          ? {
+              ...task,
+              name: input.name,
+              policyName: policy?.name ?? input.name,
+              nodeId: input.nodeId,
+              nodeName: node?.name ?? `节点-${input.nodeId}`,
+              policyId: input.policyId ?? null,
+              rsyncSource: input.rsyncSource ?? policy?.sourcePath,
+              rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
+              executorType: input.executorType ?? "rsync",
+              cronSpec: input.cronSpec ?? policy?.cron,
+            }
+          : task
+      )
+    );
+  }, [exec, markTasksMutated, nodes, policies, setTasks]);
+
   const deleteTask = useCallback(async (taskID: number) => {
     await exec("删除任务", (t) => apiClient.deleteTask(t, taskID));
     markTasksMutated();
@@ -151,6 +185,7 @@ export function useTaskOperations({
 
   return {
     createTask,
+    updateTask,
     deleteTask,
     triggerTask,
     cancelTask,
