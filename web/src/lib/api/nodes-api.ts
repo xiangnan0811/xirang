@@ -102,7 +102,9 @@ export function createNodesApi() {
           private_key: input.inlinePrivateKey,
           key_type: input.inlineKeyType,
           tags: input.tags,
-          base_path: input.basePath
+          base_path: input.basePath,
+          maintenance_start: input.maintenanceStart || undefined,
+          maintenance_end: input.maintenanceEnd || undefined
         }
       });
       const row = unwrapData(payload);
@@ -124,7 +126,9 @@ export function createNodesApi() {
           private_key: input.inlinePrivateKey,
           key_type: input.inlineKeyType,
           tags: input.tags,
-          base_path: input.basePath
+          base_path: input.basePath,
+          maintenance_start: input.maintenanceStart || undefined,
+          maintenance_end: input.maintenanceEnd || undefined
         }
       });
       const row = unwrapData(payload);

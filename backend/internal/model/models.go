@@ -270,3 +270,41 @@ func (n *Node) AfterFind(_ *gorm.DB) error {
 	}
 	return nil
 }
+
+// User TOTP 敏感字段加解密 hooks
+
+func (u *User) BeforeSave(_ *gorm.DB) error {
+	if u.TOTPSecret != "" {
+		encrypted, err := secure.EncryptIfNeeded(u.TOTPSecret)
+		if err != nil {
+			return err
+		}
+		u.TOTPSecret = encrypted
+	}
+	if u.RecoveryCodes != "" {
+		encrypted, err := secure.EncryptIfNeeded(u.RecoveryCodes)
+		if err != nil {
+			return err
+		}
+		u.RecoveryCodes = encrypted
+	}
+	return nil
+}
+
+func (u *User) AfterFind(_ *gorm.DB) error {
+	if u.TOTPSecret != "" {
+		decrypted, err := secure.DecryptIfNeeded(u.TOTPSecret)
+		if err != nil {
+			return err
+		}
+		u.TOTPSecret = decrypted
+	}
+	if u.RecoveryCodes != "" {
+		decrypted, err := secure.DecryptIfNeeded(u.RecoveryCodes)
+		if err != nil {
+			return err
+		}
+		u.RecoveryCodes = decrypted
+	}
+	return nil
+}

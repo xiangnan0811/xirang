@@ -120,5 +120,5 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"items": logs})
+	c.JSON(http.StatusOK, gin.H{"data": logs})
 }

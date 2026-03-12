@@ -279,6 +279,11 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		return 0, fmt.Errorf("任务不存在")
 	}
 
+	// 仅 rsync 类型任务支持恢复
+	if taskEntity.ExecutorType != "rsync" {
+		return 0, fmt.Errorf("仅 rsync 同步任务支持备份恢复")
+	}
+
 	// 校验是否有成功的执行记录
 	var successCount int64
 	m.db.Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount)

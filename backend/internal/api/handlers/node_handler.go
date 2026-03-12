@@ -28,17 +28,19 @@ func NewNodeHandler(db *gorm.DB) *NodeHandler {
 }
 
 type nodeRequest struct {
-	Name       string `json:"name" binding:"required"`
-	Host       string `json:"host" binding:"required"`
-	Port       int    `json:"port"`
-	Username   string `json:"username" binding:"required"`
-	AuthType   string `json:"auth_type"`
-	Password   string `json:"password"`
-	PrivateKey string `json:"private_key"`
-	SSHKeyID   *uint  `json:"ssh_key_id"`
-	Tags       string `json:"tags"`
-	Status     string `json:"status"`
-	BasePath   string `json:"base_path"`
+	Name             string  `json:"name" binding:"required"`
+	Host             string  `json:"host" binding:"required"`
+	Port             int     `json:"port"`
+	Username         string  `json:"username" binding:"required"`
+	AuthType         string  `json:"auth_type"`
+	Password         string  `json:"password"`
+	PrivateKey       string  `json:"private_key"`
+	SSHKeyID         *uint   `json:"ssh_key_id"`
+	Tags             string  `json:"tags"`
+	Status           string  `json:"status"`
+	BasePath         string  `json:"base_path"`
+	MaintenanceStart *string `json:"maintenance_start"`
+	MaintenanceEnd   *string `json:"maintenance_end"`
 }
 
 type nodeBatchDeleteRequest struct {
@@ -167,6 +169,16 @@ func (h *NodeHandler) Create(c *gin.Context) {
 			node.PrivateKey = ""
 		}
 	}
+	if req.MaintenanceStart != nil {
+		if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
+			node.MaintenanceStart = &t
+		}
+	}
+	if req.MaintenanceEnd != nil {
+		if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
+			node.MaintenanceEnd = &t
+		}
+	}
 	if err := h.db.Create(&node).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -248,6 +260,16 @@ func (h *NodeHandler) Update(c *gin.Context) {
 			node.PrivateKey = req.PrivateKey
 		} else {
 			node.PrivateKey = ""
+		}
+	}
+	if req.MaintenanceStart != nil {
+		if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
+			node.MaintenanceStart = &t
+		}
+	}
+	if req.MaintenanceEnd != nil {
+		if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
+			node.MaintenanceEnd = &t
 		}
 	}
 	if err := h.db.Save(&node).Error; err != nil {

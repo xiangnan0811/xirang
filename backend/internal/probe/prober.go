@@ -114,7 +114,20 @@ func (p *Prober) probeAll() {
 	wg.Wait()
 }
 
+func isInMaintenanceWindow(node model.Node) bool {
+	if node.MaintenanceStart == nil || node.MaintenanceEnd == nil {
+		return false
+	}
+	now := time.Now().UTC()
+	return now.After(*node.MaintenanceStart) && now.Before(*node.MaintenanceEnd)
+}
+
 func (p *Prober) probeNode(node model.Node) {
+	// 维护窗口内跳过探测和告警
+	if isInMaintenanceWindow(node) {
+		return
+	}
+
 	now := time.Now()
 	result, err := sshutil.ProbeNode(node, p.db)
 

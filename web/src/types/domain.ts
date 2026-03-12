@@ -292,6 +292,8 @@ export interface NewNodeInput {
   inlineKeyName?: string;
   inlineKeyType?: SSHKeyType;
   inlinePrivateKey?: string;
+  maintenanceStart?: string;
+  maintenanceEnd?: string;
 }
 
 export interface LoginResponse {

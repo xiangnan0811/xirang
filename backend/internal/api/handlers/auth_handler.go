@@ -67,7 +67,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
-	if h.captchaEnabled && strings.TrimSpace(req.Captcha) == "" {
+	if h.captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码不能为空"})
 		return
 	}
@@ -224,11 +224,15 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		return
 	}
 	userID := c.GetUint(middleware.CtxUserID)
-	if err := h.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
-		"totp_secret":    req.Secret,
-		"totp_enabled":   true,
-		"recovery_codes": string(recoveryJSON),
-	}).Error; err != nil {
+	var user model.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	user.TOTPSecret = req.Secret
+	user.TOTPEnabled = true
+	user.RecoveryCodes = string(recoveryJSON)
+	if err := h.db.Save(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存 2FA 配置失败"})
 		return
 	}
@@ -265,11 +269,10 @@ func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
 		return
 	}
-	if err := h.db.Model(&user).Updates(map[string]any{
-		"totp_secret":    "",
-		"totp_enabled":   false,
-		"recovery_codes": "",
-	}).Error; err != nil {
+	user.TOTPSecret = ""
+	user.TOTPEnabled = false
+	user.RecoveryCodes = ""
+	if err := h.db.Save(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "禁用 2FA 失败"})
 		return
 	}
@@ -318,7 +321,8 @@ func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 			return
 		}
 		newJSON, _ := json.Marshal(remaining)
-		h.db.Model(&user).Update("recovery_codes", string(newJSON))
+		user.RecoveryCodes = string(newJSON)
+		h.db.Save(&user)
 	}
 	token, err := h.jwtManager.GenerateToken(user)
 	if err != nil {

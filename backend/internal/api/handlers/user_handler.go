@@ -19,9 +19,10 @@ func NewUserHandler(authService *auth.Service) *UserHandler {
 }
 
 type userResponse struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	ID          uint   `json:"id"`
+	Username    string `json:"username"`
+	Role        string `json:"role"`
+	TOTPEnabled bool   `json:"totp_enabled"`
 }
 
 type createUserRequest struct {
@@ -45,9 +46,10 @@ func (h *UserHandler) List(c *gin.Context) {
 	result := make([]userResponse, 0, len(users))
 	for _, item := range users {
 		result = append(result, userResponse{
-			ID:       item.ID,
-			Username: item.Username,
-			Role:     item.Role,
+			ID:          item.ID,
+			Username:    item.Username,
+			Role:        item.Role,
+			TOTPEnabled: item.TOTPEnabled,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})
@@ -67,9 +69,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"data": userResponse{
-		ID:       user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		ID:          user.ID,
+		Username:    user.Username,
+		Role:        user.Role,
+		TOTPEnabled: user.TOTPEnabled,
 	}})
 }
 
@@ -101,9 +104,10 @@ func (h *UserHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": userResponse{
-		ID:       user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		ID:          user.ID,
+		Username:    user.Username,
+		Role:        user.Role,
+		TOTPEnabled: user.TOTPEnabled,
 	}})
 }
 

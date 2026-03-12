@@ -9,60 +9,87 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ETag wraps the response writer to capture response body for ETag computation.
-// Apply to specific low-frequency routes only.
+// ETag computes an ETag from the response body and supports 304 Not Modified.
+// Apply to specific low-frequency GET routes only.
 func ETag() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Only apply to GET requests
 		if c.Request.Method != http.MethodGet {
 			c.Next()
 			return
 		}
 
-		// Capture response
-		w := &etagResponseWriter{ResponseWriter: c.Writer, body: &bytes.Buffer{}}
-		c.Writer = w
+		// Buffer the response instead of writing directly
+		bw := &bufferedWriter{
+			ResponseWriter: c.Writer,
+			buf:            &bytes.Buffer{},
+		}
+		c.Writer = bw
 		c.Next()
 
-		// Only process 200 responses
-		if w.Status() != http.StatusOK {
+		status := bw.code
+		if status == 0 {
+			status = http.StatusOK
+		}
+		body := bw.buf.Bytes()
+
+		// Non-200: flush as-is
+		if status != http.StatusOK {
+			bw.ResponseWriter.WriteHeader(status)
+			if len(body) > 0 {
+				bw.ResponseWriter.Write(body)
+			}
 			return
 		}
 
-		// Compute ETag from response body
-		hash := sha256.Sum256(w.body.Bytes())
+		// Compute ETag
+		hash := sha256.Sum256(body)
 		etag := fmt.Sprintf(`"%x"`, hash[:8])
+		bw.ResponseWriter.Header().Set("ETag", etag)
 
-		c.Header("ETag", etag)
-
-		// Check If-None-Match
-		ifNoneMatch := c.Request.Header.Get("If-None-Match")
-		if ifNoneMatch == etag {
-			// Reset writer and send 304
-			c.Status(http.StatusNotModified)
+		// Check If-None-Match BEFORE writing body
+		if c.Request.Header.Get("If-None-Match") == etag {
+			bw.ResponseWriter.WriteHeader(http.StatusNotModified)
+			return
 		}
+
+		// Send full response with ETag
+		bw.ResponseWriter.WriteHeader(status)
+		bw.ResponseWriter.Write(body)
 	}
 }
 
-type etagResponseWriter struct {
+// bufferedWriter captures the response body and status without writing to the client.
+type bufferedWriter struct {
 	gin.ResponseWriter
-	body   *bytes.Buffer
-	status int
+	buf  *bytes.Buffer
+	code int
 }
 
-func (w *etagResponseWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
-	return w.ResponseWriter.Write(b)
+func (w *bufferedWriter) Write(b []byte) (int, error) {
+	return w.buf.Write(b)
 }
 
-func (w *etagResponseWriter) WriteHeader(status int) {
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
+func (w *bufferedWriter) WriteString(s string) (int, error) {
+	return w.buf.WriteString(s)
 }
 
-func (w *etagResponseWriter) Status() int {
-	if w.status == 0 {
+func (w *bufferedWriter) WriteHeader(code int) {
+	w.code = code
+}
+
+func (w *bufferedWriter) WriteHeaderNow() {}
+
+func (w *bufferedWriter) Written() bool {
+	return false
+}
+
+func (w *bufferedWriter) Status() int {
+	if w.code == 0 {
 		return http.StatusOK
 	}
-	return w.status
+	return w.code
+}
+
+func (w *bufferedWriter) Size() int {
+	return w.buf.Len()
 }

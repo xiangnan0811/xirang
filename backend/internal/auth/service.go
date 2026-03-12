@@ -107,7 +107,7 @@ func (s *Service) Login(username, password, clientIP string) (*LoginResult, erro
 
 func (s *Service) ListUsers() ([]model.User, error) {
 	var users []model.User
-	if err := s.db.Select("id", "username", "role", "created_at", "updated_at").Order("id asc").Find(&users).Error; err != nil {
+	if err := s.db.Select("id", "username", "role", "totp_enabled", "created_at", "updated_at").Order("id asc").Find(&users).Error; err != nil {
 		return nil, err
 	}
 	return users, nil

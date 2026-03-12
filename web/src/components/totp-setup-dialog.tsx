@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -121,11 +122,9 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                 <>
                   {qrUrl && (
                     <div className="flex justify-center">
-                      <img
-                        src={qrUrl}
-                        alt="TOTP 二维码"
-                        className="size-48 rounded-lg border border-border bg-white p-2"
-                      />
+                      <div className="rounded-lg border border-border bg-white p-3">
+                        <QRCodeSVG value={qrUrl} size={176} />
+                      </div>
                     </div>
                   )}
                   <div className="space-y-1">
