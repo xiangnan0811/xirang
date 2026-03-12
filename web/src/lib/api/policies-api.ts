@@ -8,6 +8,9 @@ type PolicyResponse = {
   target_path: string;
   cron_spec: string;
   enabled: boolean;
+  node_ids?: number[];
+  verify_enabled?: boolean;
+  verify_sample_rate?: number;
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
@@ -19,7 +22,10 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     cron: row.cron_spec,
     naturalLanguage: `按照 ${row.cron_spec} 调度`,
     enabled: row.enabled,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: row.node_ids ?? [],
+    verifyEnabled: row.verify_enabled ?? false,
+    verifySampleRate: row.verify_sample_rate ?? 0,
   };
 }
 
@@ -40,7 +46,10 @@ export function createPoliciesApi() {
           source_path: input.sourcePath,
           target_path: input.targetPath,
           cron_spec: input.cron,
-          enabled: input.enabled
+          enabled: input.enabled,
+          node_ids: input.nodeIds,
+          verify_enabled: input.verifyEnabled,
+          verify_sample_rate: input.verifySampleRate,
         }
       });
       return mapPolicy(unwrapData(payload));
@@ -55,7 +64,10 @@ export function createPoliciesApi() {
           source_path: input.sourcePath,
           target_path: input.targetPath,
           cron_spec: input.cron,
-          enabled: input.enabled
+          enabled: input.enabled,
+          node_ids: input.nodeIds,
+          verify_enabled: input.verifyEnabled,
+          verify_sample_rate: input.verifySampleRate,
         }
       });
       return mapPolicy(unwrapData(payload));

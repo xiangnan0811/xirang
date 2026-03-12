@@ -26,6 +26,8 @@ type TaskResponse = {
   next_run_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  source?: string;
+  verify_status?: string;
 };
 
 type TaskLogResponse = {
@@ -44,9 +46,21 @@ function mapTaskStatus(raw: string): TaskStatus {
     case "success":
     case "retrying":
     case "canceled":
+    case "warning":
       return raw;
     default:
       return "pending";
+  }
+}
+
+function mapVerifyStatus(raw?: string): TaskRecord["verifyStatus"] {
+  switch (raw) {
+    case "passed":
+    case "warning":
+    case "failed":
+      return raw;
+    default:
+      return "none";
   }
 }
 
@@ -74,6 +88,8 @@ function deriveTaskProgress(status: TaskStatus, retryCount: number, index: numbe
       return Math.min(95, 18 + retryCount * 15 + (index % 13));
     case "failed":
       return 68;
+    case "warning":
+      return 100;
     case "canceled":
       return 0;
     default:
@@ -107,7 +123,9 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     executorType: mapTaskExecutor(row.executor_type),
     cronSpec: row.cron_spec ?? undefined,
     updatedAt: formatTime(row.updated_at),
-    speedMbps: 0
+    speedMbps: 0,
+    source: row.source ?? "manual",
+    verifyStatus: mapVerifyStatus(row.verify_status),
   };
 }
 

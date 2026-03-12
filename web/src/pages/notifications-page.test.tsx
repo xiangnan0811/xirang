@@ -37,9 +37,11 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
   );
+  const searchParams = new URLSearchParams();
   return {
     ...actual,
     useOutletContext: () => contextRef.current,
+    useSearchParams: () => [searchParams, vi.fn()] as const,
   };
 });
 

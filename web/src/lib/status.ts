@@ -27,6 +27,8 @@ export function getTaskStatusMeta(status: TaskStatus) {
       return { label: "失败", variant: "danger" as const };
     case "canceled":
       return { label: "已取消", variant: "outline" as const };
+    case "warning":
+      return { label: "校验异常", variant: "warning" as const };
     default:
       return { label: "未知", variant: "outline" as const };
   }

@@ -7,6 +7,7 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { OnboardingTour } from "@/components/onboarding-tour";
+import { NotificationBell } from "@/components/notification-bell";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,7 +81,7 @@ export function AppShell() {
 
       if (isQuickFocus) {
         event.preventDefault();
-        const isDesktop = window.matchMedia("(min-width: 768px)").matches;
+        const isDesktop = window.matchMedia("(min-width: 1280px)").matches;
         if (isDesktop) {
           globalSearchInputRef.current?.focus();
           globalSearchInputRef.current?.select();
@@ -161,66 +162,67 @@ export function AppShell() {
           </div>
 
           <div className="flex min-w-0 flex-1 items-center justify-between px-4 lg:px-6">
-            <div className="hidden min-w-0 md:flex items-center gap-3">
+            <div className="hidden min-w-0 xl:flex items-center gap-3">
               <div className="relative shrink-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   ref={globalSearchInputRef}
                   value={consoleData.globalSearch}
                   onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
-                  className="h-8 w-60 pl-9 pr-16 bg-background/50 text-xs lg:w-72"
+                  className="h-8 w-60 pl-9 pr-16 bg-background/50 text-xs xl:w-72"
                   aria-label="全局搜索节点（名称、IP、标签、状态）"
                   aria-keyshortcuts="Control+K Meta+K /"
                   placeholder="搜索节点、IP、标签…"
                 />
-                <span className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground lg:inline-flex border border-border/50 shadow-sm font-mono">
+                <span className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground xl:inline-flex border border-border/50 shadow-sm font-mono">
                   ⌘ K
                 </span>
               </div>
+            </div>
 
-              <div className="flex min-w-0 items-center gap-2 mt-0.5 overflow-hidden">
-                <Badge variant="success" className="h-6 shrink-0 px-2 text-[10px]">在线 {consoleData.overview.healthyNodes}</Badge>
-                <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">运行中 {consoleData.overview.runningTasks}</Badge>
-                <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">异常 {consoleData.overview.failedTasks24h}</Badge>
-                <div className="h-4 w-px shrink-0 bg-border/50 mx-1" />
-                <span className="truncate text-[11px] text-muted-foreground">总数 {consoleData.nodes.length}</span>
-              </div>
+            <div className="hidden min-w-0 md:flex items-center gap-2 mt-0.5 overflow-hidden">
+              <Badge variant="success" className="h-6 shrink-0 px-2 text-[10px]">在线 {consoleData.overview.healthyNodes}</Badge>
+              <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">运行中 {consoleData.overview.runningTasks}</Badge>
+              <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">异常 {consoleData.overview.failedTasks24h}</Badge>
+              <div className="h-4 w-px shrink-0 bg-border/50 mx-1" />
+              <span className="truncate text-[11px] text-muted-foreground">总数 {consoleData.nodes.length}</span>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden size-8"
-              onClick={() => setMobileSearchOpen(true)}
-              aria-label="打开全局搜索"
-            >
-              <Search className="size-4" />
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={consoleData.refresh}
-              className="size-8 text-muted-foreground hover:text-foreground"
-              disabled={consoleData.loading}
-              aria-busy={consoleData.loading}
-              title="刷新数据"
-            >
-              <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} />
-            </Button>
-
-            <DisplayPreferencesToggle className="hidden md:flex items-center h-8 [&>button]:size-8 [&_svg]:size-4" />
-            <div className="flex items-center h-8 [&>button]:size-8 [&_svg]:size-4">
-              <ThemeToggle />
-            </div>
-
-            <div className="hidden md:flex items-center pl-1">
-              <span className="text-xs text-muted-foreground mr-3">{username ?? "未知"}</span>
-              <Button variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleLogout}>
-                退出登录
+              <Button
+                variant="ghost"
+                size="icon"
+                className="xl:hidden size-8"
+                onClick={() => setMobileSearchOpen(true)}
+                aria-label="打开全局搜索"
+              >
+                <Search className="size-4" />
               </Button>
-            </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={consoleData.refresh}
+                className="size-8 text-muted-foreground hover:text-foreground"
+                disabled={consoleData.loading}
+                aria-busy={consoleData.loading}
+                title="刷新数据"
+              >
+                <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} />
+              </Button>
+
+              <NotificationBell token={token} />
+              <DisplayPreferencesToggle className="hidden md:flex items-center h-8 [&>button]:size-8 [&_svg]:size-4" />
+              <div className="flex items-center h-8 [&>button]:size-8 [&_svg]:size-4">
+                <ThemeToggle />
+              </div>
+
+              <div className="hidden md:flex items-center pl-1">
+                <span className="text-xs text-muted-foreground mr-3">{username ?? "未知"}</span>
+                <Button variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleLogout}>
+                  退出登录
+                </Button>
+              </div>
             </div>
           </div>
         </div>

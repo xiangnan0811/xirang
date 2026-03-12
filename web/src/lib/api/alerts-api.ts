@@ -184,6 +184,27 @@ export function createAlertsApi() {
       };
     },
 
+    async getAlertUnreadCount(token: string): Promise<{ total: number; critical: number; warning: number }> {
+      const payload = await request<Envelope<{ total: number; critical: number; warning: number }>>("/alerts/unread-count", { token });
+      const data = unwrapData(payload);
+      return {
+        total: Number(data?.total ?? 0),
+        critical: Number(data?.critical ?? 0),
+        warning: Number(data?.warning ?? 0),
+      };
+    },
+
+    async getRecentAlerts(token: string, options?: { limit?: number; signal?: AbortSignal }): Promise<AlertRecord[]> {
+      const query = new URLSearchParams();
+      query.set("status", "open");
+      if (options?.limit) {
+        query.set("limit", String(options.limit));
+      }
+      const payload = await request<Envelope<AlertResponse[]>>(`/alerts?${query.toString()}`, { token, signal: options?.signal });
+      const rows = unwrapData(payload) ?? [];
+      return rows.map((row) => mapAlert(row));
+    },
+
     async retryFailedDeliveries(token: string, alertId: string): Promise<AlertBulkRetryResult> {
       const numericAlertID = parseNumericId(alertId, "alert");
       const payload = await request<Envelope<RetryFailedDeliveriesResponse>>(`/alerts/${numericAlertID}/retry-failed-deliveries`, {

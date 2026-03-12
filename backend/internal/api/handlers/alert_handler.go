@@ -373,6 +373,26 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 	}})
 }
 
+func (h *AlertHandler) UnreadCount(c *gin.Context) {
+	var counts struct {
+		Total    int64 `gorm:"column:total"`
+		Critical int64 `gorm:"column:critical"`
+		Warning  int64 `gorm:"column:warning"`
+	}
+	if err := h.db.Model(&model.Alert{}).
+		Select("COUNT(*) as total, COALESCE(SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END), 0) as critical, COALESCE(SUM(CASE WHEN severity='warning' THEN 1 ELSE 0 END), 0) as warning").
+		Where("status = ?", "open").
+		Scan(&counts).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"total":    counts.Total,
+		"critical": counts.Critical,
+		"warning":  counts.Warning,
+	}})
+}
+
 func parseDeliveryStatsHours(raw string) int {
 	value := 24
 	if strings.TrimSpace(raw) == "" {

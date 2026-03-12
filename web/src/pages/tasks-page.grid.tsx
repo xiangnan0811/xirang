@@ -40,7 +40,8 @@ export const TasksGrid = React.memo(function TasksGrid({
             className={cn(
               "interactive-surface flex h-full flex-col gap-2 p-4",
               task.status === "failed" && "border-destructive/35 bg-destructive/10",
-              task.status === "running" && "border-info/30 bg-info/5"
+              task.status === "running" && "border-info/30 bg-info/5",
+              task.status === "warning" && "border-warning/35 bg-warning/10"
             )}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -56,6 +57,14 @@ export const TasksGrid = React.memo(function TasksGrid({
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0">定时</Badge>
                 )}
                 <Badge variant={status.variant}>{status.label}</Badge>
+                {task.verifyStatus && task.verifyStatus !== "none" && (
+                  <Badge
+                    variant={task.verifyStatus === "passed" ? "success" : "warning"}
+                    className="text-[10px] px-1.5 py-0"
+                  >
+                    {task.verifyStatus === "passed" ? "校验通过" : task.verifyStatus === "warning" ? "校验异常" : "校验失败"}
+                  </Badge>
+                )}
               </div>
             </div>
 
@@ -83,7 +92,9 @@ export const TasksGrid = React.memo(function TasksGrid({
                         ? "bg-destructive"
                         : task.status === "running" || task.status === "retrying"
                           ? "bg-info"
-                          : "bg-muted-foreground"
+                          : task.status === "warning"
+                            ? "bg-warning"
+                            : "bg-muted-foreground"
                   )}
                   style={{ width: `${task.progress}%` }}
                 />

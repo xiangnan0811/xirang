@@ -14,10 +14,27 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
+	"xirang/backend/internal/task/verifier"
 	"xirang/backend/internal/ws"
 
+	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
+
+// nextCronRun 根据 cron 表达式计算下一次执行时间。
+// 如果表达式为空或无效，返回 nil。
+func nextCronRun(spec string) *time.Time {
+	if spec == "" {
+		return nil
+	}
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	schedule, err := parser.Parse(spec)
+	if err != nil {
+		return nil
+	}
+	next := schedule.Next(time.Now())
+	return &next
+}
 
 const (
 	defaultLogQueueCapacity       = 1024
@@ -214,6 +231,10 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 	if m.scheduler == nil {
 		return nil
 	}
+	// 持久化下次调度时间
+	if next := nextCronRun(task.CronSpec); next != nil {
+		m.db.Model(&model.Task{}).Where("id = ?", task.ID).Update("next_run_at", next)
+	}
 	return m.scheduler.RegisterTask(task.ID, task.CronSpec, func() {
 		if err := m.TriggerFromScheduler(task.ID); err != nil {
 			log.Printf("warn: 定时触发任务失败(task_id=%d): %v", task.ID, err)
@@ -333,7 +354,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		return
 	}
 
-	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled {
+	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled || currentStatus == StatusWarning {
 		if err := m.updateStatus(&taskEntity, StatusPending, map[string]interface{}{"last_error": ""}); err != nil {
 			m.emitLog(taskID, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
 			return
@@ -368,7 +389,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	if wasCanceled {
 		if ParseStatus(taskEntity.Status) != StatusCanceled {
 			if statusErr := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-				"next_run_at": nil,
+				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  "任务已取消",
 			}); statusErr != nil {
 				m.emitLog(taskID, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
@@ -380,13 +401,54 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	}
 
 	if err == nil && exitCode == 0 {
+		verifyStatus := "none"
+
+		// 检查关联策略是否启用校验
+		if taskEntity.Policy != nil && taskEntity.Policy.VerifyEnabled {
+			m.emitLog(taskID, "info", "开始备份完整性校验", taskEntity.Status)
+			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
+				m.emitLog(taskID, level, msg, string(StatusRunning))
+			})
+
+			// 校验期间可能被取消
+			if execCtx.Err() != nil {
+				m.emitLog(taskID, "warn", "校验期间任务已取消", taskEntity.Status)
+				m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
+					"next_run_at": nextCronRun(taskEntity.CronSpec),
+					"last_error":  "任务已取消",
+				})
+				return
+			}
+
+			verifyStatus = result.Status
+
+			if result.Status == "warning" || result.Status == "failed" {
+				m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{
+					"retry_count":   0,
+					"next_run_at":   nextCronRun(taskEntity.CronSpec),
+					"last_error":    result.Message,
+					"verify_status": verifyStatus,
+				})
+				m.emitLog(taskID, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
+				alerting.RaiseVerificationFailure(m.db, taskEntity, result.Message)
+				return
+			}
+			m.emitLog(taskID, "info", "备份完整性校验通过", taskEntity.Status)
+		}
+
 		if statusErr := m.updateStatus(&taskEntity, StatusSuccess, map[string]interface{}{
-			"retry_count": 0,
-			"next_run_at": nil,
-			"last_error":  "",
+			"retry_count":   0,
+			"next_run_at":   nextCronRun(taskEntity.CronSpec),
+			"last_error":    "",
+			"verify_status": verifyStatus,
 		}); statusErr != nil {
 			m.emitLog(taskID, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
 			return
+		}
+		// 更新关联节点的最后备份时间
+		if taskEntity.NodeID > 0 {
+			now := time.Now()
+			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &now)
 		}
 		m.emitLog(taskID, "info", "任务执行成功", taskEntity.Status)
 		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
@@ -429,7 +491,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 
 	if statusErr := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
 		"retry_count": retryCount,
-		"next_run_at": nil,
+		"next_run_at": nextCronRun(taskEntity.CronSpec),
 		"last_error":  errorMsg,
 	}); statusErr != nil {
 		m.emitLog(taskID, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
@@ -717,7 +779,7 @@ func (m *Manager) Cancel(taskID uint) error {
 	case StatusPending, StatusRetrying:
 		m.stopRetryTimer(taskID)
 		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-			"next_run_at": nil,
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
 			"last_error":  "任务已取消",
 		}); err != nil {
 			return err
@@ -732,7 +794,7 @@ func (m *Manager) Cancel(taskID uint) error {
 			}
 		}
 		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-			"next_run_at": nil,
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
 			"last_error":  "任务已取消",
 		}); err != nil {
 			return err

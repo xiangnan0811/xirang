@@ -1,28 +1,20 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
-	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 	"gorm.io/gorm"
 )
 
@@ -55,7 +47,6 @@ type nodeBatchDeleteRequest struct {
 const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
-var knownHostsWriteMu sync.Mutex
 
 func sanitizeNode(node model.Node) model.Node {
 	copyNode := node
@@ -349,6 +340,13 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
+	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.PolicyNode{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Task{}).Error; err != nil {
 		tx.Rollback()
 		log.Printf("服务器内部错误: %v", err)
@@ -409,6 +407,13 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	if err := tx.Where("node_id = ?", id).Delete(&model.PolicyNode{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("服务器内部错误: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+
 	if err := tx.Where("node_id = ?", id).Delete(&model.Task{}).Error; err != nil {
 		tx.Rollback()
 		log.Printf("服务器内部错误: %v", err)
@@ -439,199 +444,6 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-func parseDiskProbe(output string) (int, int, bool) {
-	fields := strings.Fields(strings.TrimSpace(output))
-	if len(fields) < 2 {
-		return 0, 0, false
-	}
-
-	parseGB := func(raw string) (int, bool) {
-		trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(raw, "Gi"), "G"))
-		value, err := strconv.Atoi(trimmed)
-		if err != nil {
-			return 0, false
-		}
-		return value, true
-	}
-	total, okTotal := parseGB(fields[0])
-	used, okUsed := parseGB(fields[1])
-	if !okTotal || !okUsed || total <= 0 || used < 0 || used > total {
-		return 0, 0, false
-	}
-	return used, total, true
-}
-
-func (h *NodeHandler) resolveKeyContent(node model.Node) (string, string, error) {
-	if node.SSHKey != nil {
-		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			if node.SSHKeyID != nil {
-				return key, fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID), nil
-			}
-			return key, "ssh_key_ref", nil
-		}
-	}
-
-	if node.SSHKeyID != nil {
-		keyID := *node.SSHKeyID
-		var key model.SSHKey
-		if err := h.db.First(&key, keyID).Error; err != nil {
-			return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥不存在，请重新选择")
-		}
-		if content := strings.TrimSpace(key.PrivateKey); content != "" {
-			return content, fmt.Sprintf("ssh_key_id=%d", keyID), nil
-		}
-		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥内容为空，请重新配置")
-	}
-
-	if content := strings.TrimSpace(node.PrivateKey); content != "" {
-		return content, "node.private_key", nil
-	}
-	return "", "", nil
-}
-
-func (h *NodeHandler) buildSSHAuth(node model.Node) ([]ssh.AuthMethod, string, error) {
-	switch node.AuthType {
-	case "password":
-		if node.Password == "" {
-			return nil, "", fmt.Errorf("密码认证模式下请填写密码")
-		}
-		return []ssh.AuthMethod{ssh.Password(node.Password)}, "", nil
-	case "key":
-		keyContent, keySource, resolveErr := h.resolveKeyContent(node)
-		if resolveErr != nil {
-			return nil, "", resolveErr
-		}
-		if keyContent == "" {
-			return nil, "", fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
-		}
-		preparedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
-			if strings.TrimSpace(keySource) == "" {
-				keySource = "unknown"
-			}
-			return nil, "", fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(preparedKey))
-		if err != nil {
-			return nil, "", fmt.Errorf("解析私钥失败")
-		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, preparedKey, nil
-	default:
-		return nil, "", fmt.Errorf("不支持的认证方式")
-	}
-}
-
-func resolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
-	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
-	if err != nil {
-		return nil, err
-	}
-	if !strictHostCheck {
-		log.Printf("warn: SSH 主机密钥校验已禁用，建议在生产环境启用 SSH_STRICT_HOST_KEY_CHECKING=true")
-		return ssh.InsecureIgnoreHostKey(), nil
-	}
-
-	knownHostsPath, err := util.ExpandHomePath(strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")))
-	if err != nil {
-		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
-	}
-	if strings.TrimSpace(knownHostsPath) == "" {
-		return nil, fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
-	}
-	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
-		return nil, fmt.Errorf("准备 known_hosts 失败")
-	}
-
-	callback, err := knownhosts.New(knownHostsPath)
-	if err != nil {
-		return nil, fmt.Errorf("加载 known_hosts 失败")
-	}
-	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		if callbackErr := callback(hostname, remote, key); callbackErr != nil {
-			var keyErr *knownhosts.KeyError
-			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
-				if appendErr := appendKnownHost(knownHostsPath, hostname, key); appendErr != nil {
-					return fmt.Errorf("knownhosts: accept new host failed: %w", appendErr)
-				}
-				refreshedCallback, refreshErr := knownhosts.New(knownHostsPath)
-				if refreshErr != nil {
-					return fmt.Errorf("加载 known_hosts 失败")
-				}
-				callback = refreshedCallback
-				return callback(hostname, remote, key)
-			}
-			return callbackErr
-		}
-		return nil
-	}, nil
-}
-
-func ensureKnownHostsFile(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	return file.Close()
-}
-
-func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
-	knownHostsWriteMu.Lock()
-	defer knownHostsWriteMu.Unlock()
-
-	if err := ensureKnownHostsFile(path); err != nil {
-		return err
-	}
-	entry := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if knownHostEntryExists(content, hostname, key) {
-		return nil
-	}
-	prefix := ""
-	if len(content) > 0 && content[len(content)-1] != '\n' {
-		prefix = "\n"
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	_, err = file.WriteString(prefix + entry + "\n")
-	return err
-}
-
-func knownHostEntryExists(content []byte, hostname string, key ssh.PublicKey) bool {
-	normalizedHost := knownhosts.Normalize(hostname)
-	keyFields := strings.Fields(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))))
-	if len(keyFields) < 2 {
-		return false
-	}
-
-	for _, rawLine := range strings.Split(string(content), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		hosts := strings.Split(fields[0], ",")
-		if !slices.Contains(hosts, normalizedHost) {
-			continue
-		}
-		if fields[1] == keyFields[0] && fields[2] == keyFields[1] {
-			return true
-		}
-	}
-	return false
-}
 func (h *NodeHandler) Exec(c *gin.Context) {
 	c.JSON(http.StatusForbidden, gin.H{
 		"error": "节点远程执行能力已禁用",
@@ -651,7 +463,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		return
 	}
 
-	authMethods, _, err := h.buildSSHAuth(node)
+	authMethods, _, err := sshutil.BuildSSHAuthWithKey(node, h.db)
 	if err != nil {
 		probeAt := time.Now()
 		node.Status = "offline"
@@ -663,15 +475,16 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
+		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
-			"message": fmt.Sprintf("连接失败：%v", err),
+			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
 		return
 	}
 
 	address := fmt.Sprintf("%s:%d", node.Host, node.Port)
-	hostKeyCallback, err := resolveSSHHostKeyCallback()
+	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
 		probeAt := time.Now()
 		node.Status = "offline"
@@ -683,9 +496,10 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
+		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
-			"message": fmt.Sprintf("连接失败：%v", err),
+			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
 		return
 	}
@@ -708,9 +522,10 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
+		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      false,
-			"message": fmt.Sprintf("连接失败：%v", err),
+			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
 		return
 	}
@@ -729,7 +544,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		output, runErr := session.Output("df -BG / | awk 'NR==2 {print $2\" \"$3}'")
 		_ = session.Close()
 		if runErr == nil {
-			if used, total, ok := parseDiskProbe(string(output)); ok {
+			if used, total, ok := sshutil.ParseDiskProbe(string(output)); ok {
 				node.DiskUsedGB = used
 				node.DiskTotalGB = total
 			}

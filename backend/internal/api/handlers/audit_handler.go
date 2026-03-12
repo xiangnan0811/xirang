@@ -125,7 +125,8 @@ func (h *AuditHandler) buildQuery(c *gin.Context) *gorm.DB {
 		query = query.Where("UPPER(method) = ?", strings.ToUpper(method))
 	}
 	if pathKeyword := strings.TrimSpace(c.Query("path")); pathKeyword != "" {
-		query = query.Where("path LIKE ?", "%"+pathKeyword+"%")
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(pathKeyword)
+		query = query.Where("path LIKE ? ESCAPE '\\'", "%"+escaped+"%")
 	}
 
 	if rawStatusCode := strings.TrimSpace(c.Query("status_code")); rawStatusCode != "" {

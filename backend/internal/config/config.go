@@ -28,6 +28,9 @@ type Config struct {
 	LoginFailLockDuration     time.Duration
 	LoginCaptchaEnabled       bool
 	LoginSecondCaptchaEnabled bool
+	NodeProbeInterval         time.Duration
+	NodeProbeFailThreshold    int
+	NodeProbeConcurrency      int
 }
 
 func Load() (Config, error) {
@@ -36,12 +39,22 @@ func Load() (Config, error) {
 		allowedOriginsRaw = "http://localhost:5173,http://127.0.0.1:5173"
 	}
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		if util.IsDevelopmentEnv() {
+			jwtSecret = "xirang-dev-secret"
+			log.Printf("warn: 使用默认 JWT_SECRET，仅适用于开发环境，生产环境必须设置 JWT_SECRET")
+		} else {
+			return Config{}, fmt.Errorf("JWT_SECRET 环境变量未设置（仅 APP_ENV=development 可省略）")
+		}
+	}
+
 	cfg := Config{
 		ListenAddr:     util.GetEnvOrDefault("SERVER_ADDR", ":8080"),
 		DBType:         strings.ToLower(util.GetEnvOrDefault("DB_TYPE", "sqlite")),
 		SQLitePath:     util.GetEnvOrDefault("SQLITE_PATH", "./xirang.db"),
 		PostgresDSN:    util.GetEnvOrDefault("DB_DSN", ""),
-		JWTSecret:      util.GetEnvOrDefault("JWT_SECRET", "xirang-dev-secret"),
+		JWTSecret:      jwtSecret,
 		RsyncBinary:    util.GetEnvOrDefault("RSYNC_BINARY", "rsync"),
 		TaskTrafficRetentionDays: 8,
 		AllowedOrigins: splitCSV(allowedOriginsRaw),
@@ -100,6 +113,27 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.LoginSecondCaptchaEnabled = loginSecondCaptchaEnabled
+
+	probeIntervalRaw := util.GetEnvOrDefault("NODE_PROBE_INTERVAL", "5m")
+	probeInterval, err := time.ParseDuration(probeIntervalRaw)
+	if err != nil || probeInterval < 30*time.Second {
+		return Config{}, fmt.Errorf("解析 NODE_PROBE_INTERVAL 失败")
+	}
+	cfg.NodeProbeInterval = probeInterval
+
+	probeFailThresholdRaw := util.GetEnvOrDefault("NODE_PROBE_FAIL_THRESHOLD", "3")
+	probeFailThreshold, err := strconv.Atoi(probeFailThresholdRaw)
+	if err != nil || probeFailThreshold <= 0 {
+		return Config{}, fmt.Errorf("解析 NODE_PROBE_FAIL_THRESHOLD 失败")
+	}
+	cfg.NodeProbeFailThreshold = probeFailThreshold
+
+	probeConcurrencyRaw := util.GetEnvOrDefault("NODE_PROBE_CONCURRENCY", "10")
+	probeConcurrency, err := strconv.Atoi(probeConcurrencyRaw)
+	if err != nil || probeConcurrency <= 0 {
+		return Config{}, fmt.Errorf("解析 NODE_PROBE_CONCURRENCY 失败")
+	}
+	cfg.NodeProbeConcurrency = probeConcurrency
 
 	wsAllowEmptyOrigin, err := util.ReadBoolEnv("WS_ALLOW_EMPTY_ORIGIN", false)
 	if err != nil {

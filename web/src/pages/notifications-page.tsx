@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
 import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
@@ -36,6 +36,15 @@ export function NotificationsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<IntegrationChannel | null>(null);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const highlightAlertId = searchParams.get("alert");
+  const clearHighlightAlert = useCallback(() => {
+    if (searchParams.has("alert")) {
+      searchParams.delete("alert");
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
   const openAlerts = alerts.filter((item) => item.status === "open");
@@ -130,6 +139,8 @@ export function NotificationsPage() {
           fetchAlertDeliveries={fetchAlertDeliveries}
           retryAlertDelivery={retryAlertDelivery}
           retryFailedAlertDeliveries={retryFailedAlertDeliveries}
+          initialAlertId={highlightAlertId}
+          onAlertHighlighted={clearHighlightAlert}
         />
       </section>
 

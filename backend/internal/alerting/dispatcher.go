@@ -36,7 +36,7 @@ type payload struct {
 }
 
 func RaiseTaskFailure(db *gorm.DB, task model.Task, message string) error {
-	errorCode := fmt.Sprintf("XR-EXEC-%04d", task.ID)
+	errorCode := fmt.Sprintf("XR-EXEC-%d", task.ID)
 	policyName := ""
 	if task.Policy != nil {
 		policyName = task.Policy.Name
@@ -51,6 +51,27 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, message string) error {
 		ErrorCode:   errorCode,
 		Message:     message,
 		Retryable:   true,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
+func RaiseVerificationFailure(db *gorm.DB, task model.Task, message string) error {
+	errorCode := fmt.Sprintf("XR-VRFY-%d", task.ID)
+	policyName := ""
+	if task.Policy != nil {
+		policyName = task.Policy.Name
+	}
+	alert := model.Alert{
+		NodeID:      task.NodeID,
+		NodeName:    task.Node.Name,
+		TaskID:      &task.ID,
+		PolicyName:  policyName,
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   errorCode,
+		Message:     message,
+		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
 	return raiseAndDispatch(db, &alert)
@@ -71,7 +92,7 @@ func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
 }
 
 func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
-	errorCode := fmt.Sprintf("XR-NODE-%04d", node.ID)
+	errorCode := fmt.Sprintf("XR-NODE-%d", node.ID)
 	alert := model.Alert{
 		NodeID:      node.ID,
 		NodeName:    node.Name,

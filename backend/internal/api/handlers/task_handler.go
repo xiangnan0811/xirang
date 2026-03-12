@@ -69,8 +69,9 @@ func (h *TaskHandler) List(c *gin.Context) {
 		}
 	}
 	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
-		fuzzyKeyword := "%" + keyword + "%"
-		query = query.Where("name LIKE ? OR command LIKE ? OR rsync_source LIKE ? OR rsync_target LIKE ?", fuzzyKeyword, fuzzyKeyword, fuzzyKeyword, fuzzyKeyword)
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(keyword)
+		fuzzyKeyword := "%" + escaped + "%"
+		query = query.Where("name LIKE ? ESCAPE '\\' OR command LIKE ? ESCAPE '\\' OR rsync_source LIKE ? ESCAPE '\\' OR rsync_target LIKE ? ESCAPE '\\'", fuzzyKeyword, fuzzyKeyword, fuzzyKeyword, fuzzyKeyword)
 	}
 
 	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
@@ -89,6 +90,9 @@ func (h *TaskHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	for i := range tasks {
+		tasks[i].Node = sanitizeNode(tasks[i].Node)
+	}
 	c.JSON(http.StatusOK, gin.H{"data": tasks})
 }
 
@@ -102,6 +106,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
 		return
 	}
+	taskEntity.Node = sanitizeNode(taskEntity.Node)
 	c.JSON(http.StatusOK, gin.H{"data": taskEntity})
 }
 

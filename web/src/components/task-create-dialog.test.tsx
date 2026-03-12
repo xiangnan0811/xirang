@@ -47,6 +47,9 @@ function createPolicy(id: number, name: string): PolicyRecord {
     naturalLanguage: "每 2 小时执行一次",
     enabled: true,
     criticalThreshold: 1,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0,
   };
 }
 

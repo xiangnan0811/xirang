@@ -33,6 +33,17 @@ export function usePolicyOperations({
 }: UsePolicyOperationsParams) {
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
+  const refreshTasks = useCallback(async () => {
+    if (!token) return;
+    try {
+      const tasks = await apiClient.getTasks(token);
+      markTasksMutated();
+      setTasks(tasks);
+    } catch {
+      // 静默失败，下次全量刷新会补上
+    }
+  }, [token, markTasksMutated, setTasks]);
+
   const createPolicy = useCallback(async (input: NewPolicyInput) => {
     const result = await exec("创建策略", (t) => apiClient.createPolicy(t, input));
     if (result) {
@@ -42,11 +53,15 @@ export function usePolicyOperations({
           criticalThreshold: input.criticalThreshold,
           naturalLanguage: describeCron(result.data.cron)
         }, ...prev]);
+        // 后端 SyncPolicyTasks 会自动创建关联任务，需刷新任务列表
+        if (input.nodeIds.length > 0) {
+          void refreshTasks();
+        }
       }
       return;
     }
     setPolicies((prev) => [buildDemoPolicy(input, policies), ...prev]);
-  }, [exec, policies, setPolicies]);
+  }, [exec, policies, refreshTasks, setPolicies]);
 
   const updatePolicy = useCallback(async (policyID: number, input: NewPolicyInput) => {
     const result = await exec("更新策略", (t) => apiClient.updatePolicy(t, policyID, input));
@@ -57,6 +72,8 @@ export function usePolicyOperations({
           criticalThreshold: input.criticalThreshold,
           naturalLanguage: describeCron(result.data.cron)
         } : policy)));
+        // 后端 SyncPolicyTasks 会同步更新关联任务，需刷新任务列表
+        void refreshTasks();
       }
       return;
     }
@@ -71,12 +88,15 @@ export function usePolicyOperations({
               cron: input.cron,
               naturalLanguage: describeCron(input.cron),
               enabled: input.enabled,
-              criticalThreshold: Math.max(1, input.criticalThreshold)
+              criticalThreshold: Math.max(1, input.criticalThreshold),
+              nodeIds: input.nodeIds,
+              verifyEnabled: input.verifyEnabled,
+              verifySampleRate: input.verifySampleRate,
             }
           : policy
       )
     );
-  }, [exec, setPolicies]);
+  }, [exec, refreshTasks, setPolicies]);
 
   const deletePolicy = useCallback(async (policyID: number) => {
     await exec("删除策略", (t) => apiClient.deletePolicy(t, policyID));
@@ -100,7 +120,10 @@ export function usePolicyOperations({
       targetPath: current.targetPath,
       cron: current.cron,
       criticalThreshold: current.criticalThreshold,
-      enabled: !current.enabled
+      enabled: !current.enabled,
+      nodeIds: current.nodeIds ?? [],
+      verifyEnabled: current.verifyEnabled ?? false,
+      verifySampleRate: current.verifySampleRate ?? 0,
     });
   }, [policies, updatePolicy]);
 
@@ -115,7 +138,10 @@ export function usePolicyOperations({
       targetPath: current.targetPath,
       criticalThreshold: current.criticalThreshold,
       enabled: current.enabled,
-      cron
+      cron,
+      nodeIds: current.nodeIds ?? [],
+      verifyEnabled: current.verifyEnabled ?? false,
+      verifySampleRate: current.verifySampleRate ?? 0,
     });
     setPolicies((prev) =>
       prev.map((policy) =>

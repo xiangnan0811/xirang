@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
-import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
+import type { NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -18,6 +18,9 @@ const emptyDraft: PolicyDraft = {
   cron: "0 */2 * * *",
   criticalThreshold: 2,
   enabled: true,
+  nodeIds: [],
+  verifyEnabled: true,
+  verifySampleRate: 0,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -37,6 +40,9 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     cron: policy.cron,
     criticalThreshold: policy.criticalThreshold,
     enabled: policy.enabled,
+    nodeIds: policy.nodeIds ?? [],
+    verifyEnabled: policy.verifyEnabled ?? false,
+    verifySampleRate: policy.verifySampleRate ?? 0,
   };
 }
 
@@ -45,6 +51,7 @@ type PolicyEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   editingPolicy?: PolicyRecord | null;
   onSave: (draft: PolicyDraft) => Promise<void>;
+  nodes?: NodeRecord[];
 };
 
 export function PolicyEditorDialog({
@@ -52,6 +59,7 @@ export function PolicyEditorDialog({
   onOpenChange,
   editingPolicy,
   onSave,
+  nodes = [],
 }: PolicyEditorDialogProps) {
   const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
@@ -65,6 +73,15 @@ export function PolicyEditorDialog({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleNodeToggle = (nodeId: number, checked: boolean) => {
+    setDraft((prev) => ({
+      ...prev,
+      nodeIds: checked
+        ? [...prev.nodeIds, nodeId]
+        : prev.nodeIds.filter((id) => id !== nodeId),
+    }));
   };
 
   return (
@@ -161,6 +178,80 @@ export function PolicyEditorDialog({
             <span className="text-muted-foreground">{draft.enabled ? "启用" : "停用"}</span>
           </div>
         </div>
+      </div>
+
+      {/* 关联节点 */}
+      {nodes.length > 0 ? (
+        <div>
+          <div className="mb-1 text-sm font-medium">
+            关联节点
+            {draft.nodeIds.length > 0 ? (
+              <span className="ml-1 text-xs text-muted-foreground">
+                （已选 {draft.nodeIds.length} 个）
+              </span>
+            ) : null}
+          </div>
+          <div className="glass-panel max-h-40 overflow-y-auto rounded-md border border-border/60 p-2">
+            <div className="flex flex-col gap-1.5">
+              {nodes.map((node) => {
+                const checked = draft.nodeIds.includes(node.id);
+                return (
+                  <label
+                    key={node.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent/40"
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-4 shrink-0"
+                      checked={checked}
+                      onChange={(event) => handleNodeToggle(node.id, event.target.checked)}
+                      aria-label={`选择节点 ${node.name}`}
+                    />
+                    <span className="truncate">{node.name}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{node.host}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 校验配置 */}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <div id="policy-verify-label" className="mb-1 text-sm font-medium">备份校验</div>
+          <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
+            <Switch
+              aria-labelledby="policy-verify-label"
+              checked={draft.verifyEnabled}
+              onCheckedChange={(checked) =>
+                setDraft((prev) => ({ ...prev, verifyEnabled: checked }))
+              }
+            />
+            <span className="text-muted-foreground">{draft.verifyEnabled ? "启用" : "停用"}</span>
+          </div>
+        </div>
+        {draft.verifyEnabled ? (
+          <div>
+            <label htmlFor="policy-edit-sample-rate" className="mb-1 block text-sm font-medium">
+              抽样率（%）
+            </label>
+            <Input
+              id="policy-edit-sample-rate"
+              type="number"
+              min={1}
+              max={100}
+              value={draft.verifySampleRate}
+              onChange={(event) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  verifySampleRate: toBoundedInt(event.target.value, 10, 1, 100),
+                }))
+              }
+            />
+          </div>
+        ) : null}
       </div>
     </FormDialog>
   );

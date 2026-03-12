@@ -217,6 +217,8 @@ export class LogsSocketClient {
       if (this.socket === socket) {
         this.socket = null;
       }
+      // 忽略已被新连接取代的旧 socket 的关闭事件（React 18 Strict Mode 双挂载场景）
+      if (attempt !== this.connectAttempt) return;
       this.emitStatus(false);
       if (!this.manuallyClosed) {
         this.tryNextCandidateOrReconnect();
@@ -224,6 +226,7 @@ export class LogsSocketClient {
     };
 
     socket.onerror = () => {
+      if (attempt !== this.connectAttempt) return;
       this.emitStatus(false);
     };
   }

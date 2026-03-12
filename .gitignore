@@ -4,6 +4,7 @@ web/dist/
 
 # Go
 backend/xirang
+backend/server
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal

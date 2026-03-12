@@ -17,6 +17,7 @@ type NodeResponse = {
   connection_latency_ms?: number;
   disk_used_gb?: number;
   disk_total_gb?: number;
+  last_probe_at?: string | null;
 };
 
 type NodeBatchDeleteResponse = {
@@ -68,8 +69,9 @@ function mapNode(row: NodeResponse): NodeRecord {
     diskFreePercent: freePercent,
     diskUsedGb,
     diskTotalGb,
-    diskProbeAt: formatTime(row.last_seen_at),
-    connectionLatencyMs: row.connection_latency_ms
+    diskProbeAt: formatTime(row.last_probe_at ?? row.last_seen_at),
+    connectionLatencyMs: row.connection_latency_ms,
+    lastProbeAt: formatTime(row.last_probe_at),
   };
 }
 

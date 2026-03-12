@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
@@ -23,8 +24,13 @@ func (h *WSHandler) ServeWS(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "websocket 服务不可用"})
 		return
 	}
+	// WebSocket 无法通过 HTTP 头传递 JWT，认证在升级后通过首条消息完成。
+	// 此处同时校验 token 有效性和 RBAC 权限（tasks:read）。
 	h.hub.ServeWS(c, func(token string) bool {
-		_, err := h.jwtManager.ParseToken(token)
-		return err == nil
+		claims, err := h.jwtManager.ParseToken(token)
+		if err != nil {
+			return false
+		}
+		return middleware.HasPermission(claims.Role, "tasks:read")
 	})
 }

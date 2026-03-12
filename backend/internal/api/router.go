@@ -74,7 +74,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	nodeHandler := handlers.NewNodeHandler(dep.DB)
-	policyHandler := handlers.NewPolicyHandler(dep.DB)
+	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
@@ -121,6 +121,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Delete)
 
 	secured.GET("/alerts", middleware.RBAC("alerts:read"), alertHandler.List)
+	secured.GET("/alerts/unread-count", middleware.RBAC("alerts:read"), alertHandler.UnreadCount)
 	secured.GET("/alerts/:id", middleware.RBAC("alerts:read"), alertHandler.Get)
 	secured.GET("/alerts/delivery-stats", middleware.RBAC("alerts:deliveries"), alertHandler.DeliveryStats)
 	secured.GET("/alerts/:id/deliveries", middleware.RBAC("alerts:deliveries"), alertHandler.Deliveries)
@@ -146,6 +147,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), taskHandler.Cancel)
 
+	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
+	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。
 	v1.GET("/ws/logs", wsHandler.ServeWS)
 
 	router.GET("/healthz", func(c *gin.Context) {

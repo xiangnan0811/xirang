@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
   Loader2,
@@ -43,6 +43,8 @@ type AlertCenterProps = {
   fetchAlertDeliveries: (alertId: string) => Promise<AlertDeliveryRecord[]>;
   retryAlertDelivery: (alertId: string, integrationId: string) => Promise<{ message: string }>;
   retryFailedAlertDeliveries: (alertId: string) => Promise<{ message: string }>;
+  initialAlertId?: string | null;
+  onAlertHighlighted?: () => void;
 };
 
 export function AlertCenter({
@@ -57,6 +59,8 @@ export function AlertCenter({
   fetchAlertDeliveries,
   retryAlertDelivery,
   retryFailedAlertDeliveries,
+  initialAlertId,
+  onAlertHighlighted,
 }: AlertCenterProps) {
   const {
     keyword, setKeyword,
@@ -74,6 +78,23 @@ export function AlertCenter({
   const [deliveryMap, setDeliveryMap] = useState<Record<string, AlertDeliveryRecord[]>>({});
   const [retryingDeliveryKey, setRetryingDeliveryKey] = useState<string | null>(null);
   const [retryingAllAlertId, setRetryingAllAlertId] = useState<string | null>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialAlertId && alerts.length > 0) {
+      // 清空筛选条件，确保目标告警不会被过滤掉
+      resetFilters();
+      setDeliveryOpenAlertId(initialAlertId);
+      if (!deliveryMap[initialAlertId]) {
+        refreshDeliveries(initialAlertId);
+      }
+      onAlertHighlighted?.();
+      // Scroll into view after a short delay
+      setTimeout(() => {
+        highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [initialAlertId, alerts.length]);
 
   const integrationNameMap = useMemo(
     () => new Map(integrations.map((i) => [i.id, i.name])),
@@ -183,7 +204,7 @@ export function AlertCenter({
               const isDeliveryOpen = deliveryOpenAlertId === alert.id;
               const deliveryPanelId = `alert-delivery-panel-${alert.id}`;
               return (
-                <div key={alert.id} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
+                <div key={alert.id} ref={alert.id === initialAlertId ? highlightRef : undefined} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <StatusPulse tone={severityToTone(alert.severity)} />

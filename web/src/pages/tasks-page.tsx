@@ -279,6 +279,7 @@ export function TasksPage() {
               <option value="failed">失败</option>
               <option value="success">成功</option>
               <option value="canceled">已取消</option>
+              <option value="warning">校验异常</option>
             </AppSelect>
 
             <AppSelect

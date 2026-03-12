@@ -30,42 +30,54 @@ type SSHKey struct {
 }
 
 type Node struct {
-	ID                uint       `gorm:"primaryKey" json:"id"`
-	Name              string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Host              string     `gorm:"size:255;not null" json:"host"`
-	Port              int        `gorm:"not null;default:22" json:"port"`
-	Username          string     `gorm:"size:128;not null" json:"username"`
-	AuthType          string     `gorm:"size:32;not null;default:key" json:"auth_type"`
-	Password          string     `gorm:"size:255" json:"password,omitempty"`
-	PrivateKey        string     `gorm:"type:text" json:"private_key,omitempty"`
-	SSHKeyID          *uint      `gorm:"index" json:"ssh_key_id"`
-	SSHKey            *SSHKey    `json:"ssh_key,omitempty"`
-	Tags              string     `gorm:"size:512" json:"tags"`
-	Status            string     `gorm:"size:32;not null;default:offline" json:"status"`
-	BasePath          string     `gorm:"size:255" json:"base_path"`
-	ConnectionLatency int        `gorm:"not null;default:0" json:"connection_latency_ms"`
-	DiskUsedGB        int        `gorm:"not null;default:0" json:"disk_used_gb"`
-	DiskTotalGB       int        `gorm:"not null;default:0" json:"disk_total_gb"`
-	LastSeenAt        *time.Time `json:"last_seen_at"`
-	LastBackupAt      *time.Time `json:"last_backup_at"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	Name                string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Host                string     `gorm:"size:255;not null" json:"host"`
+	Port                int        `gorm:"not null;default:22" json:"port"`
+	Username            string     `gorm:"size:128;not null" json:"username"`
+	AuthType            string     `gorm:"size:32;not null;default:key" json:"auth_type"`
+	Password            string     `gorm:"size:255" json:"password,omitempty"`
+	PrivateKey          string     `gorm:"type:text" json:"private_key,omitempty"`
+	SSHKeyID            *uint      `gorm:"index" json:"ssh_key_id"`
+	SSHKey              *SSHKey    `json:"ssh_key,omitempty"`
+	Tags                string     `gorm:"size:512" json:"tags"`
+	Status              string     `gorm:"size:32;not null;default:offline" json:"status"`
+	BasePath            string     `gorm:"size:255" json:"base_path"`
+	ConnectionLatency   int        `gorm:"not null;default:0" json:"connection_latency_ms"`
+	DiskUsedGB          int        `gorm:"not null;default:0" json:"disk_used_gb"`
+	DiskTotalGB         int        `gorm:"not null;default:0" json:"disk_total_gb"`
+	LastSeenAt          *time.Time `json:"last_seen_at"`
+	LastBackupAt        *time.Time `json:"last_backup_at"`
+	LastProbeAt         *time.Time `json:"last_probe_at"`
+	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type Policy struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	Name          string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Description   string    `gorm:"size:255" json:"description"`
-	SourcePath    string    `gorm:"size:512;not null" json:"source_path"`
-	TargetPath    string    `gorm:"size:512;not null" json:"target_path"`
-	CronSpec      string    `gorm:"size:128;not null" json:"cron_spec"`
-	ExcludeRules  string    `gorm:"type:text" json:"exclude_rules"`
-	BwLimit       int       `gorm:"not null;default:0" json:"bwlimit"`
-	RetentionDays int       `gorm:"not null;default:7" json:"retention_days"`
-	MaxConcurrent int       `gorm:"not null;default:1" json:"max_concurrent"`
-	Enabled       bool      `gorm:"not null;default:true" json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	Name             string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Description      string    `gorm:"size:255" json:"description"`
+	SourcePath       string    `gorm:"size:512;not null" json:"source_path"`
+	TargetPath       string    `gorm:"size:512;not null" json:"target_path"`
+	CronSpec         string    `gorm:"size:128;not null" json:"cron_spec"`
+	ExcludeRules     string    `gorm:"type:text" json:"exclude_rules"`
+	BwLimit          int       `gorm:"not null;default:0" json:"bwlimit"`
+	RetentionDays    int       `gorm:"not null;default:7" json:"retention_days"`
+	MaxConcurrent    int       `gorm:"not null;default:1" json:"max_concurrent"`
+	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
+	VerifyEnabled    bool      `gorm:"not null;default:true" json:"verify_enabled"`
+	VerifySampleRate int       `gorm:"not null;default:0" json:"verify_sample_rate"`
+	Nodes            []Node    `gorm:"many2many:policy_nodes" json:"-"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// PolicyNode 策略-节点关联表
+type PolicyNode struct {
+	PolicyID  uint      `gorm:"primaryKey"`
+	NodeID    uint      `gorm:"primaryKey"`
+	CreatedAt time.Time
 }
 
 type Integration struct {
@@ -119,6 +131,8 @@ type Task struct {
 	ExecutorType string     `gorm:"size:32;not null;default:local" json:"executor_type"`
 	CronSpec     string     `gorm:"size:128" json:"cron_spec"`
 	Status       string     `gorm:"size:32;not null;index" json:"status"`
+	Source       string     `gorm:"size:32;not null;default:manual" json:"source"`
+	VerifyStatus string     `gorm:"size:16;not null;default:none" json:"verify_status"`
 	RetryCount   int        `gorm:"not null;default:0" json:"retry_count"`
 	LastError    string     `gorm:"type:text" json:"last_error"`
 	LastRunAt    *time.Time `json:"last_run_at"`

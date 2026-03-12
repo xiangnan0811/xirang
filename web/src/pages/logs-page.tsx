@@ -138,6 +138,11 @@ export function LogsPage() {
 
     if (nextTask !== null) {
       setSelectedTask(nextTask);
+      // 从任务页跳转时只带 task 不带 node，自动匹配任务所属节点
+      if (nextNode === null) {
+        const matchedTask = tasks.find((t) => String(t.id) === nextTask);
+        setSelectedNode(matchedTask?.nodeName ?? "all");
+      }
     }
     if (nextNode !== null) {
       setSelectedNode(nextNode);
@@ -145,7 +150,7 @@ export function LogsPage() {
     if (nextKeyword !== null) {
       setKeyword(nextKeyword);
     }
-  }, [searchParams, setKeyword, setSelectedNode, setSelectedTask]);
+  }, [searchParams, setKeyword, setSelectedNode, setSelectedTask, tasks]);
 
   useEffect(() => {
     const taskID = Number(selectedTask);

@@ -55,7 +55,17 @@ export const TasksTable = React.memo(function TasksTable({
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">{task.nodeName}</td>
                   <td className="px-3 py-2.5">
-                    <Badge variant={status.variant}>{status.label}</Badge>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant={status.variant}>{status.label}</Badge>
+                      {task.verifyStatus && task.verifyStatus !== "none" && (
+                        <Badge
+                          variant={task.verifyStatus === "passed" ? "success" : "warning"}
+                          className="text-[10px]"
+                        >
+                          {task.verifyStatus === "passed" ? "校验通过" : task.verifyStatus === "warning" ? "校验异常" : "校验失败"}
+                        </Badge>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge variant={task.cronSpec ? "secondary" : "outline"} className="text-[10px]">
@@ -75,7 +85,9 @@ export const TasksTable = React.memo(function TasksTable({
                                 ? "bg-destructive"
                                 : task.status === "running" || task.status === "retrying"
                                   ? "bg-info"
-                                  : "bg-muted-foreground"
+                                  : task.status === "warning"
+                                    ? "bg-warning"
+                                    : "bg-muted-foreground"
                           )}
                           style={{ width: `${task.progress}%` }}
                         />

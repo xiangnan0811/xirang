@@ -111,7 +111,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "0 */2 * * *",
     naturalLanguage: "每隔两小时同步一次",
     enabled: true,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 2,
@@ -121,7 +124,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "*/30 * * * *",
     naturalLanguage: "每 30 分钟同步一次",
     enabled: true,
-    criticalThreshold: 3
+    criticalThreshold: 3,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 3,
@@ -131,7 +137,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "15 */6 * * *",
     naturalLanguage: "每 6 小时在第 15 分钟执行",
     enabled: true,
-    criticalThreshold: 1
+    criticalThreshold: 1,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 4,
@@ -141,7 +150,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "0 3 * * 0",
     naturalLanguage: "每周日凌晨 3 点执行",
     enabled: false,
-    criticalThreshold: 1
+    criticalThreshold: 1,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 5,
@@ -151,7 +163,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "*/10 * * * *",
     naturalLanguage: "每 10 分钟同步一次",
     enabled: true,
-    criticalThreshold: 4
+    criticalThreshold: 4,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 6,
@@ -161,7 +176,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "5 */4 * * *",
     naturalLanguage: "每 4 小时第 5 分钟执行",
     enabled: true,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 7,
@@ -171,7 +189,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "*/20 * * * *",
     naturalLanguage: "每 20 分钟同步一次",
     enabled: true,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 8,
@@ -181,7 +202,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "0 */3 * * *",
     naturalLanguage: "每 3 小时同步一次",
     enabled: true,
-    criticalThreshold: 3
+    criticalThreshold: 3,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 9,
@@ -191,7 +215,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "45 */1 * * *",
     naturalLanguage: "每小时第 45 分钟同步",
     enabled: true,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 10,
@@ -201,7 +228,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "*/15 * * * *",
     naturalLanguage: "每 15 分钟同步一次",
     enabled: true,
-    criticalThreshold: 3
+    criticalThreshold: 3,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 11,
@@ -211,7 +241,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "30 */2 * * *",
     naturalLanguage: "每 2 小时第 30 分钟执行",
     enabled: true,
-    criticalThreshold: 2
+    criticalThreshold: 2,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   },
   {
     id: 12,
@@ -221,7 +254,10 @@ export const mockPolicies: PolicyRecord[] = [
     cron: "0 */8 * * *",
     naturalLanguage: "每 8 小时同步一次",
     enabled: true,
-    criticalThreshold: 1
+    criticalThreshold: 1,
+    nodeIds: [],
+    verifyEnabled: false,
+    verifySampleRate: 0
   }
 ];
 

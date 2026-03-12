@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Clock, CalendarDays, Settings2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,33 +27,41 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder = "ä¾
   const [weekdays, setWeekdays] = useState<string[]>(["0"]); // 0 = Sunday
   const [dayOfMonth, setDayOfMonth] = useState("1");
 
-  // Sync builder state with raw cron if possible when opening builder
+  // Track whether the builder just opened to prevent auto-generate race condition
+  const prevBuilderOpen = useRef(false);
+  const skipNextAutoGen = useRef(false);
+
+  // Sync builder state with raw cron only when the builder first opens
   useEffect(() => {
-    if (isBuilderOpen && value) {
-      const parts = value.trim().split(/\s+/);
-      if (parts.length === 5) {
-        const [min, hr, dom, mon, dow] = parts;
-        if (min.startsWith("*/") && hr === "*" && dom === "*" && mon === "*" && dow === "*") {
-          setScheduleType("minutes");
-          setMinutesInterval(min.replace("*/", ""));
-        } else if (hr.startsWith("*/") && dom === "*" && mon === "*" && dow === "*") {
-          setScheduleType("hours");
-          setHoursInterval(hr.replace("*/", ""));
-          setHoursMinute(min);
-        } else if (dom === "*" && mon === "*" && dow !== "*") {
-          setScheduleType("weekly");
-          setWeekdays(dow.split(","));
-          setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
-        } else if (dom !== "*" && mon === "*" && dow === "*") {
-          setScheduleType("monthly");
-          setDayOfMonth(dom);
-          setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
-        } else if (dom === "*" && mon === "*" && dow === "*") {
-          setScheduleType("daily");
-          setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
-        } else {
-          setScheduleType("custom");
-        }
+    const justOpened = isBuilderOpen && !prevBuilderOpen.current;
+    prevBuilderOpen.current = isBuilderOpen;
+
+    if (!justOpened || !value) return;
+
+    skipNextAutoGen.current = true;
+    const parts = value.trim().split(/\s+/);
+    if (parts.length === 5) {
+      const [min, hr, dom, mon, dow] = parts;
+      if (min.startsWith("*/") && hr === "*" && dom === "*" && mon === "*" && dow === "*") {
+        setScheduleType("minutes");
+        setMinutesInterval(min.replace("*/", ""));
+      } else if (hr.startsWith("*/") && dom === "*" && mon === "*" && dow === "*") {
+        setScheduleType("hours");
+        setHoursInterval(hr.replace("*/", ""));
+        setHoursMinute(min);
+      } else if (dom === "*" && mon === "*" && dow !== "*") {
+        setScheduleType("weekly");
+        setWeekdays(dow.split(","));
+        setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
+      } else if (dom !== "*" && mon === "*" && dow === "*") {
+        setScheduleType("monthly");
+        setDayOfMonth(dom);
+        setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
+      } else if (dom === "*" && mon === "*" && dow === "*") {
+        setScheduleType("daily");
+        setTime(`${hr.padStart(2, "0")}:${min.padStart(2, "0")}`);
+      } else {
+        setScheduleType("custom");
       }
     }
   }, [isBuilderOpen, value]);
@@ -89,9 +97,13 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder = "ä¾
     return cron;
   }, [scheduleType, minutesInterval, hoursInterval, hoursMinute, time, weekdays, dayOfMonth]);
 
-  // Auto-generate when builder state changes
+  // Auto-generate when builder state changes (skip initial sync to prevent race)
   useEffect(() => {
     if (!isBuilderOpen || scheduleType === "custom") return;
+    if (skipNextAutoGen.current) {
+      skipNextAutoGen.current = false;
+      return;
+    }
     const cron = generateCron();
     if (cron !== null && cron !== value) {
       onChange(cron);

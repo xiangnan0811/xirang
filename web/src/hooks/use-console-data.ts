@@ -278,6 +278,14 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     };
   }, [loadData]);
 
+  useEffect(() => {
+    if (!token) return;
+    const interval = setInterval(() => {
+      void loadData();
+    }, 60_000); // 每 60 秒自动刷新
+    return () => clearInterval(interval);
+  }, [token, loadData]);
+
   const overview = useMemo(() => deriveOverview(nodes, policies, tasks, overviewSummary), [nodes, overviewSummary, policies, tasks]);
 
   const fetchOverviewTraffic = useCallback(async (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }): Promise<OverviewTrafficSeries> => {

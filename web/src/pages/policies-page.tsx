@@ -24,6 +24,7 @@ const keywordStorageKey = "xirang.policies.keyword";
 export function PoliciesPage() {
   const {
     policies,
+    nodes,
     loading,
     globalSearch,
     setGlobalSearch,
@@ -89,6 +90,9 @@ export function PoliciesPage() {
       cron: draft.cron.trim(),
       criticalThreshold: Math.max(1, Number(draft.criticalThreshold || 1)),
       enabled: draft.enabled,
+      nodeIds: draft.nodeIds ?? [],
+      verifyEnabled: draft.verifyEnabled ?? false,
+      verifySampleRate: draft.verifySampleRate ?? 0,
     };
 
     try {
@@ -197,6 +201,7 @@ export function PoliciesPage() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Badge variant="outline">Cron: {policy.cron}</Badge>
                   <Badge variant="outline">失败阈值: {policy.criticalThreshold}</Badge>
+                  <Badge variant="secondary">{policy.nodeIds?.length ?? 0}/{nodes?.length ?? 0} 节点</Badge>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
@@ -257,6 +262,7 @@ export function PoliciesPage() {
                   <th className="px-3 py-2.5">Cron</th>
                   <th className="px-3 py-2.5">源路径</th>
                   <th className="px-3 py-2.5">目标路径</th>
+                  <th className="px-3 py-2.5">覆盖节点</th>
                   <th className="px-3 py-2.5">状态</th>
                   <th className="px-3 py-2.5 text-right">操作</th>
                 </tr>
@@ -275,6 +281,9 @@ export function PoliciesPage() {
                       </td>
                       <td className="px-3 py-2.5 text-muted-foreground">{policy.sourcePath}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">{policy.targetPath}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">
+                        {(policy.nodeIds?.length ?? 0)}/{nodes?.length ?? 0} 节点
+                      </td>
                       <td className="px-3 py-2.5">
                         <Switch
                           checked={policy.enabled}
@@ -308,7 +317,7 @@ export function PoliciesPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={6} className="px-3 py-5">
+                    <td colSpan={7} className="px-3 py-5">
                       <EmptyState
                         className="py-8"
                         title="暂无匹配策略"
@@ -339,6 +348,7 @@ export function PoliciesPage() {
         onOpenChange={setEditorOpen}
         editingPolicy={editingPolicy}
         onSave={handleSave}
+        nodes={nodes}
       />
 
       {dialog}

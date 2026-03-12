@@ -90,7 +90,10 @@ export function buildDemoPolicy(input: NewPolicyInput, policies: PolicyRecord[])
     cron: input.cron,
     naturalLanguage: describeCron(input.cron),
     enabled: input.enabled,
-    criticalThreshold: Math.max(1, input.criticalThreshold)
+    criticalThreshold: Math.max(1, input.criticalThreshold),
+    nodeIds: input.nodeIds ?? [],
+    verifyEnabled: input.verifyEnabled ?? false,
+    verifySampleRate: input.verifySampleRate ?? 0,
   };
 }
 

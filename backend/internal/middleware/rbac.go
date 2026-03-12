@@ -50,6 +50,12 @@ var rolePermissions = map[string]map[string]bool{
 	},
 }
 
+// HasPermission checks if a role has a specific permission.
+func HasPermission(role, permission string) bool {
+	permissions, ok := rolePermissions[role]
+	return ok && permissions[permission]
+}
+
 func RBAC(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := CurrentRole(c)

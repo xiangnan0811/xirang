@@ -293,7 +293,7 @@ export function OverviewPage() {
                           {/* Tooltip on hover */}
                           <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
                             <span className="font-medium">{node.name}</span>
-                            <span className="ml-2 text-muted-foreground">{node.lastSeenAt || "未知"}</span>
+                            <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || "未知"}</span>
                           </span>
                         </button>
                       );
@@ -492,7 +492,7 @@ export function OverviewPage() {
                     <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
                       <span className="font-medium">{node.name}</span>
                       <span className="ml-2 text-muted-foreground">{node.ip}</span>
-                      <span className="ml-2 text-muted-foreground">{node.lastSeenAt || "未知"}</span>
+                      <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || "未知"}</span>
                     </span>
                   </button>
                 );

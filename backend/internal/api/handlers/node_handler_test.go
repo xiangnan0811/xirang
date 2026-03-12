@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -63,7 +64,7 @@ func TestNodeExecDisabled(t *testing.T) {
 
 func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -86,7 +87,7 @@ func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 
 func TestNodeBatchDeleteSuccess(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -164,7 +165,7 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 }
 
 func TestParseDiskProbeAcceptsFullUsage(t *testing.T) {
-	used, total, ok := parseDiskProbe("100G 100G")
+	used, total, ok := sshutil.ParseDiskProbe("100G 100G")
 	if !ok {
 		t.Fatalf("期望 100%% 磁盘占用可被解析")
 	}

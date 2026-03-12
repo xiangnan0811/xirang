@@ -113,7 +113,9 @@
     --shadow-mobile-sheet: 0 -14px 40px rgba(2, 6, 23, 0.45);
   }
 
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     @apply border-border;
   }
 
@@ -132,6 +134,13 @@
       radial-gradient(circle at 12% -6%, rgba(180, 137, 92, 0.22), transparent 42%),
       radial-gradient(circle at 85% 0%, rgba(34, 197, 94, 0.2), transparent 40%),
       linear-gradient(180deg, hsl(var(--background)), hsl(var(--surface-1)));
+  }
+
+  /* Force disable any animation/transition on Radix popper wrappers to prevent mount geometry transitions from top-left (0,0) */
+  [data-radix-popper-content-wrapper],
+  [data-radix-menu-content] {
+    animation: none !important;
+    transition: none !important;
   }
 
   html[data-density="compact"] {
@@ -187,7 +196,10 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
+
+    *,
+    *::before,
+    *::after {
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
@@ -231,7 +243,7 @@
   .glass-panel {
     @apply rounded-xl border border-border/60 bg-background/50 shadow-sm backdrop-blur-md;
   }
-  
+
   .glass-panel-heavy {
     @apply rounded-xl border border-border/40 bg-background/40 shadow-panel backdrop-blur-xl;
   }
@@ -239,7 +251,7 @@
   .glass-card-interactive:hover {
     @apply border-primary/25;
     box-shadow: var(--shadow-panel-hover);
-    
+
   }
 
   .interactive-surface {
@@ -253,7 +265,7 @@
   .interactive-surface:hover {
     @apply border-primary/35;
     box-shadow: var(--shadow-panel);
-    
+
   }
 
   .filter-panel {
@@ -301,7 +313,8 @@
     }
   }
 
-  @media (pointer: coarse), (max-width: 768px) {
+  @media (pointer: coarse),
+  (max-width: 768px) {
     .app-shell-bg::before {
       opacity: 0.24;
       background-size: 100% 100%, 30px 30px;
@@ -330,6 +343,14 @@
     animation: slide-down var(--duration-normal) var(--ease-enter) both;
   }
 
+  .animate-popover-in {
+    animation: popover-in var(--duration-fast) var(--ease-enter) both;
+  }
+
+  .animate-popover-out {
+    animation: popover-out var(--duration-fast) var(--ease-exit) both;
+  }
+
   .grid-noise {
     background-image:
       radial-gradient(circle at 1px 1px, rgba(120, 120, 120, 0.11) 1px, transparent 0),
@@ -339,16 +360,12 @@
 
   .terminal-surface {
     background:
-      linear-gradient(
-        180deg,
+      linear-gradient(180deg,
         hsl(var(--terminal-bg-start) / 0.96),
-        hsl(var(--terminal-bg-end) / 0.98)
-      ),
-      radial-gradient(
-        circle at 10% 10%,
+        hsl(var(--terminal-bg-end) / 0.98)),
+      radial-gradient(circle at 10% 10%,
         hsl(var(--terminal-glow) / 0.22),
-        transparent 42%
-      );
+        transparent 42%);
     color: hsl(var(--terminal-foreground));
     box-shadow:
       inset 0 0 0 1px hsl(var(--terminal-border) / 0.24),
@@ -441,9 +458,11 @@
   0% {
     box-shadow: 0 0 0 0 hsl(var(--success) / 0.52);
   }
+
   70% {
     box-shadow: 0 0 0 8px hsl(var(--success) / 0);
   }
+
   100% {
     box-shadow: 0 0 0 0 hsl(var(--success) / 0);
   }
@@ -453,9 +472,11 @@
   0% {
     box-shadow: 0 0 0 0 hsl(var(--warning) / 0.52);
   }
+
   70% {
     box-shadow: 0 0 0 8px hsl(var(--warning) / 0);
   }
+
   100% {
     box-shadow: 0 0 0 0 hsl(var(--warning) / 0);
   }
@@ -465,32 +486,84 @@
   0% {
     box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.52);
   }
+
   70% {
     box-shadow: 0 0 0 8px hsl(var(--destructive) / 0);
   }
+
   100% {
     box-shadow: 0 0 0 0 hsl(var(--destructive) / 0);
   }
 }
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slide-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
 }
 
 @keyframes slide-down {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
 }
 
 @keyframes animate-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    scale: 0.94;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes popover-out {
+  from {
+    opacity: 1;
+    scale: 1;
+  }
+
+  to {
+    opacity: 0;
+    scale: 0.94;
+  }
 }
 
 @layer utilities {
@@ -500,8 +573,15 @@
 }
 
 @keyframes float {
-  0% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-  100% { transform: translateY(0); }
-}
+  0% {
+    transform: translateY(0);
+  }
 
+  50% {
+    transform: translateY(-6px);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}

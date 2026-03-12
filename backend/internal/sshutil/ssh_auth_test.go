@@ -1,4 +1,4 @@
-package handlers
+package sshutil
 
 import (
 	"crypto/rand"
@@ -32,7 +32,7 @@ func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *tes
 	knownHostsPath := filepath.Join(t.TempDir(), "ssh", "known_hosts")
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
 
-	callback, err := resolveSSHHostKeyCallback()
+	callback, err := ResolveSSHHostKeyCallback()
 	if err != nil {
 		t.Fatalf("初始化 SSH host key callback 失败: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAppendKnownHostSerializesConcurrentWrites(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			hostname := fmt.Sprintf("node-%02d.example.com:22", index)
-			if err := appendKnownHost(knownHostsPath, hostname, newTestPublicKey(t)); err != nil {
+			if err := AppendKnownHost(knownHostsPath, hostname, newTestPublicKey(t)); err != nil {
 				t.Errorf("追加 known_hosts 失败(host=%s): %v", hostname, err)
 			}
 		}(i)
@@ -102,10 +102,10 @@ func TestAppendKnownHostSkipsDuplicateHostKey(t *testing.T) {
 	hostname := "node-dup.example.com:22"
 	key := newTestPublicKey(t)
 
-	if err := appendKnownHost(knownHostsPath, hostname, key); err != nil {
+	if err := AppendKnownHost(knownHostsPath, hostname, key); err != nil {
 		t.Fatalf("首次追加 known_hosts 失败: %v", err)
 	}
-	if err := appendKnownHost(knownHostsPath, hostname, key); err != nil {
+	if err := AppendKnownHost(knownHostsPath, hostname, key); err != nil {
 		t.Fatalf("重复追加 known_hosts 失败: %v", err)
 	}
 
@@ -117,5 +117,15 @@ func TestAppendKnownHostSkipsDuplicateHostKey(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("重复 host/key 不应被重复写入，实际行数: %d\n内容: %s", len(lines), string(content))
+	}
+}
+
+func TestParseDiskProbeDistinctValues(t *testing.T) {
+	used, total, ok := ParseDiskProbe("100G 42G")
+	if !ok {
+		t.Fatal("expected parse to succeed")
+	}
+	if total != 100 || used != 42 {
+		t.Fatalf("expected total=100 used=42, got total=%d used=%d", total, used)
 	}
 }

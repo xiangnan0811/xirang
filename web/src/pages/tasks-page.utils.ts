@@ -16,7 +16,8 @@ export function normalizeStatusFilter(value: string): "all" | TaskStatus {
     value === "retrying" ||
     value === "failed" ||
     value === "success" ||
-    value === "canceled"
+    value === "canceled" ||
+    value === "warning"
   ) {
     return value;
   }

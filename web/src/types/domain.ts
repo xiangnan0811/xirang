@@ -7,7 +7,8 @@ export type TaskStatus =
   | "failed"
   | "success"
   | "retrying"
-  | "canceled";
+  | "canceled"
+  | "warning";
 
 export type TaskExecutorType = "rsync";
 
@@ -81,6 +82,7 @@ export interface NodeRecord {
   diskTotalGb: number;
   diskProbeAt?: string;
   connectionLatencyMs?: number;
+  lastProbeAt?: string;
 }
 
 export interface PolicyRecord {
@@ -92,6 +94,9 @@ export interface PolicyRecord {
   naturalLanguage: string;
   enabled: boolean;
   criticalThreshold: number;
+  nodeIds: number[];
+  verifyEnabled: boolean;
+  verifySampleRate: number;
 }
 
 export interface NewPolicyInput {
@@ -101,6 +106,9 @@ export interface NewPolicyInput {
   cron: string;
   criticalThreshold: number;
   enabled: boolean;
+  nodeIds: number[];
+  verifyEnabled: boolean;
+  verifySampleRate: number;
 }
 
 export interface TaskRecord {
@@ -125,6 +133,8 @@ export interface TaskRecord {
   cronSpec?: string;
   updatedAt?: string;
   speedMbps: number;
+  source?: string;
+  verifyStatus?: "none" | "passed" | "warning" | "failed";
 }
 
 export interface NewTaskInput {

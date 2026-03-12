@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
+	"xirang/backend/internal/probe"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -31,7 +32,7 @@ func main() {
 		log.Fatalf("连接数据库失败: %v", err)
 	}
 
-	if err := bootstrap.AutoMigrate(db); err != nil {
+	if err := bootstrap.AutoMigrate(db, cfg.DBType); err != nil {
 		log.Fatalf("执行数据库迁移失败: %v", err)
 	}
 	if err := bootstrap.SeedUsers(db); err != nil {
@@ -52,6 +53,9 @@ func main() {
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatalf("加载定时任务失败: %v", err)
 	}
+
+	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency)
+	prober.Start(hubCtx)
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	authService := auth.NewService(db, jwtManager, auth.LoginSecurityConfig{
@@ -104,6 +108,9 @@ func main() {
 
 	if err := taskManager.Shutdown(shutdownCtx); err != nil {
 		log.Printf("任务管理器关闭失败: %v", err)
+	}
+	if err := prober.Stop(shutdownCtx); err != nil {
+		log.Printf("节点探测停止失败: %v", err)
 	}
 	hubCancel()
 }
