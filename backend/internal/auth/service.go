@@ -62,31 +62,47 @@ func NewService(db *gorm.DB, jwt *JWTManager, cfg LoginSecurityConfig) *Service 
 	}
 }
 
-func (s *Service) Login(username, password, clientIP string) (string, *model.User, error) {
+// LoginResult 封装登录结果，区分完整登录和需要 2FA 的中间状态。
+type LoginResult struct {
+	Token      string
+	User       *model.User
+	Requires2FA bool
+	LoginToken  string // 仅在 Requires2FA=true 时有效
+}
+
+func (s *Service) Login(username, password, clientIP string) (*LoginResult, error) {
 	now := time.Now()
 	if lockedUntil, locked := s.failureLocker.IsLocked(username, clientIP, now); locked {
-		return "", nil, &LoginLockedError{Until: lockedUntil}
+		return nil, &LoginLockedError{Until: lockedUntil}
 	}
 
 	var user model.User
 	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			s.failureLocker.RegisterFailure(username, clientIP, now)
-			return "", nil, errInvalidCredentials
+			return nil, errInvalidCredentials
 		}
-		return "", nil, err
+		return nil, err
 	}
 	if err := CheckPassword(user.PasswordHash, password); err != nil {
 		s.failureLocker.RegisterFailure(username, clientIP, now)
-		return "", nil, errInvalidCredentials
+		return nil, errInvalidCredentials
 	}
 	s.failureLocker.RegisterSuccess(username, clientIP)
 
+	if user.TOTPEnabled {
+		loginToken, err := s.jwt.Generate2FAPendingToken(user)
+		if err != nil {
+			return nil, err
+		}
+		return &LoginResult{Requires2FA: true, LoginToken: loginToken, User: &user}, nil
+	}
+
 	token, err := s.jwt.GenerateToken(user)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	return token, &user, nil
+	return &LoginResult{Token: token, User: &user}, nil
 }
 
 func (s *Service) ListUsers() ([]model.User, error) {

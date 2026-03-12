@@ -90,13 +90,26 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskLog{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.Alert{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化采样表失败: %v", err)
 	}
 	return db
+}
+
+func createTestTaskRun(t *testing.T, db *gorm.DB, taskID uint, reason string) uint {
+	t.Helper()
+	run := model.TaskRun{
+		TaskID:      taskID,
+		TriggerType: reason,
+		Status:      "pending",
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建测试执行记录失败: %v", err)
+	}
+	return run.ID
 }
 
 func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
@@ -129,10 +142,11 @@ func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 func TestRunTaskKeepsLockEntries(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
 
 	taskEntity := seedTaskForManagerTest(t, db)
-	m.runTask(taskEntity.ID, "manual")
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual")
 
 	if exec.Calls() != 1 {
 		t.Fatalf("期望执行器调用 1 次，实际: %d", exec.Calls())
@@ -150,7 +164,7 @@ func TestRunTaskKeepsLockEntries(t *testing.T) {
 func TestTriggerManualRejectsConcurrentDuplicate(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -163,7 +177,8 @@ func TestTriggerManualRejectsConcurrentDuplicate(t *testing.T) {
 	for i := 0; i < attempts; i++ {
 		go func() {
 			<-start
-			resultCh <- m.TriggerManual(taskEntity.ID)
+			_, err := m.TriggerManual(taskEntity.ID)
+			resultCh <- err
 		}()
 	}
 	close(start)
@@ -211,9 +226,10 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 		{ObservedAt: now.Add(20 * time.Second), ThroughputMbps: 120},
 		{ObservedAt: now.Add(65 * time.Second), ThroughputMbps: 80},
 	}}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
 
-	m.runTask(taskEntity.ID, "manual")
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -240,4 +256,248 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 	if samples[0].RunStartedAt.IsZero() || samples[1].RunStartedAt.IsZero() {
 		t.Fatalf("期望记录 run_started_at")
 	}
+}
+
+func TestTriggerCreatesTaskRun(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	runID, err := m.TriggerManual(taskEntity.ID)
+	if err != nil {
+		t.Fatalf("触发任务失败: %v", err)
+	}
+	if runID == 0 {
+		t.Fatalf("期望返回非零 runID")
+	}
+
+	// 等待任务完成
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := m.Shutdown(ctx); err != nil {
+		t.Fatalf("关闭 manager 失败: %v", err)
+	}
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.TaskID != taskEntity.ID {
+		t.Fatalf("TaskRun.TaskID 期望 %d，实际 %d", taskEntity.ID, run.TaskID)
+	}
+	if run.TriggerType != "manual" {
+		t.Fatalf("TaskRun.TriggerType 期望 manual，实际 %s", run.TriggerType)
+	}
+}
+
+func TestRunTaskDualWriteSuccess(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	// 验证 Task 状态
+	var task model.Task
+	db.First(&task, taskEntity.ID)
+	if task.Status != string(StatusSuccess) {
+		t.Fatalf("Task 状态期望 success，实际 %s", task.Status)
+	}
+
+	// 验证 TaskRun 状态
+	var run model.TaskRun
+	db.First(&run, runID)
+	if run.Status != "success" {
+		t.Fatalf("TaskRun 状态期望 success，实际 %s", run.Status)
+	}
+	if run.StartedAt == nil {
+		t.Fatalf("TaskRun.StartedAt 不应为空")
+	}
+	if run.FinishedAt == nil {
+		t.Fatalf("TaskRun.FinishedAt 不应为空")
+	}
+	if run.DurationMs < 0 {
+		t.Fatalf("TaskRun.DurationMs 不应为负数: %d", run.DurationMs)
+	}
+}
+
+func TestRunTaskDualWriteFailed(t *testing.T) {
+	db := openManagerTestDB(t)
+	failExec := &failingExecutor{err: fmt.Errorf("模拟执行失败")}
+	m := NewManager(db, stubExecutorFactory{executor: failExec}, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	// TaskRun 应标记为 failed
+	var run model.TaskRun
+	db.First(&run, runID)
+	if run.Status != "failed" {
+		t.Fatalf("TaskRun 状态期望 failed，实际 %s", run.Status)
+	}
+	if run.LastError == "" {
+		t.Fatalf("TaskRun.LastError 不应为空")
+	}
+	if run.FinishedAt == nil {
+		t.Fatalf("TaskRun.FinishedAt 不应为空")
+	}
+}
+
+func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := newBlockingExecutor()
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	runID, err := m.TriggerManual(taskEntity.ID)
+	if err != nil {
+		t.Fatalf("触发任务失败: %v", err)
+	}
+
+	// 等待执行器开始
+	select {
+	case <-exec.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待执行器开始超时")
+	}
+
+	// 取消任务
+	if err := m.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("取消任务失败: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	// TaskRun 应标记为 canceled
+	var run model.TaskRun
+	db.First(&run, runID)
+	if run.Status != "canceled" {
+		t.Fatalf("TaskRun 状态期望 canceled，实际 %s", run.Status)
+	}
+}
+
+func TestCleanupExpiredTaskRuns(t *testing.T) {
+	db := openManagerTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, 8, 1) // 1 天保留
+
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	// 创建过期的 TaskRun
+	oldTime := time.Now().AddDate(0, 0, -3)
+	oldRun := model.TaskRun{
+		TaskID:      taskEntity.ID,
+		TriggerType: "manual",
+		Status:      "success",
+		CreatedAt:   oldTime,
+	}
+	db.Create(&oldRun)
+
+	// 创建关联的 TaskLog
+	oldLog := model.TaskLog{
+		TaskID:    taskEntity.ID,
+		TaskRunID: &oldRun.ID,
+		Level:     "info",
+		Message:   "test log",
+	}
+	db.Create(&oldLog)
+
+	// 创建关联的 Alert
+	oldAlert := model.Alert{
+		NodeID:      1,
+		NodeName:    "test",
+		TaskRunID:   &oldRun.ID,
+		Severity:    "warning",
+		Status:      "resolved",
+		ErrorCode:   "XR-TEST",
+		Message:     "test",
+		TriggeredAt: oldTime,
+	}
+	db.Create(&oldAlert)
+
+	// 创建新的 TaskRun（不应被清理）
+	newRun := model.TaskRun{
+		TaskID:      taskEntity.ID,
+		TriggerType: "manual",
+		Status:      "success",
+	}
+	db.Create(&newRun)
+
+	// 重置清理时间以允许执行
+	m.lastTaskRunCleanupAt = time.Time{}
+
+	m.cleanupExpiredTaskRuns()
+
+	// 旧 TaskRun 应被删除
+	var runCount int64
+	db.Model(&model.TaskRun{}).Where("id = ?", oldRun.ID).Count(&runCount)
+	if runCount != 0 {
+		t.Fatalf("过期 TaskRun 应被删除")
+	}
+
+	// 关联 TaskLog 应被删除
+	var logCount int64
+	db.Model(&model.TaskLog{}).Where("task_run_id = ?", oldRun.ID).Count(&logCount)
+	if logCount != 0 {
+		t.Fatalf("过期 TaskRun 关联的 TaskLog 应被删除")
+	}
+
+	// 关联 Alert 的 task_run_id 应被清空
+	var alert model.Alert
+	db.First(&alert, oldAlert.ID)
+	if alert.TaskRunID != nil {
+		t.Fatalf("过期 TaskRun 关联的 Alert.TaskRunID 应被清空")
+	}
+
+	// 新 TaskRun 应保留
+	var newRunCount int64
+	db.Model(&model.TaskRun{}).Where("id = ?", newRun.ID).Count(&newRunCount)
+	if newRunCount != 1 {
+		t.Fatalf("新 TaskRun 不应被删除")
+	}
+}
+
+func TestEmitLogWritesTaskRunID(t *testing.T) {
+	db := openManagerTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, 8, 90)
+
+	taskEntity := seedTaskForManagerTest(t, db)
+	runID := uint(42)
+
+	// 直接调用 emitLog
+	m.emitLog(taskEntity.ID, &runID, "info", "test message", "running")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var logs []model.TaskLog
+	db.Where("task_id = ?", taskEntity.ID).Find(&logs)
+	if len(logs) == 0 {
+		t.Fatalf("期望写入至少一条日志")
+	}
+	if logs[0].TaskRunID == nil || *logs[0].TaskRunID != runID {
+		t.Fatalf("TaskLog.TaskRunID 期望 %d，实际 %v", runID, logs[0].TaskRunID)
+	}
+}
+
+type failingExecutor struct {
+	err error
+}
+
+func (e *failingExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+	return 1, e.err
 }

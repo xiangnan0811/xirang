@@ -8,7 +8,9 @@ export type LogsSocketConnectOptions = {
   sinceId?: number;
 };
 
-const RETRY_DELAY_MS = 2500;
+const RETRY_BASE_DELAY_MS = 2500;
+const RETRY_MAX_DELAY_MS = 30_000;
+const RETRY_MAX_ATTEMPTS = 20;
 const DEFAULT_DEV_DIRECT_API = "http://127.0.0.1:8080/api/v1";
 
 function normalizePath(path: string): string {
@@ -73,6 +75,7 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
       ? payload.id
       : undefined;
   const taskID = typeof payload.task_id === "number" ? payload.task_id : undefined;
+  const taskRunID = typeof payload.task_run_id === "number" ? payload.task_run_id : undefined;
   const nodeName = typeof payload.node_name === "string" ? payload.node_name : undefined;
   const ts = typeof payload.timestamp === "string" ? payload.timestamp : new Date().toISOString();
   const levelRaw = payload.level;
@@ -97,6 +100,7 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
     level,
     message,
     taskId: taskID,
+    taskRunId: taskRunID,
     nodeName,
     status
   };
@@ -111,6 +115,7 @@ export class LogsSocketClient {
   private sinceId: number | undefined;
   private activeCandidateIndex = 0;
   private connectAttempt = 0;
+  private reconnectAttempts = 0;
   private readonly listeners = new Set<MessageListener>();
   private readonly statusListeners = new Set<StatusListener>();
   private readonly wsCandidates: string[];
@@ -125,6 +130,7 @@ export class LogsSocketClient {
     this.sinceId = options?.sinceId;
     this.manuallyClosed = false;
     this.activeCandidateIndex = 0;
+    this.reconnectAttempts = 0;
     this.open();
   }
 
@@ -165,6 +171,11 @@ export class LogsSocketClient {
     return () => this.statusListeners.delete(listener);
   }
 
+  /** 是否已达最大重试次数（不再自动重连） */
+  isGivingUp(): boolean {
+    return this.reconnectAttempts >= RETRY_MAX_ATTEMPTS;
+  }
+
   private buildRequestUrl() {
     const base = this.wsCandidates[this.activeCandidateIndex] ?? this.wsCandidates[0] ?? toWebSocketUrl("/api/v1");
     const search = new URLSearchParams();
@@ -197,6 +208,7 @@ export class LogsSocketClient {
       this.emitStatus(true);
       this.clearReconnectTimer();
       this.activeCandidateIndex = 0;
+      this.reconnectAttempts = 0;
     };
 
     socket.onmessage = (event) => {
@@ -242,8 +254,18 @@ export class LogsSocketClient {
   }
 
   private scheduleReconnect() {
+    if (this.reconnectAttempts >= RETRY_MAX_ATTEMPTS) {
+      // 已达最大重试次数，停止重连
+      return;
+    }
     this.clearReconnectTimer();
-    this.reconnectTimer = window.setTimeout(() => this.open(), RETRY_DELAY_MS);
+    // 指数退避：base * 2^attempt，上限 30s
+    const delay = Math.min(
+      RETRY_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+      RETRY_MAX_DELAY_MS
+    );
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = window.setTimeout(() => this.open(), delay);
   }
 
   private clearReconnectTimer() {

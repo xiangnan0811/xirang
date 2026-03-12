@@ -48,7 +48,7 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
     signal: options.signal,
-    cache: method === "GET" ? "no-store" : undefined
+    cache: method === "GET" ? "no-cache" : undefined
   });
 }
 

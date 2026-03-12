@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,15 +9,21 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
+	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+
 
 type AuthHandler struct {
 	authService          *auth.Service
 	jwtManager           *auth.JWTManager
+	db                   *gorm.DB
 	captchaEnabled       bool
 	secondCaptchaEnabled bool
+	captchaStore         *CaptchaStore
 }
 
 func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, captchaEnabled bool, secondCaptchaEnabled bool) *AuthHandler {
@@ -28,11 +35,25 @@ func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, capt
 	}
 }
 
+// WithDB 注入数据库，用于 2FA 相关操作。
+func (h *AuthHandler) WithDB(db *gorm.DB) *AuthHandler {
+	h.db = db
+	return h
+}
+
+// WithCaptchaStore 注入验证码存储，用于在 Login 中校验验证码。
+func (h *AuthHandler) WithCaptchaStore(store *CaptchaStore) *AuthHandler {
+	h.captchaStore = store
+	return h
+}
+
 type loginRequest struct {
-	Username      string `json:"username" binding:"required"`
-	Password      string `json:"password" binding:"required"`
-	Captcha       string `json:"captcha"`
-	SecondCaptcha string `json:"second_captcha"`
+	Username       string `json:"username" binding:"required"`
+	Password       string `json:"password" binding:"required"`
+	Captcha        string `json:"captcha"`
+	SecondCaptcha  string `json:"second_captcha"`
+	CaptchaID      string `json:"captcha_id"`
+	CaptchaAnswer  string `json:"captcha_answer"`
 }
 
 type changePasswordRequest struct {
@@ -54,8 +75,21 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "二次验证码不能为空"})
 		return
 	}
+	if h.captchaEnabled && h.captchaStore != nil {
+		answerRaw := strings.TrimSpace(req.CaptchaAnswer)
+		id := strings.TrimSpace(req.CaptchaID)
+		if id == "" || answerRaw == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误或已过期"})
+			return
+		}
+		answerInt, err := strconv.Atoi(answerRaw)
+		if err != nil || !h.captchaStore.Verify(id, answerInt) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误或已过期"})
+			return
+		}
+	}
 
-	token, user, err := h.authService.Login(req.Username, req.Password, c.ClientIP())
+	result, err := h.authService.Login(req.Username, req.Password, c.ClientIP())
 	if err != nil {
 		if lockedErr, ok := auth.IsLoginLocked(err); ok {
 			retryAfter := lockedErr.RetryAfterSeconds(time.Now())
@@ -66,22 +100,39 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
+	if result.Requires2FA {
+		c.JSON(http.StatusOK, gin.H{
+			"requires_2fa": true,
+			"login_token":  result.LoginToken,
+		})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"token": token,
+		"token": result.Token,
 		"user": gin.H{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
+			"id":           result.User.ID,
+			"username":     result.User.Username,
+			"role":         result.User.Role,
+			"totp_enabled": result.User.TOTPEnabled,
 		},
 	})
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
+	userID := c.GetUint(middleware.CtxUserID)
+	totpEnabled := false
+	if h.db != nil && userID != 0 {
+		var user model.User
+		if err := h.db.Select("totp_enabled").First(&user, userID).Error; err == nil {
+			totpEnabled = user.TOTPEnabled
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":       c.GetUint(middleware.CtxUserID),
-			"username": c.GetString(middleware.CtxUsername),
-			"role":     c.GetString(middleware.CtxRole),
+			"id":           userID,
+			"username":     c.GetString(middleware.CtxUsername),
+			"role":         c.GetString(middleware.CtxRole),
+			"totp_enabled": totpEnabled,
 		},
 	})
 }
@@ -125,4 +176,162 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "已安全退出"})
+}
+
+// TOTPSetup POST /auth/2fa/setup — 生成 TOTP 密钥（未保存），返回二维码 URL 和密钥。
+func (h *AuthHandler) TOTPSetup(c *gin.Context) {
+	username := c.GetString(middleware.CtxUsername)
+	key, err := auth.GenerateTOTPSecret("息壤 XiRang", username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 TOTP 密钥失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"secret": key.Secret(),
+		"qr_url": key.URL(),
+		"issuer": "息壤 XiRang",
+	})
+}
+
+type totpVerifyRequest struct {
+	Secret string `json:"secret" binding:"required"`
+	Code   string `json:"code" binding:"required"`
+}
+
+// TOTPVerify POST /auth/2fa/verify — 验证码正确后保存 TOTP 配置并返回恢复码。
+func (h *AuthHandler) TOTPVerify(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		return
+	}
+	var req totpVerifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+	if !auth.ValidateTOTP(req.Secret, req.Code) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
+		return
+	}
+	recoveryCodes, err := auth.GenerateRecoveryCodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成恢复码失败"})
+		return
+	}
+	recoveryJSON, err := json.Marshal(recoveryCodes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成恢复码失败"})
+		return
+	}
+	userID := c.GetUint(middleware.CtxUserID)
+	if err := h.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"totp_secret":    req.Secret,
+		"totp_enabled":   true,
+		"recovery_codes": string(recoveryJSON),
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存 2FA 配置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"recovery_codes": recoveryCodes})
+}
+
+type totpDisableRequest struct {
+	Password string `json:"password" binding:"required"`
+	TOTPCode string `json:"totp_code" binding:"required"`
+}
+
+// TOTPDisable POST /auth/2fa/disable — 验证密码和 TOTP 码后禁用 2FA。
+func (h *AuthHandler) TOTPDisable(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		return
+	}
+	var req totpDisableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+	userID := c.GetUint(middleware.CtxUserID)
+	var user model.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	if err := auth.CheckPassword(user.PasswordHash, req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "密码错误"})
+		return
+	}
+	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
+		return
+	}
+	if err := h.db.Model(&user).Updates(map[string]any{
+		"totp_secret":    "",
+		"totp_enabled":   false,
+		"recovery_codes": "",
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "禁用 2FA 失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "两步验证已禁用"})
+}
+
+type totpLoginRequest struct {
+	LoginToken string `json:"login_token" binding:"required"`
+	TOTPCode   string `json:"totp_code" binding:"required"`
+}
+
+// TOTPLogin POST /auth/2fa/login — 验证 TOTP 码或恢复码后返回完整 JWT。
+func (h *AuthHandler) TOTPLogin(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		return
+	}
+	var req totpLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+	claims, err := h.jwtManager.ParseToken(req.LoginToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录令牌无效或已过期"})
+		return
+	}
+	if claims.Purpose != "2fa_pending" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录令牌无效"})
+		return
+	}
+	var user model.User
+	if err := h.db.First(&user, claims.UserID).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+		return
+	}
+	// 先尝试 TOTP 验证码，再尝试恢复码。
+	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
+		if user.RecoveryCodes == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误"})
+			return
+		}
+		remaining, ok := auth.ValidateAndConsumeRecoveryCode(user.RecoveryCodes, req.TOTPCode)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误"})
+			return
+		}
+		newJSON, _ := json.Marshal(remaining)
+		h.db.Model(&user).Update("recovery_codes", string(newJSON))
+	}
+	token, err := h.jwtManager.GenerateToken(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 token 失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+		"user": gin.H{
+			"id":           user.ID,
+			"username":     user.Username,
+			"role":         user.Role,
+			"totp_enabled": user.TOTPEnabled,
+		},
+	})
 }

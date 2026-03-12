@@ -95,4 +95,6 @@ export type NodesViewProps = {
   onTestNode: (node: NodeRecord) => void;
   onDeleteNode: (node: NodeRecord) => void;
   handleTriggerBackup: (id: number, name: string) => void;
+  onOpenTerminal?: (node: NodeRecord) => void;
+  isAdmin?: boolean;
 };

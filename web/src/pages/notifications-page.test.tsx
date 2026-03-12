@@ -180,6 +180,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         },
       ],
     }),
+    refreshIntegrations: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

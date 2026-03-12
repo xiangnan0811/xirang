@@ -63,6 +63,18 @@ vi.mock("@/components/ui/toast", () => ({
   },
 }));
 
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({
+    token: "test-token",
+    username: "admin",
+    role: "admin",
+    userId: 1,
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}));
+
 function createContext(overrides?: Partial<ConsoleOutletContext>) {
   const base = {
     nodes: [
@@ -128,6 +140,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
       message: "连接成功",
     }),
     triggerNodeBackup: vi.fn().mockResolvedValue(undefined),
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

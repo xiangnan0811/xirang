@@ -8,7 +8,7 @@ import {
   mockOverviewSummary,
   mockPolicies,
   mockSSHKeys,
-  mockTasks
+  mockTasks,
 } from "@/data/mock";
 import { getErrorMessage } from "@/lib/utils";
 import { useIntegrationAlertOperations } from "@/hooks/use-console-integration-alert-operations";
@@ -58,6 +58,11 @@ export interface ConsoleDataState {
   setGlobalSearch: (keyword: string) => void;
   refresh: () => void;
   fetchOverviewTraffic: (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }) => Promise<OverviewTrafficSeries>;
+  refreshNodes: (options?: { limit?: number; offset?: number }) => Promise<void>;
+  refreshPolicies: () => Promise<void>;
+  refreshTasks: (options?: { limit?: number; offset?: number }) => Promise<void>;
+  refreshSSHKeys: () => Promise<void>;
+  refreshIntegrations: () => Promise<void>;
 
   createNode: (input: NewNodeInput) => Promise<number>;
   updateNode: (nodeId: number, input: NewNodeInput) => Promise<void>;
@@ -156,8 +161,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     loadAbortRef.current?.abort();
     const controller = new AbortController();
     loadAbortRef.current = controller;
-    const inventoryVersionAtStart = inventoryVersionRef.current;
-    const taskVersionAtStart = taskVersionRef.current;
 
     if (!token) {
       if (demoModeEnabled) {
@@ -173,13 +176,8 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
         return;
       }
-      setNodes([]);
-      setPolicies([]);
-      setTasks([]);
-      setAlerts([]);
-      setIntegrations([]);
-      setSSHKeys([]);
       setOverviewSummary(null);
+      setAlerts([]);
       setWarning("未检测到登录态，请重新登录后刷新数据。");
       setLoading(false);
       setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
@@ -189,21 +187,8 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setLoading(true);
     setWarning(null);
 
-    const [
-      nodesResult,
-      policiesResult,
-      tasksResult,
-      alertsResult,
-      sshKeysResult,
-      integrationsResult,
-      overviewResult
-    ] = await Promise.allSettled([
-      apiClient.getNodes(token, { signal: controller.signal }),
-      apiClient.getPolicies(token, { signal: controller.signal }),
-      apiClient.getTasks(token, { signal: controller.signal }),
+    const [alertsResult, overviewResult] = await Promise.allSettled([
       apiClient.getAlerts(token, { signal: controller.signal }),
-      apiClient.getSSHKeys(token, { signal: controller.signal }),
-      apiClient.getIntegrations(token, { signal: controller.signal }),
       apiClient.getOverviewSummary(token, { signal: controller.signal })
     ]);
 
@@ -213,40 +198,10 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
     const failedInterfaces: string[] = [];
 
-    if (nodesResult.status === "fulfilled" && inventoryVersionAtStart === inventoryVersionRef.current) {
-      setNodes(nodesResult.value);
-    } else if (nodesResult.status !== "fulfilled") {
-      failedInterfaces.push("节点");
-    }
-
-    if (policiesResult.status === "fulfilled") {
-      setPolicies(policiesResult.value);
-    } else {
-      failedInterfaces.push("策略");
-    }
-
-    if (tasksResult.status === "fulfilled" && taskVersionAtStart === taskVersionRef.current) {
-      setTasks(tasksResult.value);
-    } else if (tasksResult.status !== "fulfilled") {
-      failedInterfaces.push("任务");
-    }
-
     if (alertsResult.status === "fulfilled") {
       setAlerts(alertsResult.value);
     } else {
       failedInterfaces.push("告警");
-    }
-
-    if (sshKeysResult.status === "fulfilled" && inventoryVersionAtStart === inventoryVersionRef.current) {
-      setSSHKeys(sshKeysResult.value);
-    } else if (sshKeysResult.status !== "fulfilled") {
-      failedInterfaces.push("SSH Key");
-    }
-
-    if (integrationsResult.status === "fulfilled") {
-      setIntegrations(integrationsResult.value);
-    } else {
-      failedInterfaces.push("通知通道");
     }
 
     if (overviewResult.status === "fulfilled") {
@@ -256,19 +211,79 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     }
 
     if (failedInterfaces.length > 0) {
-      if (failedInterfaces.length === 7) {
+      if (failedInterfaces.length === 2) {
         setWarning(
-          "登录后数据加载失败：当前无法从后端获取任何控制台数据。\n请先点击顶部“刷新数据”重试；若仍失败，请检查后端服务状态、网络连通性与 VITE_API_BASE_URL 配置，并重新登录。"
+          '登录后数据加载失败：当前无法从后端获取任何控制台数据。\n请先点击顶部\u201c刷新数据\u201d重试；若仍失败，请检查后端服务状态、网络连通性与 VITE_API_BASE_URL 配置，并重新登录。'
         );
       } else {
         setWarning(
-          `部分数据加载失败（${failedInterfaces.join("、")}）。已保留已成功加载的数据。\n请点击顶部“刷新数据”重试；若持续失败，请检查后端服务状态或重新登录。`
+          `部分数据加载失败（${failedInterfaces.join('\u3001')}）。已保留已成功加载的数据。\n请点击顶部\u201c刷新数据\u201d重试；若持续失败，请检查后端服务状态或重新登录。`
         );
       }
     }
 
     setLoading(false);
     setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
+  }, [token, demoModeEnabled]);
+
+  const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {
+    if (!token) return;
+    const controller = new AbortController();
+    const inventoryVersionAtStart = inventoryVersionRef.current;
+    try {
+      const result = await apiClient.getNodes(token, { signal: controller.signal });
+      if (inventoryVersionAtStart === inventoryVersionRef.current) {
+        setNodes(result);
+      }
+    } catch {
+      // 按需刷新失败时静默处理，不覆盖全局 warning
+    }
+  }, [token]);
+
+  const refreshPolicies = useCallback(async () => {
+    if (!token) return;
+    try {
+      const result = await apiClient.getPolicies(token);
+      setPolicies(result);
+    } catch {
+      // 按需刷新失败时静默处理
+    }
+  }, [token]);
+
+  const refreshTasks = useCallback(async (_options?: { limit?: number; offset?: number }) => {
+    if (!token) return;
+    const taskVersionAtStart = taskVersionRef.current;
+    try {
+      const result = await apiClient.getTasks(token);
+      if (taskVersionAtStart === taskVersionRef.current) {
+        setTasks(result);
+      }
+    } catch {
+      // 按需刷新失败时静默处理
+    }
+  }, [token]);
+
+  const refreshSSHKeys = useCallback(async () => {
+    if (!token) return;
+    const inventoryVersionAtStart = inventoryVersionRef.current;
+    try {
+      const result = await apiClient.getSSHKeys(token);
+      if (inventoryVersionAtStart === inventoryVersionRef.current) {
+        setSSHKeys(result);
+      }
+    } catch {
+      // 按需刷新失败时静默处理
+    }
+  }, [token]);
+
+  const refreshIntegrations = useCallback(async () => {
+    if (!token) return;
+    try {
+      const result = await apiClient.getIntegrations(token);
+      setIntegrations(result);
+    } catch {
+      // 按需刷新失败时静默处理
+    }
   }, [token]);
 
   useEffect(() => {
@@ -415,6 +430,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       setRefreshVersion((current) => current + 1);
       void loadData();
     },
+    refreshNodes,
+    refreshPolicies,
+    refreshTasks,
+    refreshSSHKeys,
+    refreshIntegrations,
 
     createNode,
     updateNode,

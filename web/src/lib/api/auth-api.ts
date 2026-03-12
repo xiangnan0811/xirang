@@ -1,14 +1,34 @@
 import type { LoginResponse } from "@/types/domain";
 import { ApiError, request } from "./core";
 
+export type CaptchaResponse = {
+  id: string;
+  question: string;
+};
+
 export function createAuthApi() {
   return {
-    async login(username: string, password: string): Promise<LoginResponse> {
+    async getCaptcha(): Promise<CaptchaResponse> {
+      return request<CaptchaResponse>("/auth/captcha", { method: "GET" });
+    },
+
+    async login(
+      username: string,
+      password: string,
+      captchaId?: string,
+      captchaAnswer?: string
+    ): Promise<LoginResponse> {
+      const body: Record<string, string> = { username, password };
+      if (captchaId) body.captcha_id = captchaId;
+      if (captchaAnswer) body.captcha_answer = captchaAnswer;
       const result = await request<LoginResponse>("/auth/login", {
         method: "POST",
-        body: { username, password }
+        body
       });
-      if (!result || typeof result !== "object" || !("token" in result)) {
+      if (!result || typeof result !== "object") {
+        throw new ApiError(500, "登录响应格式异常", result);
+      }
+      if (!("token" in result) && !("requires_2fa" in result)) {
         throw new ApiError(500, "登录响应格式异常", result);
       }
       return result;

@@ -65,7 +65,8 @@ function mapVerifyStatus(raw?: string): TaskRecord["verifyStatus"] {
 }
 
 function mapTaskExecutor(raw?: string): TaskRecord["executorType"] {
-  return raw === "rsync" ? raw : "rsync";
+  if (raw === "command") return "command";
+  return "rsync";
 }
 
 function mapLogLevel(raw?: string): LogEvent["level"] {
@@ -221,11 +222,12 @@ export function createTasksApi() {
       return rows.map((row) => mapTaskLog(row));
     },
 
-    async triggerTask(token: string, taskId: number): Promise<void> {
-      await request(`/tasks/${taskId}/trigger`, {
+    async triggerTask(token: string, taskId: number): Promise<{ runId?: number }> {
+      const payload = await request<{ message?: string; run_id?: number }>(`/tasks/${taskId}/trigger`, {
         method: "POST",
         token
       });
+      return { runId: payload.run_id };
     },
 
     async cancelTask(token: string, taskId: number): Promise<void> {
@@ -233,6 +235,24 @@ export function createTasksApi() {
         method: "POST",
         token
       });
+    },
+
+    async restoreTask(token: string, taskId: number, targetPath?: string): Promise<{ runId?: number }> {
+      const payload = await request<{ message?: string; run_id?: number }>(`/tasks/${taskId}/restore`, {
+        method: "POST",
+        token,
+        body: targetPath ? { target_path: targetPath } : {}
+      });
+      return { runId: payload.run_id };
+    },
+
+    async batchTriggerTasks(token: string, taskIds: number[]): Promise<{ total: number; successCount: number }> {
+      const payload = await request<{ total?: number; success_count?: number }>("/tasks/batch-trigger", {
+        method: "POST",
+        token,
+        body: { task_ids: taskIds }
+      });
+      return { total: payload.total ?? 0, successCount: payload.success_count ?? 0 };
     }
   };
 }

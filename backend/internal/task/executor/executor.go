@@ -38,12 +38,14 @@ type Factory interface {
 }
 
 type factory struct {
-	rsync Executor
+	rsync   Executor
+	command Executor
 }
 
 func NewFactory(rsyncBinary string) Factory {
 	return &factory{
-		rsync: &RsyncExecutor{binary: rsyncBinary},
+		rsync:   &RsyncExecutor{binary: rsyncBinary},
+		command: &CommandExecutor{},
 	}
 }
 
@@ -52,6 +54,8 @@ func (f *factory) Resolve(executorType string) Executor {
 	switch normalized {
 	case "rsync":
 		return f.rsync
+	case "command":
+		return f.command
 	default:
 		return &DisabledExecutor{executorType: normalized}
 	}

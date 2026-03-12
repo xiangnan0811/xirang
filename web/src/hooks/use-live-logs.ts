@@ -54,7 +54,13 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
 
     const unsubscribeStatus = client.onStatusChange((status) => {
       setConnected(status);
-      setConnectionWarning(status ? null : "日志通道断开，正在尝试自动重连。");
+      if (status) {
+        setConnectionWarning(null);
+      } else if (client.isGivingUp()) {
+        setConnectionWarning("日志通道断开，已达最大重试次数，请刷新页面重新连接。");
+      } else {
+        setConnectionWarning("日志通道断开，正在尝试自动重连...");
+      }
     });
 
     client.connect(token, {

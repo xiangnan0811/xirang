@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +13,7 @@ import (
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
@@ -22,21 +22,24 @@ import (
 )
 
 func main() {
+	logger.Init(os.Getenv("LOG_LEVEL"))
+	log := logger.Module("main")
+
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("加载配置失败: %v", err)
+		log.Fatal().Err(err).Msg("加载配置失败")
 	}
 
 	db, err := database.Open(cfg)
 	if err != nil {
-		log.Fatalf("连接数据库失败: %v", err)
+		log.Fatal().Err(err).Msg("连接数据库失败")
 	}
 
 	if err := bootstrap.AutoMigrate(db, cfg.DBType); err != nil {
-		log.Fatalf("执行数据库迁移失败: %v", err)
+		log.Fatal().Err(err).Msg("执行数据库迁移失败")
 	}
 	if err := bootstrap.SeedUsers(db); err != nil {
-		log.Fatalf("初始化管理员账号失败: %v", err)
+		log.Fatal().Err(err).Msg("初始化管理员账号失败")
 	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
@@ -49,9 +52,9 @@ func main() {
 	defer cronScheduler.Stop()
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
-	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, cfg.TaskTrafficRetentionDays)
+	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
-		log.Fatalf("加载定时任务失败: %v", err)
+		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
 
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency)
@@ -87,30 +90,30 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("后端服务启动，监听地址: %s", cfg.ListenAddr)
+		log.Info().Str("addr", cfg.ListenAddr).Msg("后端服务启动")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("服务异常退出: %v", err)
+			log.Fatal().Err(err).Msg("服务异常退出")
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("收到退出信号，开始优雅关闭")
+	log.Info().Msg("收到退出信号，开始优雅关闭")
 
 	taskManager.StopAccepting()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("优雅关闭失败，强制退出: %v", err)
+		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
 	}
 
 	if err := taskManager.Shutdown(shutdownCtx); err != nil {
-		log.Printf("任务管理器关闭失败: %v", err)
+		log.Error().Err(err).Msg("任务管理器关闭失败")
 	}
 	if err := prober.Stop(shutdownCtx); err != nil {
-		log.Printf("节点探测停止失败: %v", err)
+		log.Error().Err(err).Msg("节点探测停止失败")
 	}
 	hubCancel()
 }

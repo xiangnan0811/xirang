@@ -53,6 +53,10 @@ vi.mock("@/components/ui/toast", () => ({
   },
 }));
 
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({ token: "test-token" }),
+}));
+
 function createContext(overrides?: Partial<ConsoleOutletContext>) {
   const base = {
     policies: [
@@ -84,6 +88,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     updatePolicy: vi.fn().mockResolvedValue(undefined),
     deletePolicy: vi.fn().mockResolvedValue(undefined),
     togglePolicy: vi.fn().mockResolvedValue(undefined),
+    refreshPolicies: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Plus, Trash2, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckSquare, Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import {
@@ -16,12 +16,15 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
+import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
+import { useAuth } from "@/context/auth-context";
 
 const keywordStorageKey = "xirang.policies.keyword";
 
 export function PoliciesPage() {
+  const { token } = useAuth();
   const {
     policies,
     nodes,
@@ -32,7 +35,12 @@ export function PoliciesPage() {
     updatePolicy,
     deletePolicy,
     togglePolicy,
+    refreshPolicies,
   } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshPolicies();
+  }, [refreshPolicies]);
 
   const {
     keyword,
@@ -45,7 +53,26 @@ export function PoliciesPage() {
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
+  const [selectedPolicyIds, setSelectedPolicyIds] = useState<number[]>([]);
   const { confirm, dialog } = useConfirm();
+
+  const togglePolicySelection = (id: number, checked: boolean) => {
+    setSelectedPolicyIds((prev) =>
+      checked ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((pid) => pid !== id)
+    );
+  };
+
+  const handleBatchToggle = async (enabled: boolean) => {
+    if (!selectedPolicyIds.length || !token) return;
+    try {
+      await apiClient.batchTogglePolicies(token, selectedPolicyIds, enabled);
+      toast.success(`已批量${enabled ? "启用" : "停用"} ${selectedPolicyIds.length} 个策略。`);
+      setSelectedPolicyIds([]);
+      void refreshPolicies();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
 
   const filteredPolicies = useMemo(() => {
     const effectiveKeyword = deferredKeyword.trim().toLowerCase();
@@ -188,9 +215,12 @@ export function PoliciesPage() {
                     <h3 className="font-medium">{policy.name}</h3>
                     <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
                   </div>
-                  <Badge variant={policy.enabled ? "success" : "outline"}>
-                    {policy.enabled ? "启用" : "停用"}
-                  </Badge>
+                  <div className="flex items-center gap-1.5">
+                    {policy.isTemplate && <Badge variant="secondary">模板</Badge>}
+                    <Badge variant={policy.enabled ? "success" : "outline"}>
+                      {policy.enabled ? "启用" : "停用"}
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="mt-3 grid gap-2 text-sm text-muted-foreground flex-1">
@@ -258,6 +288,21 @@ export function PoliciesPage() {
             <table className="min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <th className="w-10 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      className="size-3.5 accent-primary"
+                      checked={filteredPolicies.length > 0 && filteredPolicies.every((p) => selectedPolicyIds.includes(p.id))}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedPolicyIds(filteredPolicies.map((p) => p.id));
+                        } else {
+                          setSelectedPolicyIds([]);
+                        }
+                      }}
+                      aria-label="全选策略"
+                    />
+                  </th>
                   <th className="px-3 py-2.5">策略名</th>
                   <th className="px-3 py-2.5">Cron</th>
                   <th className="px-3 py-2.5">源路径</th>
@@ -272,7 +317,19 @@ export function PoliciesPage() {
                   filteredPolicies.map((policy) => (
                     <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                       <td className="px-3 py-2.5">
-                        <p className="font-medium">{policy.name}</p>
+                        <input
+                          type="checkbox"
+                          className="size-3.5 accent-primary"
+                          checked={selectedPolicyIds.includes(policy.id)}
+                          onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
+                          aria-label={`选择策略 ${policy.name}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium">{policy.name}</p>
+                          {policy.isTemplate && <Badge variant="secondary">模板</Badge>}
+                        </div>
                         <p className="text-xs text-muted-foreground">阈值 {policy.criticalThreshold}</p>
                       </td>
                       <td className="px-3 py-2.5">
@@ -317,7 +374,7 @@ export function PoliciesPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-3 py-5">
+                    <td colSpan={8} className="px-3 py-5">
                       <EmptyState
                         className="py-8"
                         title="暂无匹配策略"
@@ -342,6 +399,28 @@ export function PoliciesPage() {
           </div>
         </CardContent>
       </Card>
+
+      {selectedPolicyIds.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              <CheckSquare className="mr-1 inline size-4" />
+              已选 {selectedPolicyIds.length} 个策略
+            </span>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
+                批量启用
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
+                批量停用
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
+                取消
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <PolicyEditorDialog
         open={editorOpen}

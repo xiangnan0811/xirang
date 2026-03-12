@@ -15,7 +15,8 @@ import (
 )
 
 type TaskRunner interface {
-	TriggerManual(taskID uint) error
+	TriggerManual(taskID uint) (uint, error)
+	TriggerRestore(taskID uint, targetPath string) (uint, error)
 	SyncSchedule(task model.Task) error
 	RemoveSchedule(taskID uint)
 	Cancel(taskID uint) error
@@ -133,7 +134,6 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		}
 		return
 	}
-	req.Command = ""
 
 	taskEntity := model.Task{
 		Name:         req.Name,
@@ -222,7 +222,6 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		return
 	}
-	req.Command = ""
 
 	taskEntity.Name = req.Name
 	taskEntity.NodeID = req.NodeID
@@ -276,11 +275,12 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.runner.TriggerManual(id); err != nil {
+	runID, err := h.runner.TriggerManual(id)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"message": "triggered"})
+	c.JSON(http.StatusAccepted, gin.H{"message": "triggered", "run_id": runID})
 }
 
 func (h *TaskHandler) Cancel(c *gin.Context) {
@@ -293,6 +293,67 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "canceled"})
+}
+
+// Restore 触发备份恢复，将备份数据反向同步回源路径或指定的自定义路径。
+func (h *TaskHandler) Restore(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		TargetPath string `json:"target_path"`
+	}
+	// 允许空 body（使用默认恢复路径）
+	_ = c.ShouldBindJSON(&req)
+
+	runID, err := h.runner.TriggerRestore(id, req.TargetPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "restore triggered",
+		"run_id":  runID,
+	})
+}
+
+// BatchTrigger 批量触发任务执行。
+// POST /tasks/batch-trigger
+func (h *TaskHandler) BatchTrigger(c *gin.Context) {
+	var req struct {
+		TaskIDs []uint `json:"task_ids" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+
+	type triggerResult struct {
+		TaskID uint   `json:"task_id"`
+		RunID  uint   `json:"run_id,omitempty"`
+		Error  string `json:"error,omitempty"`
+	}
+
+	results := make([]triggerResult, 0, len(req.TaskIDs))
+	successCount := 0
+	for _, tid := range req.TaskIDs {
+		runID, err := h.runner.TriggerManual(tid)
+		if err != nil {
+			results = append(results, triggerResult{TaskID: tid, Error: err.Error()})
+			continue
+		}
+		results = append(results, triggerResult{TaskID: tid, RunID: runID})
+		successCount++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"results":       results,
+		"total":         len(req.TaskIDs),
+		"success_count": successCount,
+	})
 }
 
 func (h *TaskHandler) Logs(c *gin.Context) {
@@ -400,11 +461,8 @@ func validateTaskRequest(req taskRequest) error {
 	if req.NodeID == 0 {
 		return fmt.Errorf("请选择目标节点")
 	}
-	if req.ExecutorType != "rsync" {
-		return fmt.Errorf("仅支持 rsync 同步类型")
-	}
-	if strings.TrimSpace(req.Command) != "" {
-		return fmt.Errorf("命令执行已禁用，请配置同步源路径与目标路径")
+	if req.ExecutorType != "rsync" && req.ExecutorType != "command" {
+		return fmt.Errorf("仅支持 rsync 同步和 command 命令类型")
 	}
 	if req.CronSpec != "" {
 		if err := validateCronSpec(req.CronSpec); err != nil {
@@ -412,8 +470,14 @@ func validateTaskRequest(req taskRequest) error {
 		}
 	}
 
-	if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
-		return fmt.Errorf("同步任务必须填写源路径和目标路径")
+	if req.ExecutorType == "command" {
+		if strings.TrimSpace(req.Command) == "" {
+			return fmt.Errorf("命令类型任务必须填写命令内容")
+		}
+	} else {
+		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
+			return fmt.Errorf("同步任务必须填写源路径和目标路径")
+		}
 	}
 
 	sourceAllowList := parseCSVEnvList("RSYNC_ALLOWED_SOURCE_PREFIXES")

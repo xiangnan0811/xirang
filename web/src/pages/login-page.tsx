@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,35 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 验证码状态
+  const [captchaId, setCaptchaId] = useState<string | null>(null);
+  const [captchaQuestion, setCaptchaQuestion] = useState<string | null>(null);
+  const [captchaAnswer, setCaptchaAnswer] = useState("");
+
+  // 2FA 步骤状态
+  const [requires2FA, setRequires2FA] = useState(false);
+  const [loginToken, setLoginToken] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+
   const errorId = "login-form-error";
+
+  const fetchCaptcha = async () => {
+    try {
+      const data = await apiClient.getCaptcha();
+      setCaptchaId(data.id);
+      setCaptchaQuestion(data.question);
+      setCaptchaAnswer("");
+    } catch {
+      // 验证码接口不可用（未启用），隐藏验证码区域
+      setCaptchaId(null);
+      setCaptchaQuestion(null);
+    }
+  };
+
+  useEffect(() => {
+    void fetchCaptcha();
+  }, []);
 
   if (isAuthenticated) {
     return <Navigate to="/app/overview" replace />;
@@ -34,11 +62,26 @@ export function LoginPage() {
     setError(null);
 
     try {
-      const result = await apiClient.login(username, password);
-      login(result.token, result.user.username, result.user.role, result.user.id);
-      navigate(redirectTo, { replace: true });
+      const result = await apiClient.login(
+        username,
+        password,
+        captchaId ?? undefined,
+        captchaQuestion ? captchaAnswer : undefined
+      );
+
+      if (result.requires_2fa && result.login_token) {
+        setLoginToken(result.login_token);
+        setRequires2FA(true);
+        return;
+      }
+
+      if (result.token && result.user) {
+        login(result.token, result.user.username, result.user.role as "admin" | "operator" | "viewer", result.user.id, result.user.totp_enabled ?? false);
+        navigate(redirectTo, { replace: true });
+      }
       return;
     } catch (error) {
+      void fetchCaptcha();
       if (error instanceof ApiError) {
         const payload =
           error.detail && typeof error.detail === "object"
@@ -62,6 +105,30 @@ export function LoginPage() {
         return;
       }
       setError("登录失败：后端服务不可达，请检查服务状态与网络连接。");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handle2FASubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const result = await apiClient.totpLogin(loginToken, totpCode);
+      login(result.token, result.user.username, result.user.role as "admin" | "operator" | "viewer", result.user.id, result.user.totp_enabled);
+      navigate(redirectTo, { replace: true });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        const payload =
+          error.detail && typeof error.detail === "object"
+            ? (error.detail as { error?: string; message?: string })
+            : undefined;
+        setError(payload?.error ?? `验证失败（HTTP ${error.status}）`);
+        return;
+      }
+      setError("验证失败：后端服务不可达。");
     } finally {
       setSubmitting(false);
     }
@@ -115,58 +182,129 @@ export function LoginPage() {
               <ShieldCheck className="size-6" />
             </div>
             <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">息壤控制台</h1>
-            <CardTitle className="text-2xl font-bold">欢迎登录</CardTitle>
-            <CardDescription className="text-base">输入管理员账号，进入节点与任务统一管理。</CardDescription>
+            {requires2FA ? (
+              <>
+                <CardTitle className="text-2xl font-bold">两步验证</CardTitle>
+                <CardDescription className="text-base">请输入验证器 App 中的验证码，或使用恢复码登录。</CardDescription>
+              </>
+            ) : (
+              <>
+                <CardTitle className="text-2xl font-bold">欢迎登录</CardTitle>
+                <CardDescription className="text-base">输入管理员账号，进入节点与任务统一管理。</CardDescription>
+              </>
+            )}
           </CardHeader>
           <CardContent className="animate-slide-up [animation-delay:300ms]">
-            <form className="space-y-4" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="username">
-                  用户名
-                </label>
-                <Input
-                  id="username"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  autoComplete="username"
-                  placeholder="请输入用户名"
-                  aria-invalid={Boolean(error)}
-                  aria-describedby={error ? errorId : undefined}
-                  required
-                />
-              </div>
+            {requires2FA ? (
+              <form className="space-y-4" onSubmit={handle2FASubmit}>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="totp-code">
+                    验证码
+                  </label>
+                  <Input
+                    id="totp-code"
+                    value={totpCode}
+                    onChange={(event) => setTotpCode(event.target.value)}
+                    autoComplete="one-time-code"
+                    placeholder="请输入 6 位验证码或恢复码"
+                    aria-invalid={Boolean(error)}
+                    aria-describedby={error ? errorId : undefined}
+                    autoFocus
+                    required
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="password">
-                  密码
-                </label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  placeholder="请输入密码"
-                  aria-invalid={Boolean(error)}
-                  aria-describedby={error ? errorId : undefined}
-                  required
-                />
-              </div>
+                {error ? (
+                  <p
+                    id={errorId}
+                    role="alert"
+                    className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  >
+                    {error}
+                  </p>
+                ) : null}
 
-              {error ? (
-                <p
-                  id={errorId}
-                  role="alert"
-                  className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                <Button className="w-full" type="submit" loading={submitting}>
+                  验证
+                </Button>
+                <Button
+                  className="w-full"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => { setRequires2FA(false); setError(null); setTotpCode(""); }}
                 >
-                  {error}
-                </p>
-              ) : null}
+                  返回登录
+                </Button>
+              </form>
+            ) : (
+              <form className="space-y-4" onSubmit={handleSubmit}>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="username">
+                    用户名
+                  </label>
+                  <Input
+                    id="username"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    autoComplete="username"
+                    placeholder="请输入用户名"
+                    aria-invalid={Boolean(error)}
+                    aria-describedby={error ? errorId : undefined}
+                    required
+                  />
+                </div>
 
-              <Button className="w-full" type="submit" loading={submitting}>
-                登录控制台
-              </Button>
-            </form>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="password">
+                    密码
+                  </label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="current-password"
+                    placeholder="请输入密码"
+                    aria-invalid={Boolean(error)}
+                    aria-describedby={error ? errorId : undefined}
+                    required
+                  />
+                </div>
+
+                {captchaQuestion ? (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="captcha-answer">
+                      验证码
+                    </label>
+                    <p className="text-sm text-muted-foreground">{captchaQuestion}</p>
+                    <Input
+                      id="captcha-answer"
+                      type="text"
+                      inputMode="numeric"
+                      value={captchaAnswer}
+                      onChange={(event) => setCaptchaAnswer(event.target.value)}
+                      placeholder="请输入计算结果"
+                      autoComplete="off"
+                      required
+                    />
+                  </div>
+                ) : null}
+
+                {error ? (
+                  <p
+                    id={errorId}
+                    role="alert"
+                    className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  >
+                    {error}
+                  </p>
+                ) : null}
+
+                <Button className="w-full" type="submit" loading={submitting}>
+                  登录控制台
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -23,8 +23,12 @@ type mockTaskRunner struct {
 	removeCalls []uint
 }
 
-func (m *mockTaskRunner) TriggerManual(taskID uint) error {
-	return nil
+func (m *mockTaskRunner) TriggerManual(taskID uint) (uint, error) {
+	return 0, nil
+}
+
+func (m *mockTaskRunner) TriggerRestore(taskID uint, targetPath string) (uint, error) {
+	return 0, nil
 }
 
 func (m *mockTaskRunner) SyncSchedule(task model.Task) error {
@@ -308,17 +312,16 @@ func TestValidateTaskRequestRejectsNonRsyncExecutor(t *testing.T) {
 	}
 }
 
-func TestValidateTaskRequestRejectsCommandInput(t *testing.T) {
+func TestValidateTaskRequestRejectsCommandWithEmptyContent(t *testing.T) {
+	// command 类型任务必须填写命令内容
 	req := taskRequest{
-		Name:         "task-rsync",
+		Name:         "task-cmd",
 		NodeID:       1,
-		Command:      "echo should-not-run",
-		ExecutorType: "rsync",
-		RsyncSource:  "/data/src",
-		RsyncTarget:  "/backup/dst",
+		ExecutorType: "command",
+		Command:      "   ", // 全空白，应被拒绝
 	}
 	if err := validateTaskRequest(req); err == nil {
-		t.Fatalf("期望 command 输入链路被拒绝")
+		t.Fatalf("期望 command 内容为空时被拒绝")
 	}
 }
 
@@ -362,7 +365,7 @@ func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "仅支持 rsync 同步类型") {
+	if !strings.Contains(resp.Body.String(), "仅支持 rsync 同步和 command 命令类型") {
 		t.Fatalf("期望返回 local 拒绝错误，实际: %s", resp.Body.String())
 	}
 }

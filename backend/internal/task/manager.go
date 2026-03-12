@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"xirang/backend/internal/logger"
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
@@ -49,10 +51,11 @@ const (
 )
 
 type queuedTaskLog struct {
-	taskID  uint
-	level   string
-	message string
-	status  string
+	taskID    uint
+	taskRunID *uint
+	level     string
+	message   string
+	status    string
 }
 
 type queuedTaskSample struct {
@@ -93,26 +96,31 @@ type Manager struct {
 	lastSampleCleanupAt    time.Time
 	sampleCleanupMu        sync.Mutex
 
+	taskRunRetentionDays    int
+	lastTaskRunCleanupAt    time.Time
+	taskRunCleanupMu        sync.Mutex
+
 	shuttingDown atomic.Bool
 }
 
-func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, sampleRetentionDays int) *Manager {
+func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
 	m := &Manager{
-		db:                  db,
-		stateMachine:        NewStateMachine(),
-		executorFactory:     executorFactory,
-		hub:                 hub,
-		scheduler:           scheduler,
-		semaphore:           make(chan struct{}, 8),
-		logQueue:            make(chan queuedTaskLog, defaultLogQueueCapacity),
-		logBatchSize:        defaultLogBatchSize,
-		logFlushInterval:    defaultLogFlushInterval,
-		logWorkerDone:       make(chan struct{}),
-		sampleQueue:         make(chan queuedTaskSample, defaultSampleQueueCapacity),
-		sampleBatchSize:     defaultSampleBatchSize,
-		sampleFlushInterval: defaultSampleFlushInterval,
-		sampleWorkerDone:    make(chan struct{}),
-		sampleRetentionDays: sampleRetentionDays,
+		db:                   db,
+		stateMachine:         NewStateMachine(),
+		executorFactory:      executorFactory,
+		hub:                  hub,
+		scheduler:            scheduler,
+		semaphore:            make(chan struct{}, 8),
+		logQueue:             make(chan queuedTaskLog, defaultLogQueueCapacity),
+		logBatchSize:         defaultLogBatchSize,
+		logFlushInterval:     defaultLogFlushInterval,
+		logWorkerDone:        make(chan struct{}),
+		sampleQueue:          make(chan queuedTaskSample, defaultSampleQueueCapacity),
+		sampleBatchSize:      defaultSampleBatchSize,
+		sampleFlushInterval:  defaultSampleFlushInterval,
+		sampleWorkerDone:     make(chan struct{}),
+		sampleRetentionDays:  sampleRetentionDays,
+		taskRunRetentionDays: taskRunRetentionDays,
 	}
 	m.startLogWorker()
 	m.startSampleWorker()
@@ -167,6 +175,7 @@ func (m *Manager) runLogWorker(ctx context.Context) {
 				flush()
 			}
 		case <-ticker.C:
+			m.cleanupExpiredTaskRuns()
 			flush()
 		}
 	}
@@ -237,7 +246,7 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 	}
 	return m.scheduler.RegisterTask(task.ID, task.CronSpec, func() {
 		if err := m.TriggerFromScheduler(task.ID); err != nil {
-			log.Printf("warn: 定时触发任务失败(task_id=%d): %v", task.ID, err)
+			logger.Module("task").Warn().Uint("task_id", task.ID).Err(err).Msg("定时触发任务失败")
 		}
 	})
 }
@@ -249,27 +258,162 @@ func (m *Manager) RemoveSchedule(taskID uint) {
 	m.scheduler.RemoveTask(taskID)
 }
 
-func (m *Manager) TriggerManual(taskID uint) error {
+func (m *Manager) TriggerManual(taskID uint) (uint, error) {
 	return m.trigger(taskID, "manual")
 }
 
 func (m *Manager) TriggerFromScheduler(taskID uint) error {
-	return m.trigger(taskID, "cron")
+	_, err := m.trigger(taskID, "cron")
+	return err
 }
 
-func (m *Manager) trigger(taskID uint, reason string) error {
+// TriggerRestore 触发备份恢复：将备份目标反向同步回源路径（或自定义路径）。
+// 要求该任务至少有一次成功的执行记录，且恢复路径通过安全校验。
+func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
+	if m.shuttingDown.Load() {
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
+	}
+
+	var taskEntity model.Task
+	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
+		return 0, fmt.Errorf("任务不存在")
+	}
+
+	// 校验是否有成功的执行记录
+	var successCount int64
+	m.db.Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount)
+	if successCount == 0 {
+		return 0, fmt.Errorf("该任务没有成功的执行记录，无法恢复")
+	}
+
+	// 确定恢复目标路径
+	restoreTo := strings.TrimSpace(targetPath)
+	if restoreTo == "" {
+		restoreTo = taskEntity.RsyncSource // 默认恢复到原始源路径
+	}
+	if err := validateRestorePath(restoreTo); err != nil {
+		return 0, err
+	}
+
+	// 创建恢复执行记录
+	run := model.TaskRun{
+		TaskID:      taskID,
+		TriggerType: "restore",
+		Status:      "pending",
+	}
+	if err := m.db.Create(&run).Error; err != nil {
+		return 0, fmt.Errorf("创建恢复执行记录失败: %w", err)
+	}
+
+	m.taskWG.Add(1)
+	go func() {
+		defer m.taskWG.Done()
+		// 内存拷贝，交换 source/target 实现反向同步
+		restoreTask := taskEntity
+		restoreTask.RsyncSource = taskEntity.RsyncTarget // 备份目的地变为源
+		restoreTask.RsyncTarget = restoreTo              // 恢复到目标路径
+		m.runRestoreTask(taskID, run.ID, restoreTask)
+	}()
+	return run.ID, nil
+}
+
+// validateRestorePath 校验恢复路径的安全性。
+func validateRestorePath(path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("恢复路径必须是绝对路径")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("恢复路径不允许包含 '..'")
+	}
+	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot"}
+	cleanPath := strings.TrimRight(path, "/")
+	if cleanPath == "" {
+		cleanPath = "/"
+	}
+	for _, dir := range forbidden {
+		if cleanPath == dir {
+			return fmt.Errorf("禁止恢复到系统目录: %s", dir)
+		}
+	}
+	return nil
+}
+
+// runRestoreTask 执行恢复任务。与 runTask 不同，恢复不影响原始 Task 的状态，
+// 仅更新 TaskRun 记录。使用内存中交换了 source/target 的任务副本。
+func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task) {
+	runCompleted := false
+	defer func() {
+		if !runCompleted {
+			now := time.Now()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).
+				Updates(map[string]interface{}{
+					"status":      "failed",
+					"finished_at": &now,
+					"last_error":  "恢复任务启动前异常退出",
+				})
+		}
+	}()
+
+	m.semaphore <- struct{}{}
+	defer func() { <-m.semaphore }()
+
+	runIDPtr := &runID
+
+	now := time.Now()
+	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		"status":     "running",
+		"started_at": &now,
+	})
+	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复任务，源: %s → 目标: %s", restoreTask.RsyncSource, restoreTask.RsyncTarget), "")
+
+	execCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
+	_, err := exec.Run(execCtx, restoreTask, func(level, message string) {
+		m.emitLog(taskID, runIDPtr, level, message, "running")
+	}, nil)
+
+	if err != nil {
+		errorMsg := err.Error()
+		finishedAt := time.Now()
+		duration := finishedAt.Sub(now).Milliseconds()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &finishedAt,
+			"duration_ms": duration,
+			"last_error":  errorMsg,
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "")
+		return
+	}
+
+	finishedAt := time.Now()
+	duration := finishedAt.Sub(now).Milliseconds()
+	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		"status":      "success",
+		"finished_at": &finishedAt,
+		"duration_ms": duration,
+		"last_error":  "",
+	})
+	runCompleted = true
+	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "")
+}
+
+func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
 	if m.shuttingDown.Load() {
 		if reason == "retry" || reason == "cron" {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("系统维护中，请稍候再试")
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
 
 	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
 		if reason == "retry" || reason == "cron" {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("该任务正在执行中，请勿重复触发")
+		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
 	defer func() {
@@ -281,31 +425,41 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 	var taskEntity model.Task
 	result := m.db.Where("id = ?", taskID).Limit(1).Find(&taskEntity)
 	if result.Error != nil {
-		return result.Error
+		return 0, result.Error
 	}
 	if result.RowsAffected == 0 {
 		if reason == "retry" || reason == "cron" {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("任务不存在")
+		return 0, fmt.Errorf("任务不存在")
 	}
 
 	if reason == "retry" {
 		current := ParseStatus(taskEntity.Status)
 		if current != StatusRetrying {
-			return fmt.Errorf("当前任务状态不支持重试，请稍候再试")
+			return 0, fmt.Errorf("当前任务状态不支持重试，请稍候再试")
 		}
 	}
 	if ParseStatus(taskEntity.Status) == StatusRunning {
-		return fmt.Errorf("该任务正在执行中，请勿重复触发")
+		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if conflicted {
-		return fmt.Errorf("同节点有任务正在运行，请稍候再试")
+		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
+	}
+
+	// 创建 TaskRun 执行记录
+	run := model.TaskRun{
+		TaskID:      taskID,
+		TriggerType: reason,
+		Status:      "pending",
+	}
+	if err := m.db.Create(&run).Error; err != nil {
+		return 0, fmt.Errorf("创建执行记录失败: %w", err)
 	}
 
 	m.stopRetryTimer(taskID)
@@ -313,13 +467,26 @@ func (m *Manager) trigger(taskID uint, reason string) error {
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		m.runTask(taskID, reason)
+		m.runTask(taskID, run.ID, reason)
 	}()
-	return nil
+	return run.ID, nil
 }
 
-func (m *Manager) runTask(taskID uint, reason string) {
+func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 	defer m.pendingRuns.Delete(taskID)
+
+	runCompleted := false
+	defer func() {
+		if !runCompleted {
+			now := time.Now()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).
+				Updates(map[string]interface{}{
+					"status":      "failed",
+					"finished_at": &now,
+					"last_error":  "任务启动前异常退出",
+				})
+		}
+	}()
 
 	m.semaphore <- struct{}{}
 	defer func() { <-m.semaphore }()
@@ -328,15 +495,32 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	lock.Lock()
 	defer lock.Unlock()
 
+	runIDPtr := &runID
+
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
-		m.emitLog(taskID, "error", fmt.Sprintf("加载任务失败: %v", err), "")
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("加载任务失败: %v", err), "")
+		return
+	}
+
+	// 检查节点是否处于维护窗口
+	checkTime := time.Now()
+	if taskEntity.Node.MaintenanceStart != nil && taskEntity.Node.MaintenanceEnd != nil &&
+		checkTime.After(*taskEntity.Node.MaintenanceStart) && checkTime.Before(*taskEntity.Node.MaintenanceEnd) {
+		canceledAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &canceledAt,
+			"last_error":  "节点处于维护窗口",
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "warn", "节点处于维护窗口，跳过执行", "")
 		return
 	}
 
 	currentStatus := ParseStatus(taskEntity.Status)
 	if currentStatus == StatusRunning {
-		m.emitLog(taskID, "warn", "任务已在运行，忽略重复触发", taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "warn", "任务已在运行，忽略重复触发", taskEntity.Status)
 		return
 	}
 
@@ -346,17 +530,17 @@ func (m *Manager) runTask(taskID uint, reason string) {
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
-		m.emitLog(taskID, "error", fmt.Sprintf("校验互斥冲突失败: %v", err), taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("校验互斥冲突失败: %v", err), taskEntity.Status)
 		return
 	}
 	if conflicted {
-		m.emitLog(taskID, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
 		return
 	}
 
 	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled || currentStatus == StatusWarning {
 		if err := m.updateStatus(&taskEntity, StatusPending, map[string]interface{}{"last_error": ""}); err != nil {
-			m.emitLog(taskID, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
 			return
 		}
 	}
@@ -368,10 +552,15 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		"next_run_at": nil,
 		"last_error":  "",
 	}); err != nil {
-		m.emitLog(taskID, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
 		return
 	}
-	m.emitLog(taskID, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
+	// 同步更新 TaskRun 为 running
+	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		"status":     "running",
+		"started_at": &now,
+	})
+	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
 
 	execCtx, cancel := context.WithCancel(context.Background())
 	m.runningCancels.Store(taskID, cancel)
@@ -380,7 +569,7 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
 	runStartedAt := now.UTC()
 	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
-		m.emitLog(taskID, level, message, string(StatusRunning))
+		m.emitLog(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.emitTrafficSample(taskID, taskEntity.NodeID, runStartedAt, sample)
 	})
@@ -392,11 +581,18 @@ func (m *Manager) runTask(taskID uint, reason string) {
 				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  "任务已取消",
 			}); statusErr != nil {
-				m.emitLog(taskID, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
+				m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
 				return
 			}
 		}
-		m.emitLog(taskID, "warn", "任务执行已取消，进程已中断", taskEntity.Status)
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "任务已取消",
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "warn", "任务执行已取消，进程已中断", taskEntity.Status)
 		return
 	}
 
@@ -405,18 +601,25 @@ func (m *Manager) runTask(taskID uint, reason string) {
 
 		// 检查关联策略是否启用校验
 		if taskEntity.Policy != nil && taskEntity.Policy.VerifyEnabled {
-			m.emitLog(taskID, "info", "开始备份完整性校验", taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
-				m.emitLog(taskID, level, msg, string(StatusRunning))
+				m.emitLog(taskID, runIDPtr, level, msg, string(StatusRunning))
 			})
 
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
-				m.emitLog(taskID, "warn", "校验期间任务已取消", taskEntity.Status)
+				m.emitLog(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
 				m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 					"next_run_at": nextCronRun(taskEntity.CronSpec),
 					"last_error":  "任务已取消",
 				})
+				finishedAt := time.Now()
+				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+					"status":      "canceled",
+					"finished_at": &finishedAt,
+					"last_error":  "任务已取消",
+				})
+				runCompleted = true
 				return
 			}
 
@@ -429,11 +632,21 @@ func (m *Manager) runTask(taskID uint, reason string) {
 					"last_error":    result.Message,
 					"verify_status": verifyStatus,
 				})
-				m.emitLog(taskID, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
-				alerting.RaiseVerificationFailure(m.db, taskEntity, result.Message)
+				finishedAt := time.Now()
+				duration := finishedAt.Sub(now).Milliseconds()
+				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+					"status":        "warning",
+					"finished_at":   &finishedAt,
+					"duration_ms":   duration,
+					"verify_status": verifyStatus,
+					"last_error":    result.Message,
+				})
+				runCompleted = true
+				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
+				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, result.Message)
 				return
 			}
-			m.emitLog(taskID, "info", "备份完整性校验通过", taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "info", "备份完整性校验通过", taskEntity.Status)
 		}
 
 		if statusErr := m.updateStatus(&taskEntity, StatusSuccess, map[string]interface{}{
@@ -442,17 +655,34 @@ func (m *Manager) runTask(taskID uint, reason string) {
 			"last_error":    "",
 			"verify_status": verifyStatus,
 		}); statusErr != nil {
-			m.emitLog(taskID, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
 			return
 		}
+		// 计算本次执行的平均吞吐量
+		finishedAt := time.Now()
+		duration := finishedAt.Sub(now).Milliseconds()
+		var avgThroughput float64
+		m.db.Model(&model.TaskTrafficSample{}).
+			Where("task_id = ? AND sampled_at BETWEEN ? AND ?", taskID, runStartedAt, finishedAt).
+			Select("COALESCE(AVG(throughput_mbps), 0)").Scan(&avgThroughput)
+
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":          "success",
+			"finished_at":     &finishedAt,
+			"duration_ms":     duration,
+			"verify_status":   verifyStatus,
+			"throughput_mbps": avgThroughput,
+			"last_error":      "",
+		})
+		runCompleted = true
 		// 更新关联节点的最后备份时间
 		if taskEntity.NodeID > 0 {
-			now := time.Now()
-			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &now)
+			backupAt := time.Now()
+			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &backupAt)
 		}
-		m.emitLog(taskID, "info", "任务执行成功", taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
 		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
-			log.Printf("warn: ResolveTaskAlerts 失败(task_id=%d): %v", taskID, resolveErr)
+			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 		}
 		return
 	}
@@ -465,24 +695,36 @@ func (m *Manager) runTask(taskID uint, reason string) {
 	}
 
 	nextStatus, retryCount, nextRun, shouldRetry := m.stateMachine.NextAfterFailure(StatusRunning, taskEntity.RetryCount, time.Now())
+
+	// 当前 TaskRun 始终标记为 failed（即使 Task 进入 retrying）
+	failedAt := time.Now()
+	failDuration := failedAt.Sub(now).Milliseconds()
+	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		"status":      "failed",
+		"finished_at": &failedAt,
+		"duration_ms": failDuration,
+		"last_error":  errorMsg,
+	})
+	runCompleted = true
+
 	if shouldRetry {
 		if statusErr := m.updateStatus(&taskEntity, nextStatus, map[string]interface{}{
 			"retry_count": retryCount,
 			"next_run_at": &nextRun,
 			"last_error":  errorMsg,
 		}); statusErr != nil {
-			m.emitLog(taskID, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
 			return
 		}
-		m.emitLog(taskID, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Format(time.RFC3339)), taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Format(time.RFC3339)), taskEntity.Status)
 		delay := time.Until(nextRun)
 		if delay < 0 {
 			delay = 0
 		}
 		timer := time.AfterFunc(delay, func() {
 			m.retryTimers.Delete(taskID)
-			if err := m.trigger(taskID, "retry"); err != nil {
-				log.Printf("warn: 重试触发失败(task_id=%d): %v", taskID, err)
+			if _, err := m.trigger(taskID, "retry"); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试触发失败")
 			}
 		})
 		m.storeRetryTimer(taskID, timer)
@@ -494,12 +736,12 @@ func (m *Manager) runTask(taskID uint, reason string) {
 		"next_run_at": nextCronRun(taskEntity.CronSpec),
 		"last_error":  errorMsg,
 	}); statusErr != nil {
-		m.emitLog(taskID, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
 		return
 	}
-	m.emitLog(taskID, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
-	if raiseErr := alerting.RaiseTaskFailure(m.db, taskEntity, errorMsg); raiseErr != nil {
-		log.Printf("warn: RaiseTaskFailure 失败(task_id=%d): %v", taskEntity.ID, raiseErr)
+	m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
+	if raiseErr := alerting.RaiseTaskFailure(m.db, taskEntity, runIDPtr, errorMsg); raiseErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
 	}
 }
 
@@ -527,12 +769,13 @@ func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates ma
 	return nil
 }
 
-func (m *Manager) emitLog(taskID uint, level, message, status string) {
+func (m *Manager) emitLog(taskID uint, runID *uint, level, message, status string) {
 	entry := queuedTaskLog{
-		taskID:  taskID,
-		level:   level,
-		message: message,
-		status:  status,
+		taskID:    taskID,
+		taskRunID: runID,
+		level:     level,
+		message:   message,
+		status:    status,
 	}
 
 	if m.logQueue == nil {
@@ -543,7 +786,7 @@ func (m *Manager) emitLog(taskID uint, level, message, status string) {
 	select {
 	case m.logQueue <- entry:
 	default:
-		log.Printf("warn: task log queue full, fallback to direct write(task_id=%d)", taskID)
+		logger.Module("task").Warn().Uint("task_id", taskID).Msg("task log queue full, fallback to direct write")
 		m.persistLogBatch([]queuedTaskLog{entry})
 	}
 }
@@ -580,7 +823,7 @@ func (m *Manager) emitTrafficSample(taskID uint, nodeID uint, runStartedAt time.
 	select {
 	case m.sampleQueue <- entry:
 	default:
-		log.Printf("warn: task traffic sample queue full, dropping sample(task_id=%d)", taskID)
+		logger.Module("task").Warn().Uint("task_id", taskID).Msg("task traffic sample queue full, dropping sample")
 	}
 }
 
@@ -592,22 +835,24 @@ func (m *Manager) persistLogBatch(batch []queuedTaskLog) {
 	records := make([]model.TaskLog, 0, len(batch))
 	for _, item := range batch {
 		records = append(records, model.TaskLog{
-			TaskID:  item.taskID,
-			Level:   item.level,
-			Message: item.message,
+			TaskID:    item.taskID,
+			TaskRunID: item.taskRunID,
+			Level:     item.level,
+			Message:   item.message,
 		})
 	}
 
 	if err := m.db.CreateInBatches(&records, m.logBatchSize).Error; err != nil {
-		log.Printf("warn: 批量写入任务日志失败，回退单条写入: %v", err)
+		logger.Module("task").Warn().Err(err).Msg("批量写入任务日志失败，回退单条写入")
 		for i, item := range batch {
 			record := model.TaskLog{
-				TaskID:  item.taskID,
-				Level:   item.level,
-				Message: item.message,
+				TaskID:    item.taskID,
+				TaskRunID: item.taskRunID,
+				Level:     item.level,
+				Message:   item.message,
 			}
 			if oneErr := m.db.Create(&record).Error; oneErr != nil {
-				log.Printf("error: 写入任务日志失败(task_id=%d, batch_index=%d): %v", item.taskID, i, oneErr)
+				logger.Module("task").Error().Uint("task_id", item.taskID).Int("batch_index", i).Err(oneErr).Msg("写入任务日志失败")
 				continue
 			}
 			m.publishLogEvent(record, item.status)
@@ -638,10 +883,10 @@ func (m *Manager) persistSampleBatch(batch []queuedTaskSample) {
 	}
 
 	if err := m.db.CreateInBatches(&records, m.sampleBatchSize).Error; err != nil {
-		log.Printf("warn: 批量写入吞吐采样失败，回退单条写入: %v", err)
+		logger.Module("task").Warn().Err(err).Msg("批量写入吞吐采样失败，回退单条写入")
 		for i := range records {
 			if oneErr := m.db.Create(&records[i]).Error; oneErr != nil {
-				log.Printf("error: 写入吞吐采样失败(task_id=%d, batch_index=%d): %v", records[i].TaskID, i, oneErr)
+				logger.Module("task").Error().Uint("task_id", records[i].TaskID).Int("batch_index", i).Err(oneErr).Msg("写入吞吐采样失败")
 			}
 		}
 	}
@@ -664,14 +909,14 @@ func (m *Manager) cleanupExpiredTrafficSamples() {
 	for {
 		var ids []uint
 		if err := m.db.Model(&model.TaskTrafficSample{}).Where("sampled_at < ?", cutoff).Order("id asc").Limit(defaultSampleCleanupBatchSize).Pluck("id", &ids).Error; err != nil {
-			log.Printf("warn: 查询过期吞吐采样失败: %v", err)
+			logger.Module("task").Warn().Err(err).Msg("查询过期吞吐采样失败")
 			return
 		}
 		if len(ids) == 0 {
 			break
 		}
 		if err := m.db.Where("id IN ?", ids).Delete(&model.TaskTrafficSample{}).Error; err != nil {
-			log.Printf("warn: 清理过期吞吐采样失败: %v", err)
+			logger.Module("task").Warn().Err(err).Msg("清理过期吞吐采样失败")
 			return
 		}
 		if len(ids) < defaultSampleCleanupBatchSize {
@@ -681,6 +926,49 @@ func (m *Manager) cleanupExpiredTrafficSamples() {
 	m.lastSampleCleanupAt = now
 }
 
+func (m *Manager) cleanupExpiredTaskRuns() {
+	if m.taskRunRetentionDays <= 0 || m.db == nil {
+		return
+	}
+
+	m.taskRunCleanupMu.Lock()
+	defer m.taskRunCleanupMu.Unlock()
+
+	now := time.Now().UTC()
+	if !m.lastTaskRunCleanupAt.IsZero() && now.Sub(m.lastTaskRunCleanupAt) < defaultSampleCleanupInterval {
+		return
+	}
+
+	cutoff := now.AddDate(0, 0, -m.taskRunRetentionDays)
+	for {
+		var ids []uint
+		if err := m.db.Model(&model.TaskRun{}).Where("created_at < ?", cutoff).Order("id asc").Limit(defaultSampleCleanupBatchSize).Pluck("id", &ids).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("查询过期执行记录失败")
+			return
+		}
+		if len(ids) == 0 {
+			break
+		}
+		// 级联清理：删除关联 TaskLog，清除关联 Alert 的 run 引用
+		if err := m.db.Where("task_run_id IN ?", ids).Delete(&model.TaskLog{}).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录关联日志失败")
+			return
+		}
+		if err := m.db.Model(&model.Alert{}).Where("task_run_id IN ?", ids).Update("task_run_id", nil).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清除过期执行记录关联告警引用失败")
+			return
+		}
+		if err := m.db.Where("id IN ?", ids).Delete(&model.TaskRun{}).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录失败")
+			return
+		}
+		if len(ids) < defaultSampleCleanupBatchSize {
+			break
+		}
+	}
+	m.lastTaskRunCleanupAt = now
+}
+
 func (m *Manager) publishLogEvent(record model.TaskLog, status string) {
 	if m.hub == nil {
 		return
@@ -688,6 +976,7 @@ func (m *Manager) publishLogEvent(record model.TaskLog, status string) {
 	m.hub.Publish(ws.LogEvent{
 		LogID:     record.ID,
 		TaskID:    record.TaskID,
+		TaskRunID: record.TaskRunID,
 		Level:     record.Level,
 		Message:   record.Message,
 		Status:    status,
@@ -726,7 +1015,10 @@ func (m *Manager) hasRunningConflict(taskEntity model.Task) (bool, error) {
 	query := m.db.Model(&model.Task{}).
 		Where("id <> ? AND node_id = ? AND status = ?", taskEntity.ID, taskEntity.NodeID, string(StatusRunning))
 
-	if taskEntity.PolicyID == nil {
+	if taskEntity.ExecutorType == "command" {
+		// command 任务仅与 rsync 任务互斥（不阻塞其他 command 任务并行执行）
+		query = query.Where("executor_type <> ?", "command")
+	} else if taskEntity.PolicyID == nil {
 		query = query.Where("policy_id IS NULL")
 	} else {
 		query = query.Where("policy_id = ?", *taskEntity.PolicyID)
@@ -784,7 +1076,7 @@ func (m *Manager) Cancel(taskID uint) error {
 		}); err != nil {
 			return err
 		}
-		m.emitLog(taskID, "warn", "任务已取消", taskEntity.Status)
+		m.emitLog(taskID, nil, "warn", "任务已取消", taskEntity.Status)
 		return nil
 	case StatusRunning:
 		m.stopRetryTimer(taskID)
@@ -799,7 +1091,7 @@ func (m *Manager) Cancel(taskID uint) error {
 		}); err != nil {
 			return err
 		}
-		m.emitLog(taskID, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
+		m.emitLog(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
 	default:
 		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   CheckSquare,
   Download,
   FileUp,
+  Layers,
   MoreHorizontal,
   ServerCog,
   Trash2,
@@ -41,18 +42,30 @@ import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeRecord } from "@/types/domain";
+import { useAuth } from "@/context/auth-context";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+const WebTerminal = lazy(() => import("@/components/web-terminal"));
 
 const keywordStorageKey = "xirang.nodes.keyword";
 const statusStorageKey = "xirang.nodes.status";
 const tagStorageKey = "xirang.nodes.tag";
 const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
+const groupViewStorageKey = "xirang.nodes.groupView";
 const selectedStorageKey = "xirang.nodes.selected";
 
 
 export function NodesPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { token, role } = useAuth();
+  const isAdmin = role === "admin";
   const {
     nodes,
     sshKeys,
@@ -65,7 +78,12 @@ export function NodesPage() {
     deleteNodes,
     testNodeConnection,
     triggerNodeBackup,
+    refreshNodes,
   } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshNodes();
+  }, [refreshNodes]);
 
   const queryKeyword = searchParams.get("keyword") ?? "";
   const {
@@ -85,9 +103,15 @@ export function NodesPage() {
     viewStorageKey,
     "cards"
   );
+  const [groupView, setGroupView] = usePersistentState<boolean>(
+    groupViewStorageKey,
+    false
+  );
 
   const { confirm, dialog } = useConfirm();
   const [editorOpen, setEditorOpen] = useState(false);
+  const [terminalNode, setTerminalNode] = useState<NodeRecord | null>(null);
+  const [terminalKey, setTerminalKey] = useState(0);
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
@@ -174,6 +198,21 @@ export function NodesPage() {
     });
     return list;
   }, [filteredNodes, sortBy]);
+
+  const groupedNodes = useMemo(() => {
+    if (!groupView) return null;
+    const groups: Record<string, typeof sortedNodes> = {};
+    for (const node of sortedNodes) {
+      const nodeTags = node.tags.length > 0 ? node.tags : ["未分组"];
+      for (const tag of nodeTags) {
+        if (!groups[tag]) {
+          groups[tag] = [];
+        }
+        groups[tag].push(node);
+      }
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [groupView, sortedNodes]);
 
   useEffect(() => {
     if (!sortedNodes.length) {
@@ -570,6 +609,16 @@ export function NodesPage() {
               cardsButtonLabel="节点卡片视图"
               listButtonLabel="节点列表视图"
             />
+            <Button
+              size="sm"
+              variant={groupView ? "default" : "outline"}
+              className="hidden shrink-0 md:inline-flex"
+              onClick={() => setGroupView(!groupView)}
+              aria-label="按标签分组视图"
+            >
+              <Layers className="mr-1 size-3.5" />
+              分组
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" variant="outline" aria-label="批量操作">
@@ -655,6 +704,46 @@ export function NodesPage() {
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
 
+          {/* 分组视图 */}
+          {groupView && groupedNodes ? (
+            <div className="space-y-4">
+              {groupedNodes.map(([tag, tagNodes]) => (
+                <details key={tag} open className="group">
+                  <summary className="flex cursor-pointer items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm font-medium hover:bg-muted/60">
+                    <Layers className="size-4 text-muted-foreground" />
+                    {tag}
+                    <span className="ml-auto text-xs text-muted-foreground">{tagNodes.length} 个节点</span>
+                  </summary>
+                  <div className="mt-2">
+                    <NodesGrid
+                      loading={loading}
+                      sortedNodes={tagNodes}
+                      sshKeys={sshKeys}
+                      selectedNodeSet={selectedNodeSet}
+                      selectedNodeId={selectedNodeId}
+                      selectedNodeIds={selectedNodeIds}
+                      allVisibleSelected={allVisibleSelected}
+                      testingNodeId={testingNodeId}
+                      triggeringNodeId={triggeringNodeId}
+                      toggleNodeSelection={toggleNodeSelection}
+                      toggleSelectAllVisible={toggleSelectAllVisible}
+                      setSelectedNodeId={setSelectedNodeId}
+                      handleBulkDelete={handleBulkDelete}
+                      resetFilters={resetFilters}
+                      openCreateDialog={openCreateDialog}
+                      openEditDialog={openEditDialog}
+                      onTestNode={onTestNode}
+                      onDeleteNode={onDeleteNode}
+                      handleTriggerBackup={handleTriggerBackup}
+                      onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+                      isAdmin={isAdmin}
+                    />
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : (
+          <>
           {/* 移动端始终显示卡片视图（viewMode 可能从桌面端持久化为 list） */}
           <div className={viewMode === "list" ? "md:hidden" : undefined}>
             <NodesGrid
@@ -677,6 +766,8 @@ export function NodesPage() {
               onTestNode={onTestNode}
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
+              onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              isAdmin={isAdmin}
             />
           </div>
           {viewMode === "list" && (
@@ -700,7 +791,11 @@ export function NodesPage() {
               onTestNode={onTestNode}
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
+              onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              isAdmin={isAdmin}
             />
+          )}
+          </>
           )}
         </CardContent>
       </Card>
@@ -713,6 +808,31 @@ export function NodesPage() {
         onSave={handleSaveNode}
         onTestConnection={handleTestConnection}
       />
+
+      <Dialog
+        open={terminalNode !== null}
+        onOpenChange={(open) => { if (!open) setTerminalNode(null); }}
+      >
+        <DialogContent className="max-w-5xl h-[80vh] flex flex-col gap-0 p-0">
+          <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
+            <DialogTitle>
+              Web 终端 — {terminalNode?.name ?? ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden px-4 pb-4">
+            {terminalNode !== null && token !== null && (
+              <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">加载终端中...</div>}>
+                <WebTerminal
+                  key={terminalKey}
+                  nodeId={terminalNode.id}
+                  token={token}
+                  onDisconnect={() => setTerminalNode(null)}
+                />
+              </Suspense>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {dialog}
     </div>

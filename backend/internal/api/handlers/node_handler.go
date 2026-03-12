@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -585,6 +586,41 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		"disk_total_gb": node.DiskTotalGB,
 		"probe_at":      probeAt,
 	})
+}
+
+// Metrics 返回节点最近资源采样（用于趋势图）
+// GET /nodes/:id/metrics?limit=288&since=24h
+func (h *NodeHandler) Metrics(c *gin.Context) {
+	nodeID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	limit := 288 // 24h * 12 samples/hour (5min interval)
+	if raw := c.Query("limit"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 2016 {
+			limit = v
+		}
+	}
+
+	// since=24h, 7d, etc.
+	since := 24 * time.Hour
+	if raw := c.Query("since"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			since = d
+		}
+	}
+
+	cutoff := time.Now().UTC().Add(-since)
+	var samples []model.NodeMetricSample
+	if err := h.db.Where("node_id = ? AND sampled_at >= ?", nodeID, cutoff).
+		Order("sampled_at asc").
+		Limit(limit).
+		Find(&samples).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询节点指标失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": samples})
 }
 
 func validateNodeHostPort(host string, port int) error {

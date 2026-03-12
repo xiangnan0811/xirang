@@ -17,6 +17,7 @@ type Claims struct {
 	UserID   uint   `json:"uid"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	Purpose  string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -34,6 +35,29 @@ func NewJWTManager(secret string, ttl time.Duration) *JWTManager {
 		ttl:     ttl,
 		revoked: make(map[string]time.Time),
 	}
+}
+
+// Generate2FAPendingToken 生成用于 2FA 验证步骤的短期令牌（5 分钟有效）。
+func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
+	now := time.Now()
+	tokenID, err := generateTokenID()
+	if err != nil {
+		return "", err
+	}
+	claims := Claims{
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		Purpose:  "2fa_pending",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+			Subject:   fmt.Sprintf("%d", user.ID),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(m.secret)
 }
 
 func (m *JWTManager) GenerateToken(user model.User) (string, error) {

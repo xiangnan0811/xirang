@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
+import { History, Loader2, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ export const TasksTable = React.memo(function TasksTable({
   handleDelete,
   handleTrigger,
   onEdit,
+  onViewHistory,
 }: TasksViewProps) {
   const navigate = useNavigate();
 
@@ -128,6 +129,15 @@ export const TasksTable = React.memo(function TasksTable({
                         onClick={() => navigate(`/app/logs?task=${task.id}`)}
                       >
                         <Terminal className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`查看任务 #${task.id} 执行历史`}
+                        onClick={() => onViewHistory(task)}
+                      >
+                        <History className="size-4" />
                       </Button>
                       <Button
                         variant="ghost"

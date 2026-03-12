@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
@@ -31,7 +31,12 @@ export function NotificationsPage() {
     updateIntegration,
     testIntegration,
     fetchAlertDeliveryStats,
+    refreshIntegrations,
   } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshIntegrations();
+  }, [refreshIntegrations]);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -35,7 +35,7 @@ type payload struct {
 	Triggered  time.Time `json:"triggered_at"`
 }
 
-func RaiseTaskFailure(db *gorm.DB, task model.Task, message string) error {
+func RaiseTaskFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
 	errorCode := fmt.Sprintf("XR-EXEC-%d", task.ID)
 	policyName := ""
 	if task.Policy != nil {
@@ -45,6 +45,7 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, message string) error {
 		NodeID:      task.NodeID,
 		NodeName:    task.Node.Name,
 		TaskID:      &task.ID,
+		TaskRunID:   taskRunID,
 		PolicyName:  policyName,
 		Severity:    "critical",
 		Status:      "open",
@@ -56,7 +57,7 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, message string) error {
 	return raiseAndDispatch(db, &alert)
 }
 
-func RaiseVerificationFailure(db *gorm.DB, task model.Task, message string) error {
+func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
 	errorCode := fmt.Sprintf("XR-VRFY-%d", task.ID)
 	policyName := ""
 	if task.Policy != nil {
@@ -66,6 +67,7 @@ func RaiseVerificationFailure(db *gorm.DB, task model.Task, message string) erro
 		NodeID:      task.NodeID,
 		NodeName:    task.Node.Name,
 		TaskID:      &task.ID,
+		TaskRunID:   taskRunID,
 		PolicyName:  policyName,
 		Severity:    "warning",
 		Status:      "open",
@@ -102,6 +104,22 @@ func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
 		Status:      "open",
 		ErrorCode:   errorCode,
 		Message:     message,
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
+func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
+	alert := model.Alert{
+		NodeID:      node.ID,
+		NodeName:    node.Name,
+		TaskID:      nil,
+		PolicyName:  "",
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   "XR-NODE-DISK-FULL",
+		Message:     fmt.Sprintf("节点磁盘使用率 %.1f%% 超过 90%%", diskPct),
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
@@ -173,7 +191,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 				delivery.Status = "sent"
 			}
 			if saveErr := db.Create(&delivery).Error; saveErr != nil {
-				log.Printf("warn: 保存告警投递记录失败(alert_id=%d,integration_id=%d): %v", alert.ID, ch.ID, saveErr)
+				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")
 			}
 		}(channel)
 	}
@@ -186,7 +204,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		notifiedAt := time.Now()
 		alert.LastNotifiedAt = &notifiedAt
 		if err := db.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
-			log.Printf("warn: 更新告警最后通知时间失败(alert_id=%d): %v", alert.ID, err)
+			logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Err(err).Msg("更新告警最后通知时间失败")
 		}
 	}
 

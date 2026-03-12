@@ -37,4 +37,5 @@ export type TasksViewProps = {
   handleDelete: (taskId: number) => Promise<void>;
   handleTrigger: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
+  onViewHistory: (task: TaskRecord) => void;
 };

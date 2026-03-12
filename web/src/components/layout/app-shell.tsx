@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search, ShieldCheck, ShieldOff } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
@@ -8,6 +8,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { NotificationBell } from "@/components/notification-bell";
+import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
+import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +47,7 @@ function isTypingTarget(target: EventTarget | null) {
 
 export function AppShell() {
   const navigate = useNavigate();
-  const { username, role, token, logout } = useAuth();
+  const { username, role, token, logout, totpEnabled, setTotpEnabled } = useAuth();
   const consoleData = useConsoleData(token);
 
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -53,6 +55,8 @@ export function AppShell() {
   const globalSearchValueRef = useRef(consoleData.globalSearch);
   const setGlobalSearchRef = useRef(consoleData.setGlobalSearch);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [totpSetupOpen, setTotpSetupOpen] = useState(false);
+  const [totpDisableOpen, setTotpDisableOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>("xirang.sidebar.collapsed", false);
   const hasWarning = Boolean(consoleData.warning);
 
@@ -185,7 +189,7 @@ export function AppShell() {
               <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">运行中 {consoleData.overview.runningTasks}</Badge>
               <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">异常 {consoleData.overview.failedTasks24h}</Badge>
               <div className="h-4 w-px shrink-0 bg-border/50 mx-1" />
-              <span className="truncate text-[11px] text-muted-foreground">总数 {consoleData.nodes.length}</span>
+              <span className="truncate text-[11px] text-muted-foreground">总数 {consoleData.overview.totalNodes}</span>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
@@ -217,8 +221,31 @@ export function AppShell() {
                 <ThemeToggle />
               </div>
 
-              <div className="hidden md:flex items-center pl-1">
-                <span className="text-xs text-muted-foreground mr-3">{username ?? "未知"}</span>
+              <div className="hidden md:flex items-center pl-1 gap-2">
+                <span className="text-xs text-muted-foreground">{username ?? "未知"}</span>
+                {totpEnabled ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-green-600 hover:text-green-700 dark:text-green-500 dark:hover:text-green-400"
+                    onClick={() => setTotpDisableOpen(true)}
+                    title="禁用两步验证"
+                    aria-label="禁用两步验证"
+                  >
+                    <ShieldCheck className="size-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:text-foreground"
+                    onClick={() => setTotpSetupOpen(true)}
+                    title="启用两步验证"
+                    aria-label="启用两步验证"
+                  >
+                    <ShieldOff className="size-4" />
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleLogout}>
                   退出登录
                 </Button>
@@ -287,11 +314,31 @@ export function AppShell() {
       <MobileNavigation
         username={username}
         role={role}
+        totpEnabled={totpEnabled}
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
+        onTotpSetup={() => setTotpSetupOpen(true)}
+        onTotpDisable={() => setTotpDisableOpen(true)}
       />
 
       <OnboardingTour />
+
+      {token ? (
+        <>
+          <TOTPSetupDialog
+            open={totpSetupOpen}
+            onOpenChange={setTotpSetupOpen}
+            token={token}
+            onSuccess={() => setTotpEnabled(true)}
+          />
+          <TOTPDisableDialog
+            open={totpDisableOpen}
+            onOpenChange={setTotpDisableOpen}
+            token={token}
+            onSuccess={() => setTotpEnabled(false)}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

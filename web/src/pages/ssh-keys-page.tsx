@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { KeyRound, Plus, ShieldAlert, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -16,8 +16,12 @@ import { getErrorMessage } from "@/lib/utils";
 import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
 
 export function SSHKeysPage() {
-  const { sshKeys, nodes, createSSHKey, updateSSHKey, deleteSSHKey } =
+  const { sshKeys, nodes, createSSHKey, updateSSHKey, deleteSSHKey, refreshSSHKeys } =
     useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshSSHKeys();
+  }, [refreshSSHKeys]);
 
   const { confirm, dialog } = useConfirm();
 

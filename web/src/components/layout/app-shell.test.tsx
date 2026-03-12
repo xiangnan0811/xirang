@@ -24,7 +24,9 @@ vi.mock("@/context/auth-context", () => ({
     username: "alice",
     role: "admin",
     token: "token-1",
+    totpEnabled: false,
     logout: vi.fn(),
+    setTotpEnabled: vi.fn(),
   }),
 }));
 

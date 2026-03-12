@@ -37,7 +37,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		appCtx = context.Background()
 	}
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		allowedOrigin := resolveAllowedOrigin(origin, c.Request.Host, dep.AllowedOrigins)
@@ -70,21 +70,28 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		c.Next()
 	})
 
-	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled)
+	captchaStore := handlers.NewCaptchaStore()
+	captchaHandler := handlers.NewCaptchaHandler(captchaStore)
+	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled).WithDB(dep.DB).WithCaptchaStore(captchaStore)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	nodeHandler := handlers.NewNodeHandler(dep.DB)
 	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager)
+	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
 	alertHandler := handlers.NewAlertHandler(dep.DB)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
 	userHandler := handlers.NewUserHandler(dep.AuthService)
+	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
+	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager)
 
 	v1 := router.Group("/api/v1")
+	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
+	v1.POST("/auth/2fa/login", authHandler.TOTPLogin)
 
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager))
@@ -92,9 +99,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/me", authHandler.Me)
 	secured.POST("/auth/logout", authHandler.Logout)
 	secured.POST("/auth/change-password", authHandler.ChangePassword)
+	secured.POST("/auth/2fa/setup", authHandler.TOTPSetup)
+	secured.POST("/auth/2fa/verify", authHandler.TOTPVerify)
+	secured.POST("/auth/2fa/disable", authHandler.TOTPDisable)
 	secured.GET("/overview", overviewHandler.Get)
 	secured.GET("/overview/traffic", middleware.RBAC("tasks:read"), overviewTrafficHandler.Get)
-	secured.GET("/users", middleware.RBAC("users:manage"), userHandler.List)
+	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)
 	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
 	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)
 	secured.DELETE("/users/:id", middleware.RBAC("users:manage"), userHandler.Delete)
@@ -106,14 +116,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/nodes/:id", middleware.RBAC("nodes:write"), nodeHandler.Update)
 	secured.DELETE("/nodes/:id", middleware.RBAC("nodes:write"), nodeHandler.Delete)
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), nodeHandler.TestConnection)
+	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), nodeHandler.Metrics)
 
-	secured.GET("/ssh-keys", middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
+	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.PUT("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Update)
 	secured.DELETE("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Delete)
 
-	secured.GET("/integrations", middleware.RBAC("integrations:read"), integrationHandler.List)
+	secured.GET("/integrations", middleware.ETag(), middleware.RBAC("integrations:read"), integrationHandler.List)
 	secured.GET("/integrations/:id", middleware.RBAC("integrations:read"), integrationHandler.Get)
 	secured.POST("/integrations", middleware.RBAC("integrations:write"), integrationHandler.Create)
 	secured.PUT("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Update)
@@ -135,6 +146,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
 	secured.POST("/policies", middleware.RBAC("policies:write"), policyHandler.Create)
+	secured.POST("/policies/batch-toggle", middleware.RBAC("policies:write"), policyHandler.BatchToggle)
+	secured.POST("/policies/from-template/:id", middleware.RBAC("policies:write"), policyHandler.CloneFromTemplate)
 	secured.PUT("/policies/:id", middleware.RBAC("policies:write"), policyHandler.Update)
 	secured.DELETE("/policies/:id", middleware.RBAC("policies:write"), policyHandler.Delete)
 
@@ -144,12 +157,22 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks", middleware.RBAC("tasks:write"), taskHandler.Create)
 	secured.PUT("/tasks/:id", middleware.RBAC("tasks:write"), taskHandler.Update)
 	secured.DELETE("/tasks/:id", middleware.RBAC("tasks:write"), taskHandler.Delete)
+	secured.GET("/tasks/:id/runs", middleware.RBAC("tasks:read"), taskRunHandler.ListByTask)
+	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), taskHandler.Cancel)
+	secured.POST("/tasks/:id/restore", middleware.RBAC("admin"), taskHandler.Restore)
+
+	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
+	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)
+
+	secured.POST("/batch-commands", middleware.RBAC("tasks:write"), batchHandler.Create)
+	secured.GET("/batch-commands/:batch_id", middleware.RBAC("tasks:read"), batchHandler.Get)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。
 	v1.GET("/ws/logs", wsHandler.ServeWS)
+	v1.GET("/ws/terminal", terminalHandler.ServeTerminal)
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

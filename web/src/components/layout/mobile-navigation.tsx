@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { LogOut, Menu, RefreshCw, X } from "lucide-react";
+import { LogOut, Menu, RefreshCw, ShieldCheck, ShieldOff, X } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
@@ -11,11 +11,14 @@ import type { UserRecord } from "@/types/domain";
 type MobileNavigationProps = {
   username: string | null;
   role: UserRecord["role"] | null;
+  totpEnabled: boolean;
   onLogout: () => void;
   onRefresh: () => void;
+  onTotpSetup: () => void;
+  onTotpDisable: () => void;
 };
 
-export function MobileNavigation({ username, role, onLogout, onRefresh }: MobileNavigationProps) {
+export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefresh, onTotpSetup, onTotpDisable }: MobileNavigationProps) {
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -212,6 +215,31 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                 <LogOut className="mr-1 size-4" />
                 退出
               </Button>
+              {totpEnabled ? (
+                <Button
+                  variant="outline"
+                  className="col-span-2 h-10 text-green-600 border-green-600/40 hover:text-green-700 hover:border-green-600/60 dark:text-green-500 dark:hover:text-green-400"
+                  onClick={() => {
+                    onTotpDisable();
+                    setDrawerOpen(false);
+                  }}
+                >
+                  <ShieldCheck className="mr-1 size-4" />
+                  已启用两步验证（点击禁用）
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="col-span-2 h-10"
+                  onClick={() => {
+                    onTotpSetup();
+                    setDrawerOpen(false);
+                  }}
+                >
+                  <ShieldOff className="mr-1 size-4" />
+                  启用两步验证
+                </Button>
+              )}
             </div>
 
             <div className="mt-auto flex items-center justify-between border-t border-border/80 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">

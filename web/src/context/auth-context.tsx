@@ -11,12 +11,14 @@ const AUTH_TOKEN_KEY = "xirang-auth-token";
 const AUTH_USERNAME_KEY = "xirang-username";
 const AUTH_ROLE_KEY = "xirang-role";
 const AUTH_USER_ID_KEY = "xirang-user-id";
+const AUTH_TOTP_ENABLED_KEY = "xirang-totp-enabled";
 
 type StoredAuthState = {
   token: string | null;
   username: string | null;
   role: "admin" | "operator" | "viewer" | null;
   userId: number | null;
+  totpEnabled: boolean;
 };
 
 type AuthContextValue = {
@@ -24,9 +26,11 @@ type AuthContextValue = {
   username: string | null;
   role: "admin" | "operator" | "viewer" | null;
   userId: number | null;
+  totpEnabled: boolean;
   isAuthenticated: boolean;
-  login: (token: string, username: string, role?: "admin" | "operator" | "viewer", userId?: number) => void;
+  login: (token: string, username: string, role?: "admin" | "operator" | "viewer", userId?: number, totpEnabled?: boolean) => void;
   logout: () => void;
+  setTotpEnabled: (enabled: boolean) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -77,18 +81,21 @@ function readStoredAuthState(): StoredAuthState {
   const sessionUsername = safeGetItem(sessionStorageRef, AUTH_USERNAME_KEY);
   const sessionRole = safeGetItem(sessionStorageRef, AUTH_ROLE_KEY);
   const sessionUserID = safeGetItem(sessionStorageRef, AUTH_USER_ID_KEY);
+  const sessionTotpEnabled = safeGetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY);
   if (sessionToken) {
     const parsedUserID = sessionUserID ? Number.parseInt(sessionUserID, 10) : Number.NaN;
     return {
       token: sessionToken,
       username: sessionUsername,
       role: sessionRole === "admin" || sessionRole === "operator" || sessionRole === "viewer" ? sessionRole : null,
-      userId: Number.isFinite(parsedUserID) && parsedUserID > 0 ? parsedUserID : null
+      userId: Number.isFinite(parsedUserID) && parsedUserID > 0 ? parsedUserID : null,
+      totpEnabled: sessionTotpEnabled === "true"
     };
   }
   safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
   safeRemoveItem(sessionStorageRef, AUTH_ROLE_KEY);
   safeRemoveItem(sessionStorageRef, AUTH_USER_ID_KEY);
+  safeRemoveItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY);
 
   const legacyToken = safeGetItem(localStorageRef, AUTH_TOKEN_KEY);
   const legacyUsername = safeGetItem(localStorageRef, AUTH_USERNAME_KEY);
@@ -121,24 +128,27 @@ function readStoredAuthState(): StoredAuthState {
     role: legacyToken && (legacyRole === "admin" || legacyRole === "operator" || legacyRole === "viewer")
       ? legacyRole
       : null,
-    userId: legacyToken && Number.isFinite(parsedLegacyUserID) && parsedLegacyUserID > 0 ? parsedLegacyUserID : null
+    userId: legacyToken && Number.isFinite(parsedLegacyUserID) && parsedLegacyUserID > 0 ? parsedLegacyUserID : null,
+    totpEnabled: false
   };
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [{ token, username, role, userId }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
+  const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
 
   const login = useCallback((
     nextToken: string,
     nextUsername: string,
     nextRole?: "admin" | "operator" | "viewer",
-    nextUserID?: number
+    nextUserID?: number,
+    nextTotpEnabled?: boolean
   ) => {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
     const validUserId = typeof nextUserID === "number" && Number.isFinite(nextUserID) && nextUserID > 0
       ? nextUserID
       : null;
+    const totpEnabledValue = nextTotpEnabled ?? false;
 
     safeSetItem(sessionStorageRef, AUTH_TOKEN_KEY, nextToken);
     safeSetItem(sessionStorageRef, AUTH_USERNAME_KEY, nextUsername);
@@ -152,6 +162,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     } else {
       safeRemoveItem(sessionStorageRef, AUTH_USER_ID_KEY);
     }
+    safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(totpEnabledValue));
     safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
     safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(localStorageRef, AUTH_ROLE_KEY);
@@ -161,7 +172,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       token: nextToken,
       username: nextUsername,
       role: nextRole ?? null,
-      userId: validUserId
+      userId: validUserId,
+      totpEnabled: totpEnabledValue
     });
   }, []);
 
@@ -173,12 +185,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
     safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_ROLE_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_USER_ID_KEY);
+    safeRemoveItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY);
     safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
     safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(localStorageRef, AUTH_ROLE_KEY);
     safeRemoveItem(localStorageRef, AUTH_USER_ID_KEY);
 
-    setAuthState({ token: null, username: null, role: null, userId: null });
+    setAuthState({ token: null, username: null, role: null, userId: null, totpEnabled: false });
+  }, []);
+
+  const setTotpEnabled = useCallback((enabled: boolean) => {
+    const sessionStorageRef = getSessionStorage();
+    safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(enabled));
+    setAuthState((prev) => ({ ...prev, totpEnabled: enabled }));
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -187,11 +206,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
       username,
       role,
       userId,
+      totpEnabled,
       isAuthenticated: Boolean(token),
       login,
-      logout
+      logout,
+      setTotpEnabled
     }),
-    [login, logout, role, token, userId, username]
+    [login, logout, role, token, userId, username, totpEnabled, setTotpEnabled]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

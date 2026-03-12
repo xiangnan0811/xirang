@@ -9,12 +9,15 @@ import (
 )
 
 type User struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"size:255;not null" json:"-"`
-	Role         string    `gorm:"size:32;not null;index" json:"role"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	Username      string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash  string    `gorm:"size:255;not null" json:"-"`
+	Role          string    `gorm:"size:32;not null;index" json:"role"`
+	TOTPSecret    string    `gorm:"size:255" json:"-"`
+	TOTPEnabled   bool      `json:"totp_enabled"`
+	RecoveryCodes string    `gorm:"type:text" json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type SSHKey struct {
@@ -50,6 +53,8 @@ type Node struct {
 	LastBackupAt        *time.Time `json:"last_backup_at"`
 	LastProbeAt         *time.Time `json:"last_probe_at"`
 	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	MaintenanceStart    *time.Time `json:"maintenance_start,omitempty"`
+	MaintenanceEnd      *time.Time `json:"maintenance_end,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -68,6 +73,7 @@ type Policy struct {
 	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
 	VerifyEnabled    bool      `gorm:"not null;default:true" json:"verify_enabled"`
 	VerifySampleRate int       `gorm:"not null;default:0" json:"verify_sample_rate"`
+	IsTemplate       bool      `gorm:"not null;default:false" json:"is_template"`
 	Nodes            []Node    `gorm:"many2many:policy_nodes" json:"-"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -97,6 +103,7 @@ type Alert struct {
 	NodeID         uint       `gorm:"not null;index:idx_alerts_dedup" json:"node_id"`
 	NodeName       string     `gorm:"size:128;not null" json:"node_name"`
 	TaskID         *uint      `gorm:"index" json:"task_id"`
+	TaskRunID      *uint      `gorm:"index" json:"task_run_id,omitempty"`
 	PolicyName     string     `gorm:"size:128" json:"policy_name"`
 	Severity       string     `gorm:"size:16;not null;index" json:"severity"`
 	Status         string     `gorm:"size:16;not null;index" json:"status"`
@@ -131,6 +138,7 @@ type Task struct {
 	ExecutorType string     `gorm:"size:32;not null;default:local" json:"executor_type"`
 	CronSpec     string     `gorm:"size:128" json:"cron_spec"`
 	Status       string     `gorm:"size:32;not null;index" json:"status"`
+	BatchID      string     `gorm:"size:64;index" json:"batch_id,omitempty"`
 	Source       string     `gorm:"size:32;not null;default:manual" json:"source"`
 	VerifyStatus string     `gorm:"size:16;not null;default:none" json:"verify_status"`
 	RetryCount   int        `gorm:"not null;default:0" json:"retry_count"`
@@ -139,6 +147,22 @@ type Task struct {
 	NextRunAt    *time.Time `json:"next_run_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type TaskRun struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	TaskID         uint       `gorm:"not null;index" json:"task_id"`
+	Task           Task       `gorm:"foreignKey:TaskID" json:"-"`
+	TriggerType    string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
+	Status         string     `gorm:"size:32;not null;default:pending;index" json:"status"`
+	StartedAt      *time.Time `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at"`
+	DurationMs     int64      `gorm:"not null;default:0" json:"duration_ms"`
+	VerifyStatus   string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	ThroughputMbps float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	LastError      string     `gorm:"type:text" json:"last_error"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type AuditLog struct {
@@ -159,6 +183,7 @@ type AuditLog struct {
 type TaskLog struct {
 	ID        uint      `gorm:"primaryKey;index:idx_tasklog_task_cursor,priority:2,sort:desc" json:"id"`
 	TaskID    uint      `gorm:"not null;index;index:idx_tasklog_task_cursor,priority:1" json:"task_id"`
+	TaskRunID *uint     `gorm:"index" json:"task_run_id,omitempty"`
 	Level     string    `gorm:"size:16;not null" json:"level"`
 	Message   string    `gorm:"type:text;not null" json:"message"`
 	CreatedAt time.Time `json:"created_at"`
@@ -172,6 +197,18 @@ type TaskTrafficSample struct {
 	SampledAt      time.Time `gorm:"not null;index:idx_task_traffic_task_run_sample,priority:3;index:idx_task_traffic_sampled_at;index:idx_task_traffic_node_sample,priority:2" json:"sampled_at"`
 	ThroughputMbps float64   `gorm:"not null;default:0" json:"throughput_mbps"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// NodeMetricSample 节点资源采样记录
+type NodeMetricSample struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	NodeID    uint      `gorm:"not null;index:idx_node_metric_node_sampled,priority:1" json:"node_id"`
+	CpuPct    float64   `gorm:"not null;default:0" json:"cpu_pct"`
+	MemPct    float64   `gorm:"not null;default:0" json:"mem_pct"`
+	DiskPct   float64   `gorm:"not null;default:0" json:"disk_pct"`
+	Load1m    float64   `gorm:"not null;default:0" json:"load_1m"`
+	SampledAt time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (s *SSHKey) BeforeSave(_ *gorm.DB) error {

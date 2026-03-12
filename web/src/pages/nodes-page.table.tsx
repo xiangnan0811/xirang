@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Loader2, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ export const NodesTable = React.memo(function NodesTable({
   onTestNode,
   onDeleteNode,
   handleTriggerBackup,
+  onOpenTerminal,
+  isAdmin,
 }: NodesViewProps) {
   const navigate = useNavigate();
 
@@ -182,6 +184,17 @@ export const NodesTable = React.memo(function NodesTable({
                       >
                         <Terminal className="size-4" />
                       </Button>
+                      {isAdmin && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={`打开节点 ${node.name} Web 终端`} title="Web 终端"
+                          onClick={() => onOpenTerminal?.(node)}
+                        >
+                          <MonitorPlay className="size-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"

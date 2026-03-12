@@ -20,6 +20,7 @@ type Config struct {
 	JWTTTL                    time.Duration
 	RsyncBinary               string
 	TaskTrafficRetentionDays  int
+	TaskRunRetentionDays      int
 	AllowedOrigins            []string
 	WSAllowEmptyOrigin        bool
 	LoginRateLimit            int
@@ -66,6 +67,13 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("解析 TASK_TRAFFIC_RETENTION_DAYS 失败")
 	}
 	cfg.TaskTrafficRetentionDays = retentionDays
+
+	taskRunRetentionRaw := util.GetEnvOrDefault("TASK_RUN_RETENTION_DAYS", "90")
+	taskRunRetention, err := strconv.Atoi(taskRunRetentionRaw)
+	if err != nil || taskRunRetention < 0 {
+		return Config{}, fmt.Errorf("解析 TASK_RUN_RETENTION_DAYS 失败")
+	}
+	cfg.TaskRunRetentionDays = taskRunRetention
 
 	ttlRaw := util.GetEnvOrDefault("JWT_TTL", "24h")
 	ttl, err := time.ParseDuration(ttlRaw)

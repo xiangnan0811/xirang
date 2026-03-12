@@ -133,10 +133,10 @@ func TestAuthHandlerChangePasswordSuccess(t *testing.T) {
 		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 
-	if _, _, err := fx.service.Login("admin", "Admin#Pass2026", "127.0.0.1"); err == nil {
+	if _, err := fx.service.Login("admin", "Admin#Pass2026", "127.0.0.1"); err == nil {
 		t.Fatalf("旧密码不应继续可用")
 	}
-	if _, _, err := fx.service.Login("admin", "Admin#Pass2026!", "127.0.0.1"); err != nil {
+	if _, err := fx.service.Login("admin", "Admin#Pass2026!", "127.0.0.1"); err != nil {
 		t.Fatalf("新密码应可登录，实际错误: %v", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestUserHandlerCRUDAsAdmin(t *testing.T) {
 		t.Fatalf("更新接口期望 200，实际: %d，响应: %s", updateResp.Code, updateResp.Body.String())
 	}
 
-	if _, _, err := fx.service.Login("alice", "Alice#Pass2026!", "127.0.0.1"); err != nil {
+	if _, err := fx.service.Login("alice", "Alice#Pass2026!", "127.0.0.1"); err != nil {
 		t.Fatalf("更新后的密码应可登录，实际错误: %v", err)
 	}
 

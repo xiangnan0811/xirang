@@ -10,7 +10,7 @@ export type TaskStatus =
   | "canceled"
   | "warning";
 
-export type TaskExecutorType = "rsync";
+export type TaskExecutorType = "rsync" | "command";
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertStatus = "open" | "acked" | "resolved";
@@ -83,6 +83,8 @@ export interface NodeRecord {
   diskProbeAt?: string;
   connectionLatencyMs?: number;
   lastProbeAt?: string;
+  maintenanceStart?: string;
+  maintenanceEnd?: string;
 }
 
 export interface PolicyRecord {
@@ -97,6 +99,7 @@ export interface PolicyRecord {
   nodeIds: number[];
   verifyEnabled: boolean;
   verifySampleRate: number;
+  isTemplate?: boolean;
 }
 
 export interface NewPolicyInput {
@@ -147,6 +150,22 @@ export interface NewTaskInput {
   cronSpec?: string;
 }
 
+export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore";
+
+export interface TaskRunRecord {
+  id: number;
+  taskId: number;
+  triggerType: TaskRunTriggerType;
+  status: TaskStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs: number;
+  verifyStatus: "none" | "passed" | "warning" | "failed";
+  throughputMbps: number;
+  lastError?: string;
+  createdAt: string;
+}
+
 export interface LogEvent {
   id: string;
   logId?: number;
@@ -156,6 +175,7 @@ export interface LogEvent {
   message: string;
   nodeName?: string;
   taskId?: number;
+  taskRunId?: number;
   errorCode?: string;
   progress?: number;
   status?: TaskStatus;
@@ -275,12 +295,15 @@ export interface NewNodeInput {
 }
 
 export interface LoginResponse {
-  token: string;
-  user: {
+  token?: string;
+  user?: {
     id: number;
     username: string;
     role: "admin" | "operator" | "viewer";
+    totp_enabled?: boolean;
   };
+  requires_2fa?: boolean;
+  login_token?: string;
 }
 
 export interface UserRecord {

@@ -34,6 +34,7 @@ type policyRequest struct {
 	Enabled          *bool  `json:"enabled"`
 	VerifyEnabled    *bool  `json:"verify_enabled"`
 	VerifySampleRate *int   `json:"verify_sample_rate"`
+	IsTemplate       *bool  `json:"is_template"`
 	NodeIDs          []uint `json:"node_ids"`
 }
 
@@ -103,6 +104,11 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		verifySampleRate = *req.VerifySampleRate
 	}
 
+	isTemplate := false
+	if req.IsTemplate != nil {
+		isTemplate = *req.IsTemplate
+	}
+
 	p := model.Policy{
 		Name:             req.Name,
 		Description:      strings.TrimSpace(req.Description),
@@ -116,6 +122,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		Enabled:          enabled,
 		VerifyEnabled:    verifyEnabled,
 		VerifySampleRate: verifySampleRate,
+		IsTemplate:       isTemplate,
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -138,8 +145,8 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 					return err
 				}
 			}
-			// 同步策略任务
-			if h.runner != nil {
+			// 模板策略不生成任务
+			if h.runner != nil && !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
@@ -230,6 +237,9 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.VerifySampleRate != nil {
 		p.VerifySampleRate = *req.VerifySampleRate
 	}
+	if req.IsTemplate != nil {
+		p.IsTemplate = *req.IsTemplate
+	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&p).Error; err != nil {
@@ -256,8 +266,8 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 					return err
 				}
 			}
-			// 同步策略任务
-			if h.runner != nil {
+			// 模板策略不生成任务
+			if h.runner != nil && !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
@@ -342,8 +352,110 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"enabled":            p.Enabled,
 		"verify_enabled":     p.VerifyEnabled,
 		"verify_sample_rate": p.VerifySampleRate,
+		"is_template":        p.IsTemplate,
 		"node_ids":           nodeIDs,
 		"created_at":         p.CreatedAt,
 		"updated_at":         p.UpdatedAt,
 	}
+}
+
+// BatchToggle 批量启用/停用策略。
+// POST /policies/batch-toggle
+func (h *PolicyHandler) BatchToggle(c *gin.Context) {
+	var req struct {
+		PolicyIDs []uint `json:"policy_ids" binding:"required,min=1"`
+		Enabled   bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		for _, pid := range req.PolicyIDs {
+			var p model.Policy
+			if err := tx.First(&p, pid).Error; err != nil {
+				return fmt.Errorf("策略 %d 不存在", pid)
+			}
+			previousEnabled := p.Enabled
+			p.Enabled = req.Enabled
+			if err := tx.Save(&p).Error; err != nil {
+				return err
+			}
+			if h.runner != nil {
+				if previousEnabled && !req.Enabled {
+					if err := policy.PauseTasksForPolicy(tx, h.runner, pid); err != nil {
+						return err
+					}
+				}
+				if !previousEnabled && req.Enabled {
+					if err := policy.ResumeTasksForPolicy(tx, h.runner, pid, p.CronSpec); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "ok", "count": len(req.PolicyIDs)})
+}
+
+// CloneFromTemplate 从模板策略克隆一个新策略。
+// POST /policies/from-template/:id
+func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var tmpl model.Policy
+	if err := h.db.Preload("Nodes").First(&tmpl, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "模板策略不存在"})
+		return
+	}
+	if !tmpl.IsTemplate {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该策略不是模板"})
+		return
+	}
+
+	newPolicy := model.Policy{
+		Name:             tmpl.Name + " (副本)",
+		Description:      tmpl.Description,
+		SourcePath:       tmpl.SourcePath,
+		TargetPath:       tmpl.TargetPath,
+		CronSpec:         tmpl.CronSpec,
+		ExcludeRules:     tmpl.ExcludeRules,
+		BwLimit:          tmpl.BwLimit,
+		RetentionDays:    tmpl.RetentionDays,
+		MaxConcurrent:    tmpl.MaxConcurrent,
+		Enabled:          false,
+		VerifyEnabled:    tmpl.VerifyEnabled,
+		VerifySampleRate: tmpl.VerifySampleRate,
+		IsTemplate:       false,
+	}
+
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&newPolicy).Error; err != nil {
+			return err
+		}
+		// 复制模板的节点关联
+		for _, n := range tmpl.Nodes {
+			pn := model.PolicyNode{PolicyID: newPolicy.ID, NodeID: n.ID}
+			if err := tx.Create(&pn).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.db.Preload("Nodes").First(&newPolicy, newPolicy.ID)
+	c.JSON(http.StatusCreated, gin.H{"data": buildPolicyResponse(newPolicy)})
 }

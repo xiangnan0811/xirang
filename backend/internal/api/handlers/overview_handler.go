@@ -46,6 +46,7 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 		return
 	}
 
+	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"totalNodes":     counts.TotalNodes,
 		"healthyNodes":   counts.HealthyNodes,

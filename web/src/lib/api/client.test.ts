@@ -121,6 +121,6 @@ describe("apiClient 任务请求约束", () => {
     await apiClient.getNodes("token-task");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.cache).toBe("no-store");
+    expect(init.cache).toBe("no-cache");
   });
 });

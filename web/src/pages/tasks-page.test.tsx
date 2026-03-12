@@ -50,18 +50,33 @@ vi.mock("@/components/task-create-dialog", () => ({
     open: boolean;
     onSave: (input: Record<string, unknown>) => Promise<void>;
     editingTask?: { id: number; name?: string } | null;
-  }) =>
-    open && editingTask ? (
-      <div data-testid="edit-dialog">
-        <span data-testid="editing-task-id">{editingTask.id}</span>
+  }) => {
+    if (!open) return null;
+    if (editingTask) {
+      return (
+        <div data-testid="edit-dialog">
+          <span data-testid="editing-task-id">{editingTask.id}</span>
+          <button
+            data-testid="edit-save-btn"
+            onClick={() => void onSave({ name: "新名称", nodeId: editingTask.id })}
+          >
+            保存
+          </button>
+        </div>
+      );
+    }
+    // create mode
+    return (
+      <div data-testid="create-dialog">
         <button
-          data-testid="edit-save-btn"
-          onClick={() => void onSave({ name: "新名称", nodeId: editingTask.id })}
+          data-testid="create-save-btn"
+          onClick={() => void onSave({ name: "新任务", nodeId: 1 })}
         >
-          保存
+          创建
         </button>
       </div>
-    ) : null,
+    );
+  },
 }));
 
 vi.mock("@/components/ui/toast", () => ({
@@ -69,6 +84,15 @@ vi.mock("@/components/ui/toast", () => ({
     success: vi.fn(),
     error: vi.fn(),
   },
+}));
+
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({
+    token: "test-token",
+    username: "admin",
+    role: "admin",
+    logout: vi.fn(),
+  }),
 }));
 
 function createContext(overrides?: Partial<ConsoleOutletContext>) {
@@ -124,6 +148,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     triggerTask: vi.fn().mockResolvedValue(undefined),
     cancelTask: vi.fn().mockResolvedValue(undefined),
     retryTask: vi.fn().mockResolvedValue(undefined),
+    refreshTasks: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {
@@ -305,6 +330,49 @@ describe("TasksPage", () => {
     // 点击保存
     await user.click(screen.getByTestId("edit-save-btn"));
     expect(updateTaskMock).toHaveBeenCalledWith(102, expect.objectContaining({ name: "新名称" }));
+  });
+
+  it("点击新建任务按钮打开创建弹窗，保存成功后调用 createTask", async () => {
+    const createTaskMock = vi.fn().mockResolvedValue(201);
+    createContext({ createTask: createTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 点击新建任务按钮（工具栏中带 + 图标的按钮）
+    await user.click(screen.getByRole("button", { name: "新建任务" }));
+
+    // 创建弹窗出现
+    expect(screen.getByTestId("create-dialog")).toBeInTheDocument();
+
+    // 点击保存（弹窗内）
+    await user.click(screen.getByTestId("create-save-btn"));
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "新任务", nodeId: 1 })
+    );
+  });
+
+  it("点击触发按钮调用 triggerTask", async () => {
+    const triggerTaskMock = vi.fn().mockResolvedValue(undefined);
+    createContext({ triggerTask: triggerTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 任务按 ID 降序排列，第一条是 102（手动同步，status=success）
+    const triggerButtons = screen.getAllByRole("button", { name: "触发" });
+    await user.click(triggerButtons[0]);
+
+    expect(triggerTaskMock).toHaveBeenCalledWith(102);
   });
 
   it("updateTask 失败时不关闭弹窗且显示错误 toast", async () => {

@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { TrendingUp, Clock, AlertTriangle, CheckCircle2, Maximize2 } from "lucide-react";
+import {
+  Area,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ComposedChart,
+  Cell,
+} from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
@@ -17,12 +28,6 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { getErrorMessage } from "@/lib/utils";
 import type { NodeStatus, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 
-const CHART_WIDTH = 360;
-const CHART_HEIGHT = 160;
-const PAD_TOP = 6;
-const PAD_BOTTOM = 18;
-const PLOT_H = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
-const BAR_MAX_RATIO = 0.45;
 const MATRIX_PREVIEW_LIMIT = 80;
 const TRAFFIC_WINDOW_LABELS: Record<OverviewTrafficWindow, string> = {
   "1h": "近 1 小时",
@@ -30,42 +35,6 @@ const TRAFFIC_WINDOW_LABELS: Record<OverviewTrafficWindow, string> = {
   "7d": "近 7 天"
 };
 
-function safeMax(values: number[]): number {
-  let result = -Infinity;
-  for (const v of values) if (v > result) result = v;
-  return result;
-}
-
-function safeMin(values: number[]): number {
-  let result = Infinity;
-  for (const v of values) if (v < result) result = v;
-  return result;
-}
-
-function buildLinePath(values: number[], width: number, height: number, yOffset = 0) {
-  if (!values.length) {
-    return "";
-  }
-  const max = safeMax(values);
-  const min = safeMin(values);
-  if (max === min) {
-    const y = max <= 0 ? height : height * 0.35;
-    return values
-      .map((_, index) => {
-        const x = (index / Math.max(1, values.length - 1)) * width;
-        return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${(yOffset + y).toFixed(2)}`;
-      })
-      .join(" ");
-  }
-  const delta = max - min;
-  return values
-    .map((value, index) => {
-      const x = (index / Math.max(1, values.length - 1)) * width;
-      const y = height - ((value - min) / delta) * height;
-      return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${(yOffset + y).toFixed(2)}`;
-    })
-    .join(" ");
-}
 
 function getNodeStatusLabel(status: NodeStatus) {
   if (status === "online") {
@@ -77,10 +46,6 @@ function getNodeStatusLabel(status: NodeStatus) {
   return "离线";
 }
 
-
-function getChartX(index: number, total: number, width: number) {
-  return (index / Math.max(1, total - 1)) * width;
-}
 
 function parseDateValue(value?: string) {
   if (!value) {
@@ -156,45 +121,23 @@ export function OverviewPage() {
 
   const chartMetrics = useMemo(() => {
     const points = trafficData?.points ?? [];
-    const values = points.map((point) => point.throughputMbps);
-    const activityCounts = points.map((point) => Math.max(point.startedCount, point.activeTaskCount));
-    const linePath = buildLinePath(values, CHART_WIDTH, PLOT_H, PAD_TOP);
-    const maxActivity = activityCounts.length ? safeMax(activityCounts) : 0;
-    const barMaxH = PLOT_H * BAR_MAX_RATIO;
-    const barWidth = points.length > 0 ? Math.max(4, (CHART_WIDTH / points.length) * 0.5) : 4;
+    const totalStartedCount = points.reduce((sum, point) => sum + point.startedCount, 0);
+    const totalFailedCount = points.reduce((sum, point) => sum + point.failedCount, 0);
+    const peakThroughput = points.reduce((max, point) => Math.max(max, point.throughputMbps), 0);
 
-    const bars = points.map((point, index) => {
-      const count = Math.max(point.startedCount, point.activeTaskCount);
-      const h = maxActivity > 0 && count > 0 ? (count / maxActivity) * barMaxH : 0;
-      const x = getChartX(index, points.length, CHART_WIDTH) - barWidth / 2;
-      const y = PAD_TOP + PLOT_H - h;
-      return { x, y, w: barWidth, h, failed: point.failedCount > 0 };
-    });
-
-    const labelStep = Math.max(1, Math.ceil(points.length / 6));
-    const labels = points
-      .map((point, index) => ({
-        label: point.label,
-        x: getChartX(index, points.length, CHART_WIDTH),
-        show: index % labelStep === 0 || index === points.length - 1
-      }))
-      .filter((item) => item.show);
+    const chartData = points.map((point) => ({
+      label: point.label,
+      throughput: point.throughputMbps,
+      activity: Math.max(point.startedCount, point.activeTaskCount),
+      failed: point.failedCount,
+    }));
 
     return {
-      points,
-      values,
-      activityCounts,
-      linePath,
-      areaPath: linePath
-        ? `${linePath} L${CHART_WIDTH},${PAD_TOP + PLOT_H} L0,${PAD_TOP + PLOT_H} Z`
-        : "",
-      bars,
-      labels,
+      chartData,
       hasRealSamples: Boolean(trafficData?.hasRealSamples),
-      peakThroughput: values.length ? safeMax(values) : 0,
-      maxActivityCount: maxActivity,
-      totalStartedCount: points.reduce((sum, point) => sum + point.startedCount, 0),
-      totalFailedCount: points.reduce((sum, point) => sum + point.failedCount, 0),
+      peakThroughput,
+      totalStartedCount,
+      totalFailedCount,
     };
   }, [trafficData]);
 
@@ -347,9 +290,7 @@ export function OverviewPage() {
                 </p>
               ) : (
                 <>
-                  <svg
-                    viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-                    className="h-52 w-full"
+                  <div
                     role="img"
                     aria-label={
                       chartMetrics.hasRealSamples
@@ -357,88 +298,66 @@ export function OverviewPage() {
                         : `${TRAFFIC_WINDOW_LABELS[trafficWindow]}流量与活动趋势图，暂无真实样本`
                     }
                   >
-                    <defs>
-                      <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.25" />
-                        <stop offset="100%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.02" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Subtle horizontal grid lines */}
-                    {[0.25, 0.5, 0.75].map((frac) => (
-                      <line
-                        key={frac}
-                        x1="0"
-                        y1={(PAD_TOP + PLOT_H * (1 - frac)).toFixed(1)}
-                        x2={CHART_WIDTH}
-                        y2={(PAD_TOP + PLOT_H * (1 - frac)).toFixed(1)}
-                        stroke="hsl(var(--border))"
-                        strokeOpacity="0.25"
-                        strokeWidth="0.5"
-                        strokeDasharray="4 3"
-                      />
-                    ))}
-
-                    {/* Activity bars (behind line, bottom-aligned in plot area) */}
-                    {visibleLayers.activity && chartMetrics.bars.map((bar, i) => bar.h > 0 && (
-                      <rect
-                        key={`bar-${chartMetrics.points[i]?.timestamp ?? i}`}
-                        x={bar.x.toFixed(2)}
-                        y={bar.y.toFixed(2)}
-                        width={bar.w.toFixed(2)}
-                        height={bar.h.toFixed(2)}
-                        rx="2"
-                        fill="hsl(var(--chart-egress))"
-                        opacity="0.22"
-                      />
-                    ))}
-
-                    {/* Failed event markers (red cap on bars) */}
-                    {visibleLayers.failures && chartMetrics.bars.map((bar, i) => bar.failed && (
-                      <rect
-                        key={`fail-${chartMetrics.points[i]?.timestamp ?? i}`}
-                        x={bar.x.toFixed(2)}
-                        y={bar.y.toFixed(2)}
-                        width={bar.w.toFixed(2)}
-                        height={Math.min(3, Math.max(1, bar.h)).toFixed(1)}
-                        rx="1"
-                        fill="hsl(var(--destructive))"
-                        opacity="0.7"
-                      />
-                    ))}
-
-                    {/* Throughput area fill */}
-                    {visibleLayers.throughput && chartMetrics.areaPath ? (
-                      <path d={chartMetrics.areaPath} fill="url(#throughputGrad)" />
-                    ) : null}
-
-                    {/* Throughput line */}
-                    {visibleLayers.throughput && chartMetrics.linePath ? (
-                      <path
-                        d={chartMetrics.linePath}
-                        fill="none"
-                        stroke="hsl(var(--chart-ingress))"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    ) : null}
-
-                    {/* X-axis time labels */}
-                    {chartMetrics.labels.map((item) => (
-                      <text
-                        key={item.label}
-                        x={item.x.toFixed(1)}
-                        y={CHART_HEIGHT - 2}
-                        textAnchor="middle"
-                        fill="hsl(var(--muted-foreground))"
-                        fontSize="9"
-                        opacity="0.6"
+                    <ResponsiveContainer width="100%" height={208}>
+                      <ComposedChart
+                        data={chartMetrics.chartData}
+                        margin={{ top: 6, right: 4, left: -20, bottom: 4 }}
                       >
-                        {item.label}
-                      </text>
-                    ))}
-                  </svg>
+                        <defs>
+                          <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.25" />
+                            <stop offset="100%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.02" />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          stroke="transparent"
+                          interval="preserveStartEnd"
+                          tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          stroke="transparent"
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--card))",
+                            border: "1px solid hsl(var(--border))",
+                            fontSize: 11,
+                            borderRadius: 6,
+                          }}
+                          labelStyle={{ color: "hsl(var(--muted-foreground))" }}
+                        />
+                        {visibleLayers.activity && (
+                          <Bar dataKey="activity" name="活动" maxBarSize={8} radius={[2, 2, 0, 0]}>
+                            {chartMetrics.chartData.map((entry, index) => (
+                              <Cell
+                                key={`activity-${index}`}
+                                fill={entry.failed > 0 && visibleLayers.failures ? "hsl(var(--destructive))" : "hsl(var(--chart-egress))"}
+                                opacity={entry.failed > 0 && visibleLayers.failures ? 0.7 : 0.22}
+                              />
+                            ))}
+                          </Bar>
+                        )}
+                        {visibleLayers.throughput && (
+                          <Area
+                            type="monotone"
+                            dataKey="throughput"
+                            name="吞吐 (Mbps)"
+                            stroke="hsl(var(--chart-ingress))"
+                            strokeWidth={2}
+                            fill="url(#throughputGrad)"
+                            dot={false}
+                            activeDot={{ r: 3 }}
+                          />
+                        )}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
 
                   {/* Legend — matching matrix style (border-t, inline dots) */}
                   <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">

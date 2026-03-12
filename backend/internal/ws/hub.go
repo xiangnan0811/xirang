@@ -22,6 +22,7 @@ import (
 type LogEvent struct {
 	LogID     uint      `json:"log_id"`
 	TaskID    uint      `json:"task_id"`
+	TaskRunID *uint     `json:"task_run_id,omitempty"`
 	Level     string    `json:"level"`
 	Message   string    `json:"message"`
 	Status    string    `json:"status,omitempty"`

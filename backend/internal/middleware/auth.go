@@ -36,6 +36,11 @@ func AuthMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if claims.Purpose == "2fa_pending" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "需要完成两步验证"})
+			c.Abort()
+			return
+		}
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)

@@ -1,11 +1,24 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, Terminal, RotateCcw } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { BatchCommandDialog } from "@/components/batch-command-dialog";
+import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { TaskEditorDialog } from "@/components/task-create-dialog";
+import { TaskRunDetail } from "@/components/task-run-detail";
+import { TaskRunHistory } from "@/components/task-run-history";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
+import {
+  Dialog,
+  DialogBody,
+  DialogCloseButton,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
@@ -15,8 +28,9 @@ import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
+import type { NewTaskInput, TaskRecord, TaskRunRecord, TaskStatus } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
@@ -43,7 +57,12 @@ export function TasksPage() {
     triggerTask,
     cancelTask,
     retryTask,
+    refreshTasks,
   } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshTasks();
+  }, [refreshTasks]);
 
   const { confirm, dialog } = useConfirm();
 
@@ -65,9 +84,14 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const { token: authToken } = useAuth();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
+  const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
+  const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
 
   const filteredTasks = useMemo(() => {
     const effectiveKeyword = deferredKeyword.trim().toLowerCase();
@@ -130,6 +154,11 @@ export function TasksPage() {
   const handleEdit = (task: TaskRecord) => {
     setEditingTask(task);
     setEditDialogOpen(true);
+  };
+
+  const handleViewHistory = (task: TaskRecord) => {
+    setSelectedRun(null);
+    setHistoryTask(task);
   };
 
   const handleUpdateTask = async (input: NewTaskInput) => {
@@ -243,6 +272,10 @@ export function TasksPage() {
                 <Plus className="mr-1 size-3.5" />
                 新建任务
               </Button>
+              <Button size="sm" variant="outline" onClick={() => setBatchDialogOpen(true)}>
+                <Terminal className="mr-1 size-3.5" />
+                批量执行
+              </Button>
             </div>
             <div className="flex items-center gap-2">
               <ViewModeToggle
@@ -329,6 +362,7 @@ export function TasksPage() {
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
               onEdit={handleEdit}
+              onViewHistory={handleViewHistory}
             />
           ) : (
             <TasksTable
@@ -342,6 +376,7 @@ export function TasksPage() {
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
               onEdit={handleEdit}
+              onViewHistory={handleViewHistory}
             />
           )}
         </CardContent>
@@ -366,6 +401,82 @@ export function TasksPage() {
         onSave={handleUpdateTask}
         editingTask={editingTask}
       />
+
+      <Dialog
+        open={!!historyTask}
+        onOpenChange={(open) => {
+          if (!open) {
+            setHistoryTask(null);
+            setSelectedRun(null);
+          }
+        }}
+      >
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>
+              执行历史 — {historyTask?.name || historyTask?.policyName}
+            </DialogTitle>
+            <DialogDescription>
+              任务 #{historyTask?.id} 的执行记录
+            </DialogDescription>
+            {historyTask?.executorType === "rsync" && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto mr-8 shrink-0"
+                onClick={() => setRestoreDialogOpen(true)}
+              >
+                <RotateCcw className="mr-1 size-3.5" />
+                从此备份恢复
+              </Button>
+            )}
+            <DialogCloseButton />
+          </DialogHeader>
+          <DialogBody>
+            {historyTask && authToken && (
+              selectedRun ? (
+                <TaskRunDetail
+                  run={selectedRun}
+                  token={authToken}
+                  onBack={() => setSelectedRun(null)}
+                />
+              ) : (
+                <TaskRunHistory
+                  taskId={historyTask.id}
+                  token={authToken}
+                  onSelectRun={setSelectedRun}
+                />
+              )
+            )}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+
+      {authToken && (
+        <BatchCommandDialog
+          open={batchDialogOpen}
+          onOpenChange={setBatchDialogOpen}
+          nodes={nodes}
+          token={authToken}
+          onSuccess={(batchId) => toast.success(`批量任务已提交，批次 ID: ${batchId}`)}
+        />
+      )}
+
+      {authToken && historyTask && (
+        <RestoreConfirmDialog
+          open={restoreDialogOpen}
+          onOpenChange={setRestoreDialogOpen}
+          taskId={historyTask.id}
+          taskName={historyTask.name ?? historyTask.policyName ?? ""}
+          rsyncSource={historyTask.rsyncSource}
+          rsyncTarget={historyTask.rsyncTarget}
+          token={authToken}
+          onSuccess={(runId) => {
+            setRestoreDialogOpen(false);
+            toast.success(`恢复任务已触发，执行 ID: #${runId}`);
+          }}
+        />
+      )}
 
       {dialog}
     </div>

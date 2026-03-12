@@ -11,6 +11,7 @@ type PolicyResponse = {
   node_ids?: number[];
   verify_enabled?: boolean;
   verify_sample_rate?: number;
+  is_template?: boolean;
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
@@ -26,6 +27,7 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     nodeIds: row.node_ids ?? [],
     verifyEnabled: row.verify_enabled ?? false,
     verifySampleRate: row.verify_sample_rate ?? 0,
+    isTemplate: row.is_template ?? false,
   };
 }
 
@@ -78,6 +80,22 @@ export function createPoliciesApi() {
         method: "DELETE",
         token
       });
+    },
+
+    async batchTogglePolicies(token: string, policyIds: number[], enabled: boolean): Promise<void> {
+      await request("/policies/batch-toggle", {
+        method: "POST",
+        token,
+        body: { policy_ids: policyIds, enabled }
+      });
+    },
+
+    async clonePolicyFromTemplate(token: string, templateId: number): Promise<PolicyRecord> {
+      const payload = await request<Envelope<PolicyResponse>>(`/policies/from-template/${templateId}`, {
+        method: "POST",
+        token
+      });
+      return mapPolicy(unwrapData(payload));
     }
   };
 }

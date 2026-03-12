@@ -32,14 +32,14 @@ func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 		FailLockDuration:  time.Minute,
 	})
 
-	if _, _, err := service.Login("admin", "wrong-1", "127.0.0.1"); err == nil {
+	if _, err := service.Login("admin", "wrong-1", "127.0.0.1"); err == nil {
 		t.Fatalf("首次错误密码应返回失败")
 	}
-	if _, _, err := service.Login("admin", "wrong-2", "127.0.0.1"); err == nil {
+	if _, err := service.Login("admin", "wrong-2", "127.0.0.1"); err == nil {
 		t.Fatalf("第二次错误密码应返回失败")
 	}
 
-	if _, _, err := service.Login("admin", "correct-password", "127.0.0.1"); err == nil {
+	if _, err := service.Login("admin", "correct-password", "127.0.0.1"); err == nil {
 		t.Fatalf("达到阈值后应被锁定")
 	} else {
 		lockedErr, ok := IsLoginLocked(err)
@@ -51,8 +51,123 @@ func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 		}
 	}
 
-	if _, _, err := service.Login("admin", "correct-password", "127.0.0.2"); err != nil {
+	if _, err := service.Login("admin", "correct-password", "127.0.0.2"); err != nil {
 		t.Fatalf("不同 IP 不应受锁定影响，实际错误: %v", err)
+	}
+}
+
+func TestLoginLockExpiresAfterDuration(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("初始化用户表失败: %v", err)
+	}
+
+	passwordHash, _ := HashPassword("Correct1!")
+	user := model.User{Username: "locktest", PasswordHash: passwordHash, Role: "admin"}
+	db.Create(&user)
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+		FailLockThreshold: 2,
+		FailLockDuration:  100 * time.Millisecond, // 极短锁定时间
+	})
+
+	// 触发锁定
+	service.Login("locktest", "wrong1", "10.0.0.1")
+	service.Login("locktest", "wrong2", "10.0.0.1")
+
+	// 锁定中
+	_, err := service.Login("locktest", "Correct1!", "10.0.0.1")
+	if _, ok := IsLoginLocked(err); !ok {
+		t.Fatalf("应处于锁定状态")
+	}
+
+	// 等待锁定过期
+	time.Sleep(150 * time.Millisecond)
+
+	// 锁定应过期
+	_, err = service.Login("locktest", "Correct1!", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("锁定过期后应能正常登录，实际错误: %v", err)
+	}
+}
+
+func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("初始化用户表失败: %v", err)
+	}
+
+	passwordHash, _ := HashPassword("OldPassword1!")
+	user := model.User{Username: "chgpwd", PasswordHash: passwordHash, Role: "admin"}
+	db.Create(&user)
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+		FailLockThreshold: 10,
+		FailLockDuration:  time.Minute,
+	})
+
+	err := service.ChangePassword(user.ID, "WrongOldPass1!", "NewPassword1!")
+	if err == nil {
+		t.Fatalf("旧密码错误时应返回错误")
+	}
+	if !strings.Contains(err.Error(), "当前密码错误") {
+		t.Fatalf("错误信息应包含'当前密码错误'，实际: %v", err)
+	}
+
+	// 正确旧密码应成功
+	err = service.ChangePassword(user.ID, "OldPassword1!", "NewPassword1!")
+	if err != nil {
+		t.Fatalf("正确旧密码应能修改成功，实际错误: %v", err)
+	}
+}
+
+func TestCreateUserRejectsDuplicate(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("初始化用户表失败: %v", err)
+	}
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+		FailLockThreshold: 10,
+		FailLockDuration:  time.Minute,
+	})
+
+	_, err := service.CreateUser("dupuser", "StrongPwd1!xxz", "admin")
+	if err != nil {
+		t.Fatalf("首次创建用户应成功: %v", err)
+	}
+
+	_, err = service.CreateUser("dupuser", "StrongPwd2!xxz", "admin")
+	if err == nil {
+		t.Fatalf("重复用户名应返回错误")
+	}
+	if !strings.Contains(err.Error(), "已存在") {
+		t.Fatalf("错误信息应包含'已存在'，实际: %v", err)
+	}
+}
+
+func TestCreateUserRejectsInvalidRole(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("初始化用户表失败: %v", err)
+	}
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+		FailLockThreshold: 10,
+		FailLockDuration:  time.Minute,
+	})
+
+	_, err := service.CreateUser("roletest", "StrongPwd1!xxz", "superadmin")
+	if err == nil {
+		t.Fatalf("无效角色应返回错误")
+	}
+
+	// 合法角色
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		_, err := service.CreateUser(fmt.Sprintf("user-%s", role), "StrongPwd1!xxz", role)
+		if err != nil {
+			t.Fatalf("角色 %s 应合法，实际错误: %v", role, err)
+		}
 	}
 }
 

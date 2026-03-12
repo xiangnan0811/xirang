@@ -225,6 +225,15 @@ describe("useConsoleData", () => {
     const { result } = renderHook(() => useConsoleData("token-1"));
 
     await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    // 按需加载任务列表（D9 lazy load）
+    await act(async () => {
+      await result.current.refreshTasks();
+    });
+
+    await waitFor(() => {
       expect(result.current.tasks).toHaveLength(1);
     });
 
