@@ -28,6 +28,8 @@ type NodeEditorDraft = {
   inlineKeyName: string;
   inlineKeyType: SSHKeyType;
   inlinePrivateKey: string;
+  maintenanceStart: string;
+  maintenanceEnd: string;
 };
 
 const emptyDraft: NodeEditorDraft = {
@@ -43,6 +45,8 @@ const emptyDraft: NodeEditorDraft = {
   inlineKeyName: "",
   inlineKeyType: "auto",
   inlinePrivateKey: "",
+  maintenanceStart: "",
+  maintenanceEnd: "",
 };
 
 function toAuthType(value: string): "key" | "password" {
@@ -50,6 +54,21 @@ function toAuthType(value: string): "key" | "password" {
     return "password";
   }
   return "key";
+}
+
+function toDatetimeLocal(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromDatetimeLocal(value: string): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString();
 }
 
 function toPort(value: number): number {
@@ -74,6 +93,8 @@ function toDraft(node: NodeRecord): NodeEditorDraft {
     inlineKeyName: "",
     inlineKeyType: "auto",
     inlinePrivateKey: "",
+    maintenanceStart: toDatetimeLocal(node.maintenanceStart),
+    maintenanceEnd: toDatetimeLocal(node.maintenanceEnd),
   };
 }
 
@@ -93,6 +114,8 @@ function buildNodeInput(draft: NodeEditorDraft): NewNodeInput {
     inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
     inlineKeyType: useInlineKey ? draft.inlineKeyType : undefined,
     inlinePrivateKey: useInlineKey ? draft.inlinePrivateKey : undefined,
+    maintenanceStart: fromDatetimeLocal(draft.maintenanceStart),
+    maintenanceEnd: fromDatetimeLocal(draft.maintenanceEnd),
   };
 }
 
@@ -329,6 +352,28 @@ export function NodeEditorDialog({
           }
         />
       </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label htmlFor="node-edit-maint-start" className="mb-1 block text-sm font-medium">维护窗口开始</label>
+          <Input id="node-edit-maint-start" type="datetime-local"
+            value={draft.maintenanceStart}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, maintenanceStart: event.target.value }))
+            }
+          />
+        </div>
+        <div>
+          <label htmlFor="node-edit-maint-end" className="mb-1 block text-sm font-medium">维护窗口结束</label>
+          <Input id="node-edit-maint-end" type="datetime-local"
+            value={draft.maintenanceEnd}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, maintenanceEnd: event.target.value }))
+            }
+          />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">维护窗口内将跳过探测和任务执行。留空表示无维护计划。</p>
     </FormDialog>
   );
 }

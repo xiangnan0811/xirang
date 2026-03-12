@@ -186,6 +186,7 @@ export interface AlertRecord {
   nodeName: string;
   nodeId: number;
   taskId?: number | null;
+  taskRunId?: number | null;
   policyName: string;
   severity: AlertSeverity;
   status: AlertStatus;
@@ -312,6 +313,7 @@ export interface UserRecord {
   id: number;
   username: string;
   role: "admin" | "operator" | "viewer";
+  totpEnabled?: boolean;
 }
 
 export interface AuditLogRecord {

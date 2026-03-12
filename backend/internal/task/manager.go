@@ -394,13 +394,41 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		return
 	}
 
+	// 恢复成功后执行完整性校验（复用 F3 校验逻辑）
+	verifyStatus := "none"
+	if restoreTask.Policy != nil && restoreTask.Policy.VerifyEnabled {
+		m.emitLog(taskID, runIDPtr, "info", "开始恢复后完整性校验", "")
+		result := verifier.Verify(execCtx, restoreTask, restoreTask.Policy.VerifySampleRate, m.db, func(level, msg string) {
+			m.emitLog(taskID, runIDPtr, level, msg, "")
+		})
+
+		verifyStatus = result.Status
+
+		if result.Status == "warning" || result.Status == "failed" {
+			finishedAt := time.Now()
+			duration := finishedAt.Sub(now).Milliseconds()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+				"status":        "warning",
+				"finished_at":   &finishedAt,
+				"duration_ms":   duration,
+				"verify_status": verifyStatus,
+				"last_error":    result.Message,
+			})
+			runCompleted = true
+			m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "")
+			return
+		}
+		m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
+	}
+
 	finishedAt := time.Now()
 	duration := finishedAt.Sub(now).Milliseconds()
 	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":      "success",
-		"finished_at": &finishedAt,
-		"duration_ms": duration,
-		"last_error":  "",
+		"status":        "success",
+		"finished_at":   &finishedAt,
+		"duration_ms":   duration,
+		"verify_status": verifyStatus,
+		"last_error":    "",
 	})
 	runCompleted = true
 	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "")

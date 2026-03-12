@@ -209,7 +209,7 @@ export function AlertCenter({
                     <div className="flex items-center gap-2">
                       <StatusPulse tone={severityToTone(alert.severity)} />
                       <p className="font-medium">
-                        {alert.nodeName} · {alert.taskId ? `任务 #${alert.taskId}` : "节点探测"}
+                        {alert.nodeName} · {alert.taskId ? `任务 #${alert.taskId}${alert.taskRunId ? ` 执行 #${alert.taskRunId}` : ""}` : "节点探测"}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">

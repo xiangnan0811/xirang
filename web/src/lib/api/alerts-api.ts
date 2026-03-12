@@ -12,6 +12,7 @@ type AlertResponse = {
   node_id: number;
   node_name: string;
   task_id?: number | null;
+  task_run_id?: number | null;
   policy_name?: string;
   severity: AlertRecord["severity"];
   status: AlertRecord["status"];
@@ -67,6 +68,7 @@ function mapAlert(row: AlertResponse): AlertRecord {
     nodeName: row.node_name,
     nodeId: row.node_id,
     taskId: row.task_id ?? null,
+    taskRunId: row.task_run_id ?? null,
     policyName: row.policy_name ?? "节点探测",
     severity: row.severity,
     status: row.status,

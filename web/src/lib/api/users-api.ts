@@ -5,13 +5,15 @@ type UserResponse = {
   id: number;
   username: string;
   role: string;
+  totp_enabled?: boolean;
 };
 
 function mapUser(row: UserResponse): UserRecord {
   return {
     id: row.id,
     username: row.username,
-    role: row.role === "admin" || row.role === "operator" || row.role === "viewer" ? row.role : "viewer"
+    role: row.role === "admin" || row.role === "operator" || row.role === "viewer" ? row.role : "viewer",
+    totpEnabled: Boolean(row.totp_enabled)
   };
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckSquare, Plus, Trash2, Wrench } from "lucide-react";
+import { CheckSquare, Copy, Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import {
@@ -163,6 +163,17 @@ export function PoliciesPage() {
     }
   };
 
+  const onCloneFromTemplate = async (policy: PolicyRecord) => {
+    if (!token) return;
+    try {
+      await apiClient.clonePolicyFromTemplate(token, policy.id);
+      toast.success(`已从模板 ${policy.name} 创建新策略。`);
+      void refreshPolicies();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
   return (
     <div className="animate-fade-in space-y-5">
       <Card className="border-border/75">
@@ -241,6 +252,17 @@ export function PoliciesPage() {
                     onCheckedChange={() => void onTogglePolicy(policy)}
                   />
                   <div className="flex items-center gap-1">
+                    {policy.isTemplate && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        onClick={() => void onCloneFromTemplate(policy)}
+                        aria-label={`从模板 ${policy.name} 创建策略`}
+                      >
+                        <Copy className="size-4" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -350,6 +372,17 @@ export function PoliciesPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {policy.isTemplate && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                              onClick={() => void onCloneFromTemplate(policy)}
+                              aria-label={`从模板 ${policy.name} 创建策略`}
+                            >
+                              <Copy className="size-4" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"

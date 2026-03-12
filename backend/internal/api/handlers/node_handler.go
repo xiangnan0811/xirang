@@ -170,12 +170,16 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		}
 	}
 	if req.MaintenanceStart != nil {
-		if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
+		if *req.MaintenanceStart == "" {
+			node.MaintenanceStart = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
 			node.MaintenanceStart = &t
 		}
 	}
 	if req.MaintenanceEnd != nil {
-		if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
+		if *req.MaintenanceEnd == "" {
+			node.MaintenanceEnd = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
 			node.MaintenanceEnd = &t
 		}
 	}
@@ -263,12 +267,16 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		}
 	}
 	if req.MaintenanceStart != nil {
-		if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
+		if *req.MaintenanceStart == "" {
+			node.MaintenanceStart = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
 			node.MaintenanceStart = &t
 		}
 	}
 	if req.MaintenanceEnd != nil {
-		if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
+		if *req.MaintenanceEnd == "" {
+			node.MaintenanceEnd = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
 			node.MaintenanceEnd = &t
 		}
 	}

@@ -289,7 +289,10 @@ export function UsersPage() {
                       <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_auto] md:items-center">
                         <div>
                           <p className="font-medium">{item.username}</p>
-                          <p className="text-xs text-muted-foreground">ID: {item.id} · {roleLabel(item.role)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            ID: {item.id} · {roleLabel(item.role)}
+                            {item.totpEnabled ? <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"><Shield className="size-2.5" />2FA</span> : null}
+                          </p>
                         </div>
                         <Select
                           value={roleDrafts[item.id] ?? item.role}
