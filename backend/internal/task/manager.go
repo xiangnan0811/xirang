@@ -17,6 +17,7 @@ import (
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
 	"xirang/backend/internal/task/verifier"
+	"xirang/backend/internal/util"
 	"xirang/backend/internal/ws"
 
 	"github.com/robfig/cron/v3"
@@ -374,6 +375,43 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	execCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 恢复前检查：目标路径存在性和磁盘空间
+	m.emitLog(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
+	if util.IsRemotePathSpec(restoreTask.RsyncTarget) {
+		// 远程路径检查
+		if err := executor.EnsureRemoteTargetReady(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+			errorMsg := fmt.Sprintf("恢复前检查失败: %s", err.Error())
+			finishedAt := time.Now()
+			duration := finishedAt.Sub(now).Milliseconds()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+				"status":      "failed",
+				"finished_at": &finishedAt,
+				"duration_ms": duration,
+				"last_error":  errorMsg,
+			})
+			runCompleted = true
+			m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+			return
+		}
+	} else {
+		// 本地路径检查（复用 rsync executor 的逻辑）
+		if err := executor.EnsureLocalTargetReady(restoreTask.RsyncTarget); err != nil {
+			errorMsg := fmt.Sprintf("恢复前检查失败: %s", err.Error())
+			finishedAt := time.Now()
+			duration := finishedAt.Sub(now).Milliseconds()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+				"status":      "failed",
+				"finished_at": &finishedAt,
+				"duration_ms": duration,
+				"last_error":  errorMsg,
+			})
+			runCompleted = true
+			m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+			return
+		}
+	}
+	m.emitLog(taskID, runIDPtr, "info", "恢复前检查通过", "")
+
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
 	_, err := exec.Run(execCtx, restoreTask, func(level, message string) {
 		m.emitLog(taskID, runIDPtr, level, message, "running")
@@ -394,32 +432,35 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		return
 	}
 
-	// 恢复成功后执行完整性校验（复用 F3 校验逻辑）
+	// 恢复成功后强制执行完整性校验（不再依赖 Policy.VerifyEnabled）
 	verifyStatus := "none"
-	if restoreTask.Policy != nil && restoreTask.Policy.VerifyEnabled {
-		m.emitLog(taskID, runIDPtr, "info", "开始恢复后完整性校验", "")
-		result := verifier.Verify(execCtx, restoreTask, restoreTask.Policy.VerifySampleRate, m.db, func(level, msg string) {
-			m.emitLog(taskID, runIDPtr, level, msg, "")
-		})
-
-		verifyStatus = result.Status
-
-		if result.Status == "warning" || result.Status == "failed" {
-			finishedAt := time.Now()
-			duration := finishedAt.Sub(now).Milliseconds()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-				"status":        "warning",
-				"finished_at":   &finishedAt,
-				"duration_ms":   duration,
-				"verify_status": verifyStatus,
-				"last_error":    result.Message,
-			})
-			runCompleted = true
-			m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "")
-			return
-		}
-		m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
+	sampleRate := 100 // 默认全量校验
+	if restoreTask.Policy != nil && restoreTask.Policy.VerifySampleRate > 0 {
+		sampleRate = restoreTask.Policy.VerifySampleRate
 	}
+
+	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复后完整性校验（采样率 %d%%）", sampleRate), "")
+	result := verifier.Verify(execCtx, restoreTask, sampleRate, m.db, func(level, msg string) {
+		m.emitLog(taskID, runIDPtr, level, msg, "")
+	})
+
+	verifyStatus = result.Status
+
+	if result.Status == "warning" || result.Status == "failed" {
+		finishedAt := time.Now()
+		duration := finishedAt.Sub(now).Milliseconds()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":        "warning",
+			"finished_at":   &finishedAt,
+			"duration_ms":   duration,
+			"verify_status": verifyStatus,
+			"last_error":    result.Message,
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "")
+		return
+	}
+	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
 
 	finishedAt := time.Now()
 	duration := finishedAt.Sub(now).Milliseconds()

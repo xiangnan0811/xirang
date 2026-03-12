@@ -18,6 +18,8 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type LogFunc func(level, message string)
@@ -84,7 +86,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	}
 
 	if !util.IsRemotePathSpec(task.RsyncTarget) {
-		if err := ensureLocalTargetReady(task.RsyncTarget); err != nil {
+		if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
 			return -1, err
 		}
 	}
@@ -287,7 +289,7 @@ func parseThroughputMbps(valueField string, unitField string) (float64, bool) {
 	return bytesPerSecond * 8 / 1_000_000, true
 }
 
-func ensureLocalTargetReady(target string) error {
+func EnsureLocalTargetReady(target string) error {
 	dir := strings.TrimSpace(target)
 	if dir == "" {
 		return fmt.Errorf("目标路径不能为空")
@@ -380,4 +382,102 @@ func AsExitError(err error, target **exec.ExitError) bool {
 	}
 	*target = exitErr
 	return true
+}
+
+// ensureRemoteTargetReady 通过 SSH 检查远程目标路径是否存在且有足够磁盘空间。
+func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath string) error {
+	if strings.TrimSpace(node.Host) == "" {
+		return fmt.Errorf("节点地址不能为空")
+	}
+
+	port := node.Port
+	if port == 0 {
+		port = 22
+	}
+	user := strings.TrimSpace(node.Username)
+	if user == "" {
+		user = "root"
+	}
+
+	// 构建 SSH 认证（复用 CommandExecutor 的逻辑）
+	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
+	var authMethods []ssh.AuthMethod
+
+	switch authType {
+	case "key":
+		keyContent, _, err := resolveNodePrivateKey(node)
+		if err != nil {
+			return err
+		}
+		if keyContent == "" {
+			return fmt.Errorf("密钥认证未配置")
+		}
+		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
+		if err != nil {
+			return fmt.Errorf("私钥校验失败")
+		}
+		signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
+		if err != nil {
+			return fmt.Errorf("解析私钥失败: %w", err)
+		}
+		authMethods = append(authMethods, ssh.PublicKeys(signer))
+	case "password":
+		if node.Password == "" {
+			return fmt.Errorf("密码认证未配置密码")
+		}
+		authMethods = append(authMethods, ssh.Password(node.Password))
+	default:
+		return fmt.Errorf("不支持的认证方式: %s", authType)
+	}
+
+	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
+	if err != nil {
+		return fmt.Errorf("主机密钥配置异常: %w", err)
+	}
+
+	addr := fmt.Sprintf("%s:%d", node.Host, port)
+	client, err := sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
+	if err != nil {
+		return fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close()
+
+	// 检查目标路径是否存在，不存在则创建
+	checkCmd := fmt.Sprintf("test -d %s || mkdir -p %s", targetPath, targetPath)
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建 SSH 会话失败: %w", err)
+	}
+	if err := session.Run(checkCmd); err != nil {
+		_ = session.Close()
+		return fmt.Errorf("目标路径不可用: %w", err)
+	}
+	_ = session.Close()
+
+	// 检查磁盘空间（获取可用空间 GB）
+	minFreeGB, err := readIntEnvWithDefault("RSYNC_MIN_FREE_GB", 0)
+	if err != nil {
+		return err
+	}
+	if minFreeGB > 0 {
+		spaceCmd := fmt.Sprintf("df -BG %s | tail -1 | awk '{print $4}' | sed 's/G//'", targetPath)
+		session2, err := client.NewSession()
+		if err != nil {
+			return fmt.Errorf("创建 SSH 会话失败: %w", err)
+		}
+		output, err := session2.Output(spaceCmd)
+		_ = session2.Close()
+		if err != nil {
+			return fmt.Errorf("读取目标目录磁盘信息失败: %w", err)
+		}
+		freeGB, err := strconv.Atoi(strings.TrimSpace(string(output)))
+		if err != nil {
+			return fmt.Errorf("解析磁盘空间失败")
+		}
+		if freeGB < minFreeGB {
+			return fmt.Errorf("目标目录可用空间不足，当前 %dGB，要求至少 %dGB", freeGB, minFreeGB)
+		}
+	}
+
+	return nil
 }

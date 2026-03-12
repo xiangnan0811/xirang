@@ -19,6 +19,10 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({ token: "test-token" })
+}));
+
 function createNodes(total: number) {
   return Array.from({ length: total }, (_, index) => {
     const id = index + 1;

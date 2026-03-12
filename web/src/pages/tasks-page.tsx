@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Terminal, RotateCcw } from "lucide-react";
+import { Plus, Terminal, RotateCcw, Play } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
@@ -29,6 +29,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useAuth } from "@/context/auth-context";
+import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewTaskInput, TaskRecord, TaskRunRecord, TaskStatus } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
@@ -92,6 +93,8 @@ export function TasksPage() {
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [batchTriggerDialogOpen, setBatchTriggerDialogOpen] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
 
   const filteredTasks = useMemo(() => {
     const effectiveKeyword = deferredKeyword.trim().toLowerCase();
@@ -275,6 +278,17 @@ export function TasksPage() {
               <Button size="sm" variant="outline" onClick={() => setBatchDialogOpen(true)}>
                 <Terminal className="mr-1 size-3.5" />
                 批量执行
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSelectedTaskIds([]);
+                  setBatchTriggerDialogOpen(true);
+                }}
+              >
+                <Play className="mr-1 size-3.5" />
+                批量触发
               </Button>
             </div>
             <div className="flex items-center gap-2">
@@ -476,6 +490,94 @@ export function TasksPage() {
             toast.success(`恢复任务已触发，执行 ID: #${runId}`);
           }}
         />
+      )}
+
+      {/* 批量触发任务对话框 */}
+      {authToken && (
+        <Dialog open={batchTriggerDialogOpen} onOpenChange={setBatchTriggerDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>批量触发任务</DialogTitle>
+              <DialogDescription>选择要触发的任务，系统将依次执行</DialogDescription>
+              <DialogCloseButton />
+            </DialogHeader>
+            <DialogBody>
+              <div className="space-y-3">
+                <div className="max-h-64 overflow-y-auto space-y-2 rounded-md border border-border p-3">
+                  {filteredTasks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">暂无可触发的任务</p>
+                  ) : (
+                    filteredTasks.map((task) => (
+                      <label
+                        key={task.id}
+                        className="flex items-center gap-2 cursor-pointer hover:bg-accent/50 rounded p-2 transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTaskIds.includes(task.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTaskIds((prev) => [...prev, task.id]);
+                            } else {
+                              setSelectedTaskIds((prev) => prev.filter((id) => id !== task.id));
+                            }
+                          }}
+                          className="size-4"
+                        />
+                        <span className="text-sm flex-1">
+                          {task.name || task.policyName || `任务 #${task.id}`}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {task.executorType === "rsync" ? "同步" : "命令"}
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">已选择 {selectedTaskIds.length} 个任务</span>
+                  {selectedTaskIds.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setSelectedTaskIds([])}
+                    >
+                      清空选择
+                    </Button>
+                  )}
+                </div>
+                <div className="flex gap-2 justify-end pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setBatchTriggerDialogOpen(false);
+                      setSelectedTaskIds([]);
+                    }}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    disabled={selectedTaskIds.length === 0}
+                    onClick={async () => {
+                      try {
+                        const result = await apiClient.batchTriggerTasks(authToken, selectedTaskIds);
+                        setBatchTriggerDialogOpen(false);
+                        setSelectedTaskIds([]);
+                        toast.success(`批量触发成功：${result.successCount}/${result.total} 个任务已启动`);
+                        void refreshTasks();
+                      } catch (err) {
+                        toast.error(`批量触发失败: ${getErrorMessage(err)}`);
+                      }
+                    }}
+                  >
+                    <Play className="mr-1 size-3.5" />
+                    触发 {selectedTaskIds.length} 个任务
+                  </Button>
+                </div>
+              </div>
+            </DialogBody>
+          </DialogContent>
+        </Dialog>
       )}
 
       {dialog}
