@@ -1,0 +1,4 @@
+-- 000003_node_probe.down.sql
+-- SQLite < 3.35 不支持 DROP COLUMN，仅 PostgreSQL 可回滚
+-- ALTER TABLE nodes DROP COLUMN last_probe_at;
+-- ALTER TABLE nodes DROP COLUMN consecutive_failures;

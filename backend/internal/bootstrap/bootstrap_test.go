@@ -90,7 +90,7 @@ func TestSeedUsersAllowsMissingPasswordWhenAdminAlreadyExists(t *testing.T) {
 func TestAutoMigrateIncludesTaskTrafficSample(t *testing.T) {
 	db := openBootstrapTestDB(t)
 
-	if err := AutoMigrate(db); err != nil {
+	if err := AutoMigrate(db, "sqlite"); err != nil {
 		t.Fatalf("AutoMigrate 失败: %v", err)
 	}
 

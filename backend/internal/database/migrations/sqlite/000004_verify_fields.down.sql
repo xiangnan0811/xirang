@@ -1,0 +1,5 @@
+-- 000004_verify_fields.down.sql
+-- SQLite < 3.35 不支持 DROP COLUMN，仅 PostgreSQL 可回滚
+-- ALTER TABLE tasks DROP COLUMN verify_status;
+-- ALTER TABLE policies DROP COLUMN verify_enabled;
+-- ALTER TABLE policies DROP COLUMN verify_sample_rate;

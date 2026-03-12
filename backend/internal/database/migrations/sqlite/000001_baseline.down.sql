@@ -1,0 +1,12 @@
+-- 000001_baseline.down.sql
+DROP TABLE IF EXISTS task_traffic_samples;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS task_logs;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS alert_deliveries;
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS integrations;
+DROP TABLE IF EXISTS policies;
+DROP TABLE IF EXISTS nodes;
+DROP TABLE IF EXISTS ssh_keys;
+DROP TABLE IF EXISTS users;

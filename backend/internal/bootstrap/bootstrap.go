@@ -6,25 +6,14 @@ import (
 	"strings"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
 )
 
-func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		&model.User{},
-		&model.SSHKey{},
-		&model.Node{},
-		&model.Policy{},
-		&model.Integration{},
-		&model.Alert{},
-		&model.AlertDelivery{},
-		&model.Task{},
-		&model.TaskLog{},
-		&model.TaskTrafficSample{},
-		&model.AuditLog{},
-	)
+func AutoMigrate(db *gorm.DB, dbType string) error {
+	return database.RunMigrations(db, dbType)
 }
 
 func SeedUsers(db *gorm.DB) error {

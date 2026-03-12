@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.24 AS backend-builder
+FROM golang:1.26 AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
