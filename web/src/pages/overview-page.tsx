@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
-import { NodeMetricsChart } from "@/components/node-metrics-chart";
+import { NodeMetricsPanel } from "@/components/node-metrics-panel";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
@@ -393,27 +393,17 @@ export function OverviewPage() {
       </section>
 
       {/* 节点资源概览 */}
-      {nodes.length > 0 && nodes.some(n => n.status === "online") && (
+      {nodes.length > 0 && nodes.some(n => n.status === "online") && token && (
         <section className="animate-slide-up [animation-delay:250ms]">
           <Card className="glass-panel border-border/70">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">节点资源概览（近 24h）</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-                {nodes
-                  .filter(n => n.status === "online")
-                  .slice(0, 6)
-                  .map(node => (
-                    <div key={node.id} className="rounded-lg border border-border/60 bg-card/50 p-3">
-                      <p className="mb-2 text-sm font-medium truncate" title={node.name}>{node.name}</p>
-                      {token && <NodeMetricsChart nodeId={node.id} token={token} />}
-                    </div>
-                  ))}
-              </div>
-              {nodes.filter(n => n.status === "online").length > 6 && (
+              <NodeMetricsPanel nodes={nodes} token={token} />
+              {nodes.filter(n => n.status === "online").length > 8 && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  仅展示前 6 个在线节点，完整资源数据请前往节点页查看。
+                  仅展示前 8 个在线节点，完整资源数据请前往节点页查看。
                 </p>
               )}
             </CardContent>
