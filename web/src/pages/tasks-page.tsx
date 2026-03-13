@@ -65,6 +65,19 @@ export function TasksPage() {
     void refreshTasks();
   }, [refreshTasks]);
 
+  // 当有活跃任务（running/pending/retrying）时，每 5 秒自动刷新任务状态
+  useEffect(() => {
+    const hasActiveTask = tasks.some(
+      (t) => t.status === "running" || t.status === "pending" || t.status === "retrying"
+    );
+    if (!hasActiveTask) return;
+
+    const interval = setInterval(() => {
+      void refreshTasks();
+    }, 5_000);
+    return () => clearInterval(interval);
+  }, [tasks, refreshTasks]);
+
   const { confirm, dialog } = useConfirm();
 
   const {
