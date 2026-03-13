@@ -17,7 +17,6 @@ import (
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
 	"xirang/backend/internal/task/verifier"
-	"xirang/backend/internal/util"
 	"xirang/backend/internal/ws"
 
 	"github.com/robfig/cron/v3"
@@ -75,8 +74,10 @@ type Manager struct {
 	scheduler       *scheduler.CronScheduler
 	locks           sync.Map
 	strategyLocks   sync.Map
+	nodeLocks       sync.Map // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
 	runningCancels  sync.Map
 	pendingRuns     sync.Map
+	restoreNodes    sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
 	retryTimers     sync.Map
 	semaphore       chan struct{}
 	taskWG          sync.WaitGroup
@@ -275,6 +276,22 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
 
+	// 互斥检查：防止与同任务的备份/恢复并发执行
+	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
+		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
+	}
+	scheduled := false
+	nodeIDForCleanup := uint(0)
+	defer func() {
+		if !scheduled {
+			m.pendingRuns.Delete(taskID)
+			// 如果 restoreNodes 已注册但 goroutine 未启动，需要清理
+			if nodeIDForCleanup > 0 {
+				m.restoreNodes.Delete(nodeIDForCleanup)
+			}
+		}
+	}()
+
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
 		return 0, fmt.Errorf("任务不存在")
@@ -291,6 +308,31 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	if successCount == 0 {
 		return 0, fmt.Errorf("该任务没有成功的执行记录，无法恢复")
 	}
+
+	// 恢复是破坏性操作，需要节点级互斥（比备份的策略级互斥更严格）。
+	// 使用 nodeLock 保证冲突检查与 restoreNodes 注册的原子性，
+	// 与 runTask() 中的 isNodeRestoring+updateStatus(running) 互斥。
+	nLock := m.nodeLock(taskEntity.NodeID)
+	nLock.Lock()
+	// 1. 内存级检查：是否已有恢复任务正在运行
+	if m.isNodeRestoring(taskEntity.NodeID) {
+		nLock.Unlock()
+		return 0, fmt.Errorf("同节点已有恢复任务正在运行，请稍候再试")
+	}
+	// 2. DB 级检查：是否有普通任务正在运行（Task.Status = running）
+	conflicted, err := m.hasNodeConflictForRestore(taskEntity)
+	if err != nil {
+		nLock.Unlock()
+		return 0, err
+	}
+	if conflicted {
+		nLock.Unlock()
+		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
+	}
+	// 在同步路径中、nodeLock 保护下标记节点正在恢复
+	m.restoreNodes.Store(taskEntity.NodeID, taskID)
+	nodeIDForCleanup = taskEntity.NodeID
+	nLock.Unlock()
 
 	// 确定恢复目标路径
 	restoreTo := strings.TrimSpace(targetPath)
@@ -311,12 +353,13 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		return 0, fmt.Errorf("创建恢复执行记录失败: %w", err)
 	}
 
+	scheduled = true
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		// 内存拷贝，交换 source/target 实现反向同步
+		// 恢复模式：source=备份路径(远程), target=恢复目标路径(远程)
 		restoreTask := taskEntity
-		restoreTask.RsyncSource = taskEntity.RsyncTarget // 备份目的地变为源
+		restoreTask.RsyncSource = taskEntity.RsyncTarget // 备份目的地作为源
 		restoreTask.RsyncTarget = restoreTo              // 恢复到目标路径
 		m.runRestoreTask(taskID, run.ID, restoreTask)
 	}()
@@ -330,6 +373,9 @@ func validateRestorePath(path string) error {
 	}
 	if strings.Contains(path, "..") {
 		return fmt.Errorf("恢复路径不允许包含 '..'")
+	}
+	if strings.ContainsAny(path, ";|&$`\\\"'(){}[]<>!#~*?\n\r") {
+		return fmt.Errorf("恢复路径包含非法字符")
 	}
 	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot"}
 	cleanPath := strings.TrimRight(path, "/")
@@ -347,6 +393,17 @@ func validateRestorePath(path string) error {
 // runRestoreTask 执行恢复任务。与 runTask 不同，恢复不影响原始 Task 的状态，
 // 仅更新 TaskRun 记录。使用内存中交换了 source/target 的任务副本。
 func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task) {
+	defer m.pendingRuns.Delete(taskID)
+
+	// 尽早注册取消句柄，使排队等锁期间也能被 Cancel() 中断
+	execCtx, cancel := context.WithCancel(context.Background())
+	m.runningCancels.Store(taskID, cancel)
+	defer m.runningCancels.Delete(taskID)
+	defer cancel()
+
+	// restoreNodes 已在 TriggerRestore 同步路径中注册，此处仅负责清理
+	defer m.restoreNodes.Delete(restoreTask.NodeID)
+
 	runCompleted := false
 	defer func() {
 		if !runCompleted {
@@ -360,8 +417,47 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		}
 	}()
 
-	m.semaphore <- struct{}{}
+	// context-aware semaphore：取消时立即返回
+	select {
+	case m.semaphore <- struct{}{}:
+	case <-execCtx.Done():
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "恢复任务已取消",
+		})
+		runCompleted = true
+		return
+	}
 	defer func() { <-m.semaphore }()
+
+	// context-aware lock：取消时立即返回
+	lock := m.taskLock(taskID)
+	if !acquireLockWithContext(execCtx, lock) {
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "恢复任务已取消",
+		})
+		runCompleted = true
+		return
+	}
+	defer lock.Unlock()
+
+	strategyLock := m.strategyLock(restoreTask.NodeID, restoreTask.PolicyID)
+	if !acquireLockWithContext(execCtx, strategyLock) {
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "恢复任务已取消",
+		})
+		runCompleted = true
+		return
+	}
+	defer strategyLock.Unlock()
 
 	runIDPtr := &runID
 
@@ -370,52 +466,75 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"status":     "running",
 		"started_at": &now,
 	})
+
 	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复任务，源: %s → 目标: %s", restoreTask.RsyncSource, restoreTask.RsyncTarget), "")
 
-	execCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 恢复前检查：目标路径存在性和磁盘空间
+	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
 	m.emitLog(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if util.IsRemotePathSpec(restoreTask.RsyncTarget) {
-		// 远程路径检查
-		if err := executor.EnsureRemoteTargetReady(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
-			errorMsg := fmt.Sprintf("恢复前检查失败: %s", err.Error())
+	if err := executor.EnsureRemoteTargetReady(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+		// 区分取消与真实失败
+		if execCtx.Err() != nil {
 			finishedAt := time.Now()
-			duration := finishedAt.Sub(now).Milliseconds()
 			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-				"status":      "failed",
+				"status":      "canceled",
 				"finished_at": &finishedAt,
-				"duration_ms": duration,
-				"last_error":  errorMsg,
+				"last_error":  "恢复任务已取消",
 			})
 			runCompleted = true
-			m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+			m.emitLog(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "")
 			return
 		}
-	} else {
-		// 本地路径检查（复用 rsync executor 的逻辑）
-		if err := executor.EnsureLocalTargetReady(restoreTask.RsyncTarget); err != nil {
-			errorMsg := fmt.Sprintf("恢复前检查失败: %s", err.Error())
-			finishedAt := time.Now()
-			duration := finishedAt.Sub(now).Milliseconds()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-				"status":      "failed",
-				"finished_at": &finishedAt,
-				"duration_ms": duration,
-				"last_error":  errorMsg,
-			})
-			runCompleted = true
-			m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
-			return
-		}
+		errorMsg := fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error())
+		finishedAt := time.Now()
+		duration := finishedAt.Sub(now).Milliseconds()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &finishedAt,
+			"duration_ms": duration,
+			"last_error":  errorMsg,
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
+		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复前检查通过", "")
 
+	// 通过 RestoreExecutor 接口在远程节点上执行恢复
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
-	_, err := exec.Run(execCtx, restoreTask, func(level, message string) {
+	restoreExec, ok := exec.(executor.RestoreExecutor)
+	if !ok {
+		errorMsg := "该执行器类型不支持恢复操作"
+		finishedAt := time.Now()
+		duration := finishedAt.Sub(now).Milliseconds()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &finishedAt,
+			"duration_ms": duration,
+			"last_error":  errorMsg,
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+		return
+	}
+
+	_, err := restoreExec.RunRestore(execCtx, restoreTask, func(level, message string) {
 		m.emitLog(taskID, runIDPtr, level, message, "running")
 	}, nil)
+
+	// 检查是否被取消
+	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled)
+	if wasCanceled {
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "恢复任务已取消",
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "warn", "恢复任务已取消", "")
+		return
+	}
 
 	if err != nil {
 		errorMsg := err.Error()
@@ -429,6 +548,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "")
+		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
 		return
 	}
 
@@ -442,7 +562,20 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复后完整性校验（采样率 %d%%）", sampleRate), "")
 	result := verifier.Verify(execCtx, restoreTask, sampleRate, m.db, func(level, msg string) {
 		m.emitLog(taskID, runIDPtr, level, msg, "")
-	})
+	}, true)
+
+	// 校验期间可能被取消
+	if execCtx.Err() != nil {
+		finishedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &finishedAt,
+			"last_error":  "恢复任务已取消",
+		})
+		runCompleted = true
+		m.emitLog(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "")
+		return
+	}
 
 	verifyStatus = result.Status
 
@@ -458,6 +591,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "")
+		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, result.Message)
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
@@ -473,6 +607,9 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	})
 	runCompleted = true
 	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "")
+	if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "恢复任务成功"); resolveErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
+	}
 }
 
 func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
@@ -524,6 +661,10 @@ func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
 	}
 	if conflicted {
 		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
+	}
+	// 检查同节点是否有恢复任务正在运行（恢复是破坏性操作，需要节点级互斥）
+	if m.isNodeRestoring(taskEntity.NodeID) {
+		return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试")
 	}
 
 	// 创建 TaskRun 执行记录
@@ -602,18 +743,31 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 	strategyLock.Lock()
 	defer strategyLock.Unlock()
 
+	// 使用 nodeLock 保证 isNodeRestoring 检查与 updateStatus(running) 的原子性，
+	// 与 TriggerRestore() 中的 hasNodeConflictForRestore+restoreNodes.Store 互斥。
+	nLock := m.nodeLock(taskEntity.NodeID)
+	nLock.Lock()
+
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
+		nLock.Unlock()
 		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("校验互斥冲突失败: %v", err), taskEntity.Status)
 		return
 	}
 	if conflicted {
+		nLock.Unlock()
 		m.emitLog(taskID, runIDPtr, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
+		return
+	}
+	if m.isNodeRestoring(taskEntity.NodeID) {
+		nLock.Unlock()
+		m.emitLog(taskID, runIDPtr, "warn", "同节点有恢复任务正在运行，忽略执行", taskEntity.Status)
 		return
 	}
 
 	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled || currentStatus == StatusWarning {
 		if err := m.updateStatus(&taskEntity, StatusPending, map[string]interface{}{"last_error": ""}); err != nil {
+			nLock.Unlock()
 			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
 			return
 		}
@@ -626,6 +780,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 		"next_run_at": nil,
 		"last_error":  "",
 	}); err != nil {
+		nLock.Unlock()
 		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
 		return
 	}
@@ -634,6 +789,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 		"status":     "running",
 		"started_at": &now,
 	})
+	nLock.Unlock()
+
 	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
 
 	execCtx, cancel := context.WithCancel(context.Background())
@@ -678,7 +835,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 			m.emitLog(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
 				m.emitLog(taskID, runIDPtr, level, msg, string(StatusRunning))
-			})
+			}, false)
 
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
@@ -1085,6 +1242,33 @@ func buildStrategyKey(nodeID uint, policyID *uint) string {
 	return fmt.Sprintf("%d:%s", nodeID, policyPart)
 }
 
+// hasNodeConflictForRestore 检查同节点上是否有任何运行中的任务。
+func (m *Manager) nodeLock(nodeID uint) *sync.Mutex {
+	lock, _ := m.nodeLocks.LoadOrStore(nodeID, &sync.Mutex{})
+	mutex, ok := lock.(*sync.Mutex)
+	if !ok {
+		return &sync.Mutex{}
+	}
+	return mutex
+}
+
+// isNodeRestoring 检查指定节点是否有恢复任务正在运行（内存级持续互斥）。
+func (m *Manager) isNodeRestoring(nodeID uint) bool {
+	_, ok := m.restoreNodes.Load(nodeID)
+	return ok
+}
+
+// 恢复操作是破坏性的，需要节点级互斥，比普通备份的策略级互斥更严格。
+func (m *Manager) hasNodeConflictForRestore(taskEntity model.Task) (bool, error) {
+	var conflictCount int64
+	if err := m.db.Model(&model.Task{}).
+		Where("id <> ? AND node_id = ? AND status = ?", taskEntity.ID, taskEntity.NodeID, string(StatusRunning)).
+		Count(&conflictCount).Error; err != nil {
+		return false, err
+	}
+	return conflictCount > 0, nil
+}
+
 func (m *Manager) hasRunningConflict(taskEntity model.Task) (bool, error) {
 	query := m.db.Model(&model.Task{}).
 		Where("id <> ? AND node_id = ? AND status = ?", taskEntity.ID, taskEntity.NodeID, string(StatusRunning))
@@ -1103,6 +1287,21 @@ func (m *Manager) hasRunningConflict(taskEntity model.Task) (bool, error) {
 		return false, err
 	}
 	return conflictCount > 0, nil
+}
+
+// acquireLockWithContext 在获取 Mutex 锁时响应 context 取消。
+// 返回 true 表示成功获取锁，false 表示 context 已取消。
+func acquireLockWithContext(ctx context.Context, mu *sync.Mutex) bool {
+	for {
+		if mu.TryLock() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func (m *Manager) storeRetryTimer(taskID uint, timer *time.Timer) {
@@ -1168,6 +1367,14 @@ func (m *Manager) Cancel(taskID uint) error {
 		m.emitLog(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
 	default:
+		// 检查是否有恢复操作正在运行（恢复不改变 Task.Status，但会注册 cancel）
+		if cancelRaw, ok := m.runningCancels.Load(taskID); ok {
+			if cancelFn, castOK := cancelRaw.(context.CancelFunc); castOK {
+				cancelFn()
+			}
+			m.emitLog(taskID, nil, "warn", "恢复任务已取消", taskEntity.Status)
+			return nil
+		}
 		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")
 	}
 }

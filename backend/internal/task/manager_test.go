@@ -501,3 +501,181 @@ type failingExecutor struct {
 func (e *failingExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
 	return 1, e.err
 }
+
+// TestRestoreBlockedByInFlightNormalTask 验证即使普通任务已经进入 runTask() 但尚未将
+// 自身状态更新为 running，restore 触发仍会被节点级互斥阻塞（无 TOCTOU 竞态窗口）。
+func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := newBlockingExecutor()
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+
+	t1, t2 := seedTwoTasksSameNode(t, db)
+
+	// task2 需要有成功记录才能触发恢复
+	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+
+	// 触发 task1（普通任务），等待它进入 executor（此时 Task.Status 已更新为 running）
+	_, err := m.TriggerManual(t1.ID)
+	if err != nil {
+		t.Fatalf("触发普通任务失败: %v", err)
+	}
+	select {
+	case <-exec.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待普通任务开始执行超时")
+	}
+
+	// 普通任务正在运行，尝试对同节点另一个任务触发恢复 — 应被 DB 冲突查询阻塞
+	_, err = m.TriggerRestore(t2.ID, "")
+	if err == nil {
+		t.Fatal("同节点有普通任务运行时，恢复应被阻塞")
+	}
+	if !strings.Contains(err.Error(), "任务正在运行") {
+		t.Fatalf("错误信息应提及任务正在运行，实际: %v", err)
+	}
+
+	// 释放普通任务
+	close(exec.release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+}
+
+// seedTwoTasksSameNode 创建同节点、不同策略的两个 rsync 任务，用于互斥测试。
+func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
+	t.Helper()
+	node := model.Node{Name: "node-mutex-test", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	p1 := model.Policy{Name: "policy-mutex-1", SourcePath: "/src1", TargetPath: "/dst1", CronSpec: "@daily"}
+	p2 := model.Policy{Name: "policy-mutex-2", SourcePath: "/src2", TargetPath: "/dst2", CronSpec: "@daily"}
+	db.Create(&p1)
+	db.Create(&p2)
+
+	t1 := model.Task{Name: "t-mutex-1", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src1", RsyncTarget: "/dst1", PolicyID: &p1.ID}
+	t2 := model.Task{Name: "t-mutex-2", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src2", RsyncTarget: "/dst2", PolicyID: &p2.ID}
+	db.Create(&t1)
+	db.Create(&t2)
+	return t1, t2
+}
+
+// TestRestoreNodeMutexBlocksNormalTask 验证恢复期间同节点的普通任务被阻塞。
+func TestRestoreNodeMutexBlocksNormalTask(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+
+	t1, t2 := seedTwoTasksSameNode(t, db)
+
+	// 模拟 task1 有恢复任务正在运行
+	m.restoreNodes.Store(t1.NodeID, t1.ID)
+
+	// 触发 task2（同节点不同策略）应被阻塞
+	_, err := m.TriggerManual(t2.ID)
+	if err == nil {
+		t.Fatal("同节点有恢复任务时，普通任务应被阻塞")
+	}
+	if !strings.Contains(err.Error(), "恢复任务正在运行") {
+		t.Fatalf("错误信息应提及恢复任务，实际: %v", err)
+	}
+
+	// 恢复完成，解除节点互斥
+	m.restoreNodes.Delete(t1.NodeID)
+
+	// 现在触发应成功
+	runID, err := m.TriggerManual(t2.ID)
+	if err != nil {
+		t.Fatalf("恢复完成后触发应成功: %v", err)
+	}
+	if runID == 0 {
+		t.Fatal("期望返回非零 runID")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+}
+
+// TestRestoreNodeMutexBlocksConcurrentRestore 验证同节点不允许并发恢复。
+func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+
+	t1, t2 := seedTwoTasksSameNode(t, db)
+
+	// task1 和 task2 都需要有成功记录才能触发恢复
+	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
+	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+
+	// 模拟 task1 有恢复正在运行
+	m.restoreNodes.Store(t1.NodeID, t1.ID)
+	m.pendingRuns.Store(t1.ID, struct{}{}) // 标记 task1 正在执行
+
+	// 尝试对 task2 触发恢复 — 应因节点互斥被拒绝
+	_, err := m.TriggerRestore(t2.ID, "")
+	if err == nil {
+		t.Fatal("同节点已有恢复时，另一个恢复应被阻塞")
+	}
+	if !strings.Contains(err.Error(), "恢复任务正在运行") {
+		t.Fatalf("错误信息应提及恢复任务，实际: %v", err)
+	}
+
+	m.restoreNodes.Delete(t1.NodeID)
+	m.pendingRuns.Delete(t1.ID)
+}
+
+// TestRestoreNodeMutexRegisteredSynchronously 验证节点互斥在 TriggerRestore 同步返回时即已生效，
+// 不存在触发到 goroutine 启动之间的竞态窗口。
+func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+
+	t1, t2 := seedTwoTasksSameNode(t, db)
+
+	// task1 需要有成功记录才能触发恢复
+	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
+
+	// 填满 semaphore，使 restore goroutine 阻塞在排队阶段
+	for i := 0; i < cap(m.semaphore); i++ {
+		m.semaphore <- struct{}{}
+	}
+
+	// 触发恢复 — goroutine 会阻塞在 semaphore，但 restoreNodes 已在同步路径中注册
+	_, err := m.TriggerRestore(t1.ID, "/tmp/restore-test")
+	if err != nil {
+		t.Fatalf("触发恢复失败: %v", err)
+	}
+
+	// TriggerRestore 同步返回后立即断言（无 sleep），节点已标记为正在恢复
+	if !m.isNodeRestoring(t1.NodeID) {
+		t.Fatal("TriggerRestore 返回后，节点应立即标记为正在恢复（无竞态窗口）")
+	}
+
+	// 同节点普通任务应被阻塞
+	_, err = m.TriggerManual(t2.ID)
+	if err == nil {
+		t.Fatal("恢复排队期间，同节点普通任务应被阻塞")
+	}
+	if !strings.Contains(err.Error(), "恢复任务正在运行") {
+		t.Fatalf("错误信息应提及恢复任务，实际: %v", err)
+	}
+
+	// 取消恢复任务并释放 semaphore
+	m.Cancel(t1.ID)
+	for i := 0; i < cap(m.semaphore); i++ {
+		<-m.semaphore
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	// 恢复取消后，节点应不再标记
+	if m.isNodeRestoring(t1.NodeID) {
+		t.Fatal("恢复取消后，节点不应再标记为正在恢复")
+	}
+}

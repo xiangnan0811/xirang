@@ -35,6 +35,11 @@ type Executor interface {
 	Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
 }
 
+// RestoreExecutor 支持恢复操作的执行器。恢复模式下，source 和 target 都在远程节点上。
+type RestoreExecutor interface {
+	RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
+}
+
 type Factory interface {
 	Resolve(executorType string) Executor
 }
@@ -85,6 +90,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		return -1, fmt.Errorf("同步任务缺少源路径或目标路径")
 	}
 
+	// 备份模式：标准 rsync 执行（本地 -> 远程）
 	if !util.IsRemotePathSpec(task.RsyncTarget) {
 		if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
 			return -1, err
@@ -225,6 +231,161 @@ func newProgressScanner(reader io.Reader) *bufio.Scanner {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	scanner.Split(splitProgressTokens)
 	return scanner
+}
+
+// RunRestore 实现 RestoreExecutor 接口，在远程节点上执行 rsync 恢复操作。
+func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+	return e.runRemoteRestore(ctx, task, logf, progressf)
+}
+
+// runRemoteRestore 在远程节点上执行 rsync 恢复操作。
+// 与标准备份不同，恢复需要在远程节点上执行 rsync source target（两个路径都是节点本地路径）。
+func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+	port := task.Node.Port
+	if port == 0 {
+		port = 22
+	}
+	user := strings.TrimSpace(task.Node.Username)
+	if user == "" {
+		user = "root"
+	}
+
+	authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
+	if authType == "password" {
+		return -1, fmt.Errorf("恢复操作暂不支持密码认证，请为节点配置 SSH key")
+	}
+	if authType != "key" {
+		return -1, fmt.Errorf("不支持的认证方式")
+	}
+
+	keyContent, _, keyResolveErr := resolveNodePrivateKey(task.Node)
+	if keyResolveErr != nil {
+		return -1, keyResolveErr
+	}
+	if keyContent == "" {
+		return -1, fmt.Errorf("密钥认证未配置，请为节点设置密钥")
+	}
+
+	normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
+	if err != nil {
+		return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
+	}
+
+	// 建立 SSH 连接
+	signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
+	if err != nil {
+		return -1, fmt.Errorf("解析私钥失败: %w", err)
+	}
+
+	config := &ssh.ClientConfig{
+		User: user,
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
+	if err != nil {
+		return -1, fmt.Errorf("配置 SSH 主机密钥校验失败: %w", err)
+	}
+	config.HostKeyCallback = hostKeyCallback
+
+	addr := fmt.Sprintf("%s:%d", task.Node.Host, port)
+	client, err := ssh.Dial("tcp", addr, config)
+	if err != nil {
+		return -1, fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
+	}
+	defer session.Close()
+
+	// 构造在远程节点上执行的 rsync 命令
+	// 注意：source 和 target 都是节点本地路径
+	rsyncCmd := fmt.Sprintf("rsync -avz --info=progress2 -- %s %s",
+		shellEscape(task.RsyncSource),
+		shellEscape(task.RsyncTarget))
+
+	logf("info", fmt.Sprintf("在远程节点执行: %s", rsyncCmd))
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return -1, fmt.Errorf("获取 stdout 失败: %w", err)
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		return -1, fmt.Errorf("获取 stderr 失败: %w", err)
+	}
+
+	if err := session.Start(rsyncCmd); err != nil {
+		return -1, fmt.Errorf("启动远程命令失败: %w", err)
+	}
+
+	// 处理输出
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdout)
+		scanner.Split(splitProgressTokens)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line != "" {
+				logf("info", line)
+				if progressf != nil {
+					if sample, ok := parseProgressSample(line); ok {
+						progressf(sample)
+					}
+				}
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line != "" {
+				logf("warn", line)
+			}
+		}
+	}()
+
+	// 等待命令完成
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- session.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGTERM)
+		time.Sleep(2 * time.Second)
+		_ = session.Signal(ssh.SIGKILL)
+		wg.Wait()
+		return -1, fmt.Errorf("恢复操作被取消")
+	case err := <-errChan:
+		wg.Wait()
+		if err != nil {
+			if exitErr, ok := err.(*ssh.ExitError); ok {
+				return exitErr.ExitStatus(), fmt.Errorf("rsync 执行失败: %w", err)
+			}
+			return -1, fmt.Errorf("远程命令执行失败: %w", err)
+		}
+		return 0, nil
+	}
+}
+
+// shellEscape 对 shell 参数进行转义，防止命令注入。
+func shellEscape(s string) string {
+	// 使用单引号包裹，并转义内部的单引号
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func splitProgressTokens(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -443,7 +604,8 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 	defer client.Close()
 
 	// 检查目标路径是否存在，不存在则创建
-	checkCmd := fmt.Sprintf("test -d %s || mkdir -p %s", targetPath, targetPath)
+	quoted := shellEscape(targetPath)
+	checkCmd := fmt.Sprintf("test -d %s || mkdir -p %s", quoted, quoted)
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH 会话失败: %w", err)
@@ -460,7 +622,7 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 		return err
 	}
 	if minFreeGB > 0 {
-		spaceCmd := fmt.Sprintf("df -BG %s | tail -1 | awk '{print $4}' | sed 's/G//'", targetPath)
+		spaceCmd := fmt.Sprintf("df -BG %s | tail -1 | awk '{print $4}' | sed 's/G//'", quoted)
 		session2, err := client.NewSession()
 		if err != nil {
 			return fmt.Errorf("创建 SSH 会话失败: %w", err)

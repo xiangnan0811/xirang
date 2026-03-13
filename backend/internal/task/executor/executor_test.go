@@ -299,6 +299,92 @@ func TestRsyncExecutorEmitsProgressSamplesFromCarriageReturnStream(t *testing.T)
 	}
 }
 
+// TestRsyncExecutorBackupNotMisidentifiedAsRestore 验证普通备份任务（IsRestore=false）
+// 不会被误判为恢复模式。即使 target 路径的父目录在本地不存在，也应走备份路径。
+// 这是回归测试：以前的 os.Stat 启发式会将此场景误判为恢复。
+func TestRsyncExecutorBackupNotMisidentifiedAsRestore(t *testing.T) {
+	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	})
+
+	// target 使用一个本地不存在的路径——以前的 os.Stat 启发式会误判为恢复
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  "/var/data",
+		RsyncTarget:  "/nonexistent/backup/target/that/does/not/exist",
+		Node: model.Node{
+			Host:     "1.2.3.4",
+			Port:     22,
+			Username: "root",
+			AuthType: "key",
+			SSHKey: &model.SSHKey{
+				PrivateKey: string(privateKey),
+			},
+		},
+	}
+
+	var lines []string
+	// 备份模式下 EnsureLocalTargetReady 会尝试创建目录，可能失败，
+	// 但关键断言是不应走远程恢复路径（不应 SSH Dial）
+	_, _ = exec.Run(context.Background(), task, func(_ string, message string) {
+		lines = append(lines, message)
+	}, nil)
+
+	joined := strings.Join(lines, "\n")
+	// 如果走了远程恢复路径，日志中会包含"在远程节点执行"
+	if strings.Contains(joined, "在远程节点执行") {
+		t.Fatalf("普通备份不应走远程恢复路径，日志: %s", joined)
+	}
+}
+
+// TestRsyncExecutorRestoreUsesRemotePath 验证恢复任务（IsRestore=true）走远程恢复路径。
+// 由于没有真实 SSH 服务器，连接会失败，但关键是确认进入了 runRemoteRestore。
+func TestRsyncExecutorRestoreUsesRemotePath(t *testing.T) {
+	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	})
+
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  "/backup/data",
+		RsyncTarget:  "/var/app/data",
+		Node: model.Node{
+			Host:     "127.0.0.1",
+			Port:     1, // 使用端口 1，连接会立即被拒绝
+			Username: "root",
+			AuthType: "key",
+			SSHKey: &model.SSHKey{
+				PrivateKey: string(privateKey),
+			},
+		},
+	}
+
+	_, err = exec.RunRestore(context.Background(), task, func(_ string, _ string) {}, nil)
+	// 恢复模式需要真实 SSH 连接，所以必定失败。
+	// 关键断言：错误来自 SSH 连接（runRemoteRestore），而非本地 rsync 执行
+	if err == nil {
+		t.Fatalf("恢复模式无真实 SSH 应报错")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "SSH") && !strings.Contains(errMsg, "ssh") && !strings.Contains(errMsg, "连接") && !strings.Contains(errMsg, "dial") {
+		t.Fatalf("恢复模式应因 SSH 连接失败而报错，实际: %v", err)
+	}
+}
+
 func TestRsyncExecutorEmitsProgressSamples(t *testing.T) {
 	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-progress.sh")
 	script := "#!/bin/sh\nprintf '1,258,291,200  64%%   12.50MB/s    0:00:12 (xfr#3, to-chk=1/5)\\n'\n"
