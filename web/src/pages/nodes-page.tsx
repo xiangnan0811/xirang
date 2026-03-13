@@ -68,7 +68,7 @@ const selectedStorageKey = "xirang.nodes.selected";
 
 export function NodesPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
   const {
@@ -139,8 +139,14 @@ export function NodesPage() {
   useEffect(() => {
     if (queryKeyword) {
       setKeyword(queryKeyword);
+      // 消费后清除 URL 参数，避免与重置按钮冲突
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("keyword");
+        return next;
+      }, { replace: true });
     }
-  }, [queryKeyword, setKeyword]);
+  }, [queryKeyword, setKeyword, setSearchParams]);
 
   const tags = useMemo(
     () => ["all", ...Array.from(new Set(nodes.flatMap((node) => node.tags)))],

@@ -61,7 +61,12 @@ function parseDateValue(value?: string) {
 export function OverviewPage() {
   const navigate = useNavigate();
   const { token } = useAuth();
-  const { overview, nodes, tasks, loading, refreshVersion, fetchOverviewTraffic } = useOutletContext<ConsoleOutletContext>();
+  const { overview, nodes, tasks, loading, refreshVersion, fetchOverviewTraffic, refreshNodes, refreshTasks } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshNodes();
+    void refreshTasks();
+  }, [refreshNodes, refreshTasks]);
 
   const healthRate = overview.totalNodes > 0
     ? Math.round((overview.healthyNodes / overview.totalNodes) * 100)

@@ -48,6 +48,8 @@ function createNodes(total: number) {
 }
 
 const fetchOverviewTrafficMock = vi.fn();
+const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
+const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
 function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
   const nodes = createNodes(nodeCount);
@@ -94,6 +96,8 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
     sshKeys: [],
     refreshVersion,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
+    refreshNodes: refreshNodesMock,
+    refreshTasks: refreshTasksMock,
     loading: false
   } as unknown as ConsoleOutletContext;
   mockContextRef.current = base;
@@ -102,6 +106,8 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
 describe("OverviewPage", () => {
   beforeEach(() => {
     mockNavigate.mockReset();
+    refreshNodesMock.mockReset().mockResolvedValue(undefined);
+    refreshTasksMock.mockReset().mockResolvedValue(undefined);
     fetchOverviewTrafficMock.mockReset();
     fetchOverviewTrafficMock.mockResolvedValue({
       window: "1h",
@@ -362,6 +368,8 @@ describe("OverviewPage", () => {
       sshKeys: [],
       refreshVersion: 0,
       fetchOverviewTraffic: fetchOverviewTrafficMock,
+      refreshNodes: refreshNodesMock,
+      refreshTasks: refreshTasksMock,
       loading: false,
     } as unknown as ConsoleOutletContext;
 
