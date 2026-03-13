@@ -247,7 +247,16 @@ func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetr
 	}
 	defer session.Close()
 
-	cmd := `cpu=$(top -bn1 2>/dev/null | grep -i "cpu" | head -1 | awk '{for(i=1;i<=NF;i++){if($i~/id,?/){gsub(/[^0-9.]/,"",$i);print 100-$i;exit}}}' 2>/dev/null || echo 0); mem=$(free 2>/dev/null | awk '/^Mem:/{printf "%.1f", $3/$2*100}' || echo 0); disk=$(df / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}' || echo 0); load=$(cat /proc/loadavg 2>/dev/null | awk '{print $1}' || echo 0); echo "$cpu $mem $disk $load"`
+	// CPU: 用 /proc/stat 两次采样（间隔 0.5s）计算实时使用率，兼容所有 Linux 发行版
+	// mem/disk/load 保持原有方式
+	cmd := `s1=$(awk '/^cpu /{for(i=2;i<=NF;i++)t+=$i;print $5,t;exit}' /proc/stat);` +
+		`sleep 0.5;` +
+		`s2=$(awk '/^cpu /{for(i=2;i<=NF;i++)t+=$i;print $5,t;exit}' /proc/stat);` +
+		`cpu=$(echo "$s1 $s2"|awk '{di=$3-$1;dt=$4-$2;if(dt>0)printf "%.1f",100*(1-di/dt);else print 0}');` +
+		`mem=$(free 2>/dev/null|awk '/^Mem:/{printf "%.1f",$3/$2*100}'||echo 0);` +
+		`disk=$(df / 2>/dev/null|awk 'NR==2{gsub(/%/,"",$5);print $5}'||echo 0);` +
+		`load=$(awk '{print $1}' /proc/loadavg 2>/dev/null||echo 0);` +
+		`echo "${cpu:-0} ${mem:-0} ${disk:-0} ${load:-0}"`
 	out, err := session.Output(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("执行指标采集命令失败: %w", err)
