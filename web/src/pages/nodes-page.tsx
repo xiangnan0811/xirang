@@ -46,6 +46,7 @@ import { useAuth } from "@/context/auth-context";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -818,6 +819,9 @@ export function NodesPage() {
             <DialogTitle>
               Web 终端 — {terminalNode?.name ?? ""}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              通过 WebSocket 连接到远程节点的 SSH 终端
+            </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden px-4 pb-4">
             {terminalNode !== null && token !== null && (

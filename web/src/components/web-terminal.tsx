@@ -18,6 +18,9 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
       return;
     }
 
+    // StrictMode 会先 mount→cleanup→re-mount，cleanup 关闭 WS 时不应触发 onDisconnect
+    let active = true;
+
     const terminal = new Terminal({
       cursorBlink: true,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -70,7 +73,9 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
 
     ws.onclose = () => {
       terminal.write("\r\n\x1b[31m连接已断开\x1b[0m\r\n");
-      onDisconnect?.();
+      if (active) {
+        onDisconnect?.();
+      }
     };
 
     ws.onerror = () => {
@@ -109,6 +114,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     window.addEventListener("resize", sendResize);
 
     return () => {
+      active = false;
       window.removeEventListener("resize", sendResize);
       resizeObserver.disconnect();
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
