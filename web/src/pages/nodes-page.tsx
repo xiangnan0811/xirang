@@ -45,6 +45,7 @@ import type { NewNodeInput, NodeRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context";
 import {
   Dialog,
+  DialogCloseButton,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -814,10 +815,15 @@ export function NodesPage() {
         open={terminalNode !== null}
         onOpenChange={(open) => { if (!open) setTerminalNode(null); }}
       >
-        <DialogContent className="max-w-5xl h-[80vh] flex flex-col gap-0 p-0">
+        <DialogContent
+          className="max-w-5xl h-[80vh] flex flex-col gap-0 p-0"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
-            <DialogTitle>
-              Web 终端 — {terminalNode?.name ?? ""}
+            <DialogTitle className="flex items-center justify-between">
+              <span>Web 终端 — {terminalNode?.name ?? ""}</span>
+              <DialogCloseButton />
             </DialogTitle>
             <DialogDescription className="sr-only">
               通过 WebSocket 连接到远程节点的 SSH 终端
@@ -830,7 +836,6 @@ export function NodesPage() {
                   key={terminalKey}
                   nodeId={terminalNode.id}
                   token={token}
-                  onDisconnect={() => setTerminalNode(null)}
                 />
               </Suspense>
             )}

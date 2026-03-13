@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"xirang/backend/internal/auth"
-	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -83,7 +82,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 
 	claims, err := h.jwtManager.ParseToken(authMsg.Token)
-	if err != nil || !middleware.HasPermission(claims.Role, "admin") {
+	if err != nil || claims.Role != "admin" {
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "认证失败或权限不足"))
 		_ = conn.Close()
