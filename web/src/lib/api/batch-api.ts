@@ -4,6 +4,7 @@ interface BatchCreateResponse {
   batch_id: string;
   task_ids: number[];
   run_ids: number[];
+  retain: boolean;
 }
 
 interface BatchStatusResponse {
@@ -24,6 +25,7 @@ export interface BatchResult {
   batchId: string;
   taskIds: number[];
   runIds: number[];
+  retain: boolean;
 }
 
 export interface BatchStatus {
@@ -46,17 +48,19 @@ export function createBatchApi() {
       token: string,
       nodeIds: number[],
       command: string,
-      name?: string
+      name?: string,
+      retain?: boolean
     ): Promise<BatchResult> {
       const payload = await request<BatchCreateResponse>("/batch-commands", {
         method: "POST",
         token,
-        body: { node_ids: nodeIds, command, name },
+        body: { node_ids: nodeIds, command, name, retain: retain ?? false },
       });
       return {
         batchId: payload.batch_id,
         taskIds: payload.task_ids ?? [],
         runIds: payload.run_ids ?? [],
+        retain: payload.retain ?? false,
       };
     },
 
@@ -78,6 +82,13 @@ export function createBatchApi() {
           lastError: t.last_error,
         })),
       };
+    },
+
+    async deleteBatch(token: string, batchId: string): Promise<{ deleted: number }> {
+      return request<{ deleted: number }>(`/batch-commands/${batchId}`, {
+        method: "DELETE",
+        token,
+      });
     },
   };
 }

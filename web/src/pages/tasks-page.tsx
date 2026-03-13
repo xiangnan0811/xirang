@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { Plus, Terminal, RotateCcw, Play } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
+import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { TaskEditorDialog } from "@/components/task-create-dialog";
 import { TaskRunDetail } from "@/components/task-run-detail";
@@ -105,6 +106,8 @@ export function TasksPage() {
   const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchResultId, setBatchResultId] = useState<string | null>(null);
+  const [batchRetain, setBatchRetain] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [batchTriggerDialogOpen, setBatchTriggerDialogOpen] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
@@ -480,13 +483,25 @@ export function TasksPage() {
       </Dialog>
 
       {authToken && (
-        <BatchCommandDialog
-          open={batchDialogOpen}
-          onOpenChange={setBatchDialogOpen}
-          nodes={nodes}
-          token={authToken}
-          onSuccess={(batchId) => toast.success(`批量任务已提交，批次 ID: ${batchId}`)}
-        />
+        <>
+          <BatchCommandDialog
+            open={batchDialogOpen}
+            onOpenChange={setBatchDialogOpen}
+            nodes={nodes}
+            token={authToken}
+            onSuccess={(result) => {
+              setBatchResultId(result.batchId);
+              setBatchRetain(result.retain);
+            }}
+          />
+          <BatchResultDialog
+            open={batchResultId !== null}
+            onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
+            batchId={batchResultId}
+            retain={batchRetain}
+            token={authToken}
+          />
+        </>
       )}
 
       {authToken && historyTask && (

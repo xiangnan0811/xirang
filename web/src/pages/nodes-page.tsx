@@ -7,6 +7,7 @@ import {
   Layers,
   MoreHorizontal,
   ServerCog,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -18,6 +19,8 @@ import {
   parseCSVRows,
   parseDateTime,
 } from "@/pages/nodes-page.utils";
+import { BatchCommandDialog } from "@/components/batch-command-dialog";
+import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { NodeEditorDialog } from "@/components/node-editor-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -118,6 +121,9 @@ export function NodesPage() {
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
+  const [batchCmdOpen, setBatchCmdOpen] = useState(false);
+  const [batchResultId, setBatchResultId] = useState<string | null>(null);
+  const [batchRetain, setBatchRetain] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -642,6 +648,14 @@ export function NodesPage() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   disabled={!selectedNodeIds.length}
+                  onClick={() => setBatchCmdOpen(true)}
+                >
+                  <Terminal className="mr-2 size-3.5" />
+                  批量执行命令 ({selectedNodeIds.length})
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={!selectedNodeIds.length}
                   className="text-destructive focus:text-destructive"
                   onClick={() => void handleBulkDelete()}
                 >
@@ -843,6 +857,29 @@ export function NodesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {token && (
+        <>
+          <BatchCommandDialog
+            open={batchCmdOpen}
+            onOpenChange={setBatchCmdOpen}
+            nodes={nodes}
+            token={token}
+            defaultNodeIds={selectedNodeIds}
+            onSuccess={(result) => {
+              setBatchResultId(result.batchId);
+              setBatchRetain(result.retain);
+            }}
+          />
+          <BatchResultDialog
+            open={batchResultId !== null}
+            onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
+            batchId={batchResultId}
+            retain={batchRetain}
+            token={token}
+          />
+        </>
+      )}
 
       {dialog}
     </div>

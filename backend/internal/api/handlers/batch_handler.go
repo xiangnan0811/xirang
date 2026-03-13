@@ -33,6 +33,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		NodeIDs []uint `json:"node_ids" binding:"required,min=1"`
 		Command string `json:"command" binding:"required"`
 		Name    string `json:"name"`
+		Retain  *bool  `json:"retain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
@@ -98,10 +99,16 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		runIDs = append(runIDs, runID)
 	}
 
+	retain := false
+	if req.Retain != nil {
+		retain = *req.Retain
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"batch_id": batchID,
 		"task_ids": taskIDs,
 		"run_ids":  runIDs,
+		"retain":   retain,
 	})
 }
 
@@ -141,6 +148,47 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		"total":         len(tasks),
 		"status_counts": statusCounts,
 	})
+}
+
+// Delete 删除整个批次的任务及关联记录。
+// DELETE /batch-commands/:batch_id
+func (h *BatchHandler) Delete(c *gin.Context) {
+	batchID := c.Param("batch_id")
+	if batchID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_id 不能为空"})
+		return
+	}
+
+	// 查询该批次下的所有任务 ID
+	var taskIDs []uint
+	if err := h.db.Model(&model.Task{}).Where("batch_id = ?", batchID).Pluck("id", &taskIDs).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if len(taskIDs) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
+		return
+	}
+
+	// 删除关联记录：task_logs, task_runs, task_traffic_samples, alerts
+	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{})
+	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{})
+	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{})
+	h.db.Where("task_id IN ?", taskIDs).Delete(&model.Alert{})
+
+	// 删除任务本身
+	result := h.db.Where("batch_id = ?", batchID).Delete(&model.Task{})
+	if result.Error != nil {
+		respondInternalError(c, result.Error)
+		return
+	}
+
+	// 移除调度器中的定时计划
+	for _, tid := range taskIDs {
+		h.manager.RemoveSchedule(tid)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
 }
 
 // generateBatchID 生成 8 字符的随机批次 ID。

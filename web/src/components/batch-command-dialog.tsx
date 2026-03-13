@@ -4,12 +4,18 @@ import { FormDialog } from "@/components/ui/form-dialog";
 import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
 
+export type BatchCommandResult = {
+  batchId: string;
+  retain: boolean;
+};
+
 type BatchCommandDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   nodes: NodeRecord[];
   token: string;
-  onSuccess?: (batchId: string) => void;
+  defaultNodeIds?: number[];
+  onSuccess?: (result: BatchCommandResult) => void;
 };
 
 const TEMPLATES_KEY = "xirang:batch-cmd-templates";
@@ -34,22 +40,26 @@ export function BatchCommandDialog({
   onOpenChange,
   nodes,
   token,
+  defaultNodeIds,
   onSuccess,
 }: BatchCommandDialogProps) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
+  const [retain, setRetain] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [templates] = useState(loadTemplates);
 
   useEffect(() => {
     if (open) {
-      setSelectedNodeIds([]);
+      setSelectedNodeIds(defaultNodeIds?.length ? defaultNodeIds : []);
       setCommand("");
       setName("");
+      setRetain(false);
       setError("");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const toggleNode = useCallback((nodeId: number) => {
@@ -83,17 +93,18 @@ export function BatchCommandDialog({
         token,
         selectedNodeIds,
         command.trim(),
-        name.trim() || undefined
+        name.trim() || undefined,
+        retain
       );
       saveTemplate(command.trim());
       onOpenChange(false);
-      onSuccess?.(result.batchId);
+      onSuccess?.({ batchId: result.batchId, retain: result.retain });
     } catch (err) {
       setError(err instanceof Error ? err.message : "执行失败");
     } finally {
       setSaving(false);
     }
-  }, [selectedNodeIds, command, name, token, onOpenChange, onSuccess]);
+  }, [selectedNodeIds, command, name, retain, token, onOpenChange, onSuccess]);
 
   return (
     <FormDialog
@@ -187,6 +198,19 @@ export function BatchCommandDialog({
           命令将通过 SSH 在每个节点上执行，最大 4096 字符
         </p>
       </div>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <input
+          type="checkbox"
+          checked={retain}
+          onChange={(e) => setRetain(e.target.checked)}
+          className="size-4 rounded"
+        />
+        <span className="text-sm">保留任务记录</span>
+        <span className="text-xs text-muted-foreground">
+          不勾选则查看结果后自动清理
+        </span>
+      </label>
     </FormDialog>
   );
 }

@@ -168,6 +168,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.POST("/batch-commands", middleware.RBAC("tasks:write"), batchHandler.Create)
 	secured.GET("/batch-commands/:batch_id", middleware.RBAC("tasks:read"), batchHandler.Get)
+	secured.DELETE("/batch-commands/:batch_id", middleware.RBAC("tasks:write"), batchHandler.Delete)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。
