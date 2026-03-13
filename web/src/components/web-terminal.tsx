@@ -18,8 +18,10 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
       return;
     }
 
-    // StrictMode 会先 mount→cleanup→re-mount，cleanup 关闭 WS 时不应触发 onDisconnect
     let active = true;
+    let ws: WebSocket | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let sendResize: (() => void) | null = null;
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -53,71 +55,79 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     terminal.open(containerRef.current);
     fitAddon.fit();
 
-    // 构造 WebSocket URL（自动检测 ws:// vs wss://）
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsURL = `${protocol}//${window.location.host}/api/v1/ws/terminal?node_id=${nodeId}`;
-    const ws = new WebSocket(wsURL);
-    ws.binaryType = "arraybuffer";
+    // 延迟创建 WebSocket，跳过 React StrictMode 的首次 mount→cleanup 循环。
+    // StrictMode 的 cleanup 会同步执行并 clearTimeout，因此首次 mount 不会创建 WS。
+    const timerId = setTimeout(() => {
+      if (!active || !containerRef.current) return;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "auth", token }));
-    };
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsURL = `${protocol}//${window.location.host}/api/v1/ws/terminal?node_id=${nodeId}`;
+      ws = new WebSocket(wsURL);
+      ws.binaryType = "arraybuffer";
 
-    ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        terminal.write(new Uint8Array(event.data));
-      } else if (typeof event.data === "string") {
-        terminal.write(event.data);
+      ws.onopen = () => {
+        ws!.send(JSON.stringify({ type: "auth", token }));
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          terminal.write(new Uint8Array(event.data));
+        } else if (typeof event.data === "string") {
+          terminal.write(event.data);
+        }
+      };
+
+      ws.onclose = () => {
+        terminal.write("\r\n\x1b[31m连接已断开\x1b[0m\r\n");
+        if (active) {
+          onDisconnect?.();
+        }
+      };
+
+      ws.onerror = () => {
+        terminal.write("\r\n\x1b[31mWebSocket 错误，连接失败\x1b[0m\r\n");
+      };
+
+      // 键盘输入 → WebSocket
+      terminal.onData((data) => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      });
+
+      // 窗口大小变化 → 通知后端
+      sendResize = () => {
+        fitAddon.fit();
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "resize",
+              cols: terminal.cols,
+              rows: terminal.rows,
+            })
+          );
+        }
+      };
+
+      resizeObserver = new ResizeObserver(() => {
+        sendResize!();
+      });
+
+      if (containerRef.current) {
+        resizeObserver.observe(containerRef.current);
       }
-    };
 
-    ws.onclose = () => {
-      terminal.write("\r\n\x1b[31m连接已断开\x1b[0m\r\n");
-      if (active) {
-        onDisconnect?.();
-      }
-    };
-
-    ws.onerror = () => {
-      terminal.write("\r\n\x1b[31mWebSocket 错误，连接失败\x1b[0m\r\n");
-    };
-
-    // 键盘输入 → WebSocket
-    terminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
-      }
-    });
-
-    // 窗口大小变化 → 通知后端
-    const sendResize = () => {
-      fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "resize",
-            cols: terminal.cols,
-            rows: terminal.rows,
-          })
-        );
-      }
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-      sendResize();
-    });
-
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current);
-    }
-
-    window.addEventListener("resize", sendResize);
+      window.addEventListener("resize", sendResize);
+    }, 0);
 
     return () => {
       active = false;
-      window.removeEventListener("resize", sendResize);
-      resizeObserver.disconnect();
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      clearTimeout(timerId);
+      if (sendResize) {
+        window.removeEventListener("resize", sendResize);
+      }
+      resizeObserver?.disconnect();
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         ws.close();
       }
       terminal.dispose();
