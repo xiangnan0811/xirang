@@ -206,7 +206,7 @@ type NodeMetricSample struct {
 	CpuPct    float64   `gorm:"not null;default:0" json:"cpu_pct"`
 	MemPct    float64   `gorm:"not null;default:0" json:"mem_pct"`
 	DiskPct   float64   `gorm:"not null;default:0" json:"disk_pct"`
-	Load1m    float64   `gorm:"not null;default:0" json:"load_1m"`
+	Load1m    float64   `gorm:"column:load_1m;not null;default:0" json:"load_1m"`
 	SampledAt time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
