@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,28 +34,40 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const handleOpen = async (isOpen: boolean) => {
-    if (isOpen && step === "setup") {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await apiClient.totpSetup(token);
+  // 对话框打开时获取 TOTP 密钥（useEffect 保证受控模式下也能触发）
+  useEffect(() => {
+    if (!open || step !== "setup" || secret) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    apiClient
+      .totpSetup(token)
+      .then((data) => {
+        if (cancelled) return;
         setSecret(data.secret);
         setQrUrl(data.qr_url);
-      } catch (err) {
-        const msg = err instanceof ApiError
-          ? (err.detail && typeof err.detail === "object"
-              ? ((err.detail as { error?: string }).error ?? "生成密钥失败")
-              : "生成密钥失败")
-          : "生成密钥失败";
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const msg =
+          err instanceof ApiError
+            ? (err.detail && typeof err.detail === "object"
+                ? ((err.detail as { error?: string }).error ?? "生成密钥失败")
+                : "生成密钥失败")
+            : "生成密钥失败";
         setError(msg);
-      } finally {
-        setLoading(false);
-      }
-    }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [open, step, secret, token]);
+
+  const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
       const wasCompleted = step === "recovery";
-      // 关闭时重置状态
       setStep("setup");
       setSecret("");
       setQrUrl("");
@@ -97,7 +109,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpen}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>设置两步验证</DialogTitle>
@@ -207,7 +219,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
             </>
           )}
           {step === "recovery" && (
-            <Button type="button" onClick={() => handleOpen(false)}>
+            <Button type="button" onClick={() => handleClose(false)}>
               完成
             </Button>
           )}
