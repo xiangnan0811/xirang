@@ -170,16 +170,20 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 删除关联记录：task_logs, task_runs, task_traffic_samples, alerts
-	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{})
-	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{})
-	h.db.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{})
-	h.db.Where("task_id IN ?", taskIDs).Delete(&model.Alert{})
+	// 事务删除关联记录及任务本身
+	var deleted int64
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{})
+		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{})
+		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{})
+		tx.Where("task_id IN ?", taskIDs).Delete(&model.Alert{})
 
-	// 删除任务本身
-	result := h.db.Where("batch_id = ?", batchID).Delete(&model.Task{})
-	if result.Error != nil {
-		respondInternalError(c, result.Error)
+		result := tx.Where("batch_id = ?", batchID).Delete(&model.Task{})
+		deleted = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		respondInternalError(c, err)
 		return
 	}
 
@@ -188,7 +192,7 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		h.manager.RemoveSchedule(tid)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
 // generateBatchID 生成 8 字符的随机批次 ID。

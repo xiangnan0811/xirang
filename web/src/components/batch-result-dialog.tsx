@@ -56,7 +56,7 @@ export function BatchResultDialog({
   const [taskLogs, setTaskLogs] = useState<Record<number, LogEvent[]>>({});
   const [loadingLogs, setLoadingLogs] = useState<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const allDoneRef = useRef(false);
+  const taskLogsRef = useRef<Record<number, LogEvent[]>>({});
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
@@ -76,7 +76,6 @@ export function BatchResultDialog({
         (t) => t.status === "running" || t.status === "pending"
       );
       if (!hasActive) {
-        allDoneRef.current = true;
         stopPolling();
       }
     } catch (err) {
@@ -91,7 +90,7 @@ export function BatchResultDialog({
       setError("");
       setExpandedTaskId(null);
       setTaskLogs({});
-      allDoneRef.current = false;
+      taskLogsRef.current = {};
       stopPolling();
       return;
     }
@@ -107,21 +106,21 @@ export function BatchResultDialog({
   // 加载单个任务的日志输出
   const loadTaskLogs = useCallback(
     async (taskId: number) => {
-      if (taskLogs[taskId]) return; // 已加载
+      if (taskLogsRef.current[taskId]) return; // 已加载
       setLoadingLogs(taskId);
       try {
         const logs = await apiClient.getTaskLogs(token, taskId, { limit: 50 });
+        taskLogsRef.current[taskId] = logs;
         setTaskLogs((prev) => ({ ...prev, [taskId]: logs }));
       } catch {
-        setTaskLogs((prev) => ({
-          ...prev,
-          [taskId]: [{ id: "0", level: "error", message: "加载日志失败", timestamp: "" }],
-        }));
+        const fallback: LogEvent[] = [{ id: "0", level: "error", message: "加载日志失败", timestamp: "" }];
+        taskLogsRef.current[taskId] = fallback;
+        setTaskLogs((prev) => ({ ...prev, [taskId]: fallback }));
       } finally {
         setLoadingLogs(null);
       }
     },
-    [token, taskLogs]
+    [token]
   );
 
   const handleToggleExpand = useCallback(
@@ -142,7 +141,7 @@ export function BatchResultDialog({
   // 关闭时清理
   const handleClose = useCallback(
     (nextOpen: boolean) => {
-      if (!nextOpen && batchId && !retain && allDoneRef.current) {
+      if (!nextOpen && batchId && !retain) {
         // 后台清理，不阻塞关闭
         void apiClient.deleteBatch(token, batchId).catch(() => {});
       }
