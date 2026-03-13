@@ -83,7 +83,9 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
       ws.onclose = (event) => {
         const detail = event.reason ? ` (${event.code}: ${event.reason})` : ` (code: ${event.code})`;
         terminal?.write(`\r\n\x1b[31m连接已断开${detail}\x1b[0m\r\n`);
-        if (active) {
+        // 正常关闭(1000)或服务端主动关闭(1001)时自动关闭弹窗（如用户输入 exit）
+        // 异常关闭保留弹窗以便用户查看错误信息
+        if (active && (event.code === 1000 || event.code === 1001)) {
           onDisconnect?.();
         }
       };

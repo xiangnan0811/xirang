@@ -816,7 +816,7 @@ export function NodesPage() {
         onOpenChange={(open) => { if (!open) setTerminalNode(null); }}
       >
         <DialogContent
-          className="max-w-5xl h-[80vh] flex flex-col gap-0 p-0"
+          className="w-full max-w-[95vw] md:max-w-[90vw] h-[85vh] flex flex-col gap-0 p-0 resize overflow-hidden"
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
         >
@@ -836,6 +836,7 @@ export function NodesPage() {
                   key={terminalKey}
                   nodeId={terminalNode.id}
                   token={token}
+                  onDisconnect={() => setTerminalNode(null)}
                 />
               </Suspense>
             )}

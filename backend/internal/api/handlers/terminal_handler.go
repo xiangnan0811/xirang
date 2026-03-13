@@ -238,6 +238,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 			h.mu.Unlock()
 			_ = session.Close()
 			sshClient.Close()
+			// 发送正常关闭帧，让前端收到 code 1000 以便自动关闭弹窗
+			_ = conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			_ = conn.Close()
 
 			// 审计日志：terminal.close
