@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"xirang/backend/internal/secure"
@@ -163,6 +164,7 @@ type Task struct {
 	RsyncSource      string     `gorm:"size:512" json:"rsync_source"`
 	RsyncTarget      string     `gorm:"size:512" json:"rsync_target"`
 	ExecutorType     string     `gorm:"size:32;not null;default:local" json:"executor_type"`
+	ExecutorConfig   string     `gorm:"type:text" json:"executor_config,omitempty"`
 	CronSpec         string     `gorm:"size:128" json:"cron_spec"`
 	Status           string     `gorm:"size:32;not null;index" json:"status"`
 	BatchID          string     `gorm:"size:64;index" json:"batch_id,omitempty"`
@@ -174,6 +176,30 @@ type Task struct {
 	NextRunAt        *time.Time `json:"next_run_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+func (t *Task) BeforeSave(_ *gorm.DB) error {
+	if strings.TrimSpace(t.ExecutorConfig) == "" {
+		return nil
+	}
+	encrypted, err := secure.EncryptIfNeeded(t.ExecutorConfig)
+	if err != nil {
+		return err
+	}
+	t.ExecutorConfig = encrypted
+	return nil
+}
+
+func (t *Task) AfterFind(_ *gorm.DB) error {
+	if strings.TrimSpace(t.ExecutorConfig) == "" {
+		return nil
+	}
+	decrypted, err := secure.DecryptIfNeeded(t.ExecutorConfig)
+	if err != nil {
+		return err
+	}
+	t.ExecutorConfig = decrypted
+	return nil
 }
 
 type TaskRun struct {

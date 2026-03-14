@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os/exec"
@@ -34,6 +35,14 @@ type Result struct {
 func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, logf func(level, msg string), isRestore bool) Result {
 	if task.RsyncSource == "" || task.RsyncTarget == "" {
 		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
+	}
+
+	// restic/rclone 使用内建校验命令
+	switch task.ExecutorType {
+	case "restic":
+		return VerifyRestic(ctx, task, db, logf)
+	case "rclone":
+		return VerifyRclone(ctx, task, db, logf)
 	}
 
 	if isRestore {
@@ -454,6 +463,77 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 	}
 
 	return sampled, mismatched, nil
+}
+
+// VerifyRestic 通过 SSH 在远程节点上执行 restic check 校验仓库完整性。
+func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
+	sshClient, err := dialSSHForTask(ctx, task, db)
+	if err != nil {
+		logf("warn", fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
+		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
+	}
+	defer sshClient.Close()
+
+	repo := task.RsyncTarget // 备份时 RsyncTarget = 仓库路径
+	if repo == "" {
+		return Result{Status: "passed", Message: "无需校验：未配置仓库路径"}
+	}
+
+	// 从 executor_config 中解析密码
+	password := extractResticPassword(task.ExecutorConfig)
+	envPrefix := "RESTIC_PASSWORD=" + shellQuote(password)
+	checkCmd := fmt.Sprintf("%s restic check -r %s 2>&1", envPrefix, shellQuote(repo))
+
+	logf("info", fmt.Sprintf("执行 restic check: %s", repo))
+	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
+	if err != nil {
+		msg := fmt.Sprintf("restic check 失败: %v\n%s", err, strings.TrimSpace(output))
+		logf("warn", msg)
+		return Result{Status: "warning", Message: msg}
+	}
+	logf("info", strings.TrimSpace(output))
+	return Result{Status: "passed", Message: "restic check 通过"}
+}
+
+// VerifyRclone 通过 SSH 在远程节点上执行 rclone check 校验源与目标一致性。
+func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
+	sshClient, err := dialSSHForTask(ctx, task, db)
+	if err != nil {
+		logf("warn", fmt.Sprintf("rclone 校验阶段建立 SSH 连接失败: %v", err))
+		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
+	}
+	defer sshClient.Close()
+
+	source := task.RsyncSource
+	remote := task.RsyncTarget
+	if source == "" || remote == "" {
+		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
+	}
+
+	checkCmd := fmt.Sprintf("rclone check %s %s 2>&1", shellQuote(source), shellQuote(remote))
+	logf("info", fmt.Sprintf("执行 rclone check: %s <-> %s", source, remote))
+	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
+	if err != nil {
+		msg := fmt.Sprintf("rclone check 失败: %v\n%s", err, strings.TrimSpace(output))
+		logf("warn", msg)
+		return Result{Status: "warning", Message: msg}
+	}
+	logf("info", strings.TrimSpace(output))
+	return Result{Status: "passed", Message: "rclone check 通过"}
+}
+
+// extractResticPassword 从 executor_config JSON 中提取 repository_password。
+func extractResticPassword(executorConfig string) string {
+	if strings.TrimSpace(executorConfig) == "" {
+		return ""
+	}
+	var cfg struct {
+		RepositoryPassword string `json:"repository_password"`
+	}
+	if err := json.Unmarshal([]byte(executorConfig), &cfg); err != nil {
+		return ""
+	}
+	return cfg.RepositoryPassword
 }
 
 func shellQuote(s string) string {

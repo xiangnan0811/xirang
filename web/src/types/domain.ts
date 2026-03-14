@@ -11,7 +11,7 @@ export type TaskStatus =
   | "warning"
   | "skipped";
 
-export type TaskExecutorType = "rsync" | "command";
+export type TaskExecutorType = "rsync" | "command" | "restic" | "rclone";
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertStatus = "open" | "acked" | "resolved";
@@ -135,6 +135,7 @@ export interface TaskRecord {
   rsyncSource?: string;
   rsyncTarget?: string;
   executorType?: TaskExecutorType;
+  executorConfig?: string;
   cronSpec?: string;
   updatedAt?: string;
   speedMbps: number;
@@ -147,9 +148,11 @@ export interface NewTaskInput {
   nodeId: number;
   policyId?: number | null;
   dependsOnTaskId?: number | null;
+  command?: string;
   rsyncSource?: string;
   rsyncTarget?: string;
   executorType?: TaskExecutorType;
+  executorConfig?: string;
   cronSpec?: string;
 }
 

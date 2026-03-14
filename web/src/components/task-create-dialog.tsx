@@ -23,6 +23,11 @@ type TaskDraft = {
   rsyncSource: string;
   rsyncTarget: string;
   cronSpec: string;
+  command: string;
+  resticPassword: string;
+  resticExcludePatterns: string;
+  rcloneBandwidthLimit: string;
+  rcloneTransfers: string;
 };
 
 const defaultDraft: TaskDraft = {
@@ -34,9 +39,42 @@ const defaultDraft: TaskDraft = {
   rsyncSource: "",
   rsyncTarget: "",
   cronSpec: "",
+  command: "",
+  resticPassword: "",
+  resticExcludePatterns: "",
+  rcloneBandwidthLimit: "",
+  rcloneTransfers: "",
 };
 
+function parseResticConfig(cfg: string): { password: string; excludePatterns: string } {
+  if (!cfg) return { password: "", excludePatterns: "" };
+  try {
+    const parsed = JSON.parse(cfg) as { repository_password?: string; exclude_patterns?: string[] };
+    return {
+      password: parsed.repository_password ?? "",
+      excludePatterns: (parsed.exclude_patterns ?? []).join("\n"),
+    };
+  } catch {
+    return { password: "", excludePatterns: "" };
+  }
+}
+
+function parseRcloneConfig(cfg: string): { bandwidthLimit: string; transfers: string } {
+  if (!cfg) return { bandwidthLimit: "", transfers: "" };
+  try {
+    const parsed = JSON.parse(cfg) as { bandwidth_limit?: string; transfers?: number };
+    return {
+      bandwidthLimit: parsed.bandwidth_limit ?? "",
+      transfers: parsed.transfers ? String(parsed.transfers) : "",
+    };
+  } catch {
+    return { bandwidthLimit: "", transfers: "" };
+  }
+}
+
 function taskRecordToDraft(task: TaskRecord): TaskDraft {
+  const restic = parseResticConfig(task.executorConfig ?? "");
+  const rclone = parseRcloneConfig(task.executorConfig ?? "");
   return {
     name: task.name ?? task.policyName ?? "",
     nodeId: task.nodeId ? String(task.nodeId) : "",
@@ -46,8 +84,20 @@ function taskRecordToDraft(task: TaskRecord): TaskDraft {
     rsyncSource: task.rsyncSource ?? "",
     rsyncTarget: task.rsyncTarget ?? "",
     cronSpec: task.cronSpec ?? "",
+    command: task.command ?? "",
+    resticPassword: restic.password,
+    resticExcludePatterns: restic.excludePatterns,
+    rcloneBandwidthLimit: rclone.bandwidthLimit,
+    rcloneTransfers: rclone.transfers,
   };
 }
+
+const EXECUTOR_LABELS: Record<TaskExecutorType, string> = {
+  rsync: "Rsync（文件同步）",
+  command: "命令（SSH 执行）",
+  restic: "Restic（加密备份）",
+  rclone: "Rclone（云存储同步）",
+};
 
 function toNumberOrNull(value: string): number | null {
   const parsed = Number(value);
@@ -98,14 +148,35 @@ export function TaskEditorDialog({
     }
 
     const dependsOnTaskId = toNumberOrNull(draft.dependsOnTaskId);
+
+    let executorConfig: string | undefined;
+    if (draft.executorType === "restic") {
+      const excludePatterns = draft.resticExcludePatterns
+        .split("\n")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      executorConfig = JSON.stringify({
+        repository_password: draft.resticPassword.trim(),
+        exclude_patterns: excludePatterns,
+      });
+    } else if (draft.executorType === "rclone") {
+      const transfers = toNumberOrNull(draft.rcloneTransfers);
+      executorConfig = JSON.stringify({
+        bandwidth_limit: draft.rcloneBandwidthLimit.trim() || undefined,
+        transfers: transfers ?? undefined,
+      });
+    }
+
     const input: NewTaskInput = {
       name: draft.name.trim(),
       nodeId,
       policyId: toNumberOrNull(draft.policyId),
       dependsOnTaskId: dependsOnTaskId,
       executorType: draft.executorType,
-      rsyncSource: draft.rsyncSource.trim() || undefined,
-      rsyncTarget: draft.rsyncTarget.trim() || undefined,
+      command: draft.executorType === "command" ? draft.command.trim() || undefined : undefined,
+      rsyncSource: draft.executorType !== "command" ? draft.rsyncSource.trim() || undefined : undefined,
+      rsyncTarget: draft.executorType !== "command" ? draft.rsyncTarget.trim() || undefined : undefined,
+      executorConfig,
       // 有前置任务时忽略 cronSpec（后端也会校验）
       cronSpec: dependsOnTaskId ? undefined : draft.cronSpec.trim() || undefined,
     };
@@ -208,23 +279,20 @@ export function TaskEditorDialog({
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <div className="mb-1 text-sm font-medium">
-            执行器类型
-          </div>
-          <div className="glass-panel flex h-10 items-center px-3 text-sm text-muted-foreground">
-            Rsync 执行器
-          </div>
-        </div>
-        <div>
-          <div className="mb-1 text-sm font-medium">
-            调度方式
-          </div>
-          <div className="glass-panel flex h-10 items-center px-3 text-sm text-muted-foreground">
-            {draft.cronSpec ? "定时调度" : "手动触发"}
-          </div>
-        </div>
+      <div>
+        <label htmlFor="task-editor-executor-type" className="mb-1 block text-sm font-medium">执行器类型</label>
+        <AppSelect
+          id="task-editor-executor-type"
+          containerClassName="w-full"
+          value={draft.executorType}
+          onChange={(event) =>
+            setDraft((prev) => ({ ...prev, executorType: event.target.value as TaskExecutorType }))
+          }
+        >
+          {(Object.keys(EXECUTOR_LABELS) as TaskExecutorType[]).map((type) => (
+            <option key={type} value={type}>{EXECUTOR_LABELS[type]}</option>
+          ))}
+        </AppSelect>
       </div>
 
       <div>
@@ -244,40 +312,130 @@ export function TaskEditorDialog({
         </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      {draft.executorType === "command" && (
         <div>
-          <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
-            Rsync 源路径（可选）
+          <label htmlFor="task-editor-command" className="mb-1 block text-sm font-medium">
+            Shell 命令（可选）
           </label>
           <Input
-            id="task-editor-rsync-source"
-            placeholder="/data/source"
-            value={draft.rsyncSource}
+            id="task-editor-command"
+            placeholder="例如：/opt/scripts/backup.sh"
+            value={draft.command}
             onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                rsyncSource: event.target.value,
-              }))
+              setDraft((prev) => ({ ...prev, command: event.target.value }))
             }
           />
+          <p className="mt-1 text-xs text-muted-foreground">
+            在目标节点上通过 SSH 执行的 Shell 命令。
+          </p>
         </div>
-        <div>
-          <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
-            Rsync 目标路径（可选）
-          </label>
-          <Input
-            id="task-editor-rsync-target"
-            placeholder="/backup/target"
-            value={draft.rsyncTarget}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                rsyncTarget: event.target.value,
-              }))
-            }
-          />
+      )}
+
+      {(draft.executorType === "rsync" || draft.executorType === "restic" || draft.executorType === "rclone") && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
+              {draft.executorType === "rsync" ? "Rsync 源路径（可选）" : "源路径（可选）"}
+            </label>
+            <Input
+              id="task-editor-rsync-source"
+              placeholder="/data/source"
+              value={draft.rsyncSource}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, rsyncSource: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
+              {draft.executorType === "rsync" && "Rsync 目标路径（可选）"}
+              {draft.executorType === "restic" && "Restic 仓库路径（可选）"}
+              {draft.executorType === "rclone" && "Rclone 远端路径（可选）"}
+            </label>
+            <Input
+              id="task-editor-rsync-target"
+              placeholder={
+                draft.executorType === "restic"
+                  ? "/backup/restic-repo"
+                  : draft.executorType === "rclone"
+                  ? "s3:my-bucket/backups"
+                  : "/backup/target"
+              }
+              value={draft.rsyncTarget}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, rsyncTarget: event.target.value }))
+              }
+            />
+          </div>
         </div>
-      </div>
+      )}
+
+      {draft.executorType === "restic" && (
+        <>
+          <div>
+            <label htmlFor="task-editor-restic-password" className="mb-1 block text-sm font-medium">
+              仓库密码
+            </label>
+            <Input
+              id="task-editor-restic-password"
+              type="password"
+              placeholder="Restic 仓库加密密码"
+              value={draft.resticPassword}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, resticPassword: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="task-editor-restic-excludes" className="mb-1 block text-sm font-medium">
+              排除规则（可选，每行一条）
+            </label>
+            <textarea
+              id="task-editor-restic-excludes"
+              className="glass-panel w-full min-h-[72px] resize-none rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              placeholder={"*.log\n/tmp\n/proc"}
+              value={draft.resticExcludePatterns}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, resticExcludePatterns: event.target.value }))
+              }
+            />
+          </div>
+        </>
+      )}
+
+      {draft.executorType === "rclone" && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label htmlFor="task-editor-rclone-bwlimit" className="mb-1 block text-sm font-medium">
+              带宽限制（可选）
+            </label>
+            <Input
+              id="task-editor-rclone-bwlimit"
+              placeholder="例如：10M"
+              value={draft.rcloneBandwidthLimit}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, rcloneBandwidthLimit: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="task-editor-rclone-transfers" className="mb-1 block text-sm font-medium">
+              并发传输数（可选）
+            </label>
+            <Input
+              id="task-editor-rclone-transfers"
+              type="number"
+              min={1}
+              max={32}
+              placeholder="默认 4"
+              value={draft.rcloneTransfers}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, rcloneTransfers: event.target.value }))
+              }
+            />
+          </div>
+        </div>
+      )}
     </FormDialog>
   );
 }
