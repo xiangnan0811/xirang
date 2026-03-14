@@ -17,6 +17,7 @@ type User struct {
 	TOTPSecret    string    `gorm:"size:255" json:"-"`
 	TOTPEnabled   bool      `json:"totp_enabled"`
 	RecoveryCodes string    `gorm:"type:text" json:"-"`
+	Onboarded     bool      `gorm:"not null;default:false" json:"onboarded"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -265,6 +266,47 @@ type NodeMetricSample struct {
 	Load1m    float64   `gorm:"column:load_1m;not null;default:0" json:"load_1m"`
 	SampledAt time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// NodeOwner 节点 ownership 关联表（operator 只能访问自己负责的节点）
+type NodeOwner struct {
+	NodeID    uint      `gorm:"primaryKey" json:"node_id"`
+	UserID    uint      `gorm:"primaryKey" json:"user_id"`
+	User      User      `gorm:"foreignKey:UserID" json:"user"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ReportConfig SLA 报告配置
+type ReportConfig struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Name           string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	ScopeType      string    `gorm:"size:32;not null;default:all" json:"scope_type"` // all | tag | node_ids
+	ScopeValue     string    `gorm:"type:text;not null;default:''" json:"scope_value"`
+	Period         string    `gorm:"size:32;not null;default:weekly" json:"period"` // weekly | monthly
+	Cron           string    `gorm:"size:128;not null" json:"cron"`
+	IntegrationIDs string    `gorm:"type:text;not null;default:'[]'" json:"integration_ids"` // JSON array
+	Enabled        bool      `gorm:"not null;default:true" json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// Report 已生成的 SLA 报告
+type Report struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	ConfigID      uint      `gorm:"not null;index" json:"config_id"`
+	Config        *ReportConfig `gorm:"foreignKey:ConfigID" json:"config"`
+	PeriodStart   time.Time `gorm:"not null;index" json:"period_start"`
+	PeriodEnd     time.Time `gorm:"not null" json:"period_end"`
+	TotalRuns     int       `gorm:"not null;default:0" json:"total_runs"`
+	SuccessRuns   int       `gorm:"not null;default:0" json:"success_runs"`
+	FailedRuns    int       `gorm:"not null;default:0" json:"failed_runs"`
+	SuccessRate   float64   `gorm:"not null;default:0" json:"success_rate"`
+	AvgDurationMs int64     `gorm:"not null;default:0" json:"avg_duration_ms"`
+	TopFailures   string    `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
+	DiskTrend     string    `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
+	GeneratedAt   time.Time `gorm:"not null" json:"generated_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (s *SSHKey) BeforeSave(_ *gorm.DB) error {

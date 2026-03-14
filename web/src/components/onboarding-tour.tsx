@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useAuth } from "@/context/auth-context";
+import { request } from "@/lib/api/core";
 import { CheckCircle2, ChevronRight, ChevronLeft, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +24,7 @@ interface OnboardingStep {
 }
 
 export function OnboardingTour() {
+  const { token } = useAuth();
   const steps: OnboardingStep[] = [
     {
       id: "welcome",
@@ -117,20 +120,27 @@ export function OnboardingTour() {
     }
   };
 
+  const markOnboardedInBackend = () => {
+    void request("/me/onboarded", { method: "POST", token: token ?? undefined }).catch(() => { /* best-effort */ });
+  };
+
   const handleFinish = () => {
     setTourState({ ...tourState, completed: true, dismissed: true });
     setShowDialog(false);
+    markOnboardedInBackend();
   };
 
   const handleNeverShowAgain = () => {
     setTourState({ ...tourState, completed: true, dismissed: true });
     setShowDialog(false);
+    markOnboardedInBackend();
   };
 
   const handleDialogClose = (open: boolean) => {
     if (!open) {
       // 用户主动关闭视作跳过
       setTourState({ ...tourState, dismissed: true });
+      markOnboardedInBackend();
     }
     setShowDialog(open);
   };

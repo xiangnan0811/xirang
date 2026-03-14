@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 import { OnboardingTour } from "./onboarding-tour";
+
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({ token: "test-token" }),
+}));
+
+vi.mock("@/lib/api/core", () => ({
+  request: vi.fn().mockResolvedValue({}),
+}));
 
 describe("OnboardingTour", () => {
   beforeEach(() => {

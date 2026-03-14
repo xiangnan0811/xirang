@@ -15,6 +15,7 @@ import (
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/probe"
+	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -59,6 +60,9 @@ func main() {
 
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency)
 	prober.Start(hubCtx)
+
+	reportScheduler := reporting.NewScheduler(hubCtx, db)
+	reportScheduler.Start()
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	authService := auth.NewService(db, jwtManager, auth.LoginSecurityConfig{
