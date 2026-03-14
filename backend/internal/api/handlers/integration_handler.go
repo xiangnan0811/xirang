@@ -28,12 +28,47 @@ func NewIntegrationHandler(db *gorm.DB) *IntegrationHandler {
 }
 
 type integrationRequest struct {
-	Type            string `json:"type" binding:"required"`
-	Name            string `json:"name" binding:"required"`
-	Endpoint        string `json:"endpoint" binding:"required"`
-	Enabled         *bool  `json:"enabled"`
-	FailThreshold   int    `json:"fail_threshold"`
-	CooldownMinutes int    `json:"cooldown_minutes"`
+	Type             string `json:"type" binding:"required"`
+	Name             string `json:"name" binding:"required"`
+	Endpoint         string `json:"endpoint" binding:"required"`
+	Enabled          *bool  `json:"enabled"`
+	FailThreshold    int    `json:"fail_threshold"`
+	CooldownMinutes  int    `json:"cooldown_minutes"`
+	Secret           string `json:"secret"`
+	SkipEndpointHint bool   `json:"skip_endpoint_hint"`
+}
+
+var knownIntegrationTypes = map[string]bool{
+	"webhook": true, "slack": true, "telegram": true, "email": true,
+	"feishu": true, "dingtalk": true, "wecom": true,
+}
+
+// channelDomainHints 各通道的预期域名提示
+var channelDomainHints = map[string]string{
+	"feishu":   "open.feishu.cn",
+	"dingtalk": "oapi.dingtalk.com",
+	"wecom":    "qyapi.weixin.qq.com",
+	"slack":    "hooks.slack.com",
+}
+
+// checkChannelDomainHint 返回域名建议提示（非强制），仅对 URL 类型渠道有效
+func checkChannelDomainHint(channelType, endpoint string) string {
+	expected, ok := channelDomainHints[channelType]
+	if !ok {
+		return ""
+	}
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return ""
+	}
+	if host != expected && !strings.HasSuffix(host, "."+expected) {
+		return fmt.Sprintf("%s 通道通常使用 %s，当前地址 %s 不在此域名下，请确认地址是否正确", channelType, expected, host)
+	}
+	return ""
 }
 
 type integrationTestResponse struct {
@@ -44,7 +79,7 @@ type integrationTestResponse struct {
 
 func validateIntegrationEndpoint(channelType, endpoint string) error {
 	normalizedType := strings.ToLower(strings.TrimSpace(channelType))
-	if normalizedType != "webhook" && normalizedType != "slack" && normalizedType != "telegram" {
+	if normalizedType == "email" {
 		return nil
 	}
 
@@ -179,13 +214,26 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	req.Type = strings.TrimSpace(strings.ToLower(req.Type))
 	req.Name = strings.TrimSpace(req.Name)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
+	req.Secret = strings.TrimSpace(req.Secret)
 	if req.Type == "" || req.Name == "" || req.Endpoint == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+	if !knownIntegrationTypes[req.Type] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的通知通道类型"})
 		return
 	}
 	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
+	if !req.SkipEndpointHint {
+		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
+			c.JSON(http.StatusOK, gin.H{"hint": hint, "created": false})
+			return
+		}
 	}
 
 	enabled := true
@@ -203,6 +251,7 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 		Type:            req.Type,
 		Name:            req.Name,
 		Endpoint:        req.Endpoint,
+		Secret:          req.Secret,
 		Enabled:         enabled,
 		FailThreshold:   req.FailThreshold,
 		CooldownMinutes: req.CooldownMinutes,
@@ -212,6 +261,7 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	item.HasSecret = req.Secret != ""
 	maskIntegrationEndpoint(&item)
 	c.JSON(http.StatusCreated, gin.H{"data": item})
 }
@@ -230,8 +280,13 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	req.Type = strings.TrimSpace(strings.ToLower(req.Type))
 	req.Name = strings.TrimSpace(req.Name)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
+	req.Secret = strings.TrimSpace(req.Secret)
 	if req.Type == "" || req.Name == "" || req.Endpoint == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+	if !knownIntegrationTypes[req.Type] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的通知通道类型"})
 		return
 	}
 	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
@@ -251,6 +306,9 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		req.CooldownMinutes = item.CooldownMinutes
 	}
 
+	// 记录更新前是否有 secret（AfterFind 已解密）
+	hadSecret := item.Secret != ""
+
 	item.Type = req.Type
 	item.Name = req.Name
 	item.Endpoint = req.Endpoint
@@ -259,12 +317,16 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	}
 	item.FailThreshold = req.FailThreshold
 	item.CooldownMinutes = req.CooldownMinutes
+	if req.Secret != "" {
+		item.Secret = req.Secret
+	}
 
 	if err := h.db.Save(&item).Error; err != nil {
 		log.Printf("更新通知通道失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
+	item.HasSecret = hadSecret || req.Secret != ""
 	maskIntegrationEndpoint(&item)
 	c.JSON(http.StatusOK, gin.H{"data": item})
 }

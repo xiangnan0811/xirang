@@ -91,11 +91,37 @@ type Integration struct {
 	Type            string    `gorm:"size:32;not null" json:"type"`
 	Name            string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
 	Endpoint        string    `gorm:"size:1024;not null" json:"endpoint"`
+	Secret          string    `gorm:"size:512" json:"-"`
+	HasSecret       bool      `gorm:"-" json:"has_secret"`
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
 	FailThreshold   int       `gorm:"not null;default:1" json:"fail_threshold"`
 	CooldownMinutes int       `gorm:"not null;default:5" json:"cooldown_minutes"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (i *Integration) BeforeSave(_ *gorm.DB) error {
+	if i.Secret == "" {
+		return nil
+	}
+	encrypted, err := secure.EncryptIfNeeded(i.Secret)
+	if err != nil {
+		return err
+	}
+	i.Secret = encrypted
+	return nil
+}
+
+func (i *Integration) AfterFind(_ *gorm.DB) error {
+	if i.Secret != "" {
+		decrypted, err := secure.DecryptIfNeeded(i.Secret)
+		if err != nil {
+			return err
+		}
+		i.Secret = decrypted
+	}
+	i.HasSecret = i.Secret != ""
+	return nil
 }
 
 type Alert struct {

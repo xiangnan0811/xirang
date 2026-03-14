@@ -103,6 +103,7 @@ export function buildDemoIntegration(input: NewIntegrationInput): IntegrationCha
     type: input.type,
     name: input.name,
     endpoint: input.endpoint,
+    hasSecret: Boolean(input.secret),
     enabled: input.enabled,
     failThreshold: Math.max(1, input.failThreshold),
     cooldownMinutes: Math.max(1, input.cooldownMinutes)
