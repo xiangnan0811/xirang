@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Mail, MessageSquare, Send, Webhook } from "lucide-react";
+import { AlertTriangle, Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { AppSelect } from "@/components/ui/app-select";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
+import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
 
 type IntegrationGuide = {
@@ -43,6 +44,24 @@ const integrationGuideMap: Record<IntegrationType, IntegrationGuide> = {
     endpointHint: "支持任意 HTTP/HTTPS 接收端点。",
     sample: "https://example.com/hooks/xirang",
   },
+  feishu: {
+    endpointLabel: "飞书 Webhook URL",
+    endpointPlaceholder: "https://open.feishu.cn/open-apis/bot/v2/hook/...",
+    endpointHint: "在飞书群自定义机器人中复制 Webhook 地址。如启用签名校验，请同时填写签名密钥。",
+    sample: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx",
+  },
+  dingtalk: {
+    endpointLabel: "钉钉 Webhook URL",
+    endpointPlaceholder: "https://oapi.dingtalk.com/robot/send?access_token=...",
+    endpointHint: "在钉钉自定义机器人中复制 Webhook 地址。如启用加签安全设置，请同时填写签名密钥。",
+    sample: "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",
+  },
+  wecom: {
+    endpointLabel: "企业微信机器人 Webhook URL",
+    endpointPlaceholder: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+    endpointHint: "在企业微信群机器人中复制 Webhook 地址。",
+    sample: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx",
+  },
 };
 
 const typeIconMap: Record<IntegrationType, typeof Mail> = {
@@ -50,7 +69,13 @@ const typeIconMap: Record<IntegrationType, typeof Mail> = {
   slack: MessageSquare,
   telegram: Send,
   webhook: Webhook,
+  feishu: MessageSquare,
+  dingtalk: Bell,
+  wecom: Building2,
 };
+
+// 需要签名密钥的通道类型
+const SECRET_TYPES: ReadonlySet<IntegrationType> = new Set(["feishu", "dingtalk"]);
 
 const defaultDraft: NewIntegrationInput = {
   type: "email",
@@ -69,11 +94,12 @@ function toBoundedInt(value: string, fallback: number, min: number, max: number)
   return Math.min(max, Math.max(min, parsed));
 }
 
+const KNOWN_TYPES: ReadonlySet<string> = new Set<IntegrationType>([
+  "email", "slack", "telegram", "webhook", "feishu", "dingtalk", "wecom",
+]);
+
 function toIntegrationType(value: string): IntegrationType {
-  if (value === "slack" || value === "telegram" || value === "webhook") {
-    return value;
-  }
-  return "email";
+  return KNOWN_TYPES.has(value) ? (value as IntegrationType) : "email";
 }
 
 function isValidURL(value: string) {
@@ -128,11 +154,13 @@ export function IntegrationCreateDialog({
 }: IntegrationCreateDialogProps) {
   const [draft, setDraft] = useDialogDraft<NewIntegrationInput>(open, defaultDraft);
   const [saving, setSaving] = useState(false);
+  const [pendingHint, setPendingHint] = useState<string | null>(null);
 
   const guide = integrationGuideMap[draft.type];
   const TypeIcon = typeIconMap[draft.type];
+  const showSecretField = SECRET_TYPES.has(draft.type);
 
-  const handleSave = async () => {
+  const handleSave = async (skipHint = false) => {
     if (!draft.name.trim()) {
       toast.error("新增失败：请填写通道名称。");
       return;
@@ -150,11 +178,18 @@ export function IntegrationCreateDialog({
         ...draft,
         name: draft.name.trim(),
         endpoint: draft.endpoint.trim(),
+        secret: draft.secret?.trim() || undefined,
         failThreshold: toBoundedInt(String(draft.failThreshold), 2, 1, 10),
         cooldownMinutes: toBoundedInt(String(draft.cooldownMinutes), 5, 1, 120),
+        skipEndpointHint: skipHint,
       });
+      setPendingHint(null);
     } catch (error) {
-      toast.error(getErrorMessage(error, "新增失败，请稍后重试。"));
+      if (error instanceof EndpointHintWarning) {
+        setPendingHint(error.hint);
+      } else {
+        toast.error(getErrorMessage(error, "新增失败，请稍后重试。"));
+      }
     } finally {
       setSaving(false);
     }
@@ -166,9 +201,9 @@ export function IntegrationCreateDialog({
       onOpenChange={onOpenChange}
       icon={<TypeIcon className="size-5 text-primary" />}
       title="新增通知方式"
-      description="配置告警通知通道，支持邮件、Slack、Telegram 及自定义 Webhook。"
+      description="配置告警通知通道，支持邮件、Slack、Telegram、飞书、钉钉、企业微信及自定义 Webhook。"
       saving={saving}
-      onSubmit={handleSave}
+      onSubmit={() => handleSave(false)}
       submitLabel="保存通道"
     >
       <div className="grid gap-3 md:grid-cols-2">
@@ -184,6 +219,7 @@ export function IntegrationCreateDialog({
               setDraft((prev) => ({
                 ...prev,
                 type: toIntegrationType(event.target.value),
+                secret: "",
               }))
             }
           >
@@ -191,6 +227,9 @@ export function IntegrationCreateDialog({
             <option value="slack">Slack</option>
             <option value="telegram">Telegram</option>
             <option value="webhook">Webhook</option>
+            <option value="feishu">飞书</option>
+            <option value="dingtalk">钉钉</option>
+            <option value="wecom">企业微信</option>
           </AppSelect>
         </div>
 
@@ -229,6 +268,26 @@ export function IntegrationCreateDialog({
         </p>
       </div>
 
+      {showSecretField && (
+        <div>
+          <label htmlFor="create-integration-secret" className="mb-1 block text-sm font-medium">
+            签名密钥（可选）
+          </label>
+          <Input
+            id="create-integration-secret"
+            type="password"
+            placeholder="填写机器人安全设置中的签名密钥"
+            value={draft.secret ?? ""}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, secret: event.target.value }))
+            }
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            仅在机器人启用了加签安全设置时填写，留空则不使用签名。
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
         <span>可直接套用示例地址后再修改。</span>
         <Button
@@ -241,6 +300,31 @@ export function IntegrationCreateDialog({
           套用示例
         </Button>
       </div>
+
+      {pendingHint && (
+        <div className="flex flex-col gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 dark:border-yellow-800 dark:bg-yellow-950">
+          <div className="flex items-start gap-2 text-sm text-yellow-800 dark:text-yellow-200">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <span>{pendingHint}</span>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPendingHint(null)}
+            >
+              重新检查
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handleSave(true)}
+              disabled={saving}
+            >
+              确认保存
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>

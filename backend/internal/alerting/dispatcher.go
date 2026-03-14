@@ -272,22 +272,11 @@ func send(channel model.Integration, alert model.Alert) error {
 		Triggered:  alert.TriggeredAt,
 	}
 
-	switch strings.ToLower(strings.TrimSpace(channel.Type)) {
-	case "webhook":
-		return postJSON(channel.Endpoint, body)
-	case "slack":
-		return postJSON(channel.Endpoint, map[string]string{
-			"text": fmt.Sprintf("[XiRang][%s] %s (%s)", strings.ToUpper(alert.Severity), alert.Message, alert.ErrorCode),
-		})
-	case "telegram":
-		return postTelegram(channel.Endpoint, fmt.Sprintf("[XiRang][%s]\n节点: %s\n错误: %s\n说明: %s", strings.ToUpper(alert.Severity), alert.NodeName, alert.ErrorCode, alert.Message))
-	case "email":
-		subject := fmt.Sprintf("[XiRang][%s] %s", strings.ToUpper(alert.Severity), alert.ErrorCode)
-		content := fmt.Sprintf("节点: %s\n策略: %s\n错误码: %s\n详情: %s\n时间: %s\n", alert.NodeName, alert.PolicyName, alert.ErrorCode, alert.Message, alert.TriggeredAt.Format(time.RFC3339))
-		return sendEmail(channel.Endpoint, subject, content)
-	default:
+	s, ok := senderRegistry[strings.ToLower(strings.TrimSpace(channel.Type))]
+	if !ok {
 		return fmt.Errorf("不支持的通知通道类型: %s", channel.Type)
 	}
+	return s.Send(channel.Endpoint, channel.Secret, body)
 }
 
 func SendProbe(channel model.Integration) error {

@@ -14,7 +14,7 @@ export type TaskExecutorType = "rsync" | "command";
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertStatus = "open" | "acked" | "resolved";
-export type IntegrationType = "email" | "slack" | "telegram" | "webhook";
+export type IntegrationType = "email" | "slack" | "telegram" | "webhook" | "feishu" | "dingtalk" | "wecom";
 export type SSHKeyType = "auto" | "rsa" | "ed25519" | "ecdsa";
 
 const SSH_KEY_TYPES: ReadonlySet<string> = new Set<SSHKeyType>(["rsa", "ed25519", "ecdsa"]);
@@ -248,6 +248,7 @@ export interface IntegrationChannel {
   type: IntegrationType;
   name: string;
   endpoint: string;
+  hasSecret: boolean;
   enabled: boolean;
   failThreshold: number;
   cooldownMinutes: number;
@@ -260,6 +261,8 @@ export interface NewIntegrationInput {
   failThreshold: number;
   cooldownMinutes: number;
   enabled: boolean;
+  secret?: string;
+  skipEndpointHint?: boolean;
 }
 
 export interface SSHKeyRecord {

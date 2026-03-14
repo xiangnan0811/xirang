@@ -6,9 +6,15 @@ type IntegrationResponse = {
   type: IntegrationChannel["type"];
   name: string;
   endpoint: string;
+  has_secret: boolean;
   enabled: boolean;
   fail_threshold: number;
   cooldown_minutes: number;
+};
+
+type IntegrationHintResponse = {
+  hint: string;
+  created: false;
 };
 
 type IntegrationTestResponse = {
@@ -17,12 +23,23 @@ type IntegrationTestResponse = {
   latency_ms?: number;
 };
 
+/** 服务端返回域名建议提示时抛出，前端可捕获后弹出确认框 */
+export class EndpointHintWarning extends Error {
+  hint: string;
+  constructor(hint: string) {
+    super(hint);
+    this.name = "EndpointHintWarning";
+    this.hint = hint;
+  }
+}
+
 function mapIntegration(row: IntegrationResponse): IntegrationChannel {
   return {
     id: `int-${row.id}`,
     type: row.type,
     name: row.name,
     endpoint: row.endpoint,
+    hasSecret: Boolean(row.has_secret),
     enabled: row.enabled,
     failThreshold: row.fail_threshold,
     cooldownMinutes: row.cooldown_minutes
@@ -38,7 +55,7 @@ export function createIntegrationsApi() {
     },
 
     async createIntegration(token: string, input: NewIntegrationInput): Promise<IntegrationChannel> {
-      const payload = await request<Envelope<IntegrationResponse>>("/integrations", {
+      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>("/integrations", {
         method: "POST",
         token,
         body: {
@@ -47,10 +64,16 @@ export function createIntegrationsApi() {
           endpoint: input.endpoint,
           enabled: input.enabled,
           fail_threshold: input.failThreshold,
-          cooldown_minutes: input.cooldownMinutes
+          cooldown_minutes: input.cooldownMinutes,
+          secret: input.secret || undefined,
+          skip_endpoint_hint: input.skipEndpointHint ?? false
         }
       });
-      return mapIntegration(unwrapData(payload));
+      // 域名建议提示（200 + created:false）
+      if (raw && typeof raw === "object" && "created" in raw && raw.created === false) {
+        throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
+      }
+      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
     },
 
     async updateIntegration(
