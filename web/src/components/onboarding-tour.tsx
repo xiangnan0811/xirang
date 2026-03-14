@@ -104,34 +104,33 @@ export function OnboardingTour() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showDialog, isWelcome, isLastStep, tourState.currentStepIndex]);
 
+  const markOnboardedInBackend = () => {
+    void request("/me/onboarded", { method: "POST", token: token ?? undefined }).catch(() => { /* best-effort */ });
+  };
+
+  const handleFinish = () => {
+    setTourState((prev) => ({ ...prev, completed: true, dismissed: true }));
+    setShowDialog(false);
+    markOnboardedInBackend();
+  };
+
   const handleNext = () => {
-    if (tourState.currentStepIndex < steps.length - 1) {
-      setTourState({ ...tourState, currentStepIndex: tourState.currentStepIndex + 1 });
+    if (!isLastStep) {
+      setTourState((prev) => ({ ...prev, currentStepIndex: prev.currentStepIndex + 1 }));
     } else {
       handleFinish();
     }
   };
 
   const handlePrevious = () => {
-    if (tourState.currentStepIndex > 1) {
-      setTourState({ ...tourState, currentStepIndex: tourState.currentStepIndex - 1 });
-    } else if (tourState.currentStepIndex === 1) {
-      setTourState({ ...tourState, currentStepIndex: 0 }); // 回到欢迎页
-    }
-  };
-
-  const markOnboardedInBackend = () => {
-    void request("/me/onboarded", { method: "POST", token: token ?? undefined }).catch(() => { /* best-effort */ });
-  };
-
-  const handleFinish = () => {
-    setTourState({ ...tourState, completed: true, dismissed: true });
-    setShowDialog(false);
-    markOnboardedInBackend();
+    setTourState((prev) => ({
+      ...prev,
+      currentStepIndex: Math.max(0, prev.currentStepIndex - 1),
+    }));
   };
 
   const handleNeverShowAgain = () => {
-    setTourState({ ...tourState, completed: true, dismissed: true });
+    setTourState((prev) => ({ ...prev, completed: true, dismissed: true }));
     setShowDialog(false);
     markOnboardedInBackend();
   };
@@ -139,7 +138,7 @@ export function OnboardingTour() {
   const handleDialogClose = (open: boolean) => {
     if (!open) {
       // 用户主动关闭视作跳过
-      setTourState({ ...tourState, dismissed: true });
+      setTourState((prev) => ({ ...prev, dismissed: true }));
       markOnboardedInBackend();
     }
     setShowDialog(open);
@@ -147,7 +146,7 @@ export function OnboardingTour() {
 
   const handleStepClick = (stepIndex: number) => {
     if (stepIndex > 0 && stepIndex <= steps.length - 1) {
-      setTourState({ ...tourState, currentStepIndex: stepIndex });
+      setTourState((prev) => ({ ...prev, currentStepIndex: stepIndex }));
     }
   };
 

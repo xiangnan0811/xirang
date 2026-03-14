@@ -68,8 +68,12 @@ function mapVerifyStatus(raw?: string): TaskRecord["verifyStatus"] {
 }
 
 function mapTaskExecutor(raw?: string): TaskRecord["executorType"] {
-  if (raw === "command") return "command";
-  return "rsync";
+  switch (raw) {
+    case "command": return "command";
+    case "restic":  return "restic";
+    case "rclone":  return "rclone";
+    default:        return "rsync";
+  }
 }
 
 function mapLogLevel(raw?: string): LogEvent["level"] {

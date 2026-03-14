@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
+import { Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
@@ -52,6 +52,12 @@ function integrationIcon(type: IntegrationType) {
       return MessageSquare;
     case "telegram":
       return Send;
+    case "feishu":
+      return MessageSquare;
+    case "dingtalk":
+      return Bell;
+    case "wecom":
+      return Building2;
     default:
       return Webhook;
   }
@@ -139,13 +145,13 @@ export function IntegrationEditorDialog({
 
   const TypeIcon = integrationIcon(draft.type);
   const typeLabel =
-    draft.type === "email"
-      ? "邮件"
-      : draft.type === "slack"
-        ? "Slack"
-        : draft.type === "telegram"
-          ? "Telegram"
-          : "Webhook";
+    draft.type === "email" ? "邮件" :
+    draft.type === "slack" ? "Slack" :
+    draft.type === "telegram" ? "Telegram" :
+    draft.type === "feishu" ? "飞书" :
+    draft.type === "dingtalk" ? "钉钉" :
+    draft.type === "wecom" ? "企业微信" :
+    "Webhook";
 
   return (
     <FormDialog

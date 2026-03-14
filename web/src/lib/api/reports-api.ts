@@ -42,31 +42,33 @@ export type NewReportConfigInput = {
 
 export function createReportsApi() {
   return {
-    listConfigs: () =>
-      request<Envelope<ReportConfig[]>>("/report-configs", { method: "GET" }).then(unwrapData),
+    listConfigs: (token: string) =>
+      request<Envelope<ReportConfig[]>>("/report-configs", { method: "GET", token }).then(unwrapData),
 
-    createConfig: (input: NewReportConfigInput) =>
+    createConfig: (token: string, input: NewReportConfigInput) =>
       request<Envelope<ReportConfig>>("/report-configs", {
         method: "POST",
-        body: JSON.stringify(input),
+        token,
+        body: input,
       }).then(unwrapData),
 
-    updateConfig: (id: number, input: Partial<NewReportConfigInput>) =>
+    updateConfig: (token: string, id: number, input: Partial<NewReportConfigInput>) =>
       request<Envelope<ReportConfig>>(`/report-configs/${id}`, {
         method: "PUT",
-        body: JSON.stringify(input),
+        token,
+        body: input,
       }).then(unwrapData),
 
-    deleteConfig: (id: number) =>
-      request<Envelope<unknown>>(`/report-configs/${id}`, { method: "DELETE" }),
+    deleteConfig: (token: string, id: number) =>
+      request<Envelope<unknown>>(`/report-configs/${id}`, { method: "DELETE", token }),
 
-    generateNow: (id: number) =>
-      request<Envelope<Report>>(`/report-configs/${id}/generate`, { method: "POST" }).then(unwrapData),
+    generateNow: (token: string, id: number) =>
+      request<Envelope<Report>>(`/report-configs/${id}/generate`, { method: "POST", token }).then(unwrapData),
 
-    listReports: (configId: number) =>
-      request<Envelope<Report[]>>(`/report-configs/${configId}/reports`, { method: "GET" }).then(unwrapData),
+    listReports: (token: string, configId: number) =>
+      request<Envelope<Report[]>>(`/report-configs/${configId}/reports`, { method: "GET", token }).then(unwrapData),
 
-    getReport: (id: number) =>
-      request<Envelope<Report>>(`/reports/${id}`, { method: "GET" }).then(unwrapData),
+    getReport: (token: string, id: number) =>
+      request<Envelope<Report>>(`/reports/${id}`, { method: "GET", token }).then(unwrapData),
   };
 }

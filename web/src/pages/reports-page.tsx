@@ -88,11 +88,13 @@ function ReportRow({ report }: { report: Report }) {
 function ConfigCard({
   cfg,
   isAdmin,
+  token,
   onDelete,
   onGenerate,
 }: {
   cfg: ReportConfig;
   isAdmin: boolean;
+  token: string;
   onDelete: (id: number) => void;
   onGenerate: (id: number) => void;
 }) {
@@ -104,12 +106,15 @@ function ConfigCard({
   const loadReports = useCallback(async () => {
     setLoadingReports(true);
     try {
-      const data = await reportsApi.listReports(cfg.id);
+      const data = await reportsApi.listReports(token, cfg.id);
       setReports(data);
+    } catch (err) {
+      toast.error("加载报告失败: " + getErrorMessage(err));
+      setReports([]);
     } finally {
       setLoadingReports(false);
     }
-  }, [cfg.id]);
+  }, [token, cfg.id]);
 
   const handleExpand = () => {
     if (!expanded && reports === null) {
@@ -208,7 +213,7 @@ export function ReportsPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const data = await reportsApi.listConfigs();
+      const data = await reportsApi.listConfigs(token);
       setConfigs(data);
     } catch (err) {
       toast.error("加载失败: " + getErrorMessage(err));
@@ -220,8 +225,9 @@ export function ReportsPage() {
   useEffect(() => { void loadConfigs(); }, [loadConfigs]);
 
   const handleDelete = async (id: number) => {
+    if (!token) return;
     try {
-      await reportsApi.deleteConfig(id);
+      await reportsApi.deleteConfig(token, id);
       toast.success("已删除");
       setConfigs((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
@@ -230,8 +236,9 @@ export function ReportsPage() {
   };
 
   const handleGenerate = async (id: number) => {
+    if (!token) return;
     try {
-      await reportsApi.generateNow(id);
+      await reportsApi.generateNow(token, id);
       toast.success("报告已生成");
     } catch (err) {
       toast.error("生成失败: " + getErrorMessage(err));
@@ -272,6 +279,7 @@ export function ReportsPage() {
               key={cfg.id}
               cfg={cfg}
               isAdmin={isAdmin}
+              token={token ?? ""}
               onDelete={(id) => void handleDelete(id)}
               onGenerate={handleGenerate}
             />
@@ -284,6 +292,7 @@ export function ReportsPage() {
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           onCreated={(cfg) => setConfigs((prev) => [...prev, cfg])}
+          token={token ?? ""}
         />
       )}
     </div>

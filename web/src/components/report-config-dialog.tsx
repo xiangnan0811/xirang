@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
 import { createReportsApi, type NewReportConfigInput, type ReportConfig } from "@/lib/api/reports-api";
 import { getErrorMessage } from "@/lib/utils";
@@ -14,6 +14,7 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (cfg: ReportConfig) => void;
+  token: string;
 };
 
 const SCOPE_OPTIONS = [
@@ -56,9 +57,13 @@ function LabelRow({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-export function ReportConfigDialog({ open, onOpenChange, onCreated }: Props) {
+export function ReportConfigDialog({ open, onOpenChange, onCreated, token }: Props) {
   const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) setDraft(DEFAULT_DRAFT);
+  }, [open]);
 
   const set = (patch: Partial<Draft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
@@ -89,7 +94,7 @@ export function ReportConfigDialog({ open, onOpenChange, onCreated }: Props) {
 
     setSaving(true);
     try {
-      const cfg = await reportsApi.createConfig(input);
+      const cfg = await reportsApi.createConfig(token, input);
       toast.success("报告配置已创建");
       onCreated(cfg);
       onOpenChange(false);
