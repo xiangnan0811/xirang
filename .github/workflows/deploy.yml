@@ -77,4 +77,20 @@ jobs:
             cd "${{ secrets.DEPLOY_PATH }}"
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
+
+            echo "等待健康检查通过（最多 90s）..."
+            n=0
+            until [ "$(docker inspect --format='{{.State.Health.Status}}' xirang 2>/dev/null)" = "healthy" ]; do
+              n=$((n+1))
+              status=$(docker inspect --format='{{.State.Health.Status}}' xirang 2>/dev/null || echo "unknown")
+              if [ "$status" = "unhealthy" ] || [ "$n" -ge "18" ]; then
+                echo "服务启动失败：healthcheck 状态 = ${status}" >&2
+                docker logs xirang --tail=50 >&2
+                exit 1
+              fi
+              echo "  等待健康检查 (${n}/18)，当前状态：${status}..."
+              sleep 5
+            done
+            echo "健康检查通过，部署完成"
+
             docker compose -f docker-compose.prod.yml ps

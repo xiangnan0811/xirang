@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+# 导出备份相关环境变量供 cron 使用（cron 不继承容器运行时环境变量）
+printenv | grep -E '^(DB_TYPE|SQLITE_PATH|DB_DSN)=' | sed 's/^/export /' > /etc/backup-env || true
+chmod 600 /etc/backup-env
+
+# 确保备份目录存在
+mkdir -p /backup/db
+
+# 启动 cron 守护进程
+cron
+
 /usr/local/bin/xirang &
 XIRANG_PID=$!
 

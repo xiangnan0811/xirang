@@ -86,7 +86,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
-	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager)
+	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
@@ -161,7 +161,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), taskHandler.Cancel)
-	secured.POST("/tasks/:id/restore", middleware.RBAC("admin"), taskHandler.Restore)
+	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), taskHandler.Restore)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
 	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)

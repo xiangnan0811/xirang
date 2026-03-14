@@ -56,6 +56,18 @@ func HasPermission(role, permission string) bool {
 	return ok && permissions[permission]
 }
 
+// RequireRole 校验当前用户是否具有指定角色（而非权限），用于只允许特定角色的操作。
+func RequireRole(role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if CurrentRole(c) != role {
+			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func RBAC(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := CurrentRole(c)

@@ -102,6 +102,25 @@ func (h *Hub) Publish(event LogEvent) {
 	}
 }
 
+// CheckOrigin 供外部组件（如 TerminalHandler）复用相同的 Origin 校验策略。
+func (h *Hub) CheckOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return h.allowEmptyOrigin
+	}
+	for _, o := range h.allowedOrigins {
+		if strings.TrimSpace(o) == "*" {
+			return true
+		}
+	}
+	for _, allowed := range h.allowedOrigins {
+		if strings.EqualFold(origin, strings.TrimSpace(allowed)) {
+			return true
+		}
+	}
+	return util.IsSameHostOrigin(origin, r.Host)
+}
+
 func (h *Hub) newUpgrader() websocket.Upgrader {
 	return websocket.Upgrader{
 		ReadBufferSize:  1024,

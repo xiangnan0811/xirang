@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -59,7 +60,7 @@ func ValidateAndConsumeRecoveryCode(storedJSON, code string) ([]string, bool) {
 	remaining := make([]string, 0, len(codes))
 	found := false
 	for _, c := range codes {
-		if c == code {
+		if subtle.ConstantTimeCompare([]byte(c), []byte(code)) == 1 {
 			found = true
 			continue
 		}

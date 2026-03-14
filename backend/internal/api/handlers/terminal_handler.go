@@ -31,17 +31,14 @@ type TerminalHandler struct {
 	sessions   map[string]context.CancelFunc
 }
 
-func NewTerminalHandler(db *gorm.DB, jwtManager *auth.JWTManager) *TerminalHandler {
+func NewTerminalHandler(db *gorm.DB, jwtManager *auth.JWTManager, checkOrigin func(*http.Request) bool) *TerminalHandler {
 	return &TerminalHandler{
 		db:         db,
 		jwtManager: jwtManager,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
-			CheckOrigin: func(r *http.Request) bool {
-				// 认证在协议内完成，origin 校验由调用方负责
-				return true
-			},
+			CheckOrigin:     checkOrigin,
 		},
 		sessions: make(map[string]context.CancelFunc),
 	}

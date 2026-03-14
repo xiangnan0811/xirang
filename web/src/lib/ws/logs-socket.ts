@@ -259,11 +259,11 @@ export class LogsSocketClient {
       return;
     }
     this.clearReconnectTimer();
-    // 指数退避：base * 2^attempt，上限 30s
+    // 指数退避 + jitter：base * 2^attempt * [0.5, 1.0)，上限 30s
     const delay = Math.min(
       RETRY_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
       RETRY_MAX_DELAY_MS
-    );
+    ) * (0.5 + Math.random() * 0.5);
     this.reconnectAttempts += 1;
     this.reconnectTimer = window.setTimeout(() => this.open(), delay);
   }

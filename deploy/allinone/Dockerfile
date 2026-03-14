@@ -24,12 +24,15 @@ RUN set -eux; \
 
 FROM nginx:1.27
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl cron && rm -rf /var/lib/apt/lists/*
 
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
+COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
+COPY deploy/allinone/xirang-backup.cron /etc/cron.d/xirang-backup
+RUN chmod +x /usr/local/bin/backup-db.sh && chmod 0644 /etc/cron.d/xirang-backup
 
 ENV BACKEND_UPSTREAM=http://127.0.0.1:8080
 ENV SERVER_ADDR=:8080
