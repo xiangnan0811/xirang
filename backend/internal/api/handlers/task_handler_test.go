@@ -365,7 +365,7 @@ func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "仅支持 rsync 同步和 command 命令类型") {
+	if !strings.Contains(resp.Body.String(), "不支持的执行器类型") {
 		t.Fatalf("期望返回 local 拒绝错误，实际: %s", resp.Body.String())
 	}
 }

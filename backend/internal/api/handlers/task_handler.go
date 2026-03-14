@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -48,6 +49,7 @@ type taskRequest struct {
 	RsyncSource     string `json:"rsync_source"`
 	RsyncTarget     string `json:"rsync_target"`
 	ExecutorType    string `json:"executor_type"`
+	ExecutorConfig  string `json:"executor_config"`
 	CronSpec        string `json:"cron_spec"`
 }
 
@@ -145,6 +147,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		RsyncSource:     req.RsyncSource,
 		RsyncTarget:     req.RsyncTarget,
 		ExecutorType:    req.ExecutorType,
+		ExecutorConfig:  req.ExecutorConfig,
 		CronSpec:        req.CronSpec,
 		Status:          string(task.StatusPending),
 	}
@@ -233,6 +236,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	taskEntity.RsyncSource = req.RsyncSource
 	taskEntity.RsyncTarget = req.RsyncTarget
 	taskEntity.ExecutorType = req.ExecutorType
+	taskEntity.ExecutorConfig = req.ExecutorConfig
 	taskEntity.CronSpec = req.CronSpec
 
 	if err := h.db.Save(&taskEntity).Error; err != nil {
@@ -522,8 +526,10 @@ func validateTaskRequest(req taskRequest) error {
 	if req.NodeID == 0 {
 		return fmt.Errorf("请选择目标节点")
 	}
-	if req.ExecutorType != "rsync" && req.ExecutorType != "command" {
-		return fmt.Errorf("仅支持 rsync 同步和 command 命令类型")
+	switch req.ExecutorType {
+	case "rsync", "command", "restic", "rclone":
+	default:
+		return fmt.Errorf("不支持的执行器类型，仅允许 rsync / command / restic / rclone")
 	}
 	if req.CronSpec != "" {
 		if err := validateCronSpec(req.CronSpec); err != nil {
@@ -538,6 +544,12 @@ func validateTaskRequest(req taskRequest) error {
 	} else {
 		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
 			return fmt.Errorf("同步任务必须填写源路径和目标路径")
+		}
+	}
+
+	if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
+		if !json.Valid([]byte(cfg)) {
+			return fmt.Errorf("executor_config 必须是合法的 JSON 格式")
 		}
 	}
 

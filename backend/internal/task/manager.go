@@ -311,9 +311,11 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		return 0, fmt.Errorf("任务不存在")
 	}
 
-	// 仅 rsync 类型任务支持恢复
-	if taskEntity.ExecutorType != "rsync" {
-		return 0, fmt.Errorf("仅 rsync 同步任务支持备份恢复")
+	// 仅支持文件级同步执行器的恢复
+	switch taskEntity.ExecutorType {
+	case "rsync", "restic", "rclone":
+	default:
+		return 0, fmt.Errorf("该执行器类型（%s）不支持备份恢复", taskEntity.ExecutorType)
 	}
 
 	// 校验是否有成功的执行记录

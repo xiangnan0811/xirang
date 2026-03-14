@@ -9,6 +9,7 @@ type TaskResponse = {
   rsync_source?: string;
   rsync_target?: string;
   executor_type?: string;
+  executor_config?: string;
   cron_spec?: string;
   policy_id?: number | null;
   depends_on_task_id?: number | null;
@@ -125,6 +126,7 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     rsyncSource: row.rsync_source ?? undefined,
     rsyncTarget: row.rsync_target ?? undefined,
     executorType: mapTaskExecutor(row.executor_type),
+    executorConfig: row.executor_config ?? undefined,
     cronSpec: row.cron_spec ?? undefined,
     updatedAt: formatTime(row.updated_at),
     speedMbps: 0,
@@ -168,9 +170,11 @@ export function createTasksApi() {
           node_id: input.nodeId,
           policy_id: input.policyId ?? null,
           depends_on_task_id: input.dependsOnTaskId ?? null,
+          command: input.command,
           rsync_source: input.rsyncSource,
           rsync_target: input.rsyncTarget,
           executor_type: input.executorType,
+          executor_config: input.executorConfig,
           cron_spec: input.cronSpec
         }
       });
@@ -186,9 +190,11 @@ export function createTasksApi() {
           node_id: input.nodeId,
           policy_id: input.policyId ?? null,
           depends_on_task_id: input.dependsOnTaskId ?? null,
+          command: input.command,
           rsync_source: input.rsyncSource,
           rsync_target: input.rsyncTarget,
           executor_type: input.executorType,
+          executor_config: input.executorConfig,
           cron_spec: input.cronSpec
         }
       });
