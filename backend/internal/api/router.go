@@ -85,6 +85,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	auditHandler := handlers.NewAuditHandler(dep.DB)
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
+	fileHandler := handlers.NewFileHandler(dep.DB)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
@@ -117,6 +118,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/nodes/:id", middleware.RBAC("nodes:write"), nodeHandler.Delete)
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), nodeHandler.TestConnection)
 	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), nodeHandler.Metrics)
+	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:read"), fileHandler.ListNodeFiles)
+	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:read"), fileHandler.GetNodeFileContent)
 
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
@@ -162,6 +165,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), taskHandler.Cancel)
 	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), taskHandler.Restore)
+	secured.GET("/tasks/:id/backup-files", middleware.RequireRole("admin"), fileHandler.ListTaskBackupFiles)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
 	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)
