@@ -121,10 +121,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	totpEnabled := false
+	onboarded := false
 	if h.db != nil && userID != 0 {
 		var user model.User
-		if err := h.db.Select("totp_enabled").First(&user, userID).Error; err == nil {
+		if err := h.db.Select("totp_enabled", "onboarded").First(&user, userID).Error; err == nil {
 			totpEnabled = user.TOTPEnabled
+			onboarded = user.Onboarded
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -133,8 +135,28 @@ func (h *AuthHandler) Me(c *gin.Context) {
 			"username":     c.GetString(middleware.CtxUsername),
 			"role":         c.GetString(middleware.CtxRole),
 			"totp_enabled": totpEnabled,
+			"onboarded":    onboarded,
 		},
 	})
+}
+
+// CompleteOnboarding 标记当前用户完成引导向导。
+// POST /me/onboarded
+func (h *AuthHandler) CompleteOnboarding(c *gin.Context) {
+	userID := c.GetUint(middleware.CtxUserID)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+		return
+	}
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "服务不可用"})
+		return
+	}
+	if err := h.db.Model(&model.User{}).Where("id = ?", userID).Update("onboarded", true).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "引导完成"})
 }
 
 func (h *AuthHandler) ChangePassword(c *gin.Context) {

@@ -2,6 +2,7 @@ import {
   Bell,
   ClipboardList,
   FileSearch,
+  FileText,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -75,6 +76,12 @@ export const navItems: NavItem[] = [
     icon: Users,
     mobileTab: false,
     adminOnly: true
+  },
+  {
+    title: "报告",
+    path: "/app/reports",
+    icon: FileText,
+    mobileTab: false
   }
 ];
 

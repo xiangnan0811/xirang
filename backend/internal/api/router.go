@@ -86,6 +86,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	fileHandler := handlers.NewFileHandler(dep.DB)
+	reportHandler := handlers.NewReportHandler(dep.DB)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
@@ -98,6 +99,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager))
 	secured.Use(middleware.AuditLogger(dep.DB))
 	secured.GET("/me", authHandler.Me)
+	secured.POST("/me/onboarded", authHandler.CompleteOnboarding)
 	secured.POST("/auth/logout", authHandler.Logout)
 	secured.POST("/auth/change-password", authHandler.ChangePassword)
 	secured.POST("/auth/2fa/setup", authHandler.TOTPSetup)
@@ -120,6 +122,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), nodeHandler.Metrics)
 	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:read"), fileHandler.ListNodeFiles)
 	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:read"), fileHandler.GetNodeFileContent)
+	secured.GET("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.ListOwners)
+	secured.POST("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.AddOwner)
+	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
 
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
@@ -173,6 +178,14 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/batch-commands", middleware.RBAC("tasks:write"), batchHandler.Create)
 	secured.GET("/batch-commands/:batch_id", middleware.RBAC("tasks:read"), batchHandler.Get)
 	secured.DELETE("/batch-commands/:batch_id", middleware.RBAC("tasks:write"), batchHandler.Delete)
+
+	secured.GET("/report-configs", middleware.RBAC("reports:read"), reportHandler.ListConfigs)
+	secured.POST("/report-configs", middleware.RBAC("reports:write"), reportHandler.CreateConfig)
+	secured.PUT("/report-configs/:id", middleware.RBAC("reports:write"), reportHandler.UpdateConfig)
+	secured.DELETE("/report-configs/:id", middleware.RBAC("reports:write"), reportHandler.DeleteConfig)
+	secured.POST("/report-configs/:id/generate", middleware.RBAC("reports:write"), reportHandler.GenerateNow)
+	secured.GET("/report-configs/:id/reports", middleware.RBAC("reports:read"), reportHandler.ListReports)
+	secured.GET("/reports/:id", middleware.RBAC("reports:read"), reportHandler.GetReport)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。

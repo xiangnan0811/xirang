@@ -672,3 +672,69 @@ func validateNodeHostPort(host string, port int) error {
 	}
 	return nil
 }
+
+// ListOwners 列出节点的所有负责人（admin only）。
+// GET /nodes/:id/owners
+func (h *NodeHandler) ListOwners(c *gin.Context) {
+	nodeID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var owners []model.NodeOwner
+	if err := h.db.Preload("User").Where("node_id = ?", nodeID).Find(&owners).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	type item struct {
+		UserID   uint   `json:"user_id"`
+		Username string `json:"username"`
+	}
+	result := make([]item, 0, len(owners))
+	for _, o := range owners {
+		result = append(result, item{UserID: o.UserID, Username: o.User.Username})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// AddOwner 为节点添加负责人（admin only）。
+// POST /nodes/:id/owners  {"user_id": 2}
+func (h *NodeHandler) AddOwner(c *gin.Context) {
+	nodeID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		UserID uint `json:"user_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	owner := model.NodeOwner{NodeID: nodeID, UserID: req.UserID}
+	if err := h.db.Where(owner).FirstOrCreate(&owner).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已添加负责人"})
+}
+
+// RemoveOwner 移除节点负责人（admin only）。
+// DELETE /nodes/:id/owners/:user_id
+func (h *NodeHandler) RemoveOwner(c *gin.Context) {
+	nodeID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	userIDStr := c.Param("user_id")
+	userID, err := strconv.ParseUint(userIDStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID"})
+		return
+	}
+	if err := h.db.Where("node_id = ? AND user_id = ?", nodeID, uint(userID)).
+		Delete(&model.NodeOwner{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已移除负责人"})
+}
