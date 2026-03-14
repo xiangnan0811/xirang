@@ -263,9 +263,6 @@ func validateNodePath(rawPath string, node model.Node, db *gorm.DB) (string, err
 	}
 
 	clean := filepath.Clean(rawPath)
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("路径不合法")
-	}
 
 	// 收集白名单根路径
 	roots := []string{}
