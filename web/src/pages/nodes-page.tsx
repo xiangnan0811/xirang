@@ -55,6 +55,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { FileBrowser } from "@/components/file-browser";
+import { createFilesApi } from "@/lib/api/files-api";
+
+const filesApi = createFilesApi();
+
 const WebTerminal = lazy(() => import("@/components/web-terminal"));
 
 const keywordStorageKey = "xirang.nodes.keyword";
@@ -117,6 +122,7 @@ export function NodesPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState<NodeRecord | null>(null);
   const [terminalKey, setTerminalKey] = useState(0);
+  const [fileBrowserNode, setFileBrowserNode] = useState<NodeRecord | null>(null);
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
@@ -758,6 +764,7 @@ export function NodesPage() {
                       onDeleteNode={onDeleteNode}
                       handleTriggerBackup={handleTriggerBackup}
                       onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+                      onOpenFileBrowser={setFileBrowserNode}
                       isAdmin={isAdmin}
                     />
                   </div>
@@ -863,6 +870,34 @@ export function NodesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {token && fileBrowserNode && (
+        <Dialog
+          open={fileBrowserNode !== null}
+          onOpenChange={(open) => { if (!open) setFileBrowserNode(null); }}
+        >
+          <DialogContent className="w-full max-w-[95vw] md:max-w-[80vw]" size="lg">
+            <DialogHeader>
+              <DialogTitle>文件浏览 — {fileBrowserNode.name}</DialogTitle>
+              <DialogDescription className="sr-only">
+                通过 SFTP 浏览节点 {fileBrowserNode.name} 的远端文件系统
+              </DialogDescription>
+              <DialogCloseButton />
+            </DialogHeader>
+            <div className="px-6 pb-6">
+              <FileBrowser
+                rootPath={fileBrowserNode.basePath || "/"}
+                fetchDir={(path, signal) =>
+                  filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
+                }
+                fetchContent={(path) =>
+                  filesApi.getNodeFileContent(token, fileBrowserNode.id, path)
+                }
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {token && (
         <>

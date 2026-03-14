@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ export const NodesTable = React.memo(function NodesTable({
   onDeleteNode,
   handleTriggerBackup,
   onOpenTerminal,
+  onOpenFileBrowser,
   isAdmin,
 }: NodesViewProps) {
   const navigate = useNavigate();
@@ -195,6 +196,15 @@ export const NodesTable = React.memo(function NodesTable({
                           <MonitorPlay className="size-4" />
                         </Button>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`浏览节点 ${node.name} 文件`} title="文件浏览"
+                        onClick={() => onOpenFileBrowser?.(node)}
+                      >
+                        <FolderOpen className="size-4" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
