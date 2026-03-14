@@ -11,6 +11,7 @@ type TaskResponse = {
   executor_type?: string;
   cron_spec?: string;
   policy_id?: number | null;
+  depends_on_task_id?: number | null;
   retry_count?: number;
   last_error?: string;
   node_id?: number;
@@ -47,6 +48,7 @@ function mapTaskStatus(raw: string): TaskStatus {
     case "retrying":
     case "canceled":
     case "warning":
+    case "skipped":
       return raw;
     default:
       return "pending";
@@ -110,6 +112,7 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     policyId: row.policy?.id ?? row.policy_id ?? null,
     nodeName: row.node?.name ?? `节点-${row.node_id ?? 0}`,
     nodeId: row.node?.id ?? row.node_id ?? 0,
+    dependsOnTaskId: row.depends_on_task_id ?? null,
     createdAt: formatTime(row.created_at),
     status,
     progress: deriveTaskProgress(status, retryCount, index),
@@ -164,6 +167,7 @@ export function createTasksApi() {
           name: input.name,
           node_id: input.nodeId,
           policy_id: input.policyId ?? null,
+          depends_on_task_id: input.dependsOnTaskId ?? null,
           rsync_source: input.rsyncSource,
           rsync_target: input.rsyncTarget,
           executor_type: input.executorType,
@@ -181,6 +185,7 @@ export function createTasksApi() {
           name: input.name,
           node_id: input.nodeId,
           policy_id: input.policyId ?? null,
+          depends_on_task_id: input.dependsOnTaskId ?? null,
           rsync_source: input.rsyncSource,
           rsync_target: input.rsyncTarget,
           executor_type: input.executorType,

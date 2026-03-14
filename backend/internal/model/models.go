@@ -152,43 +152,47 @@ type AlertDelivery struct {
 }
 
 type Task struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	Name         string     `gorm:"size:128;not null" json:"name"`
-	NodeID       uint       `gorm:"not null;index" json:"node_id"`
-	Node         Node       `json:"node,omitempty"`
-	PolicyID     *uint      `gorm:"index" json:"policy_id,omitempty"`
-	Policy       *Policy    `json:"policy,omitempty"`
-	Command      string     `gorm:"type:text" json:"command"`
-	RsyncSource  string     `gorm:"size:512" json:"rsync_source"`
-	RsyncTarget  string     `gorm:"size:512" json:"rsync_target"`
-	ExecutorType string     `gorm:"size:32;not null;default:local" json:"executor_type"`
-	CronSpec     string     `gorm:"size:128" json:"cron_spec"`
-	Status       string     `gorm:"size:32;not null;index" json:"status"`
-	BatchID      string     `gorm:"size:64;index" json:"batch_id,omitempty"`
-	Source       string     `gorm:"size:32;not null;default:manual" json:"source"`
-	VerifyStatus string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	RetryCount   int        `gorm:"not null;default:0" json:"retry_count"`
-	LastError    string     `gorm:"type:text" json:"last_error"`
-	LastRunAt    *time.Time `json:"last_run_at"`
-	NextRunAt    *time.Time `json:"next_run_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	Name             string     `gorm:"size:128;not null" json:"name"`
+	NodeID           uint       `gorm:"not null;index" json:"node_id"`
+	Node             Node       `json:"node,omitempty"`
+	PolicyID         *uint      `gorm:"index" json:"policy_id,omitempty"`
+	Policy           *Policy    `json:"policy,omitempty"`
+	DependsOnTaskID  *uint      `gorm:"index" json:"depends_on_task_id,omitempty"`
+	Command          string     `gorm:"type:text" json:"command"`
+	RsyncSource      string     `gorm:"size:512" json:"rsync_source"`
+	RsyncTarget      string     `gorm:"size:512" json:"rsync_target"`
+	ExecutorType     string     `gorm:"size:32;not null;default:local" json:"executor_type"`
+	CronSpec         string     `gorm:"size:128" json:"cron_spec"`
+	Status           string     `gorm:"size:32;not null;index" json:"status"`
+	BatchID          string     `gorm:"size:64;index" json:"batch_id,omitempty"`
+	Source           string     `gorm:"size:32;not null;default:manual" json:"source"`
+	VerifyStatus     string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	RetryCount       int        `gorm:"not null;default:0" json:"retry_count"`
+	LastError        string     `gorm:"type:text" json:"last_error"`
+	LastRunAt        *time.Time `json:"last_run_at"`
+	NextRunAt        *time.Time `json:"next_run_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type TaskRun struct {
-	ID             uint       `gorm:"primaryKey" json:"id"`
-	TaskID         uint       `gorm:"not null;index" json:"task_id"`
-	Task           Task       `gorm:"foreignKey:TaskID" json:"-"`
-	TriggerType    string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
-	Status         string     `gorm:"size:32;not null;default:pending;index" json:"status"`
-	StartedAt      *time.Time `json:"started_at"`
-	FinishedAt     *time.Time `json:"finished_at"`
-	DurationMs     int64      `gorm:"not null;default:0" json:"duration_ms"`
-	VerifyStatus   string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	ThroughputMbps float64    `gorm:"not null;default:0" json:"throughput_mbps"`
-	LastError      string     `gorm:"type:text" json:"last_error"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	TaskID             uint       `gorm:"not null;index" json:"task_id"`
+	Task               Task       `gorm:"foreignKey:TaskID" json:"-"`
+	TriggerType        string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
+	Status             string     `gorm:"size:32;not null;default:pending;index" json:"status"`
+	ChainRunID         string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
+	UpstreamTaskRunID  *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
+	SkipReason         string     `gorm:"type:text" json:"skip_reason,omitempty"`
+	StartedAt          *time.Time `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
+	DurationMs         int64      `gorm:"not null;default:0" json:"duration_ms"`
+	VerifyStatus       string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	ThroughputMbps     float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	LastError          string     `gorm:"type:text" json:"last_error"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type AuditLog struct {

@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -50,6 +52,17 @@ const (
 	defaultSampleCleanupBatchSize = 500
 )
 
+// chainContext 保存任务链的上下文信息，用于重试时恢复链路追踪
+type chainContext struct {
+	chainRunID string
+}
+
+func generateChainRunID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 type queuedTaskLog struct {
 	taskID    uint
 	taskRunID *uint
@@ -78,8 +91,9 @@ type Manager struct {
 	runningCancels  sync.Map
 	pendingRuns     sync.Map
 	restoreNodes    sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
-	retryTimers     sync.Map
-	semaphore       chan struct{}
+	retryTimers          sync.Map
+	retryChainContexts   sync.Map // taskID → chainContext
+	semaphore            chan struct{}
 	taskWG          sync.WaitGroup
 
 	logQueue         chan queuedTaskLog
@@ -261,11 +275,11 @@ func (m *Manager) RemoveSchedule(taskID uint) {
 }
 
 func (m *Manager) TriggerManual(taskID uint) (uint, error) {
-	return m.trigger(taskID, "manual")
+	return m.triggerCore(taskID, "manual", generateChainRunID(), nil)
 }
 
 func (m *Manager) TriggerFromScheduler(taskID uint) error {
-	_, err := m.trigger(taskID, "cron")
+	_, err := m.triggerCore(taskID, "cron", generateChainRunID(), nil)
 	return err
 }
 
@@ -612,16 +626,27 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	}
 }
 
+// trigger 是 triggerCore 的包装，负责在重试时恢复链路上下文。
 func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
+	chainRunID := generateChainRunID()
+	if reason == "retry" {
+		if val, ok := m.retryChainContexts.LoadAndDelete(taskID); ok {
+			chainRunID = val.(chainContext).chainRunID
+		}
+	}
+	return m.triggerCore(taskID, reason, chainRunID, nil)
+}
+
+func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint) (uint, error) {
 	if m.shuttingDown.Load() {
-		if reason == "retry" || reason == "cron" {
+		if reason == "retry" || reason == "cron" || reason == "chain" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
 
 	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
-		if reason == "retry" || reason == "cron" {
+		if reason == "retry" || reason == "cron" || reason == "chain" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
@@ -639,7 +664,7 @@ func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
 		return 0, result.Error
 	}
 	if result.RowsAffected == 0 {
-		if reason == "retry" || reason == "cron" {
+		if reason == "retry" || reason == "cron" || reason == "chain" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("任务不存在")
@@ -669,9 +694,11 @@ func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
 
 	// 创建 TaskRun 执行记录
 	run := model.TaskRun{
-		TaskID:      taskID,
-		TriggerType: reason,
-		Status:      "pending",
+		TaskID:            taskID,
+		TriggerType:       reason,
+		Status:            "pending",
+		ChainRunID:        chainRunID,
+		UpstreamTaskRunID: upstreamRunID,
 	}
 	if err := m.db.Create(&run).Error; err != nil {
 		return 0, fmt.Errorf("创建执行记录失败: %w", err)
@@ -682,12 +709,12 @@ func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		m.runTask(taskID, run.ID, reason)
+		m.runTask(taskID, run.ID, reason, chainRunID)
 	}()
 	return run.ID, nil
 }
 
-func (m *Manager) runTask(taskID uint, runID uint, reason string) {
+func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
 	defer m.pendingRuns.Delete(taskID)
 
 	runCompleted := false
@@ -875,6 +902,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 				runCompleted = true
 				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
 				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, result.Message)
+				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
 			m.emitLog(taskID, runIDPtr, "info", "备份完整性校验通过", taskEntity.Status)
@@ -915,6 +943,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 		}
+		m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 		return
 	}
 
@@ -948,6 +977,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 			return
 		}
 		m.emitLog(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Format(time.RFC3339)), taskEntity.Status)
+		// 保存链路上下文，重试时由 trigger() 恢复
+		m.retryChainContexts.Store(taskID, chainContext{chainRunID: chainRunID})
 		delay := time.Until(nextRun)
 		if delay < 0 {
 			delay = 0
@@ -974,6 +1005,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string) {
 	if raiseErr := alerting.RaiseTaskFailure(m.db, taskEntity, runIDPtr, errorMsg); raiseErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
 	}
+	m.skipDownstreamIfAny(taskEntity, runID, chainRunID, errorMsg)
 }
 
 func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates map[string]interface{}) error {
@@ -998,6 +1030,60 @@ func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates ma
 		}
 	}
 	return nil
+}
+
+// triggerDownstreamIfAny 在上游任务成功（或 warning）后触发下游任务。
+func (m *Manager) triggerDownstreamIfAny(upstream model.Task, runID uint, chainRunID string) {
+	var downstream model.Task
+	result := m.db.Where("depends_on_task_id = ?", upstream.ID).Limit(1).Find(&downstream)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return
+	}
+	upstreamRunID := runID
+	if _, err := m.triggerCore(downstream.ID, "chain", chainRunID, &upstreamRunID); err != nil {
+		logger.Module("task").Warn().
+			Uint("downstream_task_id", downstream.ID).
+			Uint("upstream_task_id", upstream.ID).
+			Err(err).Msg("触发下游任务失败")
+	}
+}
+
+// skipDownstreamIfAny 在上游任务永久失败后，将下游任务标记为 skipped 并递归传播。
+func (m *Manager) skipDownstreamIfAny(upstream model.Task, runID uint, chainRunID string, reason string) {
+	var downstream model.Task
+	result := m.db.Where("depends_on_task_id = ?", upstream.ID).Limit(1).Find(&downstream)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return
+	}
+	upstreamRunID := runID
+	skipMsg := fmt.Sprintf("前置任务 [%s] 永久失败: %s", upstream.Name, reason)
+	m.skipTask(downstream, chainRunID, &upstreamRunID, skipMsg)
+}
+
+// skipTask 创建 skipped 执行记录，更新任务状态，并递归跳过其下游任务。
+func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRunID *uint, skipReason string) {
+	now := time.Now()
+	run := model.TaskRun{
+		TaskID:            taskEntity.ID,
+		TriggerType:       "chain",
+		Status:            "skipped",
+		ChainRunID:        chainRunID,
+		UpstreamTaskRunID: upstreamRunID,
+		SkipReason:        skipReason,
+		StartedAt:         &now,
+		FinishedAt:        &now,
+	}
+	if err := m.db.Create(&run).Error; err != nil {
+		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(err).Msg("创建 skipped 执行记录失败")
+		return
+	}
+	_ = m.updateStatus(&taskEntity, StatusSkipped, map[string]interface{}{
+		"last_error": skipReason,
+	})
+	runIDPtr := run.ID
+	m.emitLog(taskEntity.ID, &runIDPtr, "warn", skipReason, string(StatusSkipped))
+	// 递归跳过下游任务
+	m.skipDownstreamIfAny(taskEntity, run.ID, chainRunID, skipReason)
 }
 
 func (m *Manager) emitLog(taskID uint, runID *uint, level, message, status string) {
