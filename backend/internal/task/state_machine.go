@@ -15,6 +15,7 @@ const (
 	StatusRetrying TaskStatus = "retrying"
 	StatusCanceled TaskStatus = "canceled"
 	StatusWarning  TaskStatus = "warning"
+	StatusSkipped  TaskStatus = "skipped"
 )
 
 type StateMachine struct {
@@ -34,7 +35,7 @@ func NewStateMachine() *StateMachine {
 
 func ParseStatus(raw string) TaskStatus {
 	switch TaskStatus(raw) {
-	case StatusPending, StatusRunning, StatusSuccess, StatusFailed, StatusRetrying, StatusCanceled, StatusWarning:
+	case StatusPending, StatusRunning, StatusSuccess, StatusFailed, StatusRetrying, StatusCanceled, StatusWarning, StatusSkipped:
 		return TaskStatus(raw)
 	default:
 		return StatusPending
@@ -49,6 +50,7 @@ func (sm *StateMachine) ValidateTransition(from, to TaskStatus) error {
 		StatusPending: {
 			StatusRunning:  true,
 			StatusCanceled: true,
+			StatusSkipped:  true,
 		},
 		StatusRunning: {
 			StatusSuccess:  true,
@@ -75,6 +77,9 @@ func (sm *StateMachine) ValidateTransition(from, to TaskStatus) error {
 			StatusPending:  true,
 			StatusRunning:  true,
 			StatusCanceled: true,
+		},
+		StatusSkipped: {
+			StatusPending: true,
 		},
 	}
 	if toAllowed, ok := allowed[from]; ok {

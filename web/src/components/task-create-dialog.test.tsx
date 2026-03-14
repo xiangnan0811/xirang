@@ -114,6 +114,7 @@ describe("TaskEditorDialog", () => {
       name: "重命名任务",
       nodeId: 2,
       policyId: 2,
+      dependsOnTaskId: null,
       executorType: "rsync",
       rsyncSource: "/new/source",
       rsyncTarget: "/new/target",

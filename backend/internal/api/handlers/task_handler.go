@@ -40,14 +40,15 @@ func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
 }
 
 type taskRequest struct {
-	Name         string `json:"name" binding:"required"`
-	NodeID       uint   `json:"node_id" binding:"required"`
-	PolicyID     *uint  `json:"policy_id"`
-	Command      string `json:"command"`
-	RsyncSource  string `json:"rsync_source"`
-	RsyncTarget  string `json:"rsync_target"`
-	ExecutorType string `json:"executor_type"`
-	CronSpec     string `json:"cron_spec"`
+	Name            string `json:"name" binding:"required"`
+	NodeID          uint   `json:"node_id" binding:"required"`
+	PolicyID        *uint  `json:"policy_id"`
+	DependsOnTaskID *uint  `json:"depends_on_task_id"`
+	Command         string `json:"command"`
+	RsyncSource     string `json:"rsync_source"`
+	RsyncTarget     string `json:"rsync_target"`
+	ExecutorType    string `json:"executor_type"`
+	CronSpec        string `json:"cron_spec"`
 }
 
 func (h *TaskHandler) List(c *gin.Context) {
@@ -136,15 +137,16 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 
 	taskEntity := model.Task{
-		Name:         req.Name,
-		NodeID:       req.NodeID,
-		PolicyID:     req.PolicyID,
-		Command:      req.Command,
-		RsyncSource:  req.RsyncSource,
-		RsyncTarget:  req.RsyncTarget,
-		ExecutorType: req.ExecutorType,
-		CronSpec:     req.CronSpec,
-		Status:       string(task.StatusPending),
+		Name:            req.Name,
+		NodeID:          req.NodeID,
+		PolicyID:        req.PolicyID,
+		DependsOnTaskID: req.DependsOnTaskID,
+		Command:         req.Command,
+		RsyncSource:     req.RsyncSource,
+		RsyncTarget:     req.RsyncTarget,
+		ExecutorType:    req.ExecutorType,
+		CronSpec:        req.CronSpec,
+		Status:          string(task.StatusPending),
 	}
 	if err := h.db.Create(&taskEntity).Error; err != nil {
 		respondInternalError(c, err)
@@ -214,7 +216,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.validateTaskRefs(req); err != nil {
+	if err := h.validateTaskRefsWithID(req, id); err != nil {
 		if isTaskRefValidationError(err) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		} else {
@@ -226,6 +228,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	taskEntity.Name = req.Name
 	taskEntity.NodeID = req.NodeID
 	taskEntity.PolicyID = req.PolicyID
+	taskEntity.DependsOnTaskID = req.DependsOnTaskID
 	taskEntity.Command = req.Command
 	taskEntity.RsyncSource = req.RsyncSource
 	taskEntity.RsyncTarget = req.RsyncTarget
@@ -258,6 +261,16 @@ func (h *TaskHandler) Update(c *gin.Context) {
 func (h *TaskHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	// 防止删除被其他任务依赖的任务
+	var depCount int64
+	if err := h.db.Model(&model.Task{}).Where("depends_on_task_id = ?", id).Count(&depCount).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if depCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "该任务被其他任务依赖，请先解除依赖关系再删除"})
 		return
 	}
 	if err := h.db.Delete(&model.Task{}, id).Error; err != nil {
@@ -433,6 +446,10 @@ func isTaskRefValidationError(err error) bool {
 }
 
 func (h *TaskHandler) validateTaskRefs(req taskRequest) error {
+	return h.validateTaskRefsWithID(req, 0)
+}
+
+func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error {
 	if req.NodeID != 0 {
 		var count int64
 		if err := h.db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
@@ -450,6 +467,50 @@ func (h *TaskHandler) validateTaskRefs(req taskRequest) error {
 		if count == 0 {
 			return newTaskRefValidationError("所选策略不存在，请重新选择")
 		}
+	}
+	if req.DependsOnTaskID != nil {
+		// cron 与依赖链互斥：有前置任务的任务不能设置 cron
+		if strings.TrimSpace(req.CronSpec) != "" {
+			return newTaskRefValidationError("设置了前置任务的任务不能同时设置定时调度")
+		}
+		// 前置任务不能是自身
+		if selfID != 0 && *req.DependsOnTaskID == selfID {
+			return newTaskRefValidationError("任务不能依赖自身")
+		}
+		// 检查前置任务是否存在
+		var count int64
+		if err := h.db.Model(&model.Task{}).Where("id = ?", *req.DependsOnTaskID).Count(&count).Error; err != nil {
+			return fmt.Errorf("校验前置任务失败: %w", err)
+		}
+		if count == 0 {
+			return newTaskRefValidationError("所选前置任务不存在，请重新选择")
+		}
+		// 环路检测：从前置任务向上追溯，深度不超过 10
+		if selfID != 0 {
+			if err := h.detectDependencyCycle(selfID, *req.DependsOnTaskID, 10); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// detectDependencyCycle 从 startID 开始沿 depends_on_task_id 链向上追溯，
+// 若遍历到 selfID 则说明形成环路，maxDepth 为最大追溯深度。
+func (h *TaskHandler) detectDependencyCycle(selfID, startID uint, maxDepth int) error {
+	current := startID
+	for i := 0; i < maxDepth; i++ {
+		var t model.Task
+		if err := h.db.Select("id", "depends_on_task_id").First(&t, current).Error; err != nil {
+			return nil // 任务不存在，无法继续追溯
+		}
+		if t.DependsOnTaskID == nil {
+			return nil
+		}
+		if *t.DependsOnTaskID == selfID {
+			return newTaskRefValidationError("检测到循环依赖，请检查前置任务配置")
+		}
+		current = *t.DependsOnTaskID
 	}
 	return nil
 }

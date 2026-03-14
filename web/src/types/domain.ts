@@ -8,7 +8,8 @@ export type TaskStatus =
   | "success"
   | "retrying"
   | "canceled"
-  | "warning";
+  | "warning"
+  | "skipped";
 
 export type TaskExecutorType = "rsync" | "command";
 
@@ -121,6 +122,7 @@ export interface TaskRecord {
   policyId?: number | null;
   nodeName: string;
   nodeId: number;
+  dependsOnTaskId?: number | null;
   createdAt?: string;
   status: TaskStatus;
   progress: number;
@@ -144,19 +146,23 @@ export interface NewTaskInput {
   name: string;
   nodeId: number;
   policyId?: number | null;
+  dependsOnTaskId?: number | null;
   rsyncSource?: string;
   rsyncTarget?: string;
   executorType?: TaskExecutorType;
   cronSpec?: string;
 }
 
-export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore";
+export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore" | "chain";
 
 export interface TaskRunRecord {
   id: number;
   taskId: number;
   triggerType: TaskRunTriggerType;
   status: TaskStatus;
+  chainRunId?: string;
+  upstreamTaskRunId?: number | null;
+  skipReason?: string;
   startedAt?: string;
   finishedAt?: string;
   durationMs: number;

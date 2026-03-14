@@ -146,7 +146,7 @@ func TestRunTaskKeepsLockEntries(t *testing.T) {
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
-	m.runTask(taskEntity.ID, runID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 
 	if exec.Calls() != 1 {
 		t.Fatalf("期望执行器调用 1 次，实际: %d", exec.Calls())
@@ -229,7 +229,7 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
-	m.runTask(taskEntity.ID, runID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -298,7 +298,7 @@ func TestRunTaskDualWriteSuccess(t *testing.T) {
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
-	m.runTask(taskEntity.ID, runID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -335,7 +335,7 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
-	m.runTask(taskEntity.ID, runID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

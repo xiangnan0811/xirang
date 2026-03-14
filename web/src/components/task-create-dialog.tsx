@@ -18,6 +18,7 @@ type TaskDraft = {
   name: string;
   nodeId: string;
   policyId: string;
+  dependsOnTaskId: string;
   executorType: TaskExecutorType;
   rsyncSource: string;
   rsyncTarget: string;
@@ -28,6 +29,7 @@ const defaultDraft: TaskDraft = {
   name: "",
   nodeId: "",
   policyId: "",
+  dependsOnTaskId: "",
   executorType: "rsync",
   rsyncSource: "",
   rsyncTarget: "",
@@ -39,6 +41,7 @@ function taskRecordToDraft(task: TaskRecord): TaskDraft {
     name: task.name ?? task.policyName ?? "",
     nodeId: task.nodeId ? String(task.nodeId) : "",
     policyId: task.policyId ? String(task.policyId) : "",
+    dependsOnTaskId: task.dependsOnTaskId ? String(task.dependsOnTaskId) : "",
     executorType: task.executorType ?? "rsync",
     rsyncSource: task.rsyncSource ?? "",
     rsyncTarget: task.rsyncTarget ?? "",
@@ -59,6 +62,7 @@ type TaskEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   nodes: NodeRecord[];
   policies: PolicyRecord[];
+  tasks?: TaskRecord[];
   onSave: (input: NewTaskInput) => Promise<void>;
   editingTask?: TaskRecord | null;
 };
@@ -68,6 +72,7 @@ export function TaskEditorDialog({
   onOpenChange,
   nodes,
   policies,
+  tasks,
   onSave,
   editingTask,
 }: TaskEditorDialogProps) {
@@ -92,14 +97,17 @@ export function TaskEditorDialog({
       return;
     }
 
+    const dependsOnTaskId = toNumberOrNull(draft.dependsOnTaskId);
     const input: NewTaskInput = {
       name: draft.name.trim(),
       nodeId,
       policyId: toNumberOrNull(draft.policyId),
+      dependsOnTaskId: dependsOnTaskId,
       executorType: draft.executorType,
       rsyncSource: draft.rsyncSource.trim() || undefined,
       rsyncTarget: draft.rsyncTarget.trim() || undefined,
-      cronSpec: draft.cronSpec.trim() || undefined,
+      // 有前置任务时忽略 cronSpec（后端也会校验）
+      cronSpec: dependsOnTaskId ? undefined : draft.cronSpec.trim() || undefined,
     };
 
     setSaving(true);
@@ -169,6 +177,36 @@ export function TaskEditorDialog({
           ))}
         </AppSelect>
       </div>
+
+      {tasks && tasks.length > 0 && (
+        <div>
+          <label htmlFor="task-editor-depends-on" className="mb-1 block text-sm font-medium">
+            前置任务（可选）
+          </label>
+          <AppSelect
+            id="task-editor-depends-on"
+            containerClassName="w-full"
+            value={draft.dependsOnTaskId}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, dependsOnTaskId: event.target.value, cronSpec: event.target.value ? "" : prev.cronSpec }))
+            }
+          >
+            <option value="">无前置任务</option>
+            {tasks
+              .filter((t) => t.id !== editingTask?.id)
+              .map((t) => (
+                <option key={t.id} value={String(t.id)}>
+                  {t.name ?? t.policyName}
+                </option>
+              ))}
+          </AppSelect>
+          {draft.dependsOnTaskId && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              设置了前置任务后，Cron 调度将被忽略，任务仅在前置任务成功后自动触发。
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>

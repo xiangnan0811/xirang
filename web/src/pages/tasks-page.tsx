@@ -417,6 +417,7 @@ export function TasksPage() {
         onOpenChange={setCreateDialogOpen}
         nodes={nodes}
         policies={policies}
+        tasks={tasks}
         onSave={handleCreateTask}
       />
 
@@ -428,6 +429,7 @@ export function TasksPage() {
         }}
         nodes={nodes}
         policies={policies}
+        tasks={tasks}
         onSave={handleUpdateTask}
         editingTask={editingTask}
       />
