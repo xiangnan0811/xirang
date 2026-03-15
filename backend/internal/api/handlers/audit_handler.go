@@ -25,18 +25,9 @@ func NewAuditHandler(db *gorm.DB) *AuditHandler {
 func (h *AuditHandler) List(c *gin.Context) {
 	query := h.buildQuery(c)
 
-	limit := 50
-	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
-		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
-			limit = parsed
-		}
-	}
-	offset := 0
-	if rawOffset := strings.TrimSpace(c.Query("offset")); rawOffset != "" {
-		if parsed, err := strconv.Atoi(rawOffset); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
+	pg := parsePagination(c, 50, "id", map[string]bool{
+		"id": true, "created_at": true, "username": true, "method": true, "status_code": true,
+	})
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -45,24 +36,23 @@ func (h *AuditHandler) List(c *gin.Context) {
 	}
 
 	var items []model.AuditLog
-	if err := query.Order("id desc").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+	if err := applyPagination(query, pg).Find(&items).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data":   items,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
+	paginatedResponse(c, items, total, pg)
 }
 
 func (h *AuditHandler) ExportCSV(c *gin.Context) {
 	query := h.buildQuery(c)
 
 	limit := 1000
-	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+	rawLimit := strings.TrimSpace(c.Query("page_size"))
+	if rawLimit == "" {
+		rawLimit = strings.TrimSpace(c.Query("limit"))
+	}
+	if rawLimit != "" {
 		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 {
 			if parsed > 5000 {
 				limit = 5000

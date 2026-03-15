@@ -19,28 +19,18 @@ func NewTaskRunHandler(db *gorm.DB) *TaskRunHandler {
 }
 
 // ListByTask 返回某任务的执行历史，按 created_at DESC 分页
-// GET /tasks/:id/runs?limit=20&offset=0&status=success
+// GET /tasks/:id/runs?page=1&page_size=20&status=success
 func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
 
-	limit := 20
-	if raw := c.Query("limit"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			limit = v
-		}
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	offset := 0
-	if raw := c.Query("offset"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			offset = v
-		}
+	pg := parsePagination(c, 20, "created_at", map[string]bool{
+		"created_at": true, "status": true, "id": true,
+	})
+	if pg.PageSize > 100 {
+		pg.PageSize = 100
 	}
 
 	query := h.db.Model(&model.TaskRun{}).Where("task_id = ?", taskID)
@@ -55,15 +45,12 @@ func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 	}
 
 	var runs []model.TaskRun
-	if err := query.Order("created_at desc").Offset(offset).Limit(limit).Find(&runs).Error; err != nil {
+	if err := applyPagination(query, pg).Find(&runs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询执行记录失败"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"items": runs,
-		"total": total,
-	})
+	paginatedResponse(c, runs, total, pg)
 }
 
 // Get 返回单次执行详情，含关联的 Task 基本信息

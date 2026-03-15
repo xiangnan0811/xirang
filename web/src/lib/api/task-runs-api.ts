@@ -111,25 +111,30 @@ export function createTaskRunsApi() {
     async getTaskRuns(
       token: string,
       taskId: number,
-      options?: { limit?: number; offset?: number; status?: string; signal?: AbortSignal }
-    ): Promise<{ items: TaskRunRecord[]; total: number }> {
+      options?: { page?: number; pageSize?: number; status?: string; signal?: AbortSignal }
+    ): Promise<{ items: TaskRunRecord[]; total: number; page: number; pageSize: number }> {
       const query = new URLSearchParams();
-      if (options?.limit && Number.isFinite(options.limit) && options.limit > 0) {
-        query.set("limit", String(options.limit));
+      if (options?.page && Number.isFinite(options.page) && options.page > 0) {
+        query.set("page", String(options.page));
       }
-      if (options?.offset && Number.isFinite(options.offset) && options.offset >= 0) {
-        query.set("offset", String(options.offset));
+      if (options?.pageSize && Number.isFinite(options.pageSize) && options.pageSize > 0) {
+        query.set("page_size", String(options.pageSize));
       }
       if (options?.status) {
         query.set("status", options.status);
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<{ items: TaskRunResponse[]; total: number }>(
+      const payload = await request<Envelope<TaskRunResponse[]> & { total?: number; page?: number; page_size?: number }>(
         `/tasks/${taskId}/runs${suffix}`,
         { token, signal: options?.signal }
       );
-      const items = (payload.items ?? []).map(mapTaskRun);
-      return { items, total: payload.total ?? 0 };
+      const rows = unwrapData(payload) ?? [];
+      return {
+        items: rows.map(mapTaskRun),
+        total: payload.total ?? 0,
+        page: payload.page ?? 1,
+        pageSize: payload.page_size ?? (options?.pageSize ?? 20),
+      };
     },
 
     async getTaskRun(token: string, runId: number): Promise<TaskRunRecord> {

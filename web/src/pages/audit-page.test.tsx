@@ -97,8 +97,8 @@ describe("AuditPage", () => {
     getAuditLogsMock.mockResolvedValue({
       items: [createAuditLogRecord(1, "GET")],
       total: 1,
-      limit: 30,
-      offset: 0,
+      page: 1,
+      pageSize: 30,
     });
   });
 
@@ -122,8 +122,8 @@ describe("AuditPage", () => {
       expect.objectContaining({
         method: "DELETE",
         path: undefined,
-        limit: 30,
-        offset: 0,
+        pageSize: 30,
+        page: 1,
       })
     );
 
@@ -143,8 +143,8 @@ describe("AuditPage", () => {
       expect.objectContaining({
         method: "DELETE",
         path: "/nodes",
-        limit: 30,
-        offset: 0,
+        pageSize: 30,
+        page: 1,
       })
     );
   });
@@ -152,20 +152,20 @@ describe("AuditPage", () => {
   it("支持分页操作", async () => {
     const user = userEvent.setup();
 
-    getAuditLogsMock.mockImplementation(async (_token: string, options?: { offset?: number }) => {
-      if (options?.offset === 30) {
+    getAuditLogsMock.mockImplementation(async (_token: string, options?: { page?: number }) => {
+      if (options?.page === 2) {
         return {
           items: [createAuditLogRecord(31, "POST")],
           total: 60,
-          limit: 30,
-          offset: 30,
+          page: 2,
+          pageSize: 30,
         };
       }
       return {
         items: [createAuditLogRecord(1, "GET")],
         total: 60,
-        limit: 30,
-        offset: 0,
+        page: 1,
+        pageSize: 30,
       };
     });
 
@@ -179,8 +179,8 @@ describe("AuditPage", () => {
       expect(getAuditLogsMock).toHaveBeenLastCalledWith(
         "test-token",
         expect.objectContaining({
-          offset: 30,
-          limit: 30,
+          page: 2,
+          pageSize: 30,
         })
       );
     });
@@ -191,8 +191,8 @@ describe("AuditPage", () => {
     getAuditLogsMock.mockResolvedValue({
       items: [],
       total: 0,
-      limit: 30,
-      offset: 0,
+      page: 1,
+      pageSize: 30,
     });
 
     render(<AuditPage />);
@@ -232,7 +232,7 @@ describe("AuditPage", () => {
       expect(exportAuditLogsCSVMock).toHaveBeenCalledWith(
         "test-token",
         expect.objectContaining({
-          limit: 5000,
+          pageSize: 5000,
           method: undefined,
           path: undefined,
         })

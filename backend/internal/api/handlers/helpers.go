@@ -63,6 +63,73 @@ func checkOwnershipByPolicyNodes(c *gin.Context, db *gorm.DB, p model.Policy) bo
 	return count > 0
 }
 
+// paginationParams 统一分页参数。
+type paginationParams struct {
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+	SortBy   string `json:"sort_by"`
+	SortOrder string `json:"sort_order"`
+}
+
+// parsePagination 从查询参数中解析统一分页参数。
+// 优先使用 page/page_size，向后兼容 limit/offset。
+// defaultSort 为默认排序字段（如 "id"），allowedSorts 为允许的排序字段白名单。
+func parsePagination(c *gin.Context, defaultPageSize int, defaultSort string, allowedSorts map[string]bool) paginationParams {
+	pageSize := defaultPageSize
+	page := 1
+
+	// 优先使用新参数 page/page_size
+	if raw := strings.TrimSpace(c.Query("page_size")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 500 {
+			pageSize = v
+		}
+	} else if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		// 向后兼容 limit
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 500 {
+			pageSize = v
+		}
+	}
+
+	if raw := strings.TrimSpace(c.Query("page")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			page = v
+		}
+	} else if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		// 向后兼容 offset → 转换为 page
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 && pageSize > 0 {
+			page = v/pageSize + 1
+		}
+	}
+
+	sortBy := defaultSort
+	if raw := strings.TrimSpace(c.Query("sort_by")); raw != "" {
+		if allowedSorts[raw] {
+			sortBy = raw
+		}
+	}
+	sortOrder := "desc"
+	if raw := strings.TrimSpace(c.Query("sort_order")); raw == "asc" {
+		sortOrder = "asc"
+	}
+	return paginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+}
+
+// applyPagination 将分页参数应用到 GORM 查询。
+func applyPagination(query *gorm.DB, p paginationParams) *gorm.DB {
+	offset := (p.Page - 1) * p.PageSize
+	return query.Order(p.SortBy + " " + p.SortOrder).Offset(offset).Limit(p.PageSize)
+}
+
+// paginatedResponse 统一分页响应。
+func paginatedResponse(c *gin.Context, data interface{}, total int64, p paginationParams) {
+	c.JSON(http.StatusOK, gin.H{
+		"data":      data,
+		"total":     total,
+		"page":      p.Page,
+		"page_size": p.PageSize,
+	})
+}
+
 var standardCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 func parseID(c *gin.Context, field string) (uint, bool) {

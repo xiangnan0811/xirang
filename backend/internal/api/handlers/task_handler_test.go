@@ -106,7 +106,8 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 		t.Fatalf("筛选结果不符合预期，实际: %+v", result.Data)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/tasks?sort=-id&limit=2&offset=1", nil)
+	// 使用 page/page_size 分页：第 2 页，每页 2 条，sort=-id → [task1]
+	req = httptest.NewRequest(http.MethodGet, "/tasks?sort=-id&page_size=2&page=2", nil)
 	resp = httptest.NewRecorder()
 	r.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -115,11 +116,11 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
 		t.Fatalf("解析分页响应失败: %v", err)
 	}
-	if len(result.Data) != 2 {
-		t.Fatalf("分页结果数量错误，期望 2，实际 %d", len(result.Data))
+	if len(result.Data) != 1 {
+		t.Fatalf("分页结果数量错误，期望 1，实际 %d", len(result.Data))
 	}
-	if result.Data[0].ID != task2.ID || result.Data[1].ID != task1.ID {
-		t.Fatalf("排序或偏移不符合预期，实际 id 顺序: %d, %d", result.Data[0].ID, result.Data[1].ID)
+	if result.Data[0].ID != task1.ID {
+		t.Fatalf("排序或偏移不符合预期，实际 id: %d, 期望: %d", result.Data[0].ID, task1.ID)
 	}
 }
 

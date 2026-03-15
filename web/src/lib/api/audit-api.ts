@@ -37,8 +37,8 @@ type AuditQueryOptions = {
   statusCode?: number;
   from?: string;
   to?: string;
-  limit?: number;
-  offset?: number;
+  page?: number;
+  pageSize?: number;
 };
 
 function buildAuditQuery(options?: AuditQueryOptions): URLSearchParams {
@@ -64,11 +64,11 @@ function buildAuditQuery(options?: AuditQueryOptions): URLSearchParams {
   if (options?.to?.trim()) {
     query.set("to", options.to.trim());
   }
-  if (options?.limit && Number.isFinite(options.limit) && options.limit > 0) {
-    query.set("limit", String(options.limit));
+  if (options?.page && Number.isFinite(options.page) && options.page > 0) {
+    query.set("page", String(options.page));
   }
-  if (options?.offset && Number.isFinite(options.offset) && options.offset >= 0) {
-    query.set("offset", String(options.offset));
+  if (options?.pageSize && Number.isFinite(options.pageSize) && options.pageSize > 0) {
+    query.set("page_size", String(options.pageSize));
   }
   return query;
 }
@@ -78,10 +78,10 @@ export function createAuditApi() {
     async getAuditLogs(
       token: string,
       options?: AuditQueryOptions
-    ): Promise<{ items: AuditLogRecord[]; total: number; limit: number; offset: number }> {
+    ): Promise<{ items: AuditLogRecord[]; total: number; page: number; pageSize: number }> {
       const query = buildAuditQuery(options);
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<AuditLogResponse[]> & { total?: number; limit?: number; offset?: number }>(
+      const payload = await request<Envelope<AuditLogResponse[]> & { total?: number; page?: number; page_size?: number }>(
         `/audit-logs${suffix}`,
         {
           token
@@ -91,8 +91,8 @@ export function createAuditApi() {
       return {
         items: rows.map((row) => mapAuditLog(row)),
         total: typeof payload.total === "number" ? payload.total : rows.length,
-        limit: typeof payload.limit === "number" ? payload.limit : rows.length,
-        offset: typeof payload.offset === "number" ? payload.offset : 0
+        page: typeof payload.page === "number" ? payload.page : 1,
+        pageSize: typeof payload.page_size === "number" ? payload.page_size : rows.length,
       };
     },
 

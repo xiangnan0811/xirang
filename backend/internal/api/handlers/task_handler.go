@@ -85,26 +85,31 @@ func (h *TaskHandler) List(c *gin.Context) {
 		query = query.Where("name LIKE ? ESCAPE '\\' OR command LIKE ? ESCAPE '\\' OR rsync_source LIKE ? ESCAPE '\\' OR rsync_target LIKE ? ESCAPE '\\'", fuzzyKeyword, fuzzyKeyword, fuzzyKeyword, fuzzyKeyword)
 	}
 
-	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
-		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
-			query = query.Limit(parsed)
-		}
-	}
-	if rawOffset := strings.TrimSpace(c.Query("offset")); rawOffset != "" {
-		if parsed, err := strconv.Atoi(rawOffset); err == nil && parsed >= 0 {
-			query = query.Offset(parsed)
-		}
+	pg := parsePagination(c, 100, "created_at", map[string]bool{
+		"id": true, "created_at": true, "status": true, "name": true, "node_id": true,
+	})
+	// 向后兼容旧 sort 参数（如 sort=-id）
+	orderClause := parseTaskSort(c.Query("sort"))
+	if c.Query("sort") == "" {
+		orderClause = pg.SortBy + " " + pg.SortOrder + ", id desc"
 	}
 
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	offset := (pg.Page - 1) * pg.PageSize
 	var tasks []model.Task
-	if err := query.Preload("Node").Preload("Policy").Order(parseTaskSort(c.Query("sort"))).Find(&tasks).Error; err != nil {
+	if err := query.Preload("Node").Preload("Policy").Order(orderClause).Offset(offset).Limit(pg.PageSize).Find(&tasks).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 	for i := range tasks {
 		tasks[i].Node = sanitizeNode(tasks[i].Node)
 	}
-	c.JSON(http.StatusOK, gin.H{"data": tasks})
+	paginatedResponse(c, tasks, total, pg)
 }
 
 func (h *TaskHandler) Get(c *gin.Context) {

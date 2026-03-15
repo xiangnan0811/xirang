@@ -55,7 +55,7 @@ export function AuditPage() {
   const { token } = useAuth();
   const [rows, setRows] = useState<AuditLogRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [keyword, setKeyword] = useState("");
@@ -64,8 +64,8 @@ export function AuditPage() {
 
   const autoLoadKeyRef = useRef("");
 
-  const pageIndex = useMemo(() => Math.floor(offset / pageSize) + 1, [offset]);
-  const hasNext = offset + pageSize < total;
+  const pageIndex = page;
+  const hasNext = page * pageSize < total;
   const auditStats = useMemo(() => {
     let writeOps = 0;
     let readOps = 0;
@@ -84,7 +84,7 @@ export function AuditPage() {
     return { writeOps, readOps, errorStatus };
   }, [rows]);
 
-  const load = async (nextOffset: number) => {
+  const load = async (nextPage: number) => {
     if (!token) {
       toast.error("请先登录后查看审计日志。");
       return;
@@ -99,12 +99,12 @@ export function AuditPage() {
         method: method === "all" ? undefined : method,
         from,
         to,
-        limit: pageSize,
-        offset: nextOffset
+        pageSize,
+        page: nextPage
       });
       setRows(result.items);
       setTotal(result.total);
-      setOffset(result.offset);
+      setPage(result.page);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
         toast.error("当前账号无权访问审计日志（仅管理员可读）。");
@@ -131,7 +131,7 @@ export function AuditPage() {
         method: method === "all" ? undefined : method,
         from,
         to,
-        limit: 5000
+        pageSize: 5000
       });
 
       const link = document.createElement("a");
@@ -164,7 +164,7 @@ export function AuditPage() {
       return;
     }
     autoLoadKeyRef.current = loadKey;
-    void load(0);
+    void load(1);
   }, [keyword, method, timeRange, token]);
 
   return (
@@ -173,7 +173,7 @@ export function AuditPage() {
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => void load(offset)} disabled={loading}>
+              <Button size="sm" variant="outline" onClick={() => void load(page)} disabled={loading}>
                 <RefreshCw className="mr-1 size-3.5" />
                 刷新
               </Button>
@@ -211,7 +211,7 @@ export function AuditPage() {
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
             </AppSelect>
-            <Button className="md:col-span-2 lg:col-span-1" onClick={() => void load(0)} disabled={loading}>
+            <Button className="md:col-span-2 lg:col-span-1" onClick={() => void load(1)} disabled={loading}>
               查询
             </Button>
           </div>
@@ -302,15 +302,15 @@ export function AuditPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void load(Math.max(0, offset - pageSize))}
-                disabled={loading || offset === 0}
+                onClick={() => void load(Math.max(1, page - 1))}
+                disabled={loading || page <= 1}
               >
                 上一页
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void load(offset + pageSize)}
+                onClick={() => void load(page + 1)}
                 disabled={loading || !hasNext}
               >
                 下一页

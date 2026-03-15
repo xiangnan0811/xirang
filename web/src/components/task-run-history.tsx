@@ -57,17 +57,17 @@ type Props = {
 export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
   const [runs, setRuns] = useState<TaskRunRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRuns = useCallback(async (currentOffset: number) => {
+  const fetchRuns = useCallback(async (currentPage: number) => {
     setLoading(true);
     setError(null);
     try {
       const result = await apiClient.getTaskRuns(token, taskId, {
-        limit: PAGE_SIZE,
-        offset: currentOffset,
+        pageSize: PAGE_SIZE,
+        page: currentPage,
       });
       setRuns(result.items);
       setTotal(result.total);
@@ -79,11 +79,11 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
   }, [token, taskId]);
 
   useEffect(() => {
-    void fetchRuns(offset);
-  }, [fetchRuns, offset]);
+    void fetchRuns(page);
+  }, [fetchRuns, page]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const currentPage = page;
 
   if (loading && runs.length === 0) {
     return <LoadingState title="加载执行历史" description="正在获取执行记录..." rows={3} />;
@@ -93,7 +93,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
     return (
       <div className="py-8 text-center text-sm text-muted-foreground">
         <p>{error}</p>
-        <Button variant="outline" size="sm" className="mt-2" onClick={() => void fetchRuns(offset)}>
+        <Button variant="outline" size="sm" className="mt-2" onClick={() => void fetchRuns(page)}>
           重试
         </Button>
       </div>
@@ -166,8 +166,8 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               variant="outline"
               size="icon"
               className="size-7"
-              disabled={offset === 0 || loading}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              disabled={page <= 1 || loading}
+              onClick={() => setPage(Math.max(1, page - 1))}
               aria-label="上一页"
             >
               <ChevronLeft className="size-3.5" />
@@ -176,8 +176,8 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               variant="outline"
               size="icon"
               className="size-7"
-              disabled={offset + PAGE_SIZE >= total || loading}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage(page + 1)}
               aria-label="下一页"
             >
               <ChevronRight className="size-3.5" />

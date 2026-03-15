@@ -86,18 +86,9 @@ func (h *AlertHandler) List(c *gin.Context) {
 		}
 	}
 
-	limit := 200
-	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
-		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
-			limit = parsed
-		}
-	}
-	offset := 0
-	if rawOffset := strings.TrimSpace(c.Query("offset")); rawOffset != "" {
-		if parsed, err := strconv.Atoi(rawOffset); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
+	pg := parsePagination(c, 200, "triggered_at", map[string]bool{
+		"triggered_at": true, "severity": true, "status": true, "node_name": true,
+	})
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -106,16 +97,11 @@ func (h *AlertHandler) List(c *gin.Context) {
 	}
 
 	var alerts []model.Alert
-	if err := query.Order("triggered_at desc").Limit(limit).Offset(offset).Find(&alerts).Error; err != nil {
+	if err := applyPagination(query, pg).Find(&alerts).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"data":   alerts,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
+	paginatedResponse(c, alerts, total, pg)
 }
 
 func (h *AlertHandler) Get(c *gin.Context) {
