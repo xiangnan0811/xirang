@@ -140,7 +140,7 @@ func aggregateRuns(db *gorm.DB, nodeIDs []uint, start, end time.Time) (runAgg, e
 	}
 	var r row
 	err := db.Table("task_runs").
-		Select("COUNT(*) as total, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed_count, AVG(duration_ms) as avg_ms").
+		Select("COUNT(*) as total, SUM(CASE WHEN task_runs.status='success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN task_runs.status='failed' THEN 1 ELSE 0 END) as failed_count, AVG(task_runs.duration_ms) as avg_ms").
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
 		Where("tasks.node_id IN ? AND task_runs.started_at >= ? AND task_runs.started_at < ?", nodeIDs, start, end).
 		Scan(&r).Error

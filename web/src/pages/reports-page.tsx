@@ -127,7 +127,8 @@ function ConfigCard({
     setGenerating(true);
     try {
       await onGenerate(cfg.id);
-      if (expanded) void loadReports();
+      setExpanded(true);
+      void loadReports();
     } finally {
       setGenerating(false);
     }
