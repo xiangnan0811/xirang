@@ -50,7 +50,7 @@ func (m *mockTaskRunner) Cancel(taskID uint) error {
 
 func TestTaskListFilterPaginationSort(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.NodeOwner{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -83,6 +83,7 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewTaskHandler(db, nil)
 	r.GET("/tasks", handler.List)
 
@@ -124,7 +125,7 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 
 func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.NodeOwner{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -146,6 +147,7 @@ func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewTaskHandler(db, nil)
 	r.GET("/tasks", handler.List)
 

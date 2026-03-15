@@ -8,9 +8,39 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/middleware"
+
 	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
+
+// ownershipNodeFilter 返回当前 operator 拥有的节点 ID 列表。
+// admin/viewer 返回 nil, false（无需过滤）。operator 返回 owned IDs, true。
+func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
+	role := middleware.CurrentRole(c)
+	if role == "admin" || role == "viewer" {
+		return nil, false, nil
+	}
+	userID := middleware.CurrentUserID(c)
+	ids, err := middleware.OwnedNodeIDs(db, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, true, nil
+}
+
+// checkOwnershipByNodeID 检查 operator 是否拥有指定节点。
+func checkOwnershipByNodeID(c *gin.Context, db *gorm.DB, nodeID uint) bool {
+	role := middleware.CurrentRole(c)
+	if role == "admin" || role == "viewer" {
+		return true
+	}
+	userID := middleware.CurrentUserID(c)
+	var count int64
+	db.Table("node_owners").Where("node_id = ? AND user_id = ?", nodeID, userID).Count(&count)
+	return count > 0
+}
 
 var standardCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 

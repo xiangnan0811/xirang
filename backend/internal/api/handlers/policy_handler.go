@@ -39,8 +39,18 @@ type policyRequest struct {
 }
 
 func (h *PolicyHandler) List(c *gin.Context) {
+	query := h.db.Preload("Nodes").Order("id asc")
+
+	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		// union 规则：策略关联的任意节点属于 operator 即可见
+		query = query.Where("id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", nodeIDs)
+	}
+
 	var policies []model.Policy
-	if err := h.db.Preload("Nodes").Order("id asc").Find(&policies).Error; err != nil {
+	if err := query.Find(&policies).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}

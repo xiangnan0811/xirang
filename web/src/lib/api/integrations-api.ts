@@ -79,10 +79,10 @@ export function createIntegrationsApi() {
     async updateIntegration(
       token: string,
       integrationId: string,
-      patch: Partial<IntegrationChannel>
+      patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }
     ): Promise<IntegrationChannel> {
       const numericId = parseNumericId(integrationId, "int");
-      const payload = await request<Envelope<IntegrationResponse>>(`/integrations/${numericId}`, {
+      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>(`/integrations/${numericId}`, {
         method: "PUT",
         token,
         body: {
@@ -91,10 +91,16 @@ export function createIntegrationsApi() {
           endpoint: patch.endpoint,
           enabled: patch.enabled,
           fail_threshold: patch.failThreshold,
-          cooldown_minutes: patch.cooldownMinutes
+          cooldown_minutes: patch.cooldownMinutes,
+          secret: patch.secret || undefined,
+          skip_endpoint_hint: patch.skipEndpointHint ?? false
         }
       });
-      return mapIntegration(unwrapData(payload));
+      // 域名建议提示（200 + updated:false）
+      if (raw && typeof raw === "object" && "updated" in raw && (raw as Record<string, unknown>).updated === false) {
+        throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
+      }
+      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
     },
 
     async testIntegration(token: string, integrationId: string): Promise<IntegrationProbeResult> {

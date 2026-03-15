@@ -81,6 +81,10 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "执行记录不存在"})
 		return
 	}
+	if run.Task.ID != 0 && !checkOwnershipByNodeID(c, h.db, run.Task.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+		return
+	}
 
 	c.JSON(http.StatusOK, run)
 }
@@ -91,6 +95,19 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 	runID, ok := parseID(c, "id")
 	if !ok {
 		return
+	}
+	// ownership 校验：通过 task_run → task → node 链查
+	var taskRun model.TaskRun
+	if err := h.db.Select("id", "task_id").First(&taskRun, runID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "执行记录不存在"})
+		return
+	}
+	var taskEntity model.Task
+	if err := h.db.Select("id", "node_id").First(&taskEntity, taskRun.TaskID).Error; err == nil {
+		if !checkOwnershipByNodeID(c, h.db, taskEntity.NodeID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+			return
+		}
 	}
 
 	limit := 200

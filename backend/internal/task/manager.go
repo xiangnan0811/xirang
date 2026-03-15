@@ -681,6 +681,10 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	if ParseStatus(taskEntity.Status) == StatusRunning {
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
+	// 手动触发时，阻止有前置依赖的任务被直接执行，需从头节点触发
+	if reason == "manual" && taskEntity.DependsOnTaskID != nil && *taskEntity.DependsOnTaskID > 0 {
+		return 0, fmt.Errorf("该任务有前置依赖（任务 ID: %d），请从链头节点触发", *taskEntity.DependsOnTaskID)
+	}
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {

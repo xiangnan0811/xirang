@@ -56,6 +56,13 @@ type taskRequest struct {
 func (h *TaskHandler) List(c *gin.Context) {
 	query := h.db.Model(&model.Task{})
 
+	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		query = query.Where("node_id IN ?", nodeIDs)
+	}
+
 	status := strings.TrimSpace(c.Query("status"))
 	if status != "" {
 		query = query.Where("status = ?", status)
@@ -354,9 +361,34 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		Error  string `json:"error,omitempty"`
 	}
 
+	// ownership 校验：operator 仅允许触发自己拥有的节点上的任务
+	nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	var allowedNodeIDSet map[uint]struct{}
+	if needFilter {
+		allowedNodeIDSet = make(map[uint]struct{}, len(nodeIDs))
+		for _, nid := range nodeIDs {
+			allowedNodeIDSet[nid] = struct{}{}
+		}
+	}
+
 	results := make([]triggerResult, 0, len(req.TaskIDs))
 	successCount := 0
 	for _, tid := range req.TaskIDs {
+		if needFilter {
+			var t model.Task
+			if lookupErr := h.db.Select("id", "node_id").First(&t, tid).Error; lookupErr != nil {
+				results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
+				continue
+			}
+			if _, ok := allowedNodeIDSet[t.NodeID]; !ok {
+				results = append(results, triggerResult{TaskID: tid, Error: "无权操作该任务"})
+				continue
+			}
+		}
 		runID, err := h.runner.TriggerManual(tid)
 		if err != nil {
 			results = append(results, triggerResult{TaskID: tid, Error: err.Error()})

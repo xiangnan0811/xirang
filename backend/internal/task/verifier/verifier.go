@@ -37,16 +37,22 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
 	}
 
-	// restic/rclone 使用内建校验命令
+	// 恢复模式：restic/rclone 恢复后路径含义已交换（RsyncTarget 是恢复目标而非仓库），
+	// 不能使用内建仓库校验；rsync 恢复使用远程对比校验。
+	if isRestore {
+		switch task.ExecutorType {
+		case "restic", "rclone":
+			return Result{Status: "passed", Message: "恢复任务校验跳过（执行器已内建错误检测）"}
+		}
+		return VerifyRemoteToRemote(ctx, task, sampleRate, db, logf)
+	}
+
+	// 备份模式：restic/rclone 使用内建校验命令
 	switch task.ExecutorType {
 	case "restic":
 		return VerifyRestic(ctx, task, db, logf)
 	case "rclone":
 		return VerifyRclone(ctx, task, db, logf)
-	}
-
-	if isRestore {
-		return VerifyRemoteToRemote(ctx, task, sampleRate, db, logf)
 	}
 
 	// 备份模式：源端在远程，目标端在本地

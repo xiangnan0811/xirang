@@ -88,7 +88,7 @@ export interface ConsoleDataState {
   addIntegration: (input: NewIntegrationInput) => Promise<void>;
   removeIntegration: (integrationId: string) => Promise<void>;
   toggleIntegration: (integrationId: string) => Promise<void>;
-  updateIntegration: (integrationId: string, patch: Partial<IntegrationChannel>) => Promise<void>;
+  updateIntegration: (integrationId: string, patch: Partial<IntegrationChannel> & { secret?: string }) => Promise<void>;
 
   createSSHKey: (input: NewSSHKeyInput) => Promise<string>;
   updateSSHKey: (keyId: string, input: NewSSHKeyInput) => Promise<void>;

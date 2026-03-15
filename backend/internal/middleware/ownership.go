@@ -59,6 +59,15 @@ func OwnershipNodeCheck(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// OwnedNodeIDs 返回指定用户拥有的节点 ID 列表（用于 operator 列表过滤）。
+func OwnedNodeIDs(db *gorm.DB, userID uint) ([]uint, error) {
+	var ids []uint
+	if err := db.Model(&model.NodeOwner{}).Where("user_id = ?", userID).Pluck("node_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // OwnershipTaskCheck operator 通过 task :id 访问时，校验任务所属节点是否为当前 operator 的 owner。
 func OwnershipTaskCheck(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {

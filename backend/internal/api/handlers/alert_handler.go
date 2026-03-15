@@ -62,6 +62,13 @@ func NewAlertHandler(db *gorm.DB) *AlertHandler {
 func (h *AlertHandler) List(c *gin.Context) {
 	query := h.db.Model(&model.Alert{})
 
+	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		query = query.Where("node_id IN ?", nodeIDs)
+	}
+
 	status := strings.TrimSpace(c.Query("status"))
 	if status != "" {
 		query = query.Where("status = ?", status)
@@ -121,6 +128,10 @@ func (h *AlertHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": alert})
 }
 
@@ -132,6 +143,10 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		return
+	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
 	if alert.Status == "resolved" {
@@ -154,6 +169,10 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		return
+	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
 	alert.Status = "resolved"

@@ -306,6 +306,14 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		req.CooldownMinutes = item.CooldownMinutes
 	}
 
+	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
+	if !req.SkipEndpointHint {
+		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
+			c.JSON(http.StatusOK, gin.H{"hint": hint, "updated": false})
+			return
+		}
+	}
+
 	// 记录更新前是否有 secret（AfterFind 已解密）
 	hadSecret := item.Secret != ""
 

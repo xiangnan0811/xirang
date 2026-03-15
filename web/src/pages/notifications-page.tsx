@@ -79,6 +79,7 @@ export function NotificationsPage() {
         endpoint: draft.endpoint,
         failThreshold: draft.failThreshold,
         cooldownMinutes: draft.cooldownMinutes,
+        secret: draft.secret || undefined,
       });
       toast.success(`通知方式 ${draft.name} 已保存。`);
       setEditDialogOpen(false);

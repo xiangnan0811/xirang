@@ -55,7 +55,7 @@ export function useIntegrationAlertOperations({
     setIntegrations((prev) => prev.filter((integration) => integration.id !== integrationID));
   }, [exec, setIntegrations]);
 
-  const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel>) => {
+  const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel> & { secret?: string }) => {
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
       throw new Error(`通知方式不存在或已被删除，请刷新后重试。`);

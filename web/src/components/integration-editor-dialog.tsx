@@ -12,6 +12,7 @@ type IntegrationEditorDraft = {
   type: IntegrationType;
   name: string;
   endpoint: string;
+  secret: string;
   failThreshold: number;
   cooldownMinutes: number;
 };
@@ -21,6 +22,7 @@ const emptyDraft: IntegrationEditorDraft = {
   type: "email",
   name: "",
   endpoint: "",
+  secret: "",
   failThreshold: 1,
   cooldownMinutes: 5,
 };
@@ -39,6 +41,7 @@ function toDraft(integration: IntegrationChannel): IntegrationEditorDraft {
     type: integration.type,
     name: integration.name,
     endpoint: integration.endpoint,
+    secret: "",
     failThreshold: integration.failThreshold,
     cooldownMinutes: integration.cooldownMinutes,
   };
@@ -189,6 +192,19 @@ export function IntegrationEditorDialog({
           }
         />
       </div>
+
+      {draft.type !== "email" && (
+        <div>
+          <label htmlFor="int-edit-secret" className="mb-1 block text-sm font-medium">签名密钥（选填）</label>
+          <Input id="int-edit-secret" type="password" autoComplete="off"
+            placeholder={draft.id ? "留空保持不变" : "用于验签的密钥"}
+            value={draft.secret}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, secret: event.target.value }))
+            }
+          />
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>

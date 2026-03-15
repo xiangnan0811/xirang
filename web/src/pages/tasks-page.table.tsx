@@ -172,7 +172,7 @@ export const TasksTable = React.memo(function TasksTable({
                       <Button
                         size="sm"
                         className="ml-2"
-                        disabled={!canTrigger(task.status) || isPendingAny}
+                        disabled={!canTrigger(task.status) || !!task.dependsOnTaskId || isPendingAny}
                         onClick={() => void handleTrigger(task.id)}
                       >
                         {isPendingTrigger ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Play className="size-4 mr-1" />}

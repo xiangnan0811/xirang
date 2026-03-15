@@ -165,7 +165,7 @@ export const TasksGrid = React.memo(function TasksGrid({
               </div>
               <Button
                 size="sm"
-                disabled={!canTrigger(task.status) || isPendingAny}
+                disabled={!canTrigger(task.status) || !!task.dependsOnTaskId || isPendingAny}
                 onClick={() => void handleTrigger(task.id)}
               >
                 {isPendingTrigger ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}

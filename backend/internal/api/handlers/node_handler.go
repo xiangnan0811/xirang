@@ -64,8 +64,16 @@ func sanitizeNode(node model.Node) model.Node {
 }
 
 func (h *NodeHandler) List(c *gin.Context) {
+	query := h.db.Preload("SSHKey")
+	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		query = query.Where("id IN ?", nodeIDs)
+	}
+
 	var nodes []model.Node
-	if err := h.db.Preload("SSHKey").Order("id asc").Find(&nodes).Error; err != nil {
+	if err := query.Order("id asc").Find(&nodes).Error; err != nil {
 		log.Printf("服务器内部错误: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
@@ -130,9 +138,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	if req.Status == "" {
 		req.Status = "offline"
 	}
-	if req.BasePath == "" {
-		req.BasePath = "/"
-	}
+	// BasePath 不设置默认值 "/"，避免文件浏览器白名单开放整台机器
 	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
