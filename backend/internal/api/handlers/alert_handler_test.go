@@ -61,6 +61,7 @@ func TestAlertDeliveries(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.GET("/alerts/:id/deliveries", handler.Deliveries)
 
@@ -93,6 +94,7 @@ func TestAlertDeliveriesNotFound(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.GET("/alerts/:id/deliveries", handler.Deliveries)
 
@@ -156,6 +158,7 @@ func TestAlertRetryDeliverySuccess(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.POST("/alerts/:id/retry-delivery", handler.RetryDelivery)
 
@@ -225,6 +228,7 @@ func TestAlertRetryDeliveryFailed(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.POST("/alerts/:id/retry-delivery", handler.RetryDelivery)
 
@@ -325,6 +329,7 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.POST("/alerts/:id/retry-failed-deliveries", handler.RetryFailedDeliveries)
 
@@ -365,7 +370,7 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 
 func TestAlertDeliveryStats(t *testing.T) {
 	db := openAlertHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.AlertDelivery{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -392,6 +397,7 @@ func TestAlertDeliveryStats(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
 	handler := NewAlertHandler(db)
 	r.GET("/alerts/delivery-stats", handler.DeliveryStats)
 

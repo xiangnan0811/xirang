@@ -71,6 +71,10 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "策略不存在"})
 		return
 	}
+	if !checkOwnershipByPolicyNodes(c, h.db, p) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该策略"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": buildPolicyResponse(p)})
 }
 

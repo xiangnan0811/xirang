@@ -191,8 +191,12 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 	}
 
 	var alert model.Alert
-	if err := h.db.Select("id").First(&alert, id).Error; err != nil {
+	if err := h.db.Select("id", "node_id").First(&alert, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		return
+	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警投递记录"})
 		return
 	}
 
@@ -220,6 +224,10 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		return
+	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
 
@@ -270,6 +278,10 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		return
+	}
+	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
 
@@ -347,23 +359,39 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 	hours := parseDeliveryStatsHours(c.Query("hours"))
 	from := time.Now().Add(-time.Duration(hours) * time.Hour)
 
+	nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	totalQuery := h.db.Model(&model.AlertDelivery{}).
+		Where("created_at >= ?", from)
+	if needFilter {
+		totalQuery = totalQuery.Where("alert_id IN (SELECT id FROM alerts WHERE node_id IN ?)", nodeIDs)
+	}
+
 	var totals struct {
 		Sent   int64 `gorm:"column:sent"`
 		Failed int64 `gorm:"column:failed"`
 	}
-	if err := h.db.Model(&model.AlertDelivery{}).
+	if err := totalQuery.
 		Select("COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
-		Where("created_at >= ?", from).
 		Scan(&totals).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	var byIntegration []deliveryStatsByIntegration
-	if err := h.db.Table("alert_deliveries AS ad").
+	byIntQuery := h.db.Table("alert_deliveries AS ad").
 		Select("ad.integration_id AS integration_id, COALESCE(i.name, '') AS name, COALESCE(i.type, '') AS type, COALESCE(SUM(CASE WHEN ad.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN ad.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
 		Joins("LEFT JOIN integrations AS i ON i.id = ad.integration_id").
-		Where("ad.created_at >= ?", from).
+		Where("ad.created_at >= ?", from)
+	if needFilter {
+		byIntQuery = byIntQuery.Where("ad.alert_id IN (SELECT id FROM alerts WHERE node_id IN ?)", nodeIDs)
+	}
+
+	var byIntegration []deliveryStatsByIntegration
+	if err := byIntQuery.
 		Group("ad.integration_id, i.name, i.type").
 		Order("failed DESC, sent DESC, ad.integration_id ASC").
 		Scan(&byIntegration).Error; err != nil {
@@ -393,14 +421,22 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 }
 
 func (h *AlertHandler) UnreadCount(c *gin.Context) {
+	query := h.db.Model(&model.Alert{}).Where("status = ?", "open")
+
+	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		query = query.Where("node_id IN ?", nodeIDs)
+	}
+
 	var counts struct {
 		Total    int64 `gorm:"column:total"`
 		Critical int64 `gorm:"column:critical"`
 		Warning  int64 `gorm:"column:warning"`
 	}
-	if err := h.db.Model(&model.Alert{}).
+	if err := query.
 		Select("COUNT(*) as total, COALESCE(SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END), 0) as critical, COALESCE(SUM(CASE WHEN severity='warning' THEN 1 ELSE 0 END), 0) as warning").
-		Where("status = ?", "open").
 		Scan(&counts).Error; err != nil {
 		respondInternalError(c, err)
 		return

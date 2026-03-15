@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"xirang/backend/internal/middleware"
+	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
@@ -39,6 +40,26 @@ func checkOwnershipByNodeID(c *gin.Context, db *gorm.DB, nodeID uint) bool {
 	userID := middleware.CurrentUserID(c)
 	var count int64
 	db.Table("node_owners").Where("node_id = ? AND user_id = ?", nodeID, userID).Count(&count)
+	return count > 0
+}
+
+// checkOwnershipByPolicyNodes 检查 operator 是否拥有策略关联的任意节点（union 规则）。
+// 策略已通过 Preload("Nodes") 加载节点列表。
+func checkOwnershipByPolicyNodes(c *gin.Context, db *gorm.DB, p model.Policy) bool {
+	role := middleware.CurrentRole(c)
+	if role == "admin" || role == "viewer" {
+		return true
+	}
+	if len(p.Nodes) == 0 {
+		return false
+	}
+	userID := middleware.CurrentUserID(c)
+	nodeIDs := make([]uint, len(p.Nodes))
+	for i, n := range p.Nodes {
+		nodeIDs[i] = n.ID
+	}
+	var count int64
+	db.Table("node_owners").Where("user_id = ? AND node_id IN ?", userID, nodeIDs).Count(&count)
 	return count > 0
 }
 

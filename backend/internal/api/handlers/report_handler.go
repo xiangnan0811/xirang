@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/reporting"
 
@@ -64,6 +65,9 @@ func (h *ReportHandler) ListConfigs(c *gin.Context) {
 		log.Printf("报告配置查询失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
+	}
+	if ownedIDs, needFilter := h.operatorOwnedNodeIDs(c); needFilter {
+		configs = filterConfigsByOwnedNodes(configs, ownedIDs)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": configs})
 }
@@ -207,6 +211,15 @@ func (h *ReportHandler) ListReports(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
 		return
 	}
+	var cfg model.ReportConfig
+	if err := h.db.First(&cfg, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "报告配置不存在"})
+		return
+	}
+	if !h.checkConfigOwnership(c, cfg) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告配置"})
+		return
+	}
 	var reports []model.Report
 	if err := h.db.Where("config_id = ?", id).Order("period_start desc").Limit(50).Find(&reports).Error; err != nil {
 		log.Printf("报告查询失败: %v", err)
@@ -228,5 +241,72 @@ func (h *ReportHandler) GetReport(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "报告不存在"})
 		return
 	}
+	if report.Config != nil && report.Config.ID != 0 && !h.checkConfigOwnership(c, *report.Config) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": report})
+}
+
+// operatorOwnedNodeIDs 返回 operator 拥有的节点 ID 集合。
+// admin/viewer 返回 nil, false（无需过滤）。
+func (h *ReportHandler) operatorOwnedNodeIDs(c *gin.Context) (map[uint]struct{}, bool) {
+	role := middleware.CurrentRole(c)
+	if role == "admin" || role == "viewer" {
+		return nil, false
+	}
+	userID := middleware.CurrentUserID(c)
+	ids, err := middleware.OwnedNodeIDs(h.db, userID)
+	if err != nil || len(ids) == 0 {
+		return map[uint]struct{}{}, true
+	}
+	set := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set, true
+}
+
+// checkConfigOwnership 检查 operator 是否有权访问某报告配置。
+func (h *ReportHandler) checkConfigOwnership(c *gin.Context, cfg model.ReportConfig) bool {
+	role := middleware.CurrentRole(c)
+	if role == "admin" || role == "viewer" {
+		return true
+	}
+	// operator 仅可访问 scope_type=node_ids 且与自身节点有交集的配置
+	if cfg.ScopeType != "node_ids" {
+		return false
+	}
+	ownedIDs, needFilter := h.operatorOwnedNodeIDs(c)
+	if !needFilter {
+		return true
+	}
+	return configOverlapsOwnedNodes(cfg, ownedIDs)
+}
+
+// filterConfigsByOwnedNodes 过滤出与 operator 节点有交集的报告配置。
+func filterConfigsByOwnedNodes(configs []model.ReportConfig, ownedIDs map[uint]struct{}) []model.ReportConfig {
+	result := make([]model.ReportConfig, 0, len(configs))
+	for _, cfg := range configs {
+		if cfg.ScopeType != "node_ids" {
+			continue
+		}
+		if configOverlapsOwnedNodes(cfg, ownedIDs) {
+			result = append(result, cfg)
+		}
+	}
+	return result
+}
+
+func configOverlapsOwnedNodes(cfg model.ReportConfig, ownedIDs map[uint]struct{}) bool {
+	var nodeIDs []uint
+	if err := json.Unmarshal([]byte(cfg.ScopeValue), &nodeIDs); err != nil || len(nodeIDs) == 0 {
+		return false
+	}
+	for _, nid := range nodeIDs {
+		if _, ok := ownedIDs[nid]; ok {
+			return true
+		}
+	}
+	return false
 }
