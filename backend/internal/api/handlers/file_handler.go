@@ -259,6 +259,9 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Clo
 // validateNodePath 对选项 A 的路径做安全校验，允许 Node.BasePath 及该节点任务的 RsyncSource 作为白名单根。
 func validateNodePath(rawPath string, node model.Node, db *gorm.DB) (string, error) {
 	if util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true" {
+		if !util.IsDevelopmentEnv() {
+			return "", fmt.Errorf("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
+		}
 		return filepath.Clean(rawPath), nil
 	}
 

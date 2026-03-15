@@ -1034,32 +1034,34 @@ func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates ma
 	return nil
 }
 
-// triggerDownstreamIfAny 在上游任务成功（或 warning）后触发下游任务。
+// triggerDownstreamIfAny 在上游任务成功（或 warning）后触发所有下游任务。
 func (m *Manager) triggerDownstreamIfAny(upstream model.Task, runID uint, chainRunID string) {
-	var downstream model.Task
-	result := m.db.Where("depends_on_task_id = ?", upstream.ID).Limit(1).Find(&downstream)
-	if result.Error != nil || result.RowsAffected == 0 {
+	var downstreams []model.Task
+	if err := m.db.Where("depends_on_task_id = ?", upstream.ID).Find(&downstreams).Error; err != nil {
 		return
 	}
-	upstreamRunID := runID
-	if _, err := m.triggerCore(downstream.ID, "chain", chainRunID, &upstreamRunID); err != nil {
-		logger.Module("task").Warn().
-			Uint("downstream_task_id", downstream.ID).
-			Uint("upstream_task_id", upstream.ID).
-			Err(err).Msg("触发下游任务失败")
+	for _, downstream := range downstreams {
+		upstreamRunID := runID
+		if _, err := m.triggerCore(downstream.ID, "chain", chainRunID, &upstreamRunID); err != nil {
+			logger.Module("task").Warn().
+				Uint("downstream_task_id", downstream.ID).
+				Uint("upstream_task_id", upstream.ID).
+				Err(err).Msg("触发下游任务失败")
+		}
 	}
 }
 
-// skipDownstreamIfAny 在上游任务永久失败后，将下游任务标记为 skipped 并递归传播。
+// skipDownstreamIfAny 在上游任务永久失败后，将所有下游任务标记为 skipped 并递归传播。
 func (m *Manager) skipDownstreamIfAny(upstream model.Task, runID uint, chainRunID string, reason string) {
-	var downstream model.Task
-	result := m.db.Where("depends_on_task_id = ?", upstream.ID).Limit(1).Find(&downstream)
-	if result.Error != nil || result.RowsAffected == 0 {
+	var downstreams []model.Task
+	if err := m.db.Where("depends_on_task_id = ?", upstream.ID).Find(&downstreams).Error; err != nil {
 		return
 	}
-	upstreamRunID := runID
 	skipMsg := fmt.Sprintf("前置任务 [%s] 永久失败: %s", upstream.Name, reason)
-	m.skipTask(downstream, chainRunID, &upstreamRunID, skipMsg)
+	for _, downstream := range downstreams {
+		upstreamRunID := runID
+		m.skipTask(downstream, chainRunID, &upstreamRunID, skipMsg)
+	}
 }
 
 // skipTask 创建 skipped 执行记录，更新任务状态，并递归跳过其下游任务。

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -13,6 +14,31 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+var validScopeTypes = map[string]bool{"all": true, "tag": true, "node_ids": true}
+var validPeriods = map[string]bool{"weekly": true, "monthly": true}
+
+func validateReportConfigRequest(req *reportConfigRequest) string {
+	scopeType := req.ScopeType
+	if scopeType == "" {
+		scopeType = "all"
+	}
+	if !validScopeTypes[scopeType] {
+		return "scope_type 必须为 all、tag 或 node_ids"
+	}
+	period := req.Period
+	if period == "" {
+		period = "weekly"
+	}
+	if !validPeriods[period] {
+		return "period 必须为 weekly 或 monthly"
+	}
+	parts := strings.Fields(req.Cron)
+	if len(parts) != 5 {
+		return "cron 格式无效，须为 5 段标准 cron 表达式（分 时 日 月 周）"
+	}
+	return ""
+}
 
 type ReportHandler struct {
 	db *gorm.DB
@@ -48,6 +74,10 @@ func (h *ReportHandler) CreateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if msg := validateReportConfigRequest(&req); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		return
+	}
 
 	scopeType := req.ScopeType
 	if scopeType == "" {
@@ -78,7 +108,7 @@ func (h *ReportHandler) CreateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": cfg})
+	c.JSON(http.StatusCreated, gin.H{"data": cfg})
 }
 
 func (h *ReportHandler) UpdateConfig(c *gin.Context) {
@@ -96,6 +126,10 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	var req reportConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if msg := validateReportConfigRequest(&req); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
 

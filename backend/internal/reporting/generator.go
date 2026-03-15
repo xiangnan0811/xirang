@@ -220,6 +220,11 @@ func buildDiskTrend(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]DiskTr
 }
 
 func sendReport(db *gorm.DB, cfg model.ReportConfig, report *model.Report) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("报告发送 panic（config=%d, report=%d）: %v", cfg.ID, report.ID, r)
+		}
+	}()
 	var integrationIDs []uint
 	if err := json.Unmarshal([]byte(cfg.IntegrationIDs), &integrationIDs); err != nil || len(integrationIDs) == 0 {
 		return

@@ -105,12 +105,12 @@ func (s *feishuSender) Send(endpoint, secret string, body payload) error {
 
 type dingtalkSender struct{}
 
-// dingtalkSign 计算钉钉签名：HMAC-SHA256(key=secret, data=timestamp+"\n"+secret)，结果 URL encode
+// dingtalkSign 计算钉钉签名：HMAC-SHA256(key=secret, data=timestamp+"\n"+secret)，结果 base64
 func dingtalkSign(secret string, timestampMs int64) (string, error) {
 	data := fmt.Sprintf("%d\n%s", timestampMs, secret)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(data))
-	return url.QueryEscape(base64.StdEncoding.EncodeToString(mac.Sum(nil))), nil
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 func (s *dingtalkSender) Send(endpoint, secret string, body payload) error {
@@ -121,7 +121,15 @@ func (s *dingtalkSender) Send(endpoint, secret string, body payload) error {
 		if err != nil {
 			return fmt.Errorf("钉钉签名计算失败: %w", err)
 		}
-		endpointURL = fmt.Sprintf("%s&timestamp=%d&sign=%s", endpoint, ts, sign)
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return fmt.Errorf("钉钉 endpoint URL 解析失败: %w", err)
+		}
+		q := u.Query()
+		q.Set("timestamp", fmt.Sprintf("%d", ts))
+		q.Set("sign", sign)
+		u.RawQuery = q.Encode()
+		endpointURL = u.String()
 	}
 
 	text := fmt.Sprintf("**[XiRang 告警][%s]**\n\n节点: %s\n错误码: %s\n说明: %s\n时间: %s",
