@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
+import { AlertTriangle, Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
+import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationChannel, IntegrationType } from "@/types/domain";
 
 type IntegrationEditorDraft = {
@@ -15,6 +17,7 @@ type IntegrationEditorDraft = {
   secret: string;
   failThreshold: number;
   cooldownMinutes: number;
+  skipEndpointHint?: boolean;
 };
 
 const emptyDraft: IntegrationEditorDraft = {
@@ -117,8 +120,9 @@ export function IntegrationEditorDialog({
 }: IntegrationEditorDialogProps) {
   const [draft, setDraft] = useDialogDraft<IntegrationEditorDraft, IntegrationChannel>(open, emptyDraft, integration, toDraft);
   const [saving, setSaving] = useState(false);
+  const [pendingHint, setPendingHint] = useState<string | null>(null);
 
-  const handleSave = async () => {
+  const handleSave = async (skipHint: boolean) => {
     if (!draft.name.trim()) {
       toast.error("保存失败：请填写通道名称。", { id: "integration-edit-name-required" });
       return;
@@ -138,9 +142,15 @@ export function IntegrationEditorDialog({
         endpoint: draft.endpoint.trim(),
         failThreshold: toBoundedInt(String(draft.failThreshold), 1, 1, 10),
         cooldownMinutes: toBoundedInt(String(draft.cooldownMinutes), 5, 1, 120),
+        skipEndpointHint: skipHint,
       });
+      setPendingHint(null);
     } catch (error) {
-      toast.error(getErrorMessage(error, "保存失败，请稍后重试。"));
+      if (error instanceof EndpointHintWarning) {
+        setPendingHint(error.hint);
+      } else {
+        toast.error(getErrorMessage(error, "保存失败，请稍后重试。"));
+      }
     } finally {
       setSaving(false);
     }
@@ -164,10 +174,35 @@ export function IntegrationEditorDialog({
       title="编辑通知方式"
       description="修改通知通道参数，保存后立即生效。"
       saving={saving}
-      onSubmit={handleSave}
+      onSubmit={() => handleSave(false)}
       submitLabel={<><Save className="mr-1 size-4" />保存修改</>}
       savingLabel={<><Save className="mr-1 size-4" />保存中...</>}
     >
+      {pendingHint && (
+        <div className="flex flex-col gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 dark:border-yellow-800 dark:bg-yellow-950">
+          <div className="flex items-start gap-2 text-sm text-yellow-800 dark:text-yellow-200">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <span>{pendingHint}</span>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPendingHint(null)}
+            >
+              重新检查
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handleSave(true)}
+              disabled={saving}
+            >
+              确认保存
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label htmlFor="int-edit-type" className="mb-1 block text-sm font-medium">通道类型</label>

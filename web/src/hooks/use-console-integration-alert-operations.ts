@@ -55,22 +55,21 @@ export function useIntegrationAlertOperations({
     setIntegrations((prev) => prev.filter((integration) => integration.id !== integrationID));
   }, [exec, setIntegrations]);
 
-  const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel> & { secret?: string }) => {
+  const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }) => {
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
       throw new Error(`通知方式不存在或已被删除，请刷新后重试。`);
     }
     const merged: IntegrationChannel = { ...current, ...patch };
 
-    const result = await exec("更新通知通道", (t) => apiClient.updateIntegration(t, integrationID, merged));
-    if (result) {
-      if (result.ok) {
-        setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? result.data : item)));
-      }
+    if (!token) {
+      ensureDemoWriteAllowed("更新通知通道");
+      setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? merged : item)));
       return;
     }
-    setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? merged : item)));
-  }, [exec, integrations, setIntegrations]);
+    const updated = await apiClient.updateIntegration(token, integrationID, { ...merged, skipEndpointHint: patch.skipEndpointHint });
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? updated : item)));
+  }, [token, ensureDemoWriteAllowed, integrations, setIntegrations]);
 
   const testIntegration = useCallback(async (integrationID: string): Promise<IntegrationProbeResult> => {
     const result = await exec("测试通知通道", (t) => apiClient.testIntegration(t, integrationID));

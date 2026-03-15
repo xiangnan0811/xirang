@@ -241,9 +241,16 @@ func (h *ReportHandler) GetReport(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "报告不存在"})
 		return
 	}
-	if report.Config != nil && report.Config.ID != 0 && !h.checkConfigOwnership(c, *report.Config) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
-		return
+	role := middleware.CurrentRole(c)
+	if role != "admin" && role != "viewer" {
+		if report.Config == nil || report.Config.ID == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
+			return
+		}
+		if !h.checkConfigOwnership(c, *report.Config) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": report})
 }

@@ -8,7 +8,6 @@ import { IntegrationManager } from "@/pages/notifications-page.integration-manag
 import { AlertCenter } from "@/pages/notifications-page.alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
-import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";
 
 export function NotificationsPage() {
@@ -73,20 +72,17 @@ export function NotificationsPage() {
   }, [removeIntegration]);
 
   const handleEditIntegration = async (draft: IntegrationEditorDraft) => {
-    try {
-      await updateIntegration(draft.id, {
-        name: draft.name,
-        endpoint: draft.endpoint,
-        failThreshold: draft.failThreshold,
-        cooldownMinutes: draft.cooldownMinutes,
-        secret: draft.secret || undefined,
-      });
-      toast.success(`通知方式 ${draft.name} 已保存。`);
-      setEditDialogOpen(false);
-      setEditingIntegration(null);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    }
+    await updateIntegration(draft.id, {
+      name: draft.name,
+      endpoint: draft.endpoint,
+      failThreshold: draft.failThreshold,
+      cooldownMinutes: draft.cooldownMinutes,
+      secret: draft.secret || undefined,
+      skipEndpointHint: draft.skipEndpointHint,
+    });
+    toast.success(`通知方式 ${draft.name} 已保存。`);
+    setEditDialogOpen(false);
+    setEditingIntegration(null);
   };
 
   return (

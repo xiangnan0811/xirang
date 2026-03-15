@@ -23,6 +23,9 @@ func configurePool(db *gorm.DB) error {
 }
 
 func applySQLitePragmas(db *gorm.DB) error {
+	if err := db.Exec("PRAGMA foreign_keys=ON;").Error; err != nil {
+		return fmt.Errorf("设置 SQLite foreign_keys 失败: %w", err)
+	}
 	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
 		return fmt.Errorf("设置 SQLite WAL 模式失败: %w", err)
 	}

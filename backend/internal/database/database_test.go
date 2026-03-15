@@ -30,6 +30,14 @@ func TestOpenSQLiteEnablesWALPragmas(t *testing.T) {
 		_ = os.Remove(sqlitePath)
 	})
 
+	var foreignKeys int
+	if err := db.Raw("PRAGMA foreign_keys;").Scan(&foreignKeys).Error; err != nil {
+		t.Fatalf("查询 foreign_keys 失败: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("期望 foreign_keys=ON(1)，实际: %d", foreignKeys)
+	}
+
 	var journalMode string
 	if err := db.Raw("PRAGMA journal_mode;").Scan(&journalMode).Error; err != nil {
 		t.Fatalf("查询 journal_mode 失败: %v", err)
