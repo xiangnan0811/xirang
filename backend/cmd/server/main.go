@@ -43,6 +43,13 @@ func main() {
 		log.Fatal().Err(err).Msg("初始化管理员账号失败")
 	}
 
+	// 自动将 v1（SHA-256 KDF）加密数据迁移到 v2（Argon2id KDF）
+	if bootstrap.HasV1EncryptedData(db) {
+		if err := bootstrap.MigrateEncryptionV1ToV2(db); err != nil {
+			log.Error().Err(err).Msg("加密数据迁移失败，v1 数据仍可正常解密")
+		}
+	}
+
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	defer hubCancel()

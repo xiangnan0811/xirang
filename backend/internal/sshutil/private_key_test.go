@@ -44,7 +44,9 @@ func TestNormalizePrivateKeyMaterialExtractsKeyBlockFromMixedText(t *testing.T) 
 }
 
 func TestValidateAndPreparePrivateKeyAcceptsEncryptedCiphertextAfterDecrypt(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "xirang-test-encryption-key-for-sshutil")
+	secure.ResetForTesting()
 	key := buildRSAPrivateKeyForTest(t)
 	ciphertext, err := secure.EncryptIfNeeded(key)
 	if err != nil {
@@ -64,6 +66,9 @@ func TestValidateAndPreparePrivateKeyAcceptsEncryptedCiphertextAfterDecrypt(t *t
 }
 
 func TestValidateAndPreparePrivateKeyRejectsInvalidEncryptedCiphertext(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+	secure.ResetForTesting()
 	_, _, err := ValidateAndPreparePrivateKey("enc:v1:abc123", SSHKeyTypeAuto)
 	if err == nil {
 		t.Fatalf("期望无效 enc:v1 密文被拒绝")

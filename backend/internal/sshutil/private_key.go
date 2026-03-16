@@ -174,10 +174,10 @@ func convertPrivateKeyToPEM(normalizedKey string) (string, bool) {
 
 func ValidateAndPreparePrivateKey(rawKey string, selectedKeyType string) (string, string, error) {
 	rawTrimmed := strings.TrimSpace(rawKey)
-	if strings.HasPrefix(rawTrimmed, "enc:v1:") {
+	if secure.IsEncrypted(rawTrimmed) {
 		decrypted, err := secure.DecryptIfNeeded(rawTrimmed)
 		if err != nil {
-			return "", SSHKeyTypeAuto, fmt.Errorf("检测到加密密文 enc:v1，但解密失败，请检查 DATA_ENCRYPTION_KEY 是否与入库时一致")
+			return "", SSHKeyTypeAuto, fmt.Errorf("检测到加密密文，但解密失败，请检查 DATA_ENCRYPTION_KEY 是否与入库时一致")
 		}
 		rawKey = decrypted
 	}
