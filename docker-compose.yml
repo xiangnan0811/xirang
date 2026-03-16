@@ -13,7 +13,6 @@ services:
       SQLITE_PATH: /workspace/backend/xirang.db
       JWT_SECRET: xirang-docker-secret
       JWT_TTL: 24h
-      EXECUTOR_SHELL: /bin/sh
       RSYNC_BINARY: rsync
       # CORS_ALLOWED_ORIGINS 默认为 http://localhost:5173,http://127.0.0.1:5173。
       # 局域网 IP 访问时会自动通过"同主机 Origin"回退放行，无需额外配置。

@@ -34,7 +34,7 @@ web/.env
 tmp/
 
 # temp docs
-docs/
+docs/plans/
 
 # deploy
 deploy/certs/

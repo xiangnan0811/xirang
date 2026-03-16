@@ -40,18 +40,12 @@ User, Node, SSHKey, Policy, Task, Alert, Integration, AuditLog, TaskLog
 
 ## 环境变量
 
-### 后端（`backend/.env`）
-
+关键必填项（生产环境）：
 - `ADMIN_INITIAL_PASSWORD`：首次启动必须设置，初始化 admin 账号密码
-- `DB_TYPE`：数据库类型（默认 sqlite，可切 postgres）
-- `DB_DSN`：PostgreSQL 连接串（DB_TYPE=postgres 时必填）
-- `JWT_SECRET`：JWT 签名密钥
+- `JWT_SECRET`：JWT 签名密钥（≥16 字符）
 - `DATA_ENCRYPTION_KEY`：敏感字段加密密钥
 
-### 前端（`web/.env`）
-
-- `VITE_API_BASE_URL`：API 前缀，建议 `/api/v1`
-- `VITE_PROXY_TARGET`：开发代理目标（默认后端本地地址）
+完整参考见 `docs/env-vars.md`，示例文件：`backend/.env.example`、`web/.env.example`
 
 ## 开发与校验命令
 
