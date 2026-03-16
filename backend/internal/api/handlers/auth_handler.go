@@ -200,14 +200,27 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已安全退出"})
 }
 
-// TOTPSetup POST /auth/2fa/setup — 生成 TOTP 密钥（未保存），返回二维码 URL 和密钥。
+// TOTPSetup POST /auth/2fa/setup — 生成 TOTP 密钥并暂存到用户记录（TOTPEnabled 保持 false），返回二维码 URL 和密钥。
 func (h *AuthHandler) TOTPSetup(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		return
+	}
 	username := c.GetString(middleware.CtxUsername)
 	key, err := auth.GenerateTOTPSecret("息壤 XiRang", username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 TOTP 密钥失败"})
 		return
 	}
+
+	// 将 pending secret 存入 DB（TOTPEnabled 保持 false，直到 verify 成功）
+	userID := c.GetUint(middleware.CtxUserID)
+	if err := h.db.Model(&model.User{}).Where("id = ?", userID).
+		Update("totp_secret", key.Secret()).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存密钥失败"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"secret": key.Secret(),
 		"qr_url": key.URL(),
@@ -216,11 +229,10 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 }
 
 type totpVerifyRequest struct {
-	Secret string `json:"secret" binding:"required"`
-	Code   string `json:"code" binding:"required"`
+	Code string `json:"code" binding:"required"`
 }
 
-// TOTPVerify POST /auth/2fa/verify — 验证码正确后保存 TOTP 配置并返回恢复码。
+// TOTPVerify POST /auth/2fa/verify — 使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码。
 func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 	if h.db == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
@@ -231,7 +243,22 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
-	if !auth.ValidateTOTP(req.Secret, req.Code) {
+	userID := c.GetUint(middleware.CtxUserID)
+	var user model.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	// 使用服务端暂存的 pending secret 校验，拒绝客户端提供的 secret
+	if strings.TrimSpace(user.TOTPSecret) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先调用 setup 接口生成密钥"})
+		return
+	}
+	if user.TOTPEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "两步验证已启用"})
+		return
+	}
+	if !auth.ValidateTOTP(user.TOTPSecret, req.Code) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
 		return
 	}
@@ -245,13 +272,6 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成恢复码失败"})
 		return
 	}
-	userID := c.GetUint(middleware.CtxUserID)
-	var user model.User
-	if err := h.db.First(&user, userID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
-		return
-	}
-	user.TOTPSecret = req.Secret
 	user.TOTPEnabled = true
 	user.RecoveryCodes = string(recoveryJSON)
 	if err := h.db.Save(&user).Error; err != nil {
@@ -291,10 +311,12 @@ func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
 		return
 	}
-	user.TOTPSecret = ""
-	user.TOTPEnabled = false
-	user.RecoveryCodes = ""
-	if err := h.db.Save(&user).Error; err != nil {
+	if err := h.db.Model(&user).Updates(map[string]any{
+		"totp_secret":    "",
+		"totp_enabled":   false,
+		"recovery_codes": "",
+		"token_version":  gorm.Expr("token_version + 1"),
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "禁用 2FA 失败"})
 		return
 	}

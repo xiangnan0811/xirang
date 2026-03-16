@@ -93,10 +93,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1 := router.Group("/api/v1")
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
-	v1.POST("/auth/2fa/login", authHandler.TOTPLogin)
+	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
 
 	secured := v1.Group("")
-	secured.Use(middleware.AuthMiddleware(dep.JWTManager))
+	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
 	secured.Use(middleware.AuditLogger(dep.DB))
 	secured.GET("/me", authHandler.Me)
 	secured.POST("/me/onboarded", authHandler.CompleteOnboarding)

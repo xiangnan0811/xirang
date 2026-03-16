@@ -5,8 +5,10 @@ import (
 	"strings"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -16,7 +18,7 @@ const (
 	CtxToken    = "token"
 )
 
-func AuthMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
+func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
@@ -40,6 +42,20 @@ func AuthMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "需要完成两步验证"})
 			c.Abort()
 			return
+		}
+		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
+		if db != nil {
+			var user model.User
+			if err := db.Select("token_version").First(&user, claims.UserID).Error; err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在或已删除"})
+				c.Abort()
+				return
+			}
+			if user.TokenVersion != claims.TokenVersion {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "token 已失效，请重新登录"})
+				c.Abort()
+				return
+			}
 		}
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)

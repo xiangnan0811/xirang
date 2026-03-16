@@ -64,7 +64,7 @@ func TestNodeExecDisabled(t *testing.T) {
 
 func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}, &model.NodeOwner{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 
 func TestNodeBatchDeleteSuccess(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}, &model.NodeOwner{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -121,7 +121,10 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 
 	r := gin.New()
 	handler := NewNodeHandler(db)
-	r.POST("/nodes/batch-delete", handler.BatchDelete)
+	r.POST("/nodes/batch-delete", func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Next()
+	}, handler.BatchDelete)
 
 	payload := fmt.Sprintf(`{"ids":[%d,%d,999,%d]}`, nodeA.ID, nodeB.ID, nodeA.ID)
 	req := httptest.NewRequest(http.MethodPost, "/nodes/batch-delete", strings.NewReader(payload))

@@ -177,6 +177,11 @@ func (s *Service) UpdateUser(userID uint, role *string, password *string) (*mode
 		return &user, nil
 	}
 
+	// 密码变更时递增 token_version，使旧 token 自动失效
+	if updates["password_hash"] != nil {
+		updates["token_version"] = gorm.Expr("token_version + 1")
+	}
+
 	if err := s.db.Model(&user).Updates(updates).Error; err != nil {
 		return nil, err
 	}
@@ -217,7 +222,10 @@ func (s *Service) ChangePassword(userID uint, currentPassword string, newPasswor
 	if err != nil {
 		return fmt.Errorf("操作失败，请稍候重试")
 	}
-	return s.db.Model(&user).Update("password_hash", hash).Error
+	return s.db.Model(&user).Updates(map[string]any{
+		"password_hash": hash,
+		"token_version": gorm.Expr("token_version + 1"),
+	}).Error
 }
 
 func normalizeRole(role string) (string, error) {

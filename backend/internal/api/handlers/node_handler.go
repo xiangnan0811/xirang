@@ -346,6 +346,30 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
+	// operator 只能删除自己拥有的节点
+	ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		return
+	}
+	if needFilter {
+		ownedSet := make(map[uint]struct{}, len(ownedIDs))
+		for _, id := range ownedIDs {
+			ownedSet[id] = struct{}{}
+		}
+		filtered := make([]uint, 0, len(nodeIDs))
+		for _, id := range nodeIDs {
+			if _, ok := ownedSet[id]; ok {
+				filtered = append(filtered, id)
+			}
+		}
+		nodeIDs = filtered
+		if len(nodeIDs) == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权删除这些节点"})
+			return
+		}
+	}
+
 	tx := h.db.Begin()
 	if tx.Error != nil {
 		log.Printf("服务器内部错误: %v", tx.Error)

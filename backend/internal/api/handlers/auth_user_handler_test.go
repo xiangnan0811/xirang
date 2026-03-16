@@ -77,7 +77,7 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 
 	router := gin.New()
 	secured := router.Group("")
-	secured.Use(middleware.AuthMiddleware(jwtManager))
+	secured.Use(middleware.AuthMiddleware(jwtManager, db))
 	secured.POST("/auth/change-password", authHandler.ChangePassword)
 	secured.POST("/auth/logout", authHandler.Logout)
 	secured.GET("/users", middleware.RBAC("users:manage"), userHandler.List)

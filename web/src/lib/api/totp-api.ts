@@ -29,11 +29,11 @@ export function createTOTPApi() {
       });
     },
 
-    async totpVerify(token: string, secret: string, code: string): Promise<TOTPVerifyResponse> {
+    async totpVerify(token: string, code: string): Promise<TOTPVerifyResponse> {
       return request<TOTPVerifyResponse>("/auth/2fa/verify", {
         method: "POST",
         token,
-        body: { secret, code },
+        body: { code },
       });
     },
 

@@ -14,10 +14,11 @@ import (
 )
 
 type Claims struct {
-	UserID   uint   `json:"uid"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	Purpose  string `json:"purpose,omitempty"`
+	UserID       uint   `json:"uid"`
+	Username     string `json:"username"`
+	Role         string `json:"role"`
+	Purpose      string `json:"purpose,omitempty"`
+	TokenVersion uint   `json:"ver"`
 	jwt.RegisteredClaims
 }
 
@@ -45,10 +46,11 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 		return "", err
 	}
 	claims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
-		Purpose:  "2fa_pending",
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		Purpose:      "2fa_pending",
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -67,9 +69,10 @@ func (m *JWTManager) GenerateToken(user model.User) (string, error) {
 		return "", err
 	}
 	claims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,
 			IssuedAt:  jwt.NewNumericDate(now),

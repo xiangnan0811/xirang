@@ -87,7 +87,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     setLoading(true);
     setError(null);
     try {
-      const data = await apiClient.totpVerify(token, secret, verifyCode);
+      const data = await apiClient.totpVerify(token, verifyCode);
       setRecoveryCodes(data.recovery_codes);
       setStep("recovery");
     } catch (err) {
