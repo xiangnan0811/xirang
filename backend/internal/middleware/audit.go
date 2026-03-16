@@ -50,13 +50,15 @@ func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 			UserAgent:  c.Request.UserAgent(),
 		}
 		record.CreatedAt = time.Now().UTC()
-		if err := saveAuditLogWithHashChain(db, &record); err != nil {
+		if err := SaveAuditLogWithHashChain(db, &record); err != nil {
 			log.Printf("审计日志写入失败: %v", err)
 		}
 	}
 }
 
-func saveAuditLogWithHashChain(db *gorm.DB, record *model.AuditLog) error {
+// SaveAuditLogWithHashChain 在事务中写入审计日志并计算哈希链。
+// 导出供 WebSocket 等非中间件路径使用。
+func SaveAuditLogWithHashChain(db *gorm.DB, record *model.AuditLog) error {
 	auditWriteMu.Lock()
 	defer auditWriteMu.Unlock()
 	return db.Transaction(func(tx *gorm.DB) error {

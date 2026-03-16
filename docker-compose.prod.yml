@@ -18,6 +18,16 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # nginx 绑定 80/443
+      - CHOWN              # nginx 启动时调整文件所有者
+      - SETGID             # nginx worker 降权
+      - SETUID             # nginx worker 降权
+      - DAC_OVERRIDE       # cron 读取 /etc/cron.d
 
 volumes:
   xirang-data:

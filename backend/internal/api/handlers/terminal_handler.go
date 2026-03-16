@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -227,7 +228,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		ClientIP:   clientIP,
 		CreatedAt:  time.Now().UTC(),
 	}
-	_ = h.db.Create(&openEntry)
+	_ = middleware.SaveAuditLogWithHashChain(h.db, &openEntry)
 
 	// 注册会话
 	sessionID := fmt.Sprintf("term-%d-%d", node.ID, time.Now().UnixNano())
@@ -262,7 +263,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 				ClientIP:   clientIP,
 				CreatedAt:  time.Now().UTC(),
 			}
-			_ = h.db.Create(&closeEntry)
+			_ = middleware.SaveAuditLogWithHashChain(h.db, &closeEntry)
 		})
 	}
 
