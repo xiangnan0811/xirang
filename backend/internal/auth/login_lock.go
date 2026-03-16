@@ -105,7 +105,12 @@ func (l *LoginFailureLocker) StartCleanup(ctx context.Context, interval time.Dur
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				l.db.Where("locked_until IS NOT NULL AND locked_until < ?", time.Now()).Delete(&model.LoginFailure{})
+				now := time.Now()
+				// 清理已过期的锁定记录
+				l.db.Where("locked_until IS NOT NULL AND locked_until < ?", now).Delete(&model.LoginFailure{})
+				// 清理长期无活动的失败记录（未锁定但超过 24 小时未更新）
+				stale := now.Add(-24 * time.Hour)
+				l.db.Where("locked_until IS NULL AND updated_at < ?", stale).Delete(&model.LoginFailure{})
 			}
 		}
 	}()

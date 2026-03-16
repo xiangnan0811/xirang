@@ -25,7 +25,8 @@ until curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; do
   sleep 1
 done
 
-nginx -g 'daemon off;' &
+# 通过 nginx 官方 entrypoint 处理模板（envsubst）后启动
+/docker-entrypoint.sh nginx -g 'daemon off;' &
 NGINX_PID=$!
 
 # Update trap to cover all processes

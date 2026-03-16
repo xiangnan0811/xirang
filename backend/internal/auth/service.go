@@ -185,8 +185,8 @@ func (s *Service) UpdateUser(userID uint, role *string, password *string) (*mode
 		return &user, nil
 	}
 
-	// 密码变更时递增 token_version，使旧 token 自动失效
-	if updates["password_hash"] != nil {
+	// 密码或角色变更时递增 token_version，使旧 token 自动失效
+	if updates["password_hash"] != nil || updates["role"] != nil {
 		updates["token_version"] = gorm.Expr("token_version + 1")
 	}
 

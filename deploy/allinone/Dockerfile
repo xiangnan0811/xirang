@@ -25,11 +25,17 @@ RUN set -eux; \
 FROM nginx:1.27
 
 # 安装 supercronic（非 root cron 替代）和 curl（健康检查）
+# 构建时可通过 --build-arg SUPERCRONIC_SHA256=<hash> 强制校验完整性
 ARG TARGETARCH
+ARG SUPERCRONIC_SHA256
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \
     apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*; \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" -o /usr/local/bin/supercronic; \
+    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" \
+         -o /usr/local/bin/supercronic; \
+    if [ -n "${SUPERCRONIC_SHA256:-}" ]; then \
+      echo "${SUPERCRONIC_SHA256}  /usr/local/bin/supercronic" | sha256sum -c -; \
+    fi; \
     chmod +x /usr/local/bin/supercronic
 
 # 创建非 root 用户
