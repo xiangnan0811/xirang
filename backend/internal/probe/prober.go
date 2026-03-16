@@ -85,7 +85,7 @@ func (p *Prober) run(ctx context.Context) {
 
 func (p *Prober) probeAll() {
 	var nodes []model.Node
-	if err := p.db.Preload("SSHKey").Find(&nodes).Error; err != nil {
+	if err := p.db.Preload("SSHKey").Where("archived = ?", false).Find(&nodes).Error; err != nil {
 		logger.Module("probe").Warn().Err(err).Msg("节点探测查询失败")
 		return
 	}

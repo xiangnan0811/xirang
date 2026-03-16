@@ -1,11 +1,14 @@
-import { useState } from "react";
-import { Clock3 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, Clock3 } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
+import { AppTextarea } from "@/components/ui/app-textarea";
 import { Switch } from "@/components/ui/switch";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
-import type { NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
+import { apiClient } from "@/lib/api/client";
+import { useAuth } from "@/context/auth-context";
+import type { HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -21,6 +24,11 @@ const emptyDraft: PolicyDraft = {
   nodeIds: [],
   verifyEnabled: true,
   verifySampleRate: 0,
+  preHook: "",
+  postHook: "",
+  hookTimeoutSeconds: 300,
+  maxRetries: 2,
+  retryBaseSeconds: 30,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -43,6 +51,11 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     nodeIds: policy.nodeIds ?? [],
     verifyEnabled: policy.verifyEnabled ?? false,
     verifySampleRate: policy.verifySampleRate ?? 0,
+    preHook: policy.preHook ?? "",
+    postHook: policy.postHook ?? "",
+    hookTimeoutSeconds: policy.hookTimeoutSeconds ?? 300,
+    maxRetries: policy.maxRetries ?? 2,
+    retryBaseSeconds: policy.retryBaseSeconds ?? 30,
   };
 }
 
@@ -61,8 +74,16 @@ export function PolicyEditorDialog({
   onSave,
   nodes = [],
 }: PolicyEditorDialogProps) {
+  const { token } = useAuth();
   const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [hookTemplates, setHookTemplates] = useState<HookTemplate[]>([]);
+
+  useEffect(() => {
+    if (!open || !token) return;
+    apiClient.getHookTemplates(token).then(setHookTemplates).catch(() => {});
+  }, [open, token]);
 
   const isEditing = Boolean(draft.id);
 
@@ -252,6 +273,147 @@ export function PolicyEditorDialog({
             />
           </div>
         ) : null}
+      </div>
+
+      {/* 高级设置 */}
+      <div className="rounded-md border border-border/60">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/40 transition-colors"
+          onClick={() => setAdvancedOpen(!advancedOpen)}
+          aria-expanded={advancedOpen}
+        >
+          高级设置
+          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+        </button>
+
+        {advancedOpen && (
+          <div className="space-y-3 border-t border-border/40 px-3 py-3 animate-in slide-in-from-top-1 fade-in duration-150">
+            {/* Hook template selector */}
+            {hookTemplates.length > 0 && (
+              <div>
+                <label className="mb-1 block text-sm font-medium">插入模板</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {hookTemplates.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          preHook: tpl.preHook,
+                          postHook: tpl.postHook,
+                        }))
+                      }
+                      title={tpl.description}
+                    >
+                      {tpl.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="policy-edit-pre-hook" className="mb-1 block text-sm font-medium">
+                备份前钩子
+              </label>
+              <AppTextarea
+                id="policy-edit-pre-hook"
+                className="min-h-16 text-xs font-mono"
+                placeholder="例如: mysqldump -u root --all-databases > /tmp/db_backup.sql"
+                value={draft.preHook ?? ""}
+                onChange={(e) =>
+                  setDraft((prev) => ({ ...prev, preHook: e.target.value }))
+                }
+              />
+            </div>
+
+            <div>
+              <label htmlFor="policy-edit-post-hook" className="mb-1 block text-sm font-medium">
+                备份后钩子
+              </label>
+              <AppTextarea
+                id="policy-edit-post-hook"
+                className="min-h-16 text-xs font-mono"
+                placeholder="例如: rm -f /tmp/db_backup.sql"
+                value={draft.postHook ?? ""}
+                onChange={(e) =>
+                  setDraft((prev) => ({ ...prev, postHook: e.target.value }))
+                }
+              />
+            </div>
+
+            <div>
+              <label htmlFor="policy-edit-hook-timeout" className="mb-1 block text-sm font-medium">
+                钩子超时（秒）
+              </label>
+              <Input
+                id="policy-edit-hook-timeout"
+                type="number"
+                min={1}
+                max={3600}
+                value={draft.hookTimeoutSeconds ?? 300}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    hookTimeoutSeconds: toBoundedInt(e.target.value, 300, 1, 3600),
+                  }))
+                }
+              />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label htmlFor="policy-edit-max-retries" className="mb-1 block text-sm font-medium">
+                  最大重试次数
+                </label>
+                <Input
+                  id="policy-edit-max-retries"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={draft.maxRetries ?? 2}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      maxRetries: toBoundedInt(e.target.value, 2, 0, 10),
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="policy-edit-retry-base" className="mb-1 block text-sm font-medium">
+                  重试基础间隔（秒）
+                </label>
+                <Input
+                  id="policy-edit-retry-base"
+                  type="number"
+                  min={10}
+                  max={3600}
+                  value={draft.retryBaseSeconds ?? 30}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      retryBaseSeconds: toBoundedInt(e.target.value, 30, 10, 3600),
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            {(draft.maxRetries ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                重试延迟预览：
+                {Array.from({ length: draft.maxRetries ?? 0 }, (_, i) => {
+                  const delay = (draft.retryBaseSeconds ?? 30) * Math.pow(2, i);
+                  return delay >= 60 ? `${(delay / 60).toFixed(1)}m` : `${delay}s`;
+                }).join(" → ")}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </FormDialog>
   );

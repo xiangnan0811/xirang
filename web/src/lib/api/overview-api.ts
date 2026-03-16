@@ -1,4 +1,4 @@
-import type { OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
+import type { BackupHealthData, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StorageUsageData } from "@/types/domain";
 import { request, type Envelope, unwrapData } from "./core";
 
 type OverviewSummaryResponse = {
@@ -82,6 +82,21 @@ export function createOverviewApi() {
       const suffix = query.toString() ? `?${query.toString()}` : "";
       const payload = await request<Envelope<OverviewTrafficSeriesResponse>>(`/overview/traffic${suffix}`, { token, signal: options?.signal });
       return mapOverviewTraffic(unwrapData(payload));
+    },
+
+    async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {
+      const payload = await request<Envelope<BackupHealthData>>("/overview/backup-health", { token, signal: options?.signal });
+      return unwrapData(payload);
+    },
+
+    async getStorageUsage(token: string, options?: { signal?: AbortSignal }): Promise<StorageUsageData> {
+      const payload = await request<Envelope<StorageUsageData>>("/overview/storage-usage", { token, signal: options?.signal });
+      return unwrapData(payload);
+    },
+
+    async getHookTemplates(token: string): Promise<HookTemplate[]> {
+      const payload = await request<Envelope<HookTemplate[]>>("/hook-templates", { token });
+      return unwrapData(payload) ?? [];
     },
   };
 }

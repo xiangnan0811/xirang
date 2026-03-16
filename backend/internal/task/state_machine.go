@@ -2,6 +2,7 @@ package task
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"time"
 )
 
@@ -102,4 +103,25 @@ func (sm *StateMachine) NextAfterFailure(currentStatus TaskStatus, retryCount in
 	}
 	delay := sm.backoff[retryCount]
 	return StatusRetrying, retryCount + 1, now.Add(delay), true
+}
+
+// NextAfterFailureConfigurable 使用可配置的重试参数（指数退避 + jitter）。
+func (sm *StateMachine) NextAfterFailureConfigurable(
+	currentStatus TaskStatus, retryCount int, now time.Time,
+	maxRetries int, baseSeconds int,
+) (TaskStatus, int, time.Time, bool) {
+	if currentStatus != StatusRunning && currentStatus != StatusRetrying {
+		return StatusFailed, retryCount, time.Time{}, false
+	}
+	if retryCount >= maxRetries {
+		return StatusFailed, retryCount, time.Time{}, false
+	}
+	base := time.Duration(baseSeconds) * time.Second
+	delay := base * time.Duration(1<<uint(retryCount))
+	maxDelay := 30 * time.Minute
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	jitter := time.Duration(rand.Int64N(int64(base / 4)))
+	return StatusRetrying, retryCount + 1, now.Add(delay + jitter), true
 }

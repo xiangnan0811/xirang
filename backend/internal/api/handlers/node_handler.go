@@ -19,12 +19,18 @@ import (
 	"gorm.io/gorm"
 )
 
-type NodeHandler struct {
-	db *gorm.DB
+// NodeTaskTrigger 用于紧急备份触发任务执行。
+type NodeTaskTrigger interface {
+	TriggerManual(taskID uint) (uint, error)
 }
 
-func NewNodeHandler(db *gorm.DB) *NodeHandler {
-	return &NodeHandler{db: db}
+type NodeHandler struct {
+	db      *gorm.DB
+	trigger NodeTaskTrigger
+}
+
+func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger) *NodeHandler {
+	return &NodeHandler{db: db, trigger: trigger}
 }
 
 type nodeRequest struct {
@@ -41,6 +47,8 @@ type nodeRequest struct {
 	BasePath         string  `json:"base_path"`
 	MaintenanceStart *string `json:"maintenance_start"`
 	MaintenanceEnd   *string `json:"maintenance_end"`
+	ExpiryDate       *string `json:"expiry_date"`
+	Archived         *bool   `json:"archived"`
 }
 
 type nodeBatchDeleteRequest struct {
@@ -65,6 +73,9 @@ func sanitizeNode(node model.Node) model.Node {
 
 func (h *NodeHandler) List(c *gin.Context) {
 	query := h.db.Preload("SSHKey")
+	if c.Query("include_archived") != "true" {
+		query = query.Where("archived = ?", false)
+	}
 	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
 		respondInternalError(c, err)
 		return
@@ -189,6 +200,16 @@ func (h *NodeHandler) Create(c *gin.Context) {
 			node.MaintenanceEnd = &t
 		}
 	}
+	if req.ExpiryDate != nil {
+		if *req.ExpiryDate == "" {
+			node.ExpiryDate = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.ExpiryDate); err == nil {
+			node.ExpiryDate = &t
+		}
+	}
+	if req.Archived != nil {
+		node.Archived = *req.Archived
+	}
 	if err := h.db.Create(&node).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -285,6 +306,16 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
 			node.MaintenanceEnd = &t
 		}
+	}
+	if req.ExpiryDate != nil {
+		if *req.ExpiryDate == "" {
+			node.ExpiryDate = nil
+		} else if t, err := time.Parse(time.RFC3339, *req.ExpiryDate); err == nil {
+			node.ExpiryDate = &t
+		}
+	}
+	if req.Archived != nil {
+		node.Archived = *req.Archived
 	}
 	if err := h.db.Save(&node).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -759,6 +790,47 @@ func (h *NodeHandler) AddOwner(c *gin.Context) {
 
 // RemoveOwner 移除节点负责人（admin only）。
 // DELETE /nodes/:id/owners/:user_id
+// EmergencyBackup 触发节点所有备份任务的紧急执行。
+// POST /nodes/:id/emergency-backup
+func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var tasks []model.Task
+	if err := h.db.Where("node_id = ? AND source = ? AND executor_type IN ?",
+		id, "policy", []string{"rsync", "restic", "rclone"}).Find(&tasks).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	if len(tasks) == 0 {
+		c.JSON(http.StatusOK, gin.H{"triggered": 0, "task_ids": []uint{}, "errors": []string{}})
+		return
+	}
+
+	triggered := 0
+	taskIDs := make([]uint, 0)
+	errors := make([]string, 0)
+
+	for _, t := range tasks {
+		runID, err := h.trigger.TriggerManual(t.ID)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("任务 %d 触发失败: %v", t.ID, err))
+			continue
+		}
+		triggered++
+		taskIDs = append(taskIDs, runID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"triggered": triggered,
+		"task_ids":  taskIDs,
+		"errors":    errors,
+	})
+}
+
 func (h *NodeHandler) RemoveOwner(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {

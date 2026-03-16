@@ -1,6 +1,7 @@
 import React from "react";
-import { Activity, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,9 @@ export const NodesGrid = React.memo(function NodesGrid({
   handleTriggerBackup,
   onOpenTerminal,
   onOpenFileBrowser,
+  onEmergencyBackup,
+  onMigrate,
+  emergencyNodeId,
   isAdmin,
 }: NodesViewProps) {
   const navigate = useNavigate();
@@ -106,6 +110,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <div className="inline-flex items-center gap-1.5">
                   <StatusPulse tone={node.status} />
                   <Badge variant={status.variant}>{status.label}</Badge>
+                  <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
               </div>
 
@@ -274,6 +279,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <div className="inline-flex items-center gap-1.5">
                   <StatusPulse tone={node.status} />
                   <Badge variant={status.variant}>{status.label}</Badge>
+                  <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
               </div>
 
@@ -366,15 +372,38 @@ export const NodesGrid = React.memo(function NodesGrid({
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={triggeringNodeId === node.id}
-                  onClick={() => void handleTriggerBackup(node.id, node.name)}
-                >
-                  {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                  手动备份
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="text-xs"
+                    disabled={emergencyNodeId === node.id}
+                    onClick={() => onEmergencyBackup?.(node.id, node.name)}
+                    title="紧急备份"
+                  >
+                    {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <ShieldAlert className="mr-1 size-3.5" />}
+                    紧急备份
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs"
+                    onClick={() => onMigrate?.(node)}
+                    title="迁移到..."
+                  >
+                    <ArrowRightLeft className="mr-1 size-3.5" />
+                    迁移
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={triggeringNodeId === node.id}
+                    onClick={() => void handleTriggerBackup(node.id, node.name)}
+                  >
+                    {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                    手动备份
+                  </Button>
+                </div>
               </div>
             </div>
           );

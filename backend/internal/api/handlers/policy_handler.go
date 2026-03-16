@@ -22,20 +22,25 @@ func NewPolicyHandler(db *gorm.DB, runner policy.TaskRunner) *PolicyHandler {
 }
 
 type policyRequest struct {
-	Name             string `json:"name" binding:"required"`
-	Description      string `json:"description"`
-	SourcePath       string `json:"source_path" binding:"required"`
-	TargetPath       string `json:"target_path" binding:"required"`
-	CronSpec         string `json:"cron_spec" binding:"required"`
-	ExcludeRules     string `json:"exclude_rules"`
-	BwLimit          int    `json:"bwlimit"`
-	RetentionDays    int    `json:"retention_days"`
-	MaxConcurrent    int    `json:"max_concurrent"`
-	Enabled          *bool  `json:"enabled"`
-	VerifyEnabled    *bool  `json:"verify_enabled"`
-	VerifySampleRate *int   `json:"verify_sample_rate"`
-	IsTemplate       *bool  `json:"is_template"`
-	NodeIDs          []uint `json:"node_ids"`
+	Name               string `json:"name" binding:"required"`
+	Description        string `json:"description"`
+	SourcePath         string `json:"source_path" binding:"required"`
+	TargetPath         string `json:"target_path" binding:"required"`
+	CronSpec           string `json:"cron_spec" binding:"required"`
+	ExcludeRules       string `json:"exclude_rules"`
+	BwLimit            int    `json:"bwlimit"`
+	RetentionDays      int    `json:"retention_days"`
+	MaxConcurrent      int    `json:"max_concurrent"`
+	Enabled            *bool  `json:"enabled"`
+	VerifyEnabled      *bool  `json:"verify_enabled"`
+	VerifySampleRate   *int   `json:"verify_sample_rate"`
+	IsTemplate         *bool  `json:"is_template"`
+	PreHook            string `json:"pre_hook"`
+	PostHook           string `json:"post_hook"`
+	HookTimeoutSeconds *int   `json:"hook_timeout_seconds"`
+	MaxRetries         *int   `json:"max_retries"`
+	RetryBaseSeconds   *int   `json:"retry_base_seconds"`
+	NodeIDs            []uint `json:"node_ids"`
 }
 
 func (h *PolicyHandler) List(c *gin.Context) {
@@ -137,6 +142,17 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		VerifyEnabled:    verifyEnabled,
 		VerifySampleRate: verifySampleRate,
 		IsTemplate:       isTemplate,
+		PreHook:          strings.TrimSpace(req.PreHook),
+		PostHook:         strings.TrimSpace(req.PostHook),
+	}
+	if req.HookTimeoutSeconds != nil {
+		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
+	}
+	if req.MaxRetries != nil {
+		p.MaxRetries = *req.MaxRetries
+	}
+	if req.RetryBaseSeconds != nil {
+		p.RetryBaseSeconds = *req.RetryBaseSeconds
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -254,6 +270,17 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.IsTemplate != nil {
 		p.IsTemplate = *req.IsTemplate
 	}
+	p.PreHook = strings.TrimSpace(req.PreHook)
+	p.PostHook = strings.TrimSpace(req.PostHook)
+	if req.HookTimeoutSeconds != nil {
+		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
+	}
+	if req.MaxRetries != nil {
+		p.MaxRetries = *req.MaxRetries
+	}
+	if req.RetryBaseSeconds != nil {
+		p.RetryBaseSeconds = *req.RetryBaseSeconds
+	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&p).Error; err != nil {
@@ -353,23 +380,28 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		nodeIDs[i] = n.ID
 	}
 	return gin.H{
-		"id":                 p.ID,
-		"name":               p.Name,
-		"description":        p.Description,
-		"source_path":        p.SourcePath,
-		"target_path":        p.TargetPath,
-		"cron_spec":          p.CronSpec,
-		"exclude_rules":      p.ExcludeRules,
-		"bwlimit":            p.BwLimit,
-		"retention_days":     p.RetentionDays,
-		"max_concurrent":     p.MaxConcurrent,
-		"enabled":            p.Enabled,
-		"verify_enabled":     p.VerifyEnabled,
-		"verify_sample_rate": p.VerifySampleRate,
-		"is_template":        p.IsTemplate,
-		"node_ids":           nodeIDs,
-		"created_at":         p.CreatedAt,
-		"updated_at":         p.UpdatedAt,
+		"id":                   p.ID,
+		"name":                 p.Name,
+		"description":          p.Description,
+		"source_path":          p.SourcePath,
+		"target_path":          p.TargetPath,
+		"cron_spec":            p.CronSpec,
+		"exclude_rules":        p.ExcludeRules,
+		"bwlimit":              p.BwLimit,
+		"retention_days":       p.RetentionDays,
+		"max_concurrent":       p.MaxConcurrent,
+		"enabled":              p.Enabled,
+		"verify_enabled":       p.VerifyEnabled,
+		"verify_sample_rate":   p.VerifySampleRate,
+		"is_template":          p.IsTemplate,
+		"pre_hook":             p.PreHook,
+		"post_hook":            p.PostHook,
+		"hook_timeout_seconds": p.HookTimeoutSeconds,
+		"max_retries":          p.MaxRetries,
+		"retry_base_seconds":   p.RetryBaseSeconds,
+		"node_ids":             nodeIDs,
+		"created_at":           p.CreatedAt,
+		"updated_at":           p.UpdatedAt,
 	}
 }
 

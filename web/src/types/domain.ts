@@ -86,6 +86,8 @@ export interface NodeRecord {
   lastProbeAt?: string;
   maintenanceStart?: string;
   maintenanceEnd?: string;
+  expiryDate?: string;
+  archived?: boolean;
 }
 
 export interface PolicyRecord {
@@ -101,6 +103,11 @@ export interface PolicyRecord {
   verifyEnabled: boolean;
   verifySampleRate: number;
   isTemplate?: boolean;
+  preHook?: string;
+  postHook?: string;
+  hookTimeoutSeconds?: number;
+  maxRetries?: number;
+  retryBaseSeconds?: number;
 }
 
 export interface NewPolicyInput {
@@ -113,6 +120,11 @@ export interface NewPolicyInput {
   nodeIds: number[];
   verifyEnabled: boolean;
   verifySampleRate: number;
+  preHook?: string;
+  postHook?: string;
+  hookTimeoutSeconds?: number;
+  maxRetries?: number;
+  retryBaseSeconds?: number;
 }
 
 export interface TaskRecord {
@@ -307,6 +319,7 @@ export interface NewNodeInput {
   inlinePrivateKey?: string;
   maintenanceStart?: string;
   maintenanceEnd?: string;
+  expiryDate?: string;
 }
 
 export interface LoginResponse {
@@ -339,4 +352,66 @@ export interface AuditLogRecord {
   clientIP: string;
   userAgent: string;
   createdAt: string;
+}
+
+export interface StaleNode {
+  nodeId: number;
+  nodeName: string;
+  lastBackupAt: string | null;
+  hoursSince: number;
+}
+
+export interface DegradedPolicy {
+  policyId: number;
+  policyName: string;
+  consecutiveFailures: number;
+  lastFailedAt: string;
+}
+
+export interface HealthTrendPoint {
+  date: string;
+  total: number;
+  success: number;
+  rate: number;
+}
+
+export interface BackupHealthData {
+  staleNodes: StaleNode[];
+  degradedPolicies: DegradedPolicy[];
+  healthTrend: HealthTrendPoint[];
+  summary: {
+    totalNodes: number;
+    neverBackedUp: number;
+    stale48h: number;
+    policiesHealthy: number;
+    policiesDegraded: number;
+    successRate7d: number;
+  };
+}
+
+export interface MountPointInfo {
+  path: string;
+  usedGB: number;
+  totalGB: number;
+  pct: number;
+}
+
+export interface NodeStorageInfo {
+  nodeId: number;
+  nodeName: string;
+  path: string;
+  usedGB: number;
+}
+
+export interface StorageUsageData {
+  mountPoints: MountPointInfo[];
+  perNode: NodeStorageInfo[];
+}
+
+export interface HookTemplate {
+  id: string;
+  name: string;
+  preHook: string;
+  postHook: string;
+  description: string;
 }

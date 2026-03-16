@@ -12,6 +12,11 @@ type PolicyResponse = {
   verify_enabled?: boolean;
   verify_sample_rate?: number;
   is_template?: boolean;
+  pre_hook?: string;
+  post_hook?: string;
+  hook_timeout_seconds?: number;
+  max_retries?: number;
+  retry_base_seconds?: number;
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
@@ -28,6 +33,11 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     verifyEnabled: row.verify_enabled ?? false,
     verifySampleRate: row.verify_sample_rate ?? 0,
     isTemplate: row.is_template ?? false,
+    preHook: row.pre_hook ?? undefined,
+    postHook: row.post_hook ?? undefined,
+    hookTimeoutSeconds: row.hook_timeout_seconds ?? undefined,
+    maxRetries: row.max_retries ?? undefined,
+    retryBaseSeconds: row.retry_base_seconds ?? undefined,
   };
 }
 
@@ -52,6 +62,11 @@ export function createPoliciesApi() {
           node_ids: input.nodeIds,
           verify_enabled: input.verifyEnabled,
           verify_sample_rate: input.verifySampleRate,
+          pre_hook: input.preHook ?? undefined,
+          post_hook: input.postHook ?? undefined,
+          hook_timeout_seconds: input.hookTimeoutSeconds ?? undefined,
+          max_retries: input.maxRetries ?? undefined,
+          retry_base_seconds: input.retryBaseSeconds ?? undefined,
         }
       });
       return mapPolicy(unwrapData(payload));
@@ -70,6 +85,11 @@ export function createPoliciesApi() {
           node_ids: input.nodeIds,
           verify_enabled: input.verifyEnabled,
           verify_sample_rate: input.verifySampleRate,
+          pre_hook: input.preHook ?? undefined,
+          post_hook: input.postHook ?? undefined,
+          hook_timeout_seconds: input.hookTimeoutSeconds ?? undefined,
+          max_retries: input.maxRetries ?? undefined,
+          retry_base_seconds: input.retryBaseSeconds ?? undefined,
         }
       });
       return mapPolicy(unwrapData(payload));

@@ -57,6 +57,7 @@ import {
 
 import { FileBrowser } from "@/components/file-browser";
 import { createFilesApi } from "@/lib/api/files-api";
+import { apiClient } from "@/lib/api/client";
 
 const filesApi = createFilesApi();
 
@@ -131,6 +132,10 @@ export function NodesPage() {
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
+  const [emergencyNodeId, setEmergencyNodeId] = useState<number | null>(null);
+  const [migrateSourceNode, setMigrateSourceNode] = useState<NodeRecord | null>(null);
+  const [migrateTargetId, setMigrateTargetId] = useState<number | null>(null);
+  const [migratingNode, setMigratingNode] = useState(false);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
@@ -496,6 +501,42 @@ export function NodesPage() {
     toast.success(`已导出 ${sortedNodes.length} 条节点记录。`);
   };
 
+  const handleEmergencyBackup = async (nodeId: number, nodeName: string) => {
+    if (!token) return;
+    const ok = await confirm({
+      title: "紧急备份确认",
+      description: `确认对节点 ${nodeName} 执行紧急备份？将立即触发该节点关联的所有备份策略。`,
+    });
+    if (!ok) return;
+    try {
+      setEmergencyNodeId(nodeId);
+      const result = await apiClient.emergencyBackup(token, nodeId);
+      toast.success(`紧急备份已触发：${result.triggered} 个任务已启动。`);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setEmergencyNodeId(null);
+    }
+  };
+
+  const handleMigrateNode = async () => {
+    if (!token || !migrateSourceNode || !migrateTargetId) return;
+    try {
+      setMigratingNode(true);
+      const result = await apiClient.migrateNode(token, migrateSourceNode.id, migrateTargetId);
+      toast.success(
+        `迁移完成：${result.migratedPolicies} 个策略、${result.migratedTasks} 个任务已迁移。`
+      );
+      setMigrateSourceNode(null);
+      setMigrateTargetId(null);
+      void refreshNodes();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setMigratingNode(false);
+    }
+  };
+
   const handleDownloadTemplate = () => {
     const template = [
       "name,host,username,port,tags",
@@ -763,6 +804,8 @@ export function NodesPage() {
                       onTestNode={onTestNode}
                       onDeleteNode={onDeleteNode}
                       handleTriggerBackup={handleTriggerBackup}
+                      onEmergencyBackup={handleEmergencyBackup}
+                      emergencyNodeId={emergencyNodeId}
                       onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
                       onOpenFileBrowser={setFileBrowserNode}
                       isAdmin={isAdmin}
@@ -795,6 +838,8 @@ export function NodesPage() {
               onTestNode={onTestNode}
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
+              onEmergencyBackup={handleEmergencyBackup}
+              emergencyNodeId={emergencyNodeId}
               onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
               onOpenFileBrowser={setFileBrowserNode}
               isAdmin={isAdmin}
@@ -929,6 +974,66 @@ export function NodesPage() {
           />
         </>
       )}
+
+      {/* 迁移节点对话框 */}
+      <Dialog
+        open={migrateSourceNode !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMigrateSourceNode(null);
+            setMigrateTargetId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>迁移节点 — {migrateSourceNode?.name}</DialogTitle>
+            <DialogDescription>
+              将该节点关联的策略和任务迁移到目标节点。
+            </DialogDescription>
+            <DialogCloseButton />
+          </DialogHeader>
+          <div className="space-y-3 px-6 pb-6">
+            <div>
+              <label htmlFor="migrate-target" className="mb-1 block text-sm font-medium">
+                目标节点
+              </label>
+              <AppSelect
+                id="migrate-target"
+                containerClassName="w-full"
+                value={migrateTargetId ? String(migrateTargetId) : ""}
+                onChange={(e) => setMigrateTargetId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">请选择目标节点</option>
+                {nodes
+                  .filter((n) => n.id !== migrateSourceNode?.id)
+                  .map((n) => (
+                    <option key={n.id} value={String(n.id)}>
+                      {n.name} ({n.host})
+                    </option>
+                  ))}
+              </AppSelect>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setMigrateSourceNode(null);
+                  setMigrateTargetId(null);
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                disabled={!migrateTargetId || migratingNode}
+                onClick={() => void handleMigrateNode()}
+              >
+                {migratingNode ? "迁移中..." : "确认迁移"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {dialog}
     </div>

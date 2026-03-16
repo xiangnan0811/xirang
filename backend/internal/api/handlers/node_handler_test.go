@@ -46,7 +46,7 @@ func TestNodeExecDisabled(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db)
+	handler := NewNodeHandler(db, nil)
 	r.POST("/nodes/:id/exec", handler.Exec)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/exec", node.ID), strings.NewReader(`{"command":"hostname"}`))
@@ -69,7 +69,7 @@ func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db)
+	handler := NewNodeHandler(db, nil)
 	r.POST("/nodes/batch-delete", handler.BatchDelete)
 
 	req := httptest.NewRequest(http.MethodPost, "/nodes/batch-delete", strings.NewReader(`{"ids":[]}`))
@@ -120,7 +120,7 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db)
+	handler := NewNodeHandler(db, nil)
 	r.POST("/nodes/batch-delete", func(c *gin.Context) {
 		c.Set("role", "admin")
 		c.Next()

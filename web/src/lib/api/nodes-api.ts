@@ -20,6 +20,8 @@ type NodeResponse = {
   last_probe_at?: string | null;
   maintenance_start?: string | null;
   maintenance_end?: string | null;
+  expiry_date?: string | null;
+  archived?: boolean;
 };
 
 type NodeBatchDeleteResponse = {
@@ -76,6 +78,8 @@ function mapNode(row: NodeResponse): NodeRecord {
     lastProbeAt: formatTime(row.last_probe_at),
     maintenanceStart: row.maintenance_start ?? undefined,
     maintenanceEnd: row.maintenance_end ?? undefined,
+    expiryDate: row.expiry_date ?? undefined,
+    archived: row.archived ?? false,
   };
 }
 
@@ -104,7 +108,8 @@ export function createNodesApi() {
           tags: input.tags,
           base_path: input.basePath,
           maintenance_start: input.maintenanceStart ?? undefined,
-          maintenance_end: input.maintenanceEnd ?? undefined
+          maintenance_end: input.maintenanceEnd ?? undefined,
+          expiry_date: input.expiryDate ?? undefined,
         }
       });
       const row = unwrapData(payload);
@@ -128,7 +133,8 @@ export function createNodesApi() {
           tags: input.tags,
           base_path: input.basePath,
           maintenance_start: input.maintenanceStart ?? undefined,
-          maintenance_end: input.maintenanceEnd ?? undefined
+          maintenance_end: input.maintenanceEnd ?? undefined,
+          expiry_date: input.expiryDate ?? undefined,
         }
       });
       const row = unwrapData(payload);
@@ -162,6 +168,22 @@ export function createNodesApi() {
         method: "POST",
         token
       });
-    }
+    },
+
+    async emergencyBackup(token: string, nodeId: number): Promise<{ triggered: number; task_ids: number[]; errors: string[] }> {
+      const payload = await request<Envelope<{ triggered: number; task_ids: number[]; errors: string[] }>>(
+        `/nodes/${nodeId}/emergency-backup`,
+        { token, method: "POST" }
+      );
+      return unwrapData(payload);
+    },
+
+    async migrateNode(token: string, sourceNodeId: number, targetNodeId: number): Promise<{ migratedPolicies: number; migratedTasks: number }> {
+      const payload = await request<Envelope<{ migratedPolicies: number; migratedTasks: number }>>(
+        `/nodes/${sourceNodeId}/migrate`,
+        { token, method: "POST", body: { targetNodeId } }
+      );
+      return unwrapData(payload);
+    },
   };
 }

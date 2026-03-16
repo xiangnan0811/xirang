@@ -40,6 +40,7 @@ func (m *Manager) runRetentionWorker(ctx context.Context) {
 		case <-ticker.C:
 			m.enforceRetention()
 			m.checkLocalStorageSpace()
+			m.checkNodeExpiry()
 		}
 	}
 }

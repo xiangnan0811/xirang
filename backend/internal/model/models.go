@@ -58,6 +58,8 @@ type Node struct {
 	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
 	MaintenanceStart    *time.Time `json:"maintenance_start,omitempty"`
 	MaintenanceEnd      *time.Time `json:"maintenance_end,omitempty"`
+	ExpiryDate          *time.Time `gorm:"" json:"expiry_date,omitempty"`
+	Archived            bool       `gorm:"not null;default:false" json:"archived"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -76,8 +78,13 @@ type Policy struct {
 	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
 	VerifyEnabled    bool      `gorm:"not null;default:true" json:"verify_enabled"`
 	VerifySampleRate int       `gorm:"not null;default:0" json:"verify_sample_rate"`
-	IsTemplate       bool      `gorm:"not null;default:false" json:"is_template"`
-	Nodes            []Node    `gorm:"many2many:policy_nodes" json:"-"`
+	IsTemplate         bool      `gorm:"not null;default:false" json:"is_template"`
+	PreHook            string    `gorm:"type:text;not null;default:''" json:"pre_hook"`
+	PostHook           string    `gorm:"type:text;not null;default:''" json:"post_hook"`
+	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
+	MaxRetries         int       `gorm:"not null;default:2" json:"max_retries"`
+	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
+	Nodes              []Node    `gorm:"many2many:policy_nodes" json:"-"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
