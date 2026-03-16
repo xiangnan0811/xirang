@@ -46,9 +46,14 @@ type Hub struct {
 	allowedOrigins   []string
 	allowEmptyOrigin bool
 	droppedCount     uint64
+	maxClients       int
 }
 
 func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
+	maxClients := 100
+	if v, err := strconv.Atoi(strings.TrimSpace(util.GetEnvOrDefault("WS_MAX_CONNECTIONS", "100"))); err == nil && v > 0 {
+		maxClients = v
+	}
 	return &Hub{
 		db:               db,
 		clients:          make(map[*client]struct{}),
@@ -57,7 +62,15 @@ func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
 		broadcast:        make(chan LogEvent, 256),
 		allowedOrigins:   allowedOrigins,
 		allowEmptyOrigin: allowEmptyOrigin,
+		maxClients:       maxClients,
 	}
+}
+
+// ClientCount 返回当前活跃连接数。
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
 }
 
 func (h *Hub) Run(ctx context.Context) {
@@ -155,6 +168,11 @@ type authMessage struct {
 }
 
 func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
+	if h.ClientCount() >= h.maxClients {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "WebSocket 连接数已达上限"})
+		return
+	}
+
 	upgrader := h.newUpgrader()
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {

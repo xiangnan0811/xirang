@@ -21,7 +21,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const terminalSessionTimeout = 30 * time.Minute
+const (
+	terminalSessionTimeout = 30 * time.Minute
+	maxTerminalSessions    = 10
+)
 
 type TerminalHandler struct {
 	db         *gorm.DB
@@ -56,6 +59,14 @@ type terminalResizeMessage struct {
 }
 
 func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
+	h.mu.Lock()
+	sessionCount := len(h.sessions)
+	h.mu.Unlock()
+	if sessionCount >= maxTerminalSessions {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "终端会话数已达上限"})
+		return
+	}
+
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("warn: terminal: websocket 升级失败: %v", err)
@@ -114,18 +125,18 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 建立 SSH 连接
 	authMethods, err := sshutil.BuildSSHAuth(node, h.db)
 	if err != nil {
-		msg := fmt.Sprintf("构建 SSH 认证失败: %v", err)
+		log.Printf("warn: terminal: 构建 SSH 认证失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 认证初始化失败"))
 		_ = conn.Close()
 		return
 	}
 
 	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		msg := fmt.Sprintf("解析主机密钥失败: %v", err)
+		log.Printf("warn: terminal: 解析主机密钥失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "主机密钥校验失败"))
 		_ = conn.Close()
 		return
 	}
@@ -136,9 +147,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	sshClient, err := sshutil.DialSSH(ctx, addr, node.Username, authMethods, hostKeyCallback)
 	if err != nil {
 		cancel()
-		msg := fmt.Sprintf("SSH 连接失败: %v", err)
+		log.Printf("warn: terminal: SSH 连接失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 连接失败，请检查节点配置"))
 		_ = conn.Close()
 		return
 	}
@@ -147,9 +158,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	if err != nil {
 		cancel()
 		sshClient.Close()
-		msg := fmt.Sprintf("SSH 会话创建失败: %v", err)
+		log.Printf("warn: terminal: SSH 会话创建失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 会话创建失败"))
 		_ = conn.Close()
 		return
 	}
@@ -164,9 +175,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		cancel()
 		session.Close()
 		sshClient.Close()
-		msg := fmt.Sprintf("请求 PTY 失败: %v", err)
+		log.Printf("warn: terminal: 请求 PTY 失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "终端初始化失败"))
 		_ = conn.Close()
 		return
 	}
@@ -194,9 +205,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		cancel()
 		session.Close()
 		sshClient.Close()
-		msg := fmt.Sprintf("启动 Shell 失败: %v", err)
+		log.Printf("warn: terminal: 启动 Shell 失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, msg))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Shell 启动失败"))
 		_ = conn.Close()
 		return
 	}
