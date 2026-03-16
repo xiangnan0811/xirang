@@ -269,7 +269,7 @@ func validateNodePath(rawPath string, node model.Node, db *gorm.DB) (string, err
 
 	// 收集白名单根路径
 	roots := []string{}
-	if base := strings.TrimSpace(node.BasePath); base != "" && base != "/" {
+	if base := strings.TrimSpace(node.BasePath); base != "" {
 		roots = append(roots, filepath.Clean(base))
 	}
 

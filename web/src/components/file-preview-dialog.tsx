@@ -3,6 +3,7 @@ import { FileText, AlertCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogBody,
@@ -56,7 +57,7 @@ export function FilePreviewDialog({
             <FileText className="size-4 shrink-0 text-muted-foreground" />
             <DialogTitle className="truncate text-base font-medium">{fileName}</DialogTitle>
           </div>
-          <p className="text-xs text-muted-foreground truncate">{filePath}</p>
+          <DialogDescription className="text-xs text-muted-foreground truncate">{filePath}</DialogDescription>
           <DialogCloseButton />
         </DialogHeader>
         <DialogBody className="p-0">

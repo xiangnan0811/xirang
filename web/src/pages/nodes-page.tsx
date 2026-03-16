@@ -796,6 +796,7 @@ export function NodesPage() {
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
               onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              onOpenFileBrowser={setFileBrowserNode}
               isAdmin={isAdmin}
             />
           </div>
@@ -821,6 +822,7 @@ export function NodesPage() {
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
               onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              onOpenFileBrowser={setFileBrowserNode}
               isAdmin={isAdmin}
             />
           )}
@@ -876,7 +878,7 @@ export function NodesPage() {
           open={fileBrowserNode !== null}
           onOpenChange={(open) => { if (!open) setFileBrowserNode(null); }}
         >
-          <DialogContent className="w-full max-w-[95vw] md:max-w-[80vw]" size="lg">
+          <DialogContent className="flex w-full max-w-[95vw] flex-col md:max-w-[80vw]" size="lg">
             <DialogHeader>
               <DialogTitle>文件浏览 — {fileBrowserNode.name}</DialogTitle>
               <DialogDescription className="sr-only">
@@ -884,9 +886,15 @@ export function NodesPage() {
               </DialogDescription>
               <DialogCloseButton />
             </DialogHeader>
-            <div className="px-6 pb-6">
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 thin-scrollbar">
               <FileBrowser
-                rootPath={fileBrowserNode.basePath || "/"}
+                rootPath={
+                  fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
+                    ? fileBrowserNode.basePath
+                    : fileBrowserNode.username === "root"
+                      ? "/root"
+                      : `/home/${fileBrowserNode.username}`
+                }
                 fetchDir={(path, signal) =>
                   filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
                 }

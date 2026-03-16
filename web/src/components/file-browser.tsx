@@ -53,11 +53,13 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   const [currentPath, setCurrentPath] = useState<string>(rootPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const fetchDirRef = useRef(fetchDir);
+  fetchDirRef.current = fetchDir;
 
   const loadDir = useCallback(
     (path: string) => {
@@ -68,19 +70,21 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
       setLoading(true);
       setError(null);
 
-      fetchDir(path, ctrl.signal)
+      fetchDirRef.current(path, ctrl.signal)
         .then((result) => {
+          if (ctrl.signal.aborted) return;
           setEntries(result.entries);
           setTruncated(result.truncated);
           setCurrentPath(result.path);
+          setLoading(false);
         })
         .catch((err: unknown) => {
-          if (err instanceof Error && err.name === "AbortError") return;
+          if (ctrl.signal.aborted) return;
           setError(err instanceof Error ? err.message : "加载目录失败");
-        })
-        .finally(() => setLoading(false));
+          setLoading(false);
+        });
     },
-    [fetchDir]
+    []
   );
 
   useEffect(() => {
@@ -175,7 +179,12 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
 
       {/* 文件列表 */}
       {!error && (
-        <div className="glass-panel overflow-hidden rounded-lg">
+        <div className="glass-panel overflow-hidden rounded-lg relative">
+          {loading && entries.length > 0 && (
+            <div className="absolute inset-x-0 top-0 z-10 h-0.5 bg-primary/20">
+              <div className="h-full w-2/5 animate-pulse bg-primary/60 rounded-full" />
+            </div>
+          )}
           {loading && entries.length === 0 ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
               加载中...
