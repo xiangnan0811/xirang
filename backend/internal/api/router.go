@@ -75,7 +75,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled).WithDB(dep.DB).WithCaptchaStore(captchaStore)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
-	nodeHandler := handlers.NewNodeHandler(dep.DB)
+	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)
+	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager)
 	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
@@ -87,6 +88,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	fileHandler := handlers.NewFileHandler(dep.DB)
 	reportHandler := handlers.NewReportHandler(dep.DB)
+	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
+	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
+	configHandler := handlers.NewConfigHandler(dep.DB)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
@@ -107,6 +111,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/auth/2fa/disable", authHandler.TOTPDisable)
 	secured.GET("/overview", overviewHandler.Get)
 	secured.GET("/overview/traffic", middleware.RBAC("tasks:read"), overviewTrafficHandler.Get)
+	secured.GET("/overview/backup-health", middleware.RBAC("tasks:read"), backupHealthHandler.Get)
 	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)
 	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
 	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)
@@ -125,6 +130,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.ListOwners)
 	secured.POST("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.AddOwner)
 	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
+	secured.POST("/nodes/:id/emergency-backup", middleware.RBAC("tasks:trigger"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.EmergencyBackup)
 
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
@@ -186,6 +192,17 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/report-configs/:id/generate", middleware.RBAC("reports:write"), reportHandler.GenerateNow)
 	secured.GET("/report-configs/:id/reports", middleware.RBAC("reports:read"), reportHandler.ListReports)
 	secured.GET("/reports/:id", middleware.RBAC("reports:read"), reportHandler.GetReport)
+
+	secured.GET("/hook-templates", middleware.RBAC("policies:read"), hookTemplatesHandler.List)
+
+	secured.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListSnapshots)
+	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
+	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), snapshotHandler.Restore)
+
+	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
+	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
+
+	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。

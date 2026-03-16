@@ -42,6 +42,7 @@ func main() {
 	if err := bootstrap.SeedUsers(db); err != nil {
 		log.Fatal().Err(err).Msg("初始化管理员账号失败")
 	}
+	bootstrap.SeedPolicyTemplates(db)
 
 	// 自动将 v1（SHA-256 KDF）加密数据迁移到 v2（Argon2id KDF）
 	if bootstrap.HasV1EncryptedData(db) {

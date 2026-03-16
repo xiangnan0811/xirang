@@ -50,7 +50,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		return -1, fmt.Errorf("解析 restic 配置失败: %w", err)
 	}
 
-	client, err := dialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -59,7 +59,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	bin := e.resticBinary()
 
 	// 检查 restic 是否安装
-	if _, err := runSSHCommandOutput(ctx, client, "which "+bin+" 2>/dev/null || command -v "+bin+" 2>/dev/null"); err != nil {
+	if _, err := RunSSHCommandOutput(ctx, client, "which "+bin+" 2>/dev/null || command -v "+bin+" 2>/dev/null"); err != nil {
 		return -1, fmt.Errorf("目标节点未安装 restic，请先在节点上安装")
 	}
 
@@ -68,13 +68,13 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 
 	// 初始化仓库（若不存在）
 	checkCmd := fmt.Sprintf("%s %s snapshots -r %s --json 2>&1", envPrefix, bin, repoArg)
-	checkOut, _ := runSSHCommandOutput(ctx, client, checkCmd)
+	checkOut, _ := RunSSHCommandOutput(ctx, client, checkCmd)
 	if strings.Contains(checkOut, "Is there a repository at the following location") ||
 		strings.Contains(checkOut, "repository does not exist") ||
 		strings.Contains(checkOut, "no such file or directory") {
 		logf("info", fmt.Sprintf("初始化 restic 仓库: %s", repo))
 		initCmd := fmt.Sprintf("%s %s init -r %s 2>&1", envPrefix, bin, repoArg)
-		initOut, initErr := runSSHCommandOutput(ctx, client, initCmd)
+		initOut, initErr := RunSSHCommandOutput(ctx, client, initCmd)
 		if initErr != nil {
 			return -1, fmt.Errorf("初始化 restic 仓库失败: %s", initOut)
 		}
@@ -114,7 +114,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 		return -1, fmt.Errorf("解析 restic 配置失败: %w", err)
 	}
 
-	client, err := dialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -240,6 +240,125 @@ func parseResticProgressLine(line string, lastBytesDone *int64, lastObservedAt *
 	}, true
 }
 
+// ResticSnapshot 表示一个 restic 快照。
+type ResticSnapshot struct {
+	ID       string   `json:"id"`
+	ShortID  string   `json:"short_id"`
+	Time     string   `json:"time"`
+	Hostname string   `json:"hostname"`
+	Paths    []string `json:"paths"`
+}
+
+// ResticEntry 表示 restic 快照中的一个文件/目录。
+type ResticEntry struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Path  string `json:"path"`
+	Size  uint64 `json:"size"`
+	Mtime string `json:"mtime"`
+}
+
+// ListSnapshots 列出 restic 仓库中的所有快照。
+func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]ResticSnapshot, error) {
+	repo := strings.TrimSpace(task.RsyncTarget)
+	if repo == "" {
+		return nil, fmt.Errorf("restic 仓库路径为空")
+	}
+	cfg, err := parseResticConfig(task.ExecutorConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := DialSSHForNode(ctx, task.Node)
+	if err != nil {
+		return nil, fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close()
+
+	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
+	cmd := fmt.Sprintf("%s %s snapshots -r %s --json", envPrefix, e.resticBinary(), shellEscape(repo))
+	output, err := RunSSHCommandOutput(ctx, client, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("获取快照列表失败: %w, 输出: %s", err, output)
+	}
+
+	var snapshots []ResticSnapshot
+	if err := json.Unmarshal([]byte(output), &snapshots); err != nil {
+		return nil, fmt.Errorf("解析快照列表失败: %w", err)
+	}
+	return snapshots, nil
+}
+
+// ListFiles 列出 restic 快照中指定路径下的文件。
+func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapshotID string, path string) ([]ResticEntry, error) {
+	repo := strings.TrimSpace(task.RsyncTarget)
+	cfg, err := parseResticConfig(task.ExecutorConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := DialSSHForNode(ctx, task.Node)
+	if err != nil {
+		return nil, fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close()
+
+	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
+	lsPath := "/"
+	if path != "" {
+		lsPath = path
+	}
+	cmd := fmt.Sprintf("%s %s ls %s %s -r %s --json", envPrefix, e.resticBinary(), shellEscape(snapshotID), shellEscape(lsPath), shellEscape(repo))
+	output, err := RunSSHCommandOutput(ctx, client, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("获取文件列表失败: %w, 输出: %s", err, output)
+	}
+
+	// restic ls 输出 NDJSON（每行一个 JSON 对象）
+	var entries []ResticEntry
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry ResticEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue // 跳过无法解析的行（如快照头信息）
+		}
+		if entry.Name != "" {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+
+// RestoreFiles 从 restic 快照恢复指定文件到目标路径。
+func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snapshotID string, includes []string, targetPath string) error {
+	repo := strings.TrimSpace(task.RsyncTarget)
+	cfg, err := parseResticConfig(task.ExecutorConfig)
+	if err != nil {
+		return err
+	}
+
+	client, err := DialSSHForNode(ctx, task.Node)
+	if err != nil {
+		return fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close()
+
+	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
+	includeArgs := ""
+	for _, inc := range includes {
+		includeArgs += " --include " + shellEscape(inc)
+	}
+	cmd := fmt.Sprintf("%s %s restore %s -r %s --target %s%s", envPrefix, e.resticBinary(), shellEscape(snapshotID), shellEscape(repo), shellEscape(targetPath), includeArgs)
+	output, err := RunSSHCommandOutput(ctx, client, cmd)
+	if err != nil {
+		return fmt.Errorf("恢复失败: %w, 输出: %s", err, output)
+	}
+	return nil
+}
+
 func parseResticConfig(raw string) (ResticConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return ResticConfig{}, nil
@@ -272,8 +391,8 @@ func buildResticExcludeArgs(patterns []string) string {
 	return strings.Join(parts, " ")
 }
 
-// dialSSHForNode 为节点建立 SSH 连接（节点的 SSHKey 应已通过 Preload 加载）。
-func dialSSHForNode(ctx context.Context, node model.Node) (*ssh.Client, error) {
+// DialSSHForNode 为节点建立 SSH 连接（节点的 SSHKey 应已通过 Preload 加载）。
+func DialSSHForNode(ctx context.Context, node model.Node) (*ssh.Client, error) {
 	port := node.Port
 	if port == 0 {
 		port = 22
@@ -322,8 +441,8 @@ func dialSSHForNode(ctx context.Context, node model.Node) (*ssh.Client, error) {
 	return sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
 }
 
-// runSSHCommandOutput 通过 SSH 执行命令并返回合并的 stdout+stderr 输出。
-func runSSHCommandOutput(ctx context.Context, client *ssh.Client, cmd string) (string, error) {
+// RunSSHCommandOutput 通过 SSH 执行命令并返回合并的 stdout+stderr 输出。
+func RunSSHCommandOutput(ctx context.Context, client *ssh.Client, cmd string) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("创建 SSH 会话失败: %w", err)
