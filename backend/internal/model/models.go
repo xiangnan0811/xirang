@@ -104,18 +104,31 @@ type Integration struct {
 }
 
 func (i *Integration) BeforeSave(_ *gorm.DB) error {
-	if i.Secret == "" {
-		return nil
+	if i.Endpoint != "" {
+		encrypted, err := secure.EncryptIfNeeded(i.Endpoint)
+		if err != nil {
+			return err
+		}
+		i.Endpoint = encrypted
 	}
-	encrypted, err := secure.EncryptIfNeeded(i.Secret)
-	if err != nil {
-		return err
+	if i.Secret != "" {
+		encrypted, err := secure.EncryptIfNeeded(i.Secret)
+		if err != nil {
+			return err
+		}
+		i.Secret = encrypted
 	}
-	i.Secret = encrypted
 	return nil
 }
 
 func (i *Integration) AfterFind(_ *gorm.DB) error {
+	if i.Endpoint != "" {
+		decrypted, err := secure.DecryptIfNeeded(i.Endpoint)
+		if err != nil {
+			return err
+		}
+		i.Endpoint = decrypted
+	}
 	if i.Secret != "" {
 		decrypted, err := secure.DecryptIfNeeded(i.Secret)
 		if err != nil {

@@ -112,6 +112,7 @@ func TestAlertDeliveriesNotFound(t *testing.T) {
 
 func openAlertHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("APP_ENV", "development")
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
