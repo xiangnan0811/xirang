@@ -4,13 +4,13 @@ map $http_upgrade $connection_upgrade {
 }
 
 server {
-  listen 80;
+  listen 8080;
   server_name _;
   return 301 https://$host$request_uri;
 }
 
 server {
-  listen 443 ssl;
+  listen 8443 ssl;
   http2 on;
   server_name _;
 

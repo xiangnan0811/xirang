@@ -9,8 +9,8 @@ services:
       - xirang-backup:/backup
       - ./deploy/certs:/etc/nginx/certs:ro
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 30s
@@ -22,12 +22,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE   # nginx 绑定 80/443
-      - CHOWN              # nginx 启动时调整文件所有者
-      - SETGID             # nginx worker 降权
-      - SETUID             # nginx worker 降权
-      - DAC_OVERRIDE       # cron 读取 /etc/cron.d
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
 
 volumes:
   xirang-data:

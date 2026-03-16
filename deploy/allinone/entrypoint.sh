@@ -1,20 +1,17 @@
 #!/bin/sh
 set -eu
 
-# 导出备份相关环境变量供 cron 使用（cron 不继承容器运行时环境变量）
-printenv | grep -E '^(DB_TYPE|SQLITE_PATH|DB_DSN)=' | sed 's/^/export /' > /etc/backup-env || true
-chmod 600 /etc/backup-env
-
 # 确保备份目录存在
 mkdir -p /backup/db
 
-# 启动 cron 守护进程
-cron
+# 启动 supercronic（非 root cron 替代）
+supercronic /etc/supercronic/xirang-backup &
+CRON_PID=$!
 
 /usr/local/bin/xirang &
 XIRANG_PID=$!
 
-trap 'kill -TERM $XIRANG_PID 2>/dev/null; wait $XIRANG_PID 2>/dev/null' TERM INT
+trap 'kill -TERM $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null' TERM INT
 
 # Wait for backend readiness before accepting traffic
 attempts=0
@@ -28,13 +25,13 @@ until curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; do
   sleep 1
 done
 
-/docker-entrypoint.sh nginx -g 'daemon off;' &
+nginx -g 'daemon off;' &
 NGINX_PID=$!
 
-# Update trap to cover both processes
-trap 'kill -TERM $NGINX_PID $XIRANG_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID 2>/dev/null' TERM INT
+# Update trap to cover all processes
+trap 'kill -TERM $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null' TERM INT
 
-# Wait for nginx; if it exits, clean up backend
+# Wait for nginx; if it exits, clean up
 wait $NGINX_PID
-kill -TERM $XIRANG_PID 2>/dev/null
-wait $XIRANG_PID 2>/dev/null
+kill -TERM $XIRANG_PID $CRON_PID 2>/dev/null
+wait $XIRANG_PID $CRON_PID 2>/dev/null
