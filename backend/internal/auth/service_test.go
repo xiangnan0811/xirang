@@ -68,7 +68,7 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 
 	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
 		FailLockThreshold: 2,
-		FailLockDuration:  100 * time.Millisecond, // 极短锁定时间
+		FailLockDuration:  2 * time.Second, // 需大于 bcrypt 执行耗时
 	})
 
 	// 触发锁定
@@ -82,7 +82,7 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	}
 
 	// 等待锁定过期
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	// 锁定应过期
 	_, err = service.Login("locktest", "Correct1!", "10.0.0.1")
