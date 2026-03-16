@@ -92,7 +92,17 @@ export function usePageFilters<C extends FilterConfig>(
     return () => window.removeEventListener("storage", onStorage);
   }, [config, entries]);
 
-  const effectiveKeyword = state["keyword"] || globalSearch || "";
+  // 页面挂载时将 globalSearch 吸收到本地 keyword 并清空，
+  // 避免跨页面携带不可见的搜索条件导致结果为空
+  useEffect(() => {
+    if (globalSearch) {
+      setState((prev) => prev["keyword"] === globalSearch ? prev : { ...prev, keyword: globalSearch });
+      setGlobalSearch?.("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在挂载时执行一次
+  }, []);
+
+  const effectiveKeyword = state["keyword"] || "";
   const deferredKeyword = useDeferredValue(effectiveKeyword);
 
   const isFiltered = useMemo(
