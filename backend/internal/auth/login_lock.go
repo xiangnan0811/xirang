@@ -2,25 +2,22 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"strings"
-	"sync"
 	"time"
+
+	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-type loginLockState struct {
-	failCount   int
-	lockedUntil time.Time
-}
-
 type LoginFailureLocker struct {
-	mu           sync.Mutex
-	states       map[string]loginLockState
+	db           *gorm.DB
 	threshold    int
 	lockDuration time.Duration
 }
 
-func NewLoginFailureLocker(threshold int, lockDuration time.Duration) *LoginFailureLocker {
+func NewLoginFailureLocker(db *gorm.DB, threshold int, lockDuration time.Duration) *LoginFailureLocker {
 	if threshold <= 0 {
 		threshold = 5
 	}
@@ -28,62 +25,77 @@ func NewLoginFailureLocker(threshold int, lockDuration time.Duration) *LoginFail
 		lockDuration = 15 * time.Minute
 	}
 	return &LoginFailureLocker{
-		states:       make(map[string]loginLockState),
+		db:           db,
 		threshold:    threshold,
 		lockDuration: lockDuration,
 	}
 }
 
 func (l *LoginFailureLocker) IsLocked(username, ip string, now time.Time) (time.Time, bool) {
-	key := l.buildKey(username, ip)
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entry, ok := l.states[key]
-	if !ok {
+	u, i := normalize(username, ip)
+	var rec model.LoginFailure
+	err := l.db.Where("username = ? AND client_ip = ?", u, i).First(&rec).Error
+	if err != nil {
 		return time.Time{}, false
 	}
-	if entry.lockedUntil.After(now) {
-		return entry.lockedUntil, true
+	if rec.LockedUntil != nil && rec.LockedUntil.After(now) {
+		return *rec.LockedUntil, true
 	}
-	if !entry.lockedUntil.IsZero() {
-		delete(l.states, key)
+	// 锁定已过期——清除状态
+	if rec.LockedUntil != nil {
+		l.db.Delete(&rec)
 	}
 	return time.Time{}, false
 }
 
 func (l *LoginFailureLocker) RegisterFailure(username, ip string, now time.Time) {
-	key := l.buildKey(username, ip)
+	u, i := normalize(username, ip)
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entry := l.states[key]
-	if entry.lockedUntil.After(now) {
+	var rec model.LoginFailure
+	err := l.db.Where("username = ? AND client_ip = ?", u, i).First(&rec).Error
+	if err != nil {
+		// 首次失败，创建记录
+		rec = model.LoginFailure{
+			Username:  u,
+			ClientIP:  i,
+			FailCount: 1,
+			UpdatedAt: now,
+		}
+		if rec.FailCount >= l.threshold {
+			locked := now.Add(l.lockDuration)
+			rec.LockedUntil = &locked
+			rec.FailCount = 0
+		}
+		l.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec)
 		return
 	}
-	if !entry.lockedUntil.IsZero() && !entry.lockedUntil.After(now) {
-		entry = loginLockState{}
+
+	// 已锁定且未过期——忽略
+	if rec.LockedUntil != nil && rec.LockedUntil.After(now) {
+		return
+	}
+	// 锁定已过期——重置
+	if rec.LockedUntil != nil {
+		rec.FailCount = 0
+		rec.LockedUntil = nil
 	}
 
-	entry.failCount++
-	if entry.failCount >= l.threshold {
-		entry.failCount = 0
-		entry.lockedUntil = now.Add(l.lockDuration)
+	rec.FailCount++
+	rec.UpdatedAt = now
+	if rec.FailCount >= l.threshold {
+		locked := now.Add(l.lockDuration)
+		rec.LockedUntil = &locked
+		rec.FailCount = 0
 	}
-	l.states[key] = entry
+	l.db.Save(&rec)
 }
 
 func (l *LoginFailureLocker) RegisterSuccess(username, ip string) {
-	key := l.buildKey(username, ip)
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.states, key)
+	u, i := normalize(username, ip)
+	l.db.Where("username = ? AND client_ip = ?", u, i).Delete(&model.LoginFailure{})
 }
 
-// StartCleanup 定期清理过期的锁定条目，防止内存泄漏
+// StartCleanup 定期清理过期的锁定条目，防止表膨胀。
 func (l *LoginFailureLocker) StartCleanup(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -93,24 +105,17 @@ func (l *LoginFailureLocker) StartCleanup(ctx context.Context, interval time.Dur
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				now := time.Now()
-				l.mu.Lock()
-				for key, entry := range l.states {
-					if !entry.lockedUntil.IsZero() && !entry.lockedUntil.After(now) {
-						delete(l.states, key)
-					}
-				}
-				l.mu.Unlock()
+				l.db.Where("locked_until IS NOT NULL AND locked_until < ?", time.Now()).Delete(&model.LoginFailure{})
 			}
 		}
 	}()
 }
 
-func (l *LoginFailureLocker) buildKey(username, ip string) string {
-	normalizedUsername := strings.ToLower(strings.TrimSpace(username))
-	normalizedIP := strings.TrimSpace(ip)
-	if normalizedIP == "" {
-		normalizedIP = "unknown"
+func normalize(username, ip string) (string, string) {
+	u := strings.ToLower(strings.TrimSpace(username))
+	i := strings.TrimSpace(ip)
+	if i == "" {
+		i = "unknown"
 	}
-	return fmt.Sprintf("%s|%s", normalizedUsername, normalizedIP)
+	return u, i
 }

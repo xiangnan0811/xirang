@@ -420,3 +420,13 @@ func (u *User) AfterFind(_ *gorm.DB) error {
 	}
 	return nil
 }
+
+// LoginFailure 登录失败记录，持久化存储以防重启绕过锁定。
+type LoginFailure struct {
+	ID          uint       `gorm:"primaryKey" json:"id"`
+	Username    string     `gorm:"size:64;not null;uniqueIndex:idx_login_failures_user_ip" json:"username"`
+	ClientIP    string     `gorm:"size:45;not null;uniqueIndex:idx_login_failures_user_ip" json:"client_ip"`
+	FailCount   int        `gorm:"not null;default:0" json:"fail_count"`
+	LockedUntil *time.Time `json:"locked_until"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}

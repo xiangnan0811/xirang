@@ -14,7 +14,7 @@ import (
 
 func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 
 func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 
 func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
 
 func TestCreateUserRejectsDuplicate(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -148,7 +148,7 @@ func TestCreateUserRejectsDuplicate(t *testing.T) {
 
 func TestCreateUserRejectsInvalidRole(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
