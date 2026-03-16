@@ -94,8 +94,11 @@
 |------|------|--------|------|------|
 | `TASK_TRAFFIC_RETENTION_DAYS` | int | `8` | 否 | 任务流量数据保留天数 |
 | `TASK_RUN_RETENTION_DAYS` | int | `90` | 否 | 任务执行记录保留天数 |
+| `RETENTION_CHECK_INTERVAL` | duration | `6h` | 否 | 备份保留策略检查间隔（最小 1m），定期清理过期备份并检查存储空间 |
+| `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警 |
+| `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警 |
 
-**读取位置**：`config/config.go:64-76`
+**读取位置**：`config/config.go:64-76`，`RETENTION_CHECK_INTERVAL` → `config/config.go:146`，`BACKUP_STORAGE_*` → `config/config.go:152-164`
 
 ## 9. 邮件通知
 

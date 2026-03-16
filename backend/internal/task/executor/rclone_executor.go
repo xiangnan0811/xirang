@@ -55,7 +55,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
-	client, err := dialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -64,7 +64,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	bin := e.rcloneBinary()
 
 	// 检查 rclone 是否安装
-	if _, err := runSSHCommandOutput(ctx, client, "which "+bin+" 2>/dev/null || command -v "+bin+" 2>/dev/null"); err != nil {
+	if _, err := RunSSHCommandOutput(ctx, client, "which "+bin+" 2>/dev/null || command -v "+bin+" 2>/dev/null"); err != nil {
 		return -1, fmt.Errorf("目标节点未安装 rclone，请先在节点上安装")
 	}
 
@@ -97,7 +97,7 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
-	client, err := dialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}

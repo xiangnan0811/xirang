@@ -116,6 +116,9 @@ type Manager struct {
 	lastTaskRunCleanupAt    time.Time
 	taskRunCleanupMu        sync.Mutex
 
+	retentionCancel  context.CancelFunc
+	retentionDone    chan struct{}
+
 	shuttingDown atomic.Bool
 }
 
@@ -137,9 +140,11 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		sampleWorkerDone:     make(chan struct{}),
 		sampleRetentionDays:  sampleRetentionDays,
 		taskRunRetentionDays: taskRunRetentionDays,
+		retentionDone:       make(chan struct{}),
 	}
 	m.startLogWorker()
 	m.startSampleWorker()
+	m.startRetentionWorker()
 	return m
 }
 
@@ -751,6 +756,19 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
+	// 检查节点是否已归档
+	if taskEntity.Node.Archived {
+		m.emitLog(taskID, runIDPtr, "warn", "节点已归档，跳过执行", taskEntity.Status)
+		canceledAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": &canceledAt,
+			"last_error":  "节点已归档",
+		})
+		runCompleted = true
+		return
+	}
+
 	// 检查节点是否处于维护窗口
 	checkTime := time.Now()
 	if taskEntity.Node.MaintenanceStart != nil && taskEntity.Node.MaintenanceEnd != nil &&
@@ -830,6 +848,35 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	m.runningCancels.Store(taskID, cancel)
 	defer m.runningCancels.Delete(taskID)
 
+	// Pre-hook 执行
+	if taskEntity.Policy != nil && taskEntity.Policy.PreHook != "" {
+		hookTimeout := time.Duration(taskEntity.Policy.HookTimeoutSeconds) * time.Second
+		if hookTimeout <= 0 {
+			hookTimeout = 5 * time.Minute
+		}
+		hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
+		m.emitLog(taskID, runIDPtr, "info", "执行 pre-hook: "+taskEntity.Policy.PreHook, taskEntity.Status)
+		hookErr := m.runSSHHook(hookCtx, taskEntity, taskEntity.Policy.PreHook)
+		hookCancel()
+		if hookErr != nil {
+			m.emitLog(taskID, runIDPtr, "error", "pre-hook 失败: "+hookErr.Error(), taskEntity.Status)
+			errorMsg := fmt.Sprintf("pre-hook 执行失败: %v", hookErr)
+			failedAt := time.Now()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+				"status":      "failed",
+				"finished_at": &failedAt,
+				"last_error":  errorMsg,
+			})
+			runCompleted = true
+			m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
+				"next_run_at": nextCronRun(taskEntity.CronSpec),
+				"last_error":  errorMsg,
+			})
+			return
+		}
+		m.emitLog(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
+	}
+
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
 	runStartedAt := now.UTC()
 	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
@@ -861,6 +908,23 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	}
 
 	if err == nil && exitCode == 0 {
+		// Post-hook 执行
+		if taskEntity.Policy != nil && taskEntity.Policy.PostHook != "" {
+			hookTimeout := time.Duration(taskEntity.Policy.HookTimeoutSeconds) * time.Second
+			if hookTimeout <= 0 {
+				hookTimeout = 5 * time.Minute
+			}
+			hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
+			m.emitLog(taskID, runIDPtr, "info", "执行 post-hook: "+taskEntity.Policy.PostHook, taskEntity.Status)
+			hookErr := m.runSSHHook(hookCtx, taskEntity, taskEntity.Policy.PostHook)
+			hookCancel()
+			if hookErr != nil {
+				m.emitLog(taskID, runIDPtr, "warn", "post-hook 失败（不影响备份结果）: "+hookErr.Error(), taskEntity.Status)
+			} else {
+				m.emitLog(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
+			}
+		}
+
 		verifyStatus := "none"
 
 		// 检查关联策略是否启用校验
@@ -960,7 +1024,19 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		errorMsg = fmt.Sprintf("任务执行失败，退出码=%d", exitCode)
 	}
 
-	nextStatus, retryCount, nextRun, shouldRetry := m.stateMachine.NextAfterFailure(StatusRunning, taskEntity.RetryCount, time.Now())
+	var nextStatus TaskStatus
+	var retryCount int
+	var nextRun time.Time
+	var shouldRetry bool
+
+	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries > 0 {
+		nextStatus, retryCount, nextRun, shouldRetry = m.stateMachine.NextAfterFailureConfigurable(
+			StatusRunning, taskEntity.RetryCount, time.Now(),
+			taskEntity.Policy.MaxRetries, taskEntity.Policy.RetryBaseSeconds,
+		)
+	} else {
+		nextStatus, retryCount, nextRun, shouldRetry = m.stateMachine.NextAfterFailure(StatusRunning, taskEntity.RetryCount, time.Now())
+	}
 
 	// 当前 TaskRun 始终标记为 failed（即使 Task 进入 retrying）
 	failedAt := time.Now()
@@ -1526,6 +1602,16 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.sampleWorkerDone != nil {
 		select {
 		case <-m.sampleWorkerDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if m.retentionCancel != nil {
+		m.retentionCancel()
+	}
+	if m.retentionDone != nil {
+		select {
+		case <-m.retentionDone:
 		case <-ctx.Done():
 			return ctx.Err()
 		}

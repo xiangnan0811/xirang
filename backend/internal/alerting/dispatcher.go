@@ -126,6 +126,71 @@ func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
 	return raiseAndDispatch(db, &alert)
 }
 
+func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error {
+	severity := "warning"
+	errorCode := fmt.Sprintf("XR-NODE-EXPIRY-%d", node.ID)
+	alert := model.Alert{
+		NodeID:      node.ID,
+		NodeName:    node.Name,
+		Severity:    severity,
+		Status:      "open",
+		ErrorCode:   errorCode,
+		Message:     message,
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
+func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+	errorCode := fmt.Sprintf("XR-RETN-%d", policyID)
+	alert := model.Alert{
+		NodeID:      nodeID,
+		NodeName:    nodeName,
+		PolicyName:  policyName,
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   errorCode,
+		Message:     message,
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
+func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
+	updates := map[string]interface{}{
+		"status":           "resolved",
+		"retryable":        false,
+		"last_notified_at": time.Now(),
+	}
+	if note != "" {
+		updates["message"] = note
+	}
+	return db.Model(&model.Alert{}).
+		Where("error_code = ? AND status IN ?", errorCode, []string{"open", "acked"}).
+		Updates(updates).Error
+}
+
+func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
+	severity := "warning"
+	if usagePct >= 95 {
+		severity = "critical"
+	}
+	alert := model.Alert{
+		NodeID:      0,
+		NodeName:    "localhost",
+		PolicyName:  "",
+		Severity:    severity,
+		Status:      "open",
+		ErrorCode:   "XR-STORAGE-LOW",
+		Message:     fmt.Sprintf("本地备份存储空间不足: %s (剩余 %.1fGB / 共 %.1fGB, 使用率 %.1f%%)", targetPath, freeGB, totalGB, usagePct),
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
 func ResolveNodeAlerts(db *gorm.DB, nodeID uint, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",

@@ -32,6 +32,9 @@ type Config struct {
 	NodeProbeInterval         time.Duration
 	NodeProbeFailThreshold    int
 	NodeProbeConcurrency      int
+	RetentionCheckInterval    time.Duration
+	BackupStorageMinFreeGB    int
+	BackupStorageMaxUsagePct  int
 }
 
 func Load() (Config, error) {
@@ -142,6 +145,27 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("解析 NODE_PROBE_CONCURRENCY 失败")
 	}
 	cfg.NodeProbeConcurrency = probeConcurrency
+
+	retentionCheckIntervalRaw := util.GetEnvOrDefault("RETENTION_CHECK_INTERVAL", "6h")
+	retentionCheckInterval, err := time.ParseDuration(retentionCheckIntervalRaw)
+	if err != nil || retentionCheckInterval < 1*time.Minute {
+		return Config{}, fmt.Errorf("解析 RETENTION_CHECK_INTERVAL 失败")
+	}
+	cfg.RetentionCheckInterval = retentionCheckInterval
+
+	backupStorageMinFreeRaw := util.GetEnvOrDefault("BACKUP_STORAGE_MIN_FREE_GB", "10")
+	backupStorageMinFree, err := strconv.Atoi(backupStorageMinFreeRaw)
+	if err != nil || backupStorageMinFree < 0 {
+		return Config{}, fmt.Errorf("解析 BACKUP_STORAGE_MIN_FREE_GB 失败")
+	}
+	cfg.BackupStorageMinFreeGB = backupStorageMinFree
+
+	backupStorageMaxUsageRaw := util.GetEnvOrDefault("BACKUP_STORAGE_MAX_USAGE_PCT", "90")
+	backupStorageMaxUsage, err := strconv.Atoi(backupStorageMaxUsageRaw)
+	if err != nil || backupStorageMaxUsage < 0 || backupStorageMaxUsage > 100 {
+		return Config{}, fmt.Errorf("解析 BACKUP_STORAGE_MAX_USAGE_PCT 失败")
+	}
+	cfg.BackupStorageMaxUsagePct = backupStorageMaxUsage
 
 	wsAllowEmptyOrigin, err := util.ReadBoolEnv("WS_ALLOW_EMPTY_ORIGIN", false)
 	if err != nil {
