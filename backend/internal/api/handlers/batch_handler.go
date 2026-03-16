@@ -206,16 +206,21 @@ func generateBatchID() string {
 }
 
 // dangerousPatterns 预编译的危险命令正则表达式。
+// 注意：这是安全辅助拦截（safety net），不是安全边界——用户已有 SSH 权限。
 var dangerousPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\brm\s+.*-[^\s]*r[^\s]*f\b.*\s+/\s*$`),
-	regexp.MustCompile(`(?i)\brm\s+.*-[^\s]*r[^\s]*f\s+/\s*$`),
+	// rm -rf / 及变体（rm -r /、rm --recursive --force /、带路径 /boot /etc 等关键目录）
+	regexp.MustCompile(`(?i)\brm\s+.*-[^\s]*r[^\s]*\s+/(\s|$|boot|etc|usr|var|home|root|sys|proc|dev)`),
+	regexp.MustCompile(`(?i)\brm\s+--recursive\b`),
 	regexp.MustCompile(`(?i)\bmkfs\b`),
-	regexp.MustCompile(`(?i)\bdd\s+if=`),
+	regexp.MustCompile(`(?i)\bdd\s+.*\bof\s*=\s*/dev/`),
 	regexp.MustCompile(`(?i)\bshutdown\b`),
 	regexp.MustCompile(`(?i)\breboot\b`),
 	regexp.MustCompile(`(?i)\binit\s+0\b`),
 	regexp.MustCompile(`(?i)\bhalt\b`),
 	regexp.MustCompile(`(?i)\bpoweroff\b`),
+	// 管道写入关键设备或清空磁盘
+	regexp.MustCompile(`(?i)>\s*/dev/[sh]d`),
+	regexp.MustCompile(`(?i)\bwipefs\b`),
 }
 
 // isDangerousCommand 判断命令是否匹配危险命令规则。

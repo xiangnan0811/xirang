@@ -688,7 +688,16 @@ func validateNodeHostPort(host string, port int) error {
 	if trimmedHost == "" {
 		return fmt.Errorf("主机地址不能为空")
 	}
-	if net.ParseIP(trimmedHost) == nil {
+	// 拒绝 localhost / 回环地址，防止 SSRF 或误操作管理服务器自身
+	lower := strings.ToLower(trimmedHost)
+	if lower == "localhost" || lower == "localhost.localdomain" {
+		return fmt.Errorf("不允许将管理服务器自身（localhost）添加为节点")
+	}
+	if ip := net.ParseIP(trimmedHost); ip != nil {
+		if ip.IsLoopback() {
+			return fmt.Errorf("不允许将回环地址添加为节点")
+		}
+	} else {
 		// 不是 IP，检查是否是合法的 hostname
 		if len(trimmedHost) > 253 {
 			return fmt.Errorf("主机名过长")

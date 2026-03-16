@@ -14,6 +14,12 @@ import (
 
 var errInvalidCredentials = fmt.Errorf("用户名或密码错误")
 
+// dummyPasswordHash 用于用户不存在时执行等价 bcrypt 比对，消除时序差异。
+var dummyPasswordHash = func() string {
+	h, _ := HashPassword("xirang-dummy-timing-pad")
+	return h
+}()
+
 type LoginLockedError struct {
 	Until time.Time
 }
@@ -79,6 +85,8 @@ func (s *Service) Login(username, password, clientIP string) (*LoginResult, erro
 	var user model.User
 	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
+			// 执行一次等价的 bcrypt 比对以消除时序差异，防止通过响应时间枚举有效用户名
+			_ = CheckPassword(dummyPasswordHash, password)
 			s.failureLocker.RegisterFailure(username, clientIP, now)
 			return nil, errInvalidCredentials
 		}

@@ -200,7 +200,7 @@ func splitCSV(raw string) []string {
 
 func isWeakJWTSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
+	if trimmed == "" || len(trimmed) < 16 {
 		return true
 	}
 	weakSet := map[string]struct{}{
@@ -215,7 +215,7 @@ func isWeakJWTSecret(value string) bool {
 
 func isWeakDataEncryptionKey(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
+	if trimmed == "" || len(trimmed) < 16 {
 		return true
 	}
 	weakSet := map[string]struct{}{
