@@ -397,6 +397,8 @@ const en = {
     terminalLoading: "Loading terminal...",
     fileBrowserTitle: "File Browser — {{name}}",
     fileBrowserDesc: "Browse remote filesystem of node {{name}} via SFTP",
+    tabFiles: "Files",
+    tabDockerVolumes: "Docker Volumes",
     migrateDialogTitle: "Migrate Node — {{name}}",
     migrateDialogDesc: "Migrate policies and tasks from this node to the target node.",
     migrateTargetLabel: "Target Node",
@@ -710,6 +712,22 @@ const en = {
     nextPage: "Next page",
   },
 
+  // ── task run detail ──
+  taskRunDetail: {
+    backAriaLabel: "Back to execution history",
+    recordTitle: "Run #{{id}}",
+    createdAt: "Created",
+    startedAt: "Started",
+    finishedAt: "Finished",
+    duration: "Duration",
+    avgSpeed: "Avg. speed",
+    errorInfo: "Error",
+    executionLogs: "Execution Logs",
+    loadingLogs: "Loading logs",
+    loadingLogsDesc: "Fetching execution logs...",
+    noLogs: "No logs available",
+  },
+
   // ── task create dialog ──
   taskCreate: {
     titleCreate: "New Task",
@@ -969,6 +987,9 @@ const en = {
     confirmSave: "Confirm Save",
     errorSaveFailed: "Save failed, please try again later.",
     errorCreateFailed: "Create failed, please try again later.",
+    secretHint: "Only required if signing verification is enabled in bot settings. Leave blank to skip.",
+    sampleHint: "You can apply the sample URL and modify it afterwards.",
+    applySample: "Apply Sample",
   },
 
   // ── audit page ──

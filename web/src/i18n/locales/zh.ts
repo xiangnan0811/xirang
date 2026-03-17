@@ -397,6 +397,8 @@ const zh = {
     terminalLoading: "加载终端中...",
     fileBrowserTitle: "文件浏览 — {{name}}",
     fileBrowserDesc: "通过 SFTP 浏览节点 {{name}} 的远端文件系统",
+    tabFiles: "文件浏览",
+    tabDockerVolumes: "Docker 数据卷",
     migrateDialogTitle: "迁移节点 — {{name}}",
     migrateDialogDesc: "将该节点关联的策略和任务迁移到目标节点。",
     migrateTargetLabel: "目标节点",
@@ -710,6 +712,22 @@ const zh = {
     nextPage: "下一页",
   },
 
+  // ── task run detail ──
+  taskRunDetail: {
+    backAriaLabel: "返回执行历史",
+    recordTitle: "执行记录 #{{id}}",
+    createdAt: "创建时间",
+    startedAt: "开始时间",
+    finishedAt: "结束时间",
+    duration: "执行耗时",
+    avgSpeed: "平均速率",
+    errorInfo: "错误信息",
+    executionLogs: "执行日志",
+    loadingLogs: "加载日志",
+    loadingLogsDesc: "正在获取执行日志...",
+    noLogs: "暂无日志",
+  },
+
   // ── task create dialog ──
   taskCreate: {
     titleCreate: "新建任务",
@@ -969,6 +987,9 @@ const zh = {
     confirmSave: "确认保存",
     errorSaveFailed: "保存失败，请稍后重试。",
     errorCreateFailed: "新增失败，请稍后重试。",
+    secretHint: "仅在机器人启用了加签安全设置时填写，留空则不使用签名。",
+    sampleHint: "可直接套用示例地址后再修改。",
+    applySample: "套用示例",
   },
 
   // ── audit page ──

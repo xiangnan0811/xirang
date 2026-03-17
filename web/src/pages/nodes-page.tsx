@@ -56,6 +56,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { DockerVolumesPanel } from "@/components/docker-volumes-panel";
 import { FileBrowser } from "@/components/file-browser";
 import { createFilesApi } from "@/lib/api/files-api";
 import { apiClient } from "@/lib/api/client";
@@ -126,6 +127,7 @@ export function NodesPage() {
   const [terminalNode, setTerminalNode] = useState<NodeRecord | null>(null);
   const [terminalKey, setTerminalKey] = useState(0);
   const [fileBrowserNode, setFileBrowserNode] = useState<NodeRecord | null>(null);
+  const [fileBrowserTab, setFileBrowserTab] = useState<"files" | "docker">("files");
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
@@ -922,7 +924,7 @@ export function NodesPage() {
       {token && fileBrowserNode && (
         <Dialog
           open={fileBrowserNode !== null}
-          onOpenChange={(open) => { if (!open) setFileBrowserNode(null); }}
+          onOpenChange={(open) => { if (!open) { setFileBrowserNode(null); setFileBrowserTab("files"); } }}
         >
           <DialogContent className="flex w-full max-w-[95vw] flex-col md:max-w-[80vw]" size="lg">
             <DialogHeader>
@@ -932,22 +934,45 @@ export function NodesPage() {
               </DialogDescription>
               <DialogCloseButton />
             </DialogHeader>
+            <div className="flex gap-2 px-6">
+              <Button
+                variant={fileBrowserTab === "files" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setFileBrowserTab("files")}
+              >
+                {t("nodes.tabFiles")}
+              </Button>
+              <Button
+                variant={fileBrowserTab === "docker" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setFileBrowserTab("docker")}
+              >
+                {t("nodes.tabDockerVolumes")}
+              </Button>
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 thin-scrollbar">
-              <FileBrowser
-                rootPath={
-                  fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
-                    ? fileBrowserNode.basePath
-                    : fileBrowserNode.username === "root"
-                      ? "/root"
-                      : `/home/${fileBrowserNode.username}`
-                }
-                fetchDir={(path, signal) =>
-                  filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
-                }
-                fetchContent={(path) =>
-                  filesApi.getNodeFileContent(token, fileBrowserNode.id, path)
-                }
-              />
+              {fileBrowserTab === "files" ? (
+                <FileBrowser
+                  rootPath={
+                    fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
+                      ? fileBrowserNode.basePath
+                      : fileBrowserNode.username === "root"
+                        ? "/root"
+                        : `/home/${fileBrowserNode.username}`
+                  }
+                  fetchDir={(path, signal) =>
+                    filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
+                  }
+                  fetchContent={(path) =>
+                    filesApi.getNodeFileContent(token, fileBrowserNode.id, path)
+                  }
+                />
+              ) : (
+                <DockerVolumesPanel
+                  nodeId={fileBrowserNode.id}
+                  token={token}
+                />
+              )}
             </div>
           </DialogContent>
         </Dialog>

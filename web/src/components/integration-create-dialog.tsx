@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -11,55 +12,39 @@ import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
 
 type IntegrationGuide = {
-  endpointLabel: string;
   endpointPlaceholder: string;
-  endpointHint: string;
   sample: string;
 };
 
 const integrationGuideMap: Record<IntegrationType, IntegrationGuide> = {
   email: {
-    endpointLabel: "收件邮箱",
     endpointPlaceholder: "ops@example.com, oncall@example.com",
-    endpointHint: "可填写多个邮箱，使用逗号分隔。",
     sample: "ops@example.com",
   },
   slack: {
-    endpointLabel: "Slack Webhook URL",
     endpointPlaceholder: "https://hooks.slack.com/services/xxx/yyy/zzz",
-    endpointHint: "请在 Slack Incoming Webhook 中复制地址。",
     sample: "https://hooks.slack.com/services/T000/B000/XXXX",
   },
   telegram: {
-    endpointLabel: "Telegram Bot Endpoint",
     endpointPlaceholder:
       "https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>",
-    endpointHint: "建议使用机器人 sendMessage 接口完整 URL。",
     sample:
       "https://api.telegram.org/bot123456:abc/sendMessage?chat_id=10001",
   },
   webhook: {
-    endpointLabel: "Webhook URL",
     endpointPlaceholder: "https://example.com/xirang/alerts",
-    endpointHint: "支持任意 HTTP/HTTPS 接收端点。",
     sample: "https://example.com/hooks/xirang",
   },
   feishu: {
-    endpointLabel: "飞书 Webhook URL",
     endpointPlaceholder: "https://open.feishu.cn/open-apis/bot/v2/hook/...",
-    endpointHint: "在飞书群自定义机器人中复制 Webhook 地址。如启用签名校验，请同时填写签名密钥。",
     sample: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx",
   },
   dingtalk: {
-    endpointLabel: "钉钉 Webhook URL",
     endpointPlaceholder: "https://oapi.dingtalk.com/robot/send?access_token=...",
-    endpointHint: "在钉钉自定义机器人中复制 Webhook 地址。如启用加签安全设置，请同时填写签名密钥。",
     sample: "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",
   },
   wecom: {
-    endpointLabel: "企业微信机器人 Webhook URL",
     endpointPlaceholder: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
-    endpointHint: "在企业微信群机器人中复制 Webhook 地址。",
     sample: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx",
   },
 };
@@ -117,7 +102,7 @@ function validateDraft(
 ): string | null {
   const raw = endpoint.trim();
   if (!raw) {
-    return "新增失败：请填写通知地址。";
+    return "integration.errorCreateEndpointRequired";
   }
 
   if (type === "email") {
@@ -126,17 +111,17 @@ function validateDraft(
       .map((item) => item.trim())
       .filter(Boolean);
     if (!emails.length) {
-      return "新增失败：请填写至少一个邮箱地址。";
+      return "integration.errorCreateEmailRequired";
     }
     const mailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emails.every((item) => mailRegex.test(item))) {
-      return "新增失败：邮箱格式不正确，请使用逗号分隔多个邮箱。";
+      return "integration.errorCreateEmailFormat";
     }
     return null;
   }
 
   if (!isValidURL(raw)) {
-    return "新增失败：该通道需要合法的 http/https 地址。";
+    return "integration.errorCreateUrlRequired";
   }
   return null;
 }
@@ -152,6 +137,7 @@ export function IntegrationCreateDialog({
   onOpenChange,
   onSave,
 }: IntegrationCreateDialogProps) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<NewIntegrationInput>(open, defaultDraft);
   const [saving, setSaving] = useState(false);
   const [pendingHint, setPendingHint] = useState<string | null>(null);
@@ -162,13 +148,13 @@ export function IntegrationCreateDialog({
 
   const handleSave = async (skipHint = false) => {
     if (!draft.name.trim()) {
-      toast.error("新增失败：请填写通道名称。");
+      toast.error(t("integration.errorCreateNameRequired"));
       return;
     }
 
-    const validationError = validateDraft(draft.type, draft.endpoint);
-    if (validationError) {
-      toast.error(validationError);
+    const validationKey = validateDraft(draft.type, draft.endpoint);
+    if (validationKey) {
+      toast.error(t(validationKey));
       return;
     }
 
@@ -188,7 +174,7 @@ export function IntegrationCreateDialog({
       if (error instanceof EndpointHintWarning) {
         setPendingHint(error.hint);
       } else {
-        toast.error(getErrorMessage(error, "新增失败，请稍后重试。"));
+        toast.error(getErrorMessage(error, t("integration.errorCreateFailed")));
       }
     } finally {
       setSaving(false);
@@ -200,16 +186,16 @@ export function IntegrationCreateDialog({
       open={open}
       onOpenChange={onOpenChange}
       icon={<TypeIcon className="size-5 text-primary" />}
-      title="新增通知方式"
-      description="配置告警通知通道，支持邮件、Slack、Telegram、飞书、钉钉、企业微信及自定义 Webhook。"
+      title={t("integration.titleCreate")}
+      description={t("integration.descCreate")}
       saving={saving}
       onSubmit={() => handleSave(false)}
-      submitLabel="保存通道"
+      submitLabel={t("integration.submitCreate")}
     >
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label htmlFor="create-integration-type" className="mb-1 block text-sm font-medium">
-            通道类型
+            {t("integration.channelType")}
           </label>
           <AppSelect
             id="create-integration-type"
@@ -223,23 +209,23 @@ export function IntegrationCreateDialog({
               }))
             }
           >
-            <option value="email">邮件</option>
-            <option value="slack">Slack</option>
-            <option value="telegram">Telegram</option>
-            <option value="webhook">Webhook</option>
-            <option value="feishu">飞书</option>
-            <option value="dingtalk">钉钉</option>
-            <option value="wecom">企业微信</option>
+            <option value="email">{t("integration.typeLabels.email")}</option>
+            <option value="slack">{t("integration.typeLabels.slack")}</option>
+            <option value="telegram">{t("integration.typeLabels.telegram")}</option>
+            <option value="webhook">{t("integration.typeLabels.webhook")}</option>
+            <option value="feishu">{t("integration.typeLabels.feishu")}</option>
+            <option value="dingtalk">{t("integration.typeLabels.dingtalk")}</option>
+            <option value="wecom">{t("integration.typeLabels.wecom")}</option>
           </AppSelect>
         </div>
 
         <div>
           <label htmlFor="create-integration-name" className="mb-1 block text-sm font-medium">
-            通道名称
+            {t("integration.channelName")}
           </label>
           <Input
             id="create-integration-name"
-            placeholder="例如：运维邮箱、值班 Slack"
+            placeholder={t("integration.namePlaceholder")}
             value={draft.name}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -250,7 +236,7 @@ export function IntegrationCreateDialog({
 
       <div>
         <label htmlFor="create-integration-endpoint" className="mb-1 block text-sm font-medium">
-          {guide.endpointLabel}
+          {t(`integration.endpointLabels.${draft.type}`)}
         </label>
         <Input
           id="create-integration-endpoint"
@@ -264,32 +250,32 @@ export function IntegrationCreateDialog({
           }
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          {guide.endpointHint}
+          {t(`integration.endpointHints.${draft.type}`)}
         </p>
       </div>
 
       {showSecretField && (
         <div>
           <label htmlFor="create-integration-secret" className="mb-1 block text-sm font-medium">
-            签名密钥（可选）
+            {t("integration.signingSecret")}
           </label>
           <Input
             id="create-integration-secret"
             type="password"
-            placeholder="填写机器人安全设置中的签名密钥"
+            placeholder={t("integration.signingSecretPlaceholder")}
             value={draft.secret ?? ""}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, secret: event.target.value }))
             }
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            仅在机器人启用了加签安全设置时填写，留空则不使用签名。
+            {t("integration.secretHint")}
           </p>
         </div>
       )}
 
       <div className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        <span>可直接套用示例地址后再修改。</span>
+        <span>{t("integration.sampleHint")}</span>
         <Button
           size="sm"
           variant="outline"
@@ -297,7 +283,7 @@ export function IntegrationCreateDialog({
             setDraft((prev) => ({ ...prev, endpoint: guide.sample }))
           }
         >
-          套用示例
+          {t("integration.applySample")}
         </Button>
       </div>
 
@@ -313,14 +299,14 @@ export function IntegrationCreateDialog({
               variant="outline"
               onClick={() => setPendingHint(null)}
             >
-              重新检查
+              {t("integration.recheck")}
             </Button>
             <Button
               size="sm"
               onClick={() => handleSave(true)}
               disabled={saving}
             >
-              确认保存
+              {t("integration.confirmSave")}
             </Button>
           </div>
         </div>
@@ -329,7 +315,7 @@ export function IntegrationCreateDialog({
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label htmlFor="create-integration-fail-threshold" className="mb-1 block text-sm font-medium">
-            失败阈值（次数）
+            {t("integration.alertThreshold")}
           </label>
           <Input
             id="create-integration-fail-threshold"
@@ -348,7 +334,7 @@ export function IntegrationCreateDialog({
 
         <div>
           <label htmlFor="create-integration-cooldown" className="mb-1 block text-sm font-medium">
-            冷却时间（分钟）
+            {t("integration.cooldownTime")}
           </label>
           <Input
             id="create-integration-cooldown"
