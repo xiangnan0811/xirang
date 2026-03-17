@@ -1,4 +1,4 @@
-import type { BackupHealthData, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StorageUsageData } from "@/types/domain";
+import type { BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { request, type Envelope, unwrapData } from "./core";
 
 type OverviewSummaryResponse = {
@@ -67,6 +67,81 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapBackupHealth(raw: any): BackupHealthData {
+  const staleNodes = Array.isArray(raw?.stale_nodes)
+    ? raw.stale_nodes.map((n: any) => {
+        const lastBackup = n.last_backup_at ? new Date(n.last_backup_at).getTime() : null;
+        const hoursSince = lastBackup ? (Date.now() - lastBackup) / 3600000 : Infinity;
+        return {
+          nodeId: Number(n.id || 0),
+          nodeName: String(n.name || ""),
+          lastBackupAt: n.last_backup_at ?? null,
+          hoursSince: Number.isFinite(hoursSince) ? hoursSince : 0,
+        };
+      })
+    : [];
+
+  const degradedPolicies = Array.isArray(raw?.degraded_policies)
+    ? raw.degraded_policies.map((p: any) => ({
+        policyId: Number(p.id || 0),
+        policyName: String(p.name || ""),
+        consecutiveFailures: Number(p.consecutive_failures || 3),
+        lastFailedAt: String(p.last_failed_at || ""),
+      }))
+    : [];
+
+  const healthTrend = Array.isArray(raw?.trend)
+    ? raw.trend.map((t: any) => ({
+        date: String(t.date || ""),
+        total: Number(t.total || 0),
+        success: Number(t.success || 0),
+        rate: t.total > 0 ? Math.round((t.success / t.total) * 1000) / 10 : 0,
+      }))
+    : [];
+
+  const totalNodes = Number(raw?.summary?.total_nodes || 0);
+  const totalPolicies = Number(raw?.summary?.total_policies || 0);
+  const neverBackedUp = staleNodes.filter((n: StaleNode) => !n.lastBackupAt).length;
+  const trendTotals = healthTrend.reduce((acc: { t: number; s: number }, p: HealthTrendPoint) => ({ t: acc.t + p.total, s: acc.s + p.success }), { t: 0, s: 0 });
+
+  return {
+    staleNodes,
+    degradedPolicies,
+    healthTrend,
+    summary: {
+      totalNodes,
+      neverBackedUp,
+      stale48h: staleNodes.length - neverBackedUp,
+      policiesHealthy: Math.max(0, totalPolicies - degradedPolicies.length),
+      policiesDegraded: degradedPolicies.length,
+      successRate7d: trendTotals.t > 0 ? Math.round((trendTotals.s / trendTotals.t) * 1000) / 10 : 100,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapStorageUsage(raw: any): StorageUsageData {
+  return {
+    mountPoints: Array.isArray(raw?.mount_points)
+      ? raw.mount_points.map((m: any) => ({
+          path: String(m.path || ""),
+          usedGB: Number(m.used_gb || 0),
+          totalGB: Number(m.total_gb || 0),
+          pct: Number(m.pct || 0),
+        }))
+      : [],
+    perNode: Array.isArray(raw?.per_node)
+      ? raw.per_node.map((n: any) => ({
+          nodeId: Number(n.node_id || 0),
+          nodeName: String(n.node_name || ""),
+          path: String(n.path || ""),
+          usedGB: Number(n.used_gb || 0),
+        }))
+      : [],
+  };
+}
+
 export function createOverviewApi() {
   return {
     async getOverviewSummary(token: string, options?: { signal?: AbortSignal }): Promise<OverviewSummary> {
@@ -85,13 +160,13 @@ export function createOverviewApi() {
     },
 
     async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {
-      const payload = await request<Envelope<BackupHealthData>>("/overview/backup-health", { token, signal: options?.signal });
-      return unwrapData(payload);
+      const payload = await request<Envelope<unknown>>("/overview/backup-health", { token, signal: options?.signal });
+      return mapBackupHealth(unwrapData(payload));
     },
 
     async getStorageUsage(token: string, options?: { signal?: AbortSignal }): Promise<StorageUsageData> {
-      const payload = await request<Envelope<StorageUsageData>>("/overview/storage-usage", { token, signal: options?.signal });
-      return unwrapData(payload);
+      const payload = await request<Envelope<unknown>>("/overview/storage-usage", { token, signal: options?.signal });
+      return mapStorageUsage(unwrapData(payload));
     },
 
     async getHookTemplates(token: string): Promise<HookTemplate[]> {
