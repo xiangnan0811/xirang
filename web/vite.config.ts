@@ -22,6 +22,16 @@ export default defineConfig({
       }
     }
   },
+  build: {
+    chunkSizeWarningLimit: 550,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          recharts: ["recharts"],
+        },
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./vitest.setup.ts",
