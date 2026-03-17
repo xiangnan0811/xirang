@@ -27,6 +27,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
 import { BackupHealthPanel } from "@/components/backup-health-panel";
 import { StorageUsagePanel } from "@/components/storage-usage-panel";
+import { ConfigExportImport } from "@/components/config-export-import";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
@@ -421,6 +422,11 @@ export function OverviewPage() {
       {/* 存储用量概览 */}
       <section className="animate-slide-up [animation-delay:600ms]">
         <StorageUsagePanel />
+      </section>
+
+      {/* 系统配置导入导出（仅管理员可见） */}
+      <section className="animate-slide-up [animation-delay:700ms]">
+        <ConfigExportImport />
       </section>
 
       <Dialog open={matrixFullscreen} onOpenChange={setMatrixFullscreen}>

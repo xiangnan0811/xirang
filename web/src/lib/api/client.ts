@@ -12,6 +12,8 @@ import { createTaskRunsApi } from "./task-runs-api";
 import { createTasksApi } from "./tasks-api";
 import { createTOTPApi } from "./totp-api";
 import { createUsersApi } from "./users-api";
+import { createSnapshotsApi } from "./snapshots-api";
+import { createConfigApi } from "./config-api";
 
 export { ApiError } from "./core";
 
@@ -29,5 +31,7 @@ export const apiClient = {
   ...createAlertsApi(),
   ...createAuditApi(),
   ...createUsersApi(),
-  ...createTOTPApi()
+  ...createTOTPApi(),
+  ...createSnapshotsApi(),
+  ...createConfigApi(),
 };

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Terminal, RotateCcw, Play } from "lucide-react";
+import { Plus, Terminal, RotateCcw, Play, FolderSearch } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
+import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { TaskEditorDialog } from "@/components/task-create-dialog";
@@ -105,6 +106,7 @@ export function TasksPage() {
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
   const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
@@ -440,6 +442,7 @@ export function TasksPage() {
           if (!open) {
             setHistoryTask(null);
             setSelectedRun(null);
+            setShowSnapshots(false);
           }
         }}
       >
@@ -451,21 +454,34 @@ export function TasksPage() {
             <DialogDescription>
               任务 #{historyTask?.id} 的执行记录
             </DialogDescription>
-            {historyTask?.executorType === "rsync" && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="ml-auto mr-8 shrink-0"
-                onClick={() => setRestoreDialogOpen(true)}
-              >
-                <RotateCcw className="mr-1 size-3.5" />
-                从此备份恢复
-              </Button>
-            )}
+            <div className="ml-auto mr-8 flex gap-2 shrink-0">
+              {historyTask?.executorType === "restic" && (
+                <Button
+                  size="sm"
+                  variant={showSnapshots ? "default" : "outline"}
+                  onClick={() => setShowSnapshots((v) => !v)}
+                >
+                  <FolderSearch className="mr-1 size-3.5" />
+                  浏览快照
+                </Button>
+              )}
+              {historyTask?.executorType === "rsync" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setRestoreDialogOpen(true)}
+                >
+                  <RotateCcw className="mr-1 size-3.5" />
+                  从此备份恢复
+                </Button>
+              )}
+            </div>
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody>
-            {historyTask && authToken && (
+            {historyTask && authToken && showSnapshots ? (
+              <SnapshotBrowser taskId={historyTask.id} token={authToken} />
+            ) : historyTask && authToken && (
               selectedRun ? (
                 <TaskRunDetail
                   run={selectedRun}
@@ -558,7 +574,7 @@ export function TasksPage() {
                           {task.name || task.policyName || `任务 #${task.id}`}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {task.executorType === "rsync" ? "同步" : "命令"}
+                          {task.executorType === "rsync" ? "同步" : task.executorType === "restic" ? "restic" : task.executorType === "rclone" ? "rclone" : "命令"}
                         </span>
                       </label>
                     ))
