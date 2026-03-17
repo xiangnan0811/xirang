@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,6 +22,7 @@ interface TOTPDisableDialogProps {
 }
 
 export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTPDisableDialogProps) {
+  const { t } = useTranslation();
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -46,9 +48,9 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
     } catch (err) {
       const msg = err instanceof ApiError
         ? (err.detail && typeof err.detail === "object"
-            ? ((err.detail as { error?: string }).error ?? "禁用失败")
-            : "禁用失败")
-        : "禁用失败";
+            ? ((err.detail as { error?: string }).error ?? t("totp.disableFailed"))
+            : t("totp.disableFailed"))
+        : t("totp.disableFailed");
       setError(msg);
     } finally {
       setLoading(false);
@@ -59,9 +61,9 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent size="sm">
         <DialogHeader>
-          <DialogTitle>禁用两步验证</DialogTitle>
+          <DialogTitle>{t("totp.disableTitle")}</DialogTitle>
           <DialogDescription>
-            输入账号密码和当前验证码以关闭两步验证。
+            {t("totp.disableDesc")}
           </DialogDescription>
           <DialogCloseButton />
         </DialogHeader>
@@ -70,7 +72,7 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
           <form id="totp-disable-form" className="space-y-3" onSubmit={handleSubmit}>
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="totp-disable-password">
-                账号密码
+                {t("totp.accountPassword")}
               </label>
               <Input
                 id="totp-disable-password"
@@ -78,21 +80,21 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
-                placeholder="请输入账号密码"
+                placeholder={t("totp.accountPasswordPlaceholder")}
                 autoFocus
                 required
               />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="totp-disable-code">
-                验证码
+                {t("totp.verificationCode")}
               </label>
               <Input
                 id="totp-disable-code"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
                 autoComplete="one-time-code"
-                placeholder="请输入 6 位验证码"
+                placeholder={t("totp.codePlaceholder")}
                 required
               />
             </div>
@@ -106,10 +108,10 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => handleClose(false)}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button type="submit" form="totp-disable-form" variant="destructive" loading={loading}>
-            禁用两步验证
+            {t("totp.disableButton")}
           </Button>
         </DialogFooter>
       </DialogContent>

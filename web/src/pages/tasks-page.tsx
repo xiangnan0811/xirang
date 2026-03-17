@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
 import { Plus, Terminal, RotateCcw, Play, FolderSearch, GitCompareArrows } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -48,6 +49,7 @@ const viewStorageKey = "xirang.tasks.view";
 type TasksViewMode = "cards" | "list";
 
 export function TasksPage() {
+  const { t } = useTranslation();
   const {
     tasks,
     nodes,
@@ -161,14 +163,14 @@ export function TasksPage() {
 
   const handleCreateTask = async (input: NewTaskInput) => {
     if (!input.name.trim() || !input.nodeId) {
-      toast.error("创建失败：任务名称与节点必填。");
+      toast.error(t("tasks.createError"));
       return;
     }
 
     try {
       const taskId = await createTask(input);
       setCreateDialogOpen(false);
-      toast.success(`任务 #${taskId} 已创建。`);
+      toast.success(t("tasks.createSuccess", { id: taskId }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -187,14 +189,14 @@ export function TasksPage() {
   const handleUpdateTask = async (input: NewTaskInput) => {
     if (!editingTask) return;
     if (!input.name.trim() || !input.nodeId) {
-      toast.error("保存失败：任务名称与节点必填。");
+      toast.error(t("tasks.updateError"));
       return;
     }
     try {
       await updateTask(editingTask.id, input);
       setEditDialogOpen(false);
       setEditingTask(null);
-      toast.success(`任务 #${editingTask.id} 已更新。`);
+      toast.success(t("tasks.updateSuccess", { id: editingTask.id }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -204,7 +206,7 @@ export function TasksPage() {
     try {
       setPendingAction({ id: taskId, action: "trigger" });
       await triggerTask(taskId);
-      toast.success(`已触发任务 #${taskId}。`);
+      toast.success(t("tasks.triggerSuccess", { id: taskId }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -216,7 +218,7 @@ export function TasksPage() {
     try {
       setPendingAction({ id: taskId, action: "cancel" });
       await cancelTask(taskId);
-      toast.success(`已取消任务 #${taskId}。`);
+      toast.success(t("tasks.cancelSuccess", { id: taskId }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -228,7 +230,7 @@ export function TasksPage() {
     try {
       setPendingAction({ id: taskId, action: "retry" });
       await retryTask(taskId);
-      toast.success(`已重试任务 #${taskId}。`);
+      toast.success(t("tasks.retrySuccess", { id: taskId }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -238,8 +240,8 @@ export function TasksPage() {
 
   const handleDelete = async (taskId: number) => {
     const ok = await confirm({
-      title: "确认操作",
-      description: `确认删除任务 #${taskId} 吗？`,
+      title: t("tasks.confirmAction"),
+      description: t("tasks.confirmDeleteDesc", { id: taskId }),
     });
     if (!ok) {
       return;
@@ -247,7 +249,7 @@ export function TasksPage() {
     try {
       setPendingAction({ id: taskId, action: "delete" });
       await deleteTask(taskId);
-      toast.success(`任务 #${taskId} 已删除。`);
+      toast.success(t("tasks.deleteSuccess", { id: taskId }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -261,27 +263,27 @@ export function TasksPage() {
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
-            title: "待执行",
+            title: t("tasks.statPending"),
             value: taskStats.pending,
-            description: "等待调度触发",
+            description: t("tasks.statPendingDesc"),
             tone: "info",
           },
           {
-            title: "成功",
+            title: t("tasks.statSuccess"),
             value: taskStats.success,
-            description: "最近执行成功任务",
+            description: t("tasks.statSuccessDesc"),
             tone: "success",
           },
           {
-            title: "运行中",
+            title: t("tasks.statRunning"),
             value: taskStats.running,
-            description: "包含重试中的任务",
+            description: t("tasks.statRunningDesc"),
             tone: "warning",
           },
           {
-            title: "失败",
+            title: t("tasks.statFailed"),
             value: taskStats.failed,
-            description: "可一键重试恢复",
+            description: t("tasks.statFailedDesc"),
             tone: "destructive",
           },
         ]}
@@ -293,11 +295,11 @@ export function TasksPage() {
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="mr-1 size-3.5" />
-                新建任务
+                {t("tasks.addTask")}
               </Button>
               <Button size="sm" variant="outline" onClick={() => setBatchDialogOpen(true)}>
                 <Terminal className="mr-1 size-3.5" />
-                批量执行
+                {t("tasks.batchExecute")}
               </Button>
               <Button
                 size="sm"
@@ -308,16 +310,16 @@ export function TasksPage() {
                 }}
               >
                 <Play className="mr-1 size-3.5" />
-                批量触发
+                {t("tasks.batchTrigger")}
               </Button>
             </div>
             <div className="flex items-center gap-2">
               <ViewModeToggle
                 value={viewMode}
                 onChange={(mode) => setViewModeRaw(mode)}
-                groupLabel="任务视图切换"
-                cardsButtonLabel="任务卡片视图"
-                listButtonLabel="任务列表视图"
+                groupLabel={t("tasks.viewToggleGroup")}
+                cardsButtonLabel={t("tasks.viewCards")}
+                listButtonLabel={t("tasks.viewList")}
               />
             </div>
           </div>
@@ -325,37 +327,37 @@ export function TasksPage() {
           <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
             <SearchInput
               containerClassName="w-full"
-              placeholder="搜索任务名称 / ID / 节点 / 策略 / 错误码"
+              placeholder={t("tasks.searchPlaceholder")}
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
-              aria-label="任务关键词筛选"
+              aria-label={t("tasks.searchAriaLabel")}
             />
 
             <AppSelect
               containerClassName="w-full"
-              aria-label="任务状态筛选"
+              aria-label={t("tasks.statusFilterAriaLabel")}
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilterRaw(event.target.value as "all" | TaskStatus)
               }
             >
-              <option value="all">全部状态</option>
-              <option value="pending">待执行</option>
-              <option value="running">执行中</option>
-              <option value="retrying">重试中</option>
-              <option value="failed">失败</option>
-              <option value="success">成功</option>
-              <option value="canceled">已取消</option>
-              <option value="warning">校验异常</option>
+              <option value="all">{t("tasks.allStatus")}</option>
+              <option value="pending">{t("tasks.statusPending")}</option>
+              <option value="running">{t("tasks.statusRunning")}</option>
+              <option value="retrying">{t("tasks.statusRetrying")}</option>
+              <option value="failed">{t("tasks.statusFailed")}</option>
+              <option value="success">{t("tasks.statusSuccess")}</option>
+              <option value="canceled">{t("tasks.statusCanceled")}</option>
+              <option value="warning">{t("tasks.statusWarning")}</option>
             </AppSelect>
 
             <AppSelect
               containerClassName="w-full"
-              aria-label="任务节点筛选"
+              aria-label={t("tasks.nodeFilterAriaLabel")}
               value={nodeFilter}
               onChange={(event) => setNodeFilter(event.target.value)}
             >
-              <option value="all">全部节点</option>
+              <option value="all">{t("tasks.allNodes")}</option>
               {nodes.map((node) => (
                 <option key={node.id} value={String(node.id)}>
                   {node.name}
@@ -369,17 +371,17 @@ export function TasksPage() {
                 variant="outline"
                 onClick={resetFilters}
               >
-                重置
+                {t("tasks.resetButton")}
               </Button>
             </div>
           </FilterPanel>
 
-          <FilterSummary filtered={filteredTasks.length} total={tasks.length} unit="条任务" />
+          <FilterSummary filtered={filteredTasks.length} total={tasks.length} unit={t("tasks.taskUnit")} />
 
           {loading ? (
             <LoadingState
-              title="任务数据加载中"
-              description="正在同步任务状态、进度与最近执行信息..."
+              title={t("tasks.loadingTitle")}
+              description={t("tasks.loadingDesc")}
               rows={3}
             />
           ) : null}
@@ -451,10 +453,10 @@ export function TasksPage() {
         <DialogContent size="lg">
           <DialogHeader>
             <DialogTitle>
-              执行历史 — {historyTask?.name || historyTask?.policyName}
+              {t("tasks.executionHistory", { name: historyTask?.name || historyTask?.policyName })}
             </DialogTitle>
             <DialogDescription>
-              任务 #{historyTask?.id} 的执行记录
+              {t("tasks.executionRecord", { id: historyTask?.id })}
             </DialogDescription>
             <div className="ml-auto mr-8 flex gap-2 shrink-0">
               {historyTask?.executorType === "restic" && (
@@ -465,7 +467,7 @@ export function TasksPage() {
                     onClick={() => { setShowSnapshots((v) => !v); setShowDiff(false); }}
                   >
                     <FolderSearch className="mr-1 size-3.5" />
-                    浏览快照
+                    {t("tasks.browseSnapshots")}
                   </Button>
                   <Button
                     size="sm"
@@ -473,7 +475,7 @@ export function TasksPage() {
                     onClick={() => { setShowDiff((v) => !v); setShowSnapshots(false); }}
                   >
                     <GitCompareArrows className="mr-1 size-3.5" />
-                    比较快照
+                    {t("tasks.compareSnapshots")}
                   </Button>
                 </>
               )}
@@ -484,7 +486,7 @@ export function TasksPage() {
                   onClick={() => setRestoreDialogOpen(true)}
                 >
                   <RotateCcw className="mr-1 size-3.5" />
-                  从此备份恢复
+                  {t("tasks.restoreFromBackup")}
                 </Button>
               )}
             </div>
@@ -547,25 +549,24 @@ export function TasksPage() {
           token={authToken}
           onSuccess={(runId) => {
             setRestoreDialogOpen(false);
-            toast.success(`恢复任务已触发，执行 ID: #${runId}`);
+            toast.success(t("tasks.restoreSuccess", { runId }));
           }}
         />
       )}
 
-      {/* 批量触发任务对话框 */}
       {authToken && (
         <Dialog open={batchTriggerDialogOpen} onOpenChange={setBatchTriggerDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>批量触发任务</DialogTitle>
-              <DialogDescription>选择要触发的任务，系统将依次执行</DialogDescription>
+              <DialogTitle>{t("tasks.batchTriggerTitle")}</DialogTitle>
+              <DialogDescription>{t("tasks.batchTriggerDesc")}</DialogDescription>
               <DialogCloseButton />
             </DialogHeader>
             <DialogBody>
               <div className="space-y-3">
                 <div className="max-h-64 overflow-y-auto space-y-2 rounded-md border border-border p-3">
                   {filteredTasks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">暂无可触发的任务</p>
+                    <p className="text-sm text-muted-foreground">{t("tasks.noTriggerable")}</p>
                   ) : (
                     filteredTasks.map((task) => (
                       <label
@@ -585,24 +586,24 @@ export function TasksPage() {
                           className="size-4"
                         />
                         <span className="text-sm flex-1">
-                          {task.name || task.policyName || `任务 #${task.id}`}
+                          {task.name || task.policyName || t("tasks.taskFallbackName", { id: task.id })}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {task.executorType === "rsync" ? "同步" : task.executorType === "restic" ? "restic" : task.executorType === "rclone" ? "rclone" : "命令"}
+                          {task.executorType === "rsync" ? t("tasks.executorSync") : task.executorType === "restic" ? "restic" : task.executorType === "rclone" ? "rclone" : t("tasks.executorCommand")}
                         </span>
                       </label>
                     ))
                   )}
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">已选择 {selectedTaskIds.length} 个任务</span>
+                  <span className="text-muted-foreground">{t("tasks.selectedCount", { count: selectedTaskIds.length })}</span>
                   {selectedTaskIds.length > 0 && (
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => setSelectedTaskIds([])}
                     >
-                      清空选择
+                      {t("tasks.clearSelection")}
                     </Button>
                   )}
                 </div>
@@ -614,7 +615,7 @@ export function TasksPage() {
                       setSelectedTaskIds([]);
                     }}
                   >
-                    取消
+                    {t("common.cancel")}
                   </Button>
                   <Button
                     disabled={selectedTaskIds.length === 0}
@@ -623,15 +624,15 @@ export function TasksPage() {
                         const result = await apiClient.batchTriggerTasks(authToken, selectedTaskIds);
                         setBatchTriggerDialogOpen(false);
                         setSelectedTaskIds([]);
-                        toast.success(`批量触发成功：${result.successCount}/${result.total} 个任务已启动`);
+                        toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
                         void refreshTasks();
                       } catch (err) {
-                        toast.error(`批量触发失败: ${getErrorMessage(err)}`);
+                        toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
                       }
                     }}
                   >
                     <Play className="mr-1 size-3.5" />
-                    触发 {selectedTaskIds.length} 个任务
+                    {t("tasks.triggerCount", { count: selectedTaskIds.length })}
                   </Button>
                 </div>
               </div>

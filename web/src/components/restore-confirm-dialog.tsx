@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { RotateCcw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { apiClient } from "@/lib/api/client";
 
@@ -24,6 +25,7 @@ export function RestoreConfirmDialog({
   token,
   onSuccess,
 }: RestoreConfirmDialogProps) {
+  const { t } = useTranslation();
   const [targetPath, setTargetPath] = useState(rsyncSource ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -40,7 +42,7 @@ export function RestoreConfirmDialog({
       onOpenChange(false);
       if (result.runId) onSuccess?.(result.runId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "恢复失败");
+      setError(err instanceof Error ? err.message : t('restore.failed'));
     } finally {
       setSaving(false);
     }
@@ -50,14 +52,14 @@ export function RestoreConfirmDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="从备份恢复"
-      description={`恢复任务: ${taskName}`}
+      title={t('restore.title')}
+      description={t('restore.description', { taskName })}
       icon={<RotateCcw className="size-5" />}
       size="md"
       saving={saving}
       onSubmit={handleSubmit}
-      submitLabel="确认恢复"
-      savingLabel="恢复中..."
+      submitLabel={t('restore.submit')}
+      savingLabel={t('restore.saving')}
     >
       {error && (
         <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -68,7 +70,7 @@ export function RestoreConfirmDialog({
       <div className="space-y-3">
         <div>
           <label className="mb-1 block text-sm font-medium text-muted-foreground">
-            原始源路径（数据来源）
+            {t('restore.sourcePathLabel')}
           </label>
           <div className="rounded-md bg-muted px-3 py-2 font-mono text-sm">
             {rsyncSource || "-"}
@@ -77,7 +79,7 @@ export function RestoreConfirmDialog({
 
         <div>
           <label className="mb-1 block text-sm font-medium text-muted-foreground">
-            备份目标路径（备份存储位置）
+            {t('restore.backupTargetLabel')}
           </label>
           <div className="rounded-md bg-muted px-3 py-2 font-mono text-sm">
             {rsyncTarget || "-"}
@@ -86,17 +88,17 @@ export function RestoreConfirmDialog({
 
         <div>
           <label className="mb-1 block text-sm font-medium">
-            恢复目标路径
+            {t('restore.restoreTargetLabel')}
           </label>
           <input
             type="text"
             className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
-            placeholder={rsyncSource || "输入恢复目标路径"}
+            placeholder={rsyncSource || t('restore.restoreTargetPlaceholder')}
             value={targetPath}
             onChange={(e) => setTargetPath(e.target.value)}
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            留空则恢复到原始源路径。路径必须为绝对路径，禁止系统目录。
+            {t('restore.restoreTargetHint')}
           </p>
         </div>
       </div>

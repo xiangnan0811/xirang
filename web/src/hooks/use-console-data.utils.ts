@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type { NodeRecord, OverviewStats, OverviewSummary, PolicyRecord, TaskRecord } from "@/types/domain";
 
 export function deriveOverview(
@@ -28,20 +29,25 @@ export function deriveOverview(
 export function describeCron(cron: string) {
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) {
-    return `按表达式 ${cron} 调度`;
+    return i18n.t("cron.byCronExpression", { cron });
   }
   const [minute, hour, , , weekday] = parts;
   if (minute.startsWith("*/")) {
-    return `每 ${minute.replace("*/", "")} 分钟执行`;
+    return i18n.t("cron.everyNMinutes", { n: minute.replace("*/", "") });
   }
   if (hour.startsWith("*/")) {
     const interval = hour.replace("*/", "");
-    return minute === "0" ? `每 ${interval} 小时整点执行` : `每 ${interval} 小时第 ${minute} 分执行`;
+    return minute === "0"
+      ? i18n.t("cron.everyNHoursOnTheHour", { n: interval })
+      : i18n.t("cron.everyNHoursAtMinute", { n: interval, minute });
   }
   if (weekday !== "*") {
-    return `每周 ${weekday} ${hour.padStart(2, "0")}:${minute.padStart(2, "0")} 执行`;
+    return i18n.t("cron.weeklyDaysAtTime", {
+      days: weekday,
+      time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`
+    });
   }
-  return `每天 ${hour.padStart(2, "0")}:${minute.padStart(2, "0")} 执行`;
+  return i18n.t("cron.dailyAtTime", { time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` });
 }
 
 export function parseTags(raw: string) {

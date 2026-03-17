@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
@@ -39,6 +40,7 @@ export const NodesGrid = React.memo(function NodesGrid({
   emergencyNodeId,
   isAdmin,
 }: NodesViewProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   return (
@@ -48,14 +50,14 @@ export const NodesGrid = React.memo(function NodesGrid({
           <div className="inline-flex items-center gap-2">
             <input
               type="checkbox"
-              aria-label="全选当前页可见节点"
+              aria-label={t("nodes.selectAllVisible")}
               className="size-4"
               checked={allVisibleSelected}
               onChange={(event) =>
                 toggleSelectAllVisible(event.target.checked)
               }
             />
-            <span>全选</span>
+            <span>{t("common.selectAll")}</span>
           </div>
           <Button
             size="sm"
@@ -63,25 +65,25 @@ export const NodesGrid = React.memo(function NodesGrid({
             disabled={!selectedNodeIds.length}
             onClick={() => void handleBulkDelete()}
           >
-            删除 {selectedNodeIds.length}
+            {t("nodes.deleteCount", { count: selectedNodeIds.length })}
           </Button>
         </div>
 
         {loading ? (
           <LoadingState
-            title="节点数据加载中"
-            description="正在刷新节点探测状态与可用性..."
+            title={t("nodes.loadingTitle")}
+            description={t("nodes.loadingDesc")}
             rows={3}
           />
         ) : null}
 
         {!loading && !sortedNodes.length ? (
           <FilteredEmptyState
-            title="当前筛选条件下暂无节点"
-            description="可以重置筛选条件，或新增一个节点继续测试。"
+            title={t("nodes.emptyTitle")}
+            description={t("nodes.emptyDesc")}
             onReset={resetFilters}
             onCreate={openCreateDialog}
-            createLabel="新增节点"
+            createLabel={t("nodes.emptyCreateLabel")}
             createIcon={ServerCog}
           />
         ) : null}
@@ -98,14 +100,14 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
-                    aria-label={`选择节点 ${node.name}`}
+                    aria-label={t("nodes.selectAllVisible")}
                     className="size-4"
                     checked={checked}
                     onChange={(event) =>
                       toggleNodeSelection(node.id, event.target.checked)
                     }
                   />
-                  选择
+                  {t("common.selectAll")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
                   <StatusPulse tone={node.status} />
@@ -123,11 +125,10 @@ export const NodesGrid = React.memo(function NodesGrid({
 
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                 <p>
-                  磁盘余量：{node.diskFreePercent}%（探测：
-                  {node.diskProbeAt || "未探测"}）
+                  {t("nodes.diskFreeLabel", { pct: node.diskFreePercent, probe: node.diskProbeAt || t("nodes.probeNever") })}
                 </p>
-                <p>最后备份：{node.lastBackupAt}</p>
-                <p className="break-words">标签：{node.tags.join(" / ") || "-"}</p>
+                <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
+                <p className="break-words">{t("nodes.tagsLabel", { tags: node.tags.join(" / ") || "-" })}</p>
               </div>
 
               <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
@@ -136,7 +137,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
+                    aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
@@ -146,7 +147,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
+                    aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
                     onClick={() =>
                       navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                     }
@@ -158,7 +159,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       variant="ghost"
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={`打开节点 ${node.name} Web 终端`} title="Web 终端"
+                      aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                       onClick={() => onOpenTerminal?.(node)}
                     >
                       <MonitorPlay className="size-4" />
@@ -168,7 +169,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`浏览节点 ${node.name} 文件`} title="文件浏览"
+                    aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                     onClick={() => onOpenFileBrowser?.(node)}
                   >
                     <FolderOpen className="size-4" />
@@ -177,7 +178,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`编辑节点 ${node.name}`} title="编辑节点"
+                    aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                     onClick={() => openEditDialog(node)}
                   >
                     <Wrench className="size-4" />
@@ -186,7 +187,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                    aria-label={`删除节点 ${node.name}`} title="删除节点"
+                    aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                     onClick={() => onDeleteNode(node)}
                   >
                     <Trash2 className="size-4" />
@@ -198,7 +199,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                   onClick={() => void handleTriggerBackup(node.id, node.name)}
                 >
                   {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                  手动备份
+                  {t("nodes.manualBackup")}
                 </Button>
               </div>
             </div>
@@ -210,19 +211,19 @@ export const NodesGrid = React.memo(function NodesGrid({
         {loading ? (
           <LoadingState
             className="md:col-span-2 lg:col-span-3"
-            title="节点数据加载中"
-            description="正在刷新节点探测状态与可用性..."
+            title={t("nodes.loadingTitle")}
+            description={t("nodes.loadingDesc")}
             rows={4}
           />
         ) : null}
 
         {!loading && !sortedNodes.length ? (
           <FilteredEmptyState
-            title="当前筛选条件下暂无节点"
-            description="可以重置筛选条件，或新增一个节点继续测试。"
+            title={t("nodes.emptyTitle")}
+            description={t("nodes.emptyDesc")}
             onReset={resetFilters}
             onCreate={openCreateDialog}
-            createLabel="新增节点"
+            createLabel={t("nodes.emptyCreateLabel")}
             createIcon={ServerCog}
           />
         ) : null}
@@ -231,8 +232,8 @@ export const NodesGrid = React.memo(function NodesGrid({
           const status = getNodeStatusMeta(node.status);
           const keyLabel = node.keyId
             ? sshKeys.find((key) => key.id === node.keyId)?.name ||
-            "已绑定 Key"
-            : "未绑定";
+            t("common.keyBound")
+            : t("common.keyUnbound");
           const checked = selectedNodeSet.has(node.id);
 
           return (
@@ -243,7 +244,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                 selectedNodeId === node.id && "border-primary/45 ring-1 ring-primary/40"
               )}
               role="button"
-              aria-label={`节点卡片 ${node.name}`}
+              aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
               tabIndex={0}
               onClick={(e) => {
                 if (
@@ -267,14 +268,14 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
-                    aria-label={`选择节点 ${node.name}`}
+                    aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
                     className="size-4"
                     checked={checked}
                     onChange={(event) =>
                       toggleNodeSelection(node.id, event.target.checked)
                     }
                   />
-                  选择
+                  {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
                   <StatusPulse tone={node.status} />
@@ -292,21 +293,18 @@ export const NodesGrid = React.memo(function NodesGrid({
 
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                 <p>
-                  认证：
+                  {t("nodes.authLabel")}
                   {node.authType === "key"
-                    ? `密钥 / ${keyLabel}`
-                    : "密码"}
+                    ? t("nodes.authKeyWithLabel", { label: keyLabel })
+                    : t("nodes.authPassword")}
                 </p>
                 <p>
-                  磁盘余量：{node.diskFreePercent}% · 延迟{" "}
-                  {node.connectionLatencyMs
-                    ? `${node.connectionLatencyMs}ms`
-                    : "-"}
+                  {t("nodes.diskFreeDetail", { pct: node.diskFreePercent, latency: node.connectionLatencyMs ? `${node.connectionLatencyMs}ms` : "-" })}
                 </p>
-                <p>探测：{node.diskProbeAt || "未探测"}</p>
-                <p>最后备份：{node.lastBackupAt}</p>
+                <p>{t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}</p>
+                <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
                 <p className="break-words">
-                  标签：{node.tags.length ? node.tags.join(" / ") : "-"}
+                  {t("nodes.tagsLabel", { tags: node.tags.length ? node.tags.join(" / ") : "-" })}
                 </p>
               </div>
 
@@ -316,7 +314,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
+                    aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
@@ -326,7 +324,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
+                    aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
                     onClick={() =>
                       navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                     }
@@ -338,7 +336,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       variant="ghost"
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={`打开节点 ${node.name} Web 终端`} title="Web 终端"
+                      aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                       onClick={() => onOpenTerminal?.(node)}
                     >
                       <MonitorPlay className="size-4" />
@@ -348,7 +346,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`浏览节点 ${node.name} 文件`} title="文件浏览"
+                    aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                     onClick={() => onOpenFileBrowser?.(node)}
                   >
                     <FolderOpen className="size-4" />
@@ -357,7 +355,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`编辑节点 ${node.name}`} title="编辑节点"
+                    aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                     onClick={() => openEditDialog(node)}
                   >
                     <Wrench className="size-4" />
@@ -366,7 +364,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     variant="ghost"
                     size="icon"
                     className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                    aria-label={`删除节点 ${node.name}`} title="删除节点"
+                    aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                     onClick={() => onDeleteNode(node)}
                   >
                     <Trash2 className="size-4" />
@@ -379,20 +377,20 @@ export const NodesGrid = React.memo(function NodesGrid({
                     className="text-xs"
                     disabled={emergencyNodeId === node.id}
                     onClick={() => onEmergencyBackup?.(node.id, node.name)}
-                    title="紧急备份"
+                    title={t("nodes.emergencyBackup")}
                   >
                     {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <ShieldAlert className="mr-1 size-3.5" />}
-                    紧急备份
+                    {t("nodes.emergencyBackup")}
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
                     className="text-xs"
                     onClick={() => onMigrate?.(node)}
-                    title="迁移到..."
+                    title={t("nodes.migrateTo")}
                   >
                     <ArrowRightLeft className="mr-1 size-3.5" />
-                    迁移
+                    {t("nodes.migrateShort")}
                   </Button>
                   <Button
                     size="sm"
@@ -401,7 +399,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     onClick={() => void handleTriggerBackup(node.id, node.name)}
                   >
                     {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                    手动备份
+                    {t("nodes.manualBackup")}
                   </Button>
                 </div>
               </div>

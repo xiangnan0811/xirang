@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   CheckSquare,
@@ -73,6 +74,7 @@ const selectedStorageKey = "xirang.nodes.selected";
 
 
 export function NodesPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { token, role } = useAuth();
@@ -228,7 +230,7 @@ export function NodesPage() {
     if (!groupView) return null;
     const groups: Record<string, typeof sortedNodes> = {};
     for (const node of sortedNodes) {
-      const nodeTags = node.tags.length > 0 ? node.tags : ["未分组"];
+      const nodeTags = node.tags.length > 0 ? node.tags : [t("nodes.ungrouped")];
       for (const tag of nodeTags) {
         if (!groups[tag]) {
           groups[tag] = [];
@@ -271,7 +273,7 @@ export function NodesPage() {
 
   const handleSaveNode = async (input: NewNodeInput, nodeId?: number) => {
     if (!input.name.trim() || !input.host.trim() || !input.username.trim()) {
-      toast.error("保存失败：节点名称、主机地址、用户名不能为空。");
+      toast.error(t("nodes.saveFailedEmpty"));
       return;
     }
     if (
@@ -279,7 +281,7 @@ export function NodesPage() {
       input.inlinePrivateKey !== undefined &&
       !input.inlinePrivateKey.trim()
     ) {
-      toast.error("保存失败：请填写新 SSH Key 的私钥内容。");
+      toast.error(t("nodes.saveFailedKeyEmpty"));
       return;
     }
 
@@ -288,10 +290,10 @@ export function NodesPage() {
     try {
       if (nodeId) {
         await updateNode(nodeId, input);
-        toast.success(`节点 ${input.name} 已更新。`);
+        toast.success(t("nodes.nodeUpdated", { name: input.name }));
       } else {
         savedNodeId = await createNode(input);
-        toast.success(`节点 ${input.name} 已新增。`);
+        toast.success(t("nodes.nodeCreated", { name: input.name }));
       }
 
       setEditorOpen(false);
@@ -316,7 +318,7 @@ export function NodesPage() {
   const handleTestConnection = async (nodeId: number) => {
     const existing = nodes.find((node) => node.id === nodeId);
     if (!existing) {
-      toast.error("节点记录已变更，请先保存后重试连接测试。");
+      toast.error(t("nodes.nodeChangedRetry"));
       return;
     }
     try {
@@ -328,8 +330,8 @@ export function NodesPage() {
 
   const onDeleteNode = async (node: NodeRecord) => {
     const ok = await confirm({
-      title: "确认操作",
-      description: `确认删除节点 ${node.name} 吗？此操作会移除关联任务记录。`,
+      title: t("nodes.confirmDeleteTitle"),
+      description: t("nodes.confirmDeleteNodeDesc", { name: node.name }),
     });
     if (!ok) {
       return;
@@ -337,7 +339,7 @@ export function NodesPage() {
     try {
       await deleteNode(node.id);
       setSelectedNodeIds((prev) => prev.filter((id) => id !== node.id));
-      toast.success(`节点 ${node.name} 已删除。`);
+      toast.success(t("nodes.nodeDeleted", { name: node.name }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -368,13 +370,13 @@ export function NodesPage() {
 
   const handleBulkDelete = async () => {
     if (!selectedNodeIds.length) {
-      toast.error("请先选择至少一个节点。");
+      toast.error(t("nodes.selectAtLeastOne"));
       return;
     }
 
     const ok = await confirm({
-      title: "确认操作",
-      description: `确认批量删除 ${selectedNodeIds.length} 个节点吗？此操作会移除关联任务与告警记录。`,
+      title: t("nodes.bulkDeleteConfirmTitle"),
+      description: t("nodes.bulkDeleteConfirmDesc", { count: selectedNodeIds.length }),
     });
     if (!ok) {
       return;
@@ -385,10 +387,10 @@ export function NodesPage() {
       setSelectedNodeIds([]);
       if (result.notFoundIds.length > 0) {
         toast.success(
-          `批量删除完成：成功 ${result.deleted}，未找到 ${result.notFoundIds.length} 个节点。`
+          t("nodes.bulkDeletePartial", { deleted: result.deleted, notFound: result.notFoundIds.length })
         );
       } else {
-        toast.success(`已批量删除 ${result.deleted} 个节点。`);
+        toast.success(t("nodes.bulkDeleteSuccess", { count: result.deleted }));
       }
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -415,7 +417,7 @@ export function NodesPage() {
     try {
       setTriggeringNodeId(nodeId);
       await triggerNodeBackup(nodeId);
-      toast.success(`已触发 ${nodeName} 的手动备份任务。`);
+      toast.success(t("nodes.backupTriggered", { name: nodeName }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -426,17 +428,15 @@ export function NodesPage() {
   const handleImportCSV = async (content: string) => {
     const rows = parseCSVRows(content);
     if (!rows.length) {
-      toast.error(
-        "未解析到有效节点记录，请检查 CSV 格式（name,host,username,port,tags）。"
-      );
+      toast.error(t("nodes.csvImportEmpty"));
       return;
     }
 
     const defaultKeyID = sshKeys[0]?.id ?? null;
     if (!defaultKeyID) {
-      toast.error("批量导入前请先创建 SSH Key。出于安全考虑，CSV 导入仅支持密钥认证。", {
+      toast.error(t("nodes.csvImportNeedKey"), {
         action: {
-          label: "去创建",
+          label: t("nodes.csvImportNeedKeyAction"),
           onClick: () => {
             navigate("/app/ssh-keys");
           }
@@ -471,7 +471,7 @@ export function NodesPage() {
       }
     }
 
-    const summary = `批量导入完成：成功 ${successCount}，失败 ${failedCount}。`;
+    const summary = t("nodes.csvImportSummary", { success: successCount, failed: failedCount });
     toast.success(errors.length ? `${summary} ${errors.join(" | ")}` : summary);
   };
 
@@ -498,20 +498,20 @@ export function NodesPage() {
     link.download = `xirang-nodes-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
-    toast.success(`已导出 ${sortedNodes.length} 条节点记录。`);
+    toast.success(t("nodes.csvExported", { count: sortedNodes.length }));
   };
 
   const handleEmergencyBackup = async (nodeId: number, nodeName: string) => {
     if (!token) return;
     const ok = await confirm({
-      title: "紧急备份确认",
-      description: `确认对节点 ${nodeName} 执行紧急备份？将立即触发该节点关联的所有备份策略。`,
+      title: t("nodes.emergencyBackupConfirmTitle"),
+      description: t("nodes.emergencyBackupConfirmDesc", { name: nodeName }),
     });
     if (!ok) return;
     try {
       setEmergencyNodeId(nodeId);
       const result = await apiClient.emergencyBackup(token, nodeId);
-      toast.success(`紧急备份已触发：${result.triggered} 个任务已启动。`);
+      toast.success(t("nodes.emergencyBackupTriggered", { count: result.triggered }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -525,7 +525,7 @@ export function NodesPage() {
       setMigratingNode(true);
       const result = await apiClient.migrateNode(token, migrateSourceNode.id, migrateTargetId);
       toast.success(
-        `迁移完成：${result.migratedPolicies} 个策略、${result.migratedTasks} 个任务已迁移。`
+        t("nodes.migrateSuccess", { policies: result.migratedPolicies, tasks: result.migratedTasks })
       );
       setMigrateSourceNode(null);
       setMigrateTargetId(null);
@@ -549,7 +549,7 @@ export function NodesPage() {
     link.download = "xirang-nodes-template.csv";
     link.click();
     URL.revokeObjectURL(link.href);
-    toast.success("已下载节点导入模板。");
+    toast.success(t("nodes.templateDownloaded"));
   };
 
   return (
@@ -558,28 +558,29 @@ export function NodesPage() {
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
-            title: "节点总数",
+            title: t("nodes.totalNodes"),
             value: nodes.length,
-            description: "覆盖全部资产主机",
+            description: t("nodes.totalNodesDesc"),
             tone: "info",
           },
           {
-            title: "在线节点",
+            title: t("nodes.onlineNodes"),
             value: nodeStats.online,
-            description: `健康率 ${nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0
-              }%`,
+            description: t("nodes.onlineNodesDesc", {
+              rate: nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0,
+            }),
             tone: "success",
           },
           {
-            title: "告警 / 离线",
+            title: t("nodes.warningOffline"),
             value: nodeStats.warning + nodeStats.offline,
-            description: `告警 ${nodeStats.warning} · 离线 ${nodeStats.offline}`,
+            description: t("nodes.warningOfflineDesc", { warning: nodeStats.warning, offline: nodeStats.offline }),
             tone: "warning",
           },
           {
-            title: "当前筛选 / 选择",
+            title: t("nodes.filterSelection"),
             value: sortedNodes.length,
-            description: `已选 ${selectedNodeIds.length} 个节点`,
+            description: t("nodes.selectedCount", { count: selectedNodeIds.length }),
             tone: "primary",
           },
         ]}
@@ -591,28 +592,28 @@ export function NodesPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
               <ServerCog className="mr-1 size-3.5" />
-              新增节点
+              {t("nodes.addNode")}
             </Button>
             {/* 移动端：收纳导入/模板/导出到下拉菜单 */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="shrink-0 md:hidden">
                   <MoreHorizontal className="mr-1 size-3.5" />
-                  更多
+                  {t("nodes.more")}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
                 <DropdownMenuItem onClick={() => csvInputRef.current?.click()}>
                   <FileUp className="mr-2 size-3.5" />
-                  CSV 导入
+                  {t("nodes.csvImport")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleDownloadTemplate}>
                   <Download className="mr-2 size-3.5" />
-                  下载模板
+                  {t("nodes.downloadTemplate")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleExportCSV}>
                   <Download className="mr-2 size-3.5" />
-                  导出节点
+                  {t("nodes.exportNodes")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -626,7 +627,7 @@ export function NodesPage() {
               }}
             >
               <FileUp className="mr-1 size-3.5" />
-              CSV 导入
+              {t("nodes.csvImport")}
             </Button>
             <Button
               variant="outline"
@@ -635,11 +636,11 @@ export function NodesPage() {
               onClick={handleDownloadTemplate}
             >
               <Download className="mr-1 size-3.5" />
-              模板
+              {t("nodes.templateShort")}
             </Button>
             <Button variant="outline" size="sm" className="hidden shrink-0 md:inline-flex" onClick={handleExportCSV}>
               <Download className="mr-1 size-3.5" />
-              导出
+              {t("nodes.exportShort")}
             </Button>
             <input
               ref={csvInputRef}
@@ -666,37 +667,37 @@ export function NodesPage() {
               className="hidden md:inline-flex"
               value={viewMode}
               onChange={setViewMode}
-              groupLabel="节点视图切换"
-              cardsButtonLabel="节点卡片视图"
-              listButtonLabel="节点列表视图"
+              groupLabel={t("nodes.viewToggleGroup")}
+              cardsButtonLabel={t("nodes.viewCards")}
+              listButtonLabel={t("nodes.viewList")}
             />
             <Button
               size="sm"
               variant={groupView ? "default" : "outline"}
               className="hidden shrink-0 md:inline-flex"
               onClick={() => setGroupView(!groupView)}
-              aria-label="按标签分组视图"
+              aria-label={t("nodes.groupByTag")}
             >
               <Layers className="mr-1 size-3.5" />
-              分组
+              {t("nodes.groupLabel")}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" aria-label="批量操作">
+                <Button size="sm" variant="outline" aria-label={t("nodes.batchLabel")}>
                   <MoreHorizontal className="mr-1 size-4" />
-                  批量{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ""}
+                  {selectedNodeIds.length > 0 ? t("nodes.batchWithCount", { count: selectedNodeIds.length }) : t("nodes.batchLabel")}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
                   <CheckSquare className="mr-2 size-4" />
-                  {allVisibleSelected ? "取消全选" : "全选当前筛选"}
+                  {allVisibleSelected ? t("nodes.deselectAll") : t("nodes.selectAllFiltered")}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!selectedNodeIds.length}
                   onClick={() => setSelectedNodeIds([])}
                 >
-                  清空选择
+                  {t("nodes.clearSelection")}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -704,7 +705,7 @@ export function NodesPage() {
                   onClick={() => setBatchCmdOpen(true)}
                 >
                   <Terminal className="mr-2 size-3.5" />
-                  批量执行命令 ({selectedNodeIds.length})
+                  {t("nodes.batchCommandCount", { count: selectedNodeIds.length })}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -713,12 +714,12 @@ export function NodesPage() {
                   onClick={() => void handleBulkDelete()}
                 >
                   <Trash2 className="mr-2 size-3.5" />
-                  删除 ({selectedNodeIds.length})
+                  {t("nodes.deleteCount", { count: selectedNodeIds.length })}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button size="sm" variant="outline" onClick={resetFilters}>
-              重置
+              {t("nodes.reset")}
             </Button>
           </div>
 
@@ -727,51 +728,51 @@ export function NodesPage() {
               containerClassName="w-full col-span-2 md:col-span-3 xl:col-span-1"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
-              placeholder="按名称 / 标签 / IP / 用户名 / 连接状态筛选"
-              aria-label="节点关键词筛选"
+              placeholder={t("nodes.searchPlaceholder")}
+              aria-label={t("nodes.keywordAriaLabel")}
             />
             <AppSelect
               containerClassName="w-full"
-              aria-label="节点状态筛选"
+              aria-label={t("nodes.statusAriaLabel")}
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as typeof statusFilter)
               }
             >
-              <option value="all">全部状态</option>
-              <option value="online">在线</option>
-              <option value="warning">告警</option>
-              <option value="offline">离线</option>
+              <option value="all">{t("nodes.allStatus")}</option>
+              <option value="online">{t("nodes.statusOnline")}</option>
+              <option value="warning">{t("nodes.statusWarning")}</option>
+              <option value="offline">{t("nodes.statusOffline")}</option>
             </AppSelect>
             <AppSelect
               containerClassName="w-full"
-              aria-label="节点标签筛选"
+              aria-label={t("nodes.tagAriaLabel")}
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
             >
               {tags.map((tag) => (
                 <option key={tag} value={tag}>
-                  {tag === "all" ? "全部标签" : tag}
+                  {tag === "all" ? t("nodes.allTags") : tag}
                 </option>
               ))}
             </AppSelect>
             <AppSelect
               containerClassName="w-full col-span-2 md:col-span-1"
-              aria-label="节点排序方式"
+              aria-label={t("nodes.sortAriaLabel")}
               value={sortBy}
               onChange={(event) =>
                 setSortBy(event.target.value as typeof sortBy)
               }
             >
-              <option value="status">按异常优先</option>
-              <option value="name-asc">名称 A-Z</option>
-              <option value="name-desc">名称 Z-A</option>
-              <option value="disk-low">磁盘余量升序</option>
-              <option value="backup-recent">最近备份优先</option>
+              <option value="status">{t("nodes.sortStatus")}</option>
+              <option value="name-asc">{t("nodes.sortNameAsc")}</option>
+              <option value="name-desc">{t("nodes.sortNameDesc")}</option>
+              <option value="disk-low">{t("nodes.sortDiskLow")}</option>
+              <option value="backup-recent">{t("nodes.sortBackupRecent")}</option>
             </AppSelect>
           </FilterPanel>
 
-          <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit="个节点" />
+          <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit={t("nodes.nodeUnit")} />
 
           {/* 分组视图 */}
           {groupView && groupedNodes ? (
@@ -781,7 +782,7 @@ export function NodesPage() {
                   <summary className="flex cursor-pointer items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm font-medium hover:bg-muted/60">
                     <Layers className="size-4 text-muted-foreground" />
                     {tag}
-                    <span className="ml-auto text-xs text-muted-foreground">{tagNodes.length} 个节点</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{t("nodes.groupNodeCount", { count: tagNodes.length })}</span>
                   </summary>
                   <div className="mt-2">
                     <NodesGrid
@@ -896,16 +897,16 @@ export function NodesPage() {
         >
           <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <DialogTitle className="flex items-center justify-between">
-              <span>Web 终端 — {terminalNode?.name ?? ""}</span>
+              <span>{t("nodes.terminalTitle", { name: terminalNode?.name ?? "" })}</span>
               <DialogCloseButton />
             </DialogTitle>
             <DialogDescription className="sr-only">
-              通过 WebSocket 连接到远程节点的 SSH 终端
+              {t("nodes.terminalDesc")}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden px-4 pb-4">
             {terminalNode !== null && token !== null && (
-              <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">加载终端中...</div>}>
+              <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("nodes.terminalLoading")}</div>}>
                 <WebTerminal
                   key={terminalKey}
                   nodeId={terminalNode.id}
@@ -925,9 +926,9 @@ export function NodesPage() {
         >
           <DialogContent className="flex w-full max-w-[95vw] flex-col md:max-w-[80vw]" size="lg">
             <DialogHeader>
-              <DialogTitle>文件浏览 — {fileBrowserNode.name}</DialogTitle>
+              <DialogTitle>{t("nodes.fileBrowserTitle", { name: fileBrowserNode.name })}</DialogTitle>
               <DialogDescription className="sr-only">
-                通过 SFTP 浏览节点 {fileBrowserNode.name} 的远端文件系统
+                {t("nodes.fileBrowserDesc", { name: fileBrowserNode.name })}
               </DialogDescription>
               <DialogCloseButton />
             </DialogHeader>
@@ -987,16 +988,16 @@ export function NodesPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>迁移节点 — {migrateSourceNode?.name}</DialogTitle>
+            <DialogTitle>{t("nodes.migrateDialogTitle", { name: migrateSourceNode?.name })}</DialogTitle>
             <DialogDescription>
-              将该节点关联的策略和任务迁移到目标节点。
+              {t("nodes.migrateDialogDesc")}
             </DialogDescription>
             <DialogCloseButton />
           </DialogHeader>
           <div className="space-y-3 px-6 pb-6">
             <div>
               <label htmlFor="migrate-target" className="mb-1 block text-sm font-medium">
-                目标节点
+                {t("nodes.migrateTargetLabel")}
               </label>
               <AppSelect
                 id="migrate-target"
@@ -1004,7 +1005,7 @@ export function NodesPage() {
                 value={migrateTargetId ? String(migrateTargetId) : ""}
                 onChange={(e) => setMigrateTargetId(e.target.value ? Number(e.target.value) : null)}
               >
-                <option value="">请选择目标节点</option>
+                <option value="">{t("nodes.migrateTargetPlaceholder")}</option>
                 {nodes
                   .filter((n) => n.id !== migrateSourceNode?.id)
                   .map((n) => (
@@ -1022,13 +1023,13 @@ export function NodesPage() {
                   setMigrateTargetId(null);
                 }}
               >
-                取消
+                {t("common.cancel")}
               </Button>
               <Button
                 disabled={!migrateTargetId || migratingNode}
                 onClick={() => void handleMigrateNode()}
               >
-                {migratingNode ? "迁移中..." : "确认迁移"}
+                {migratingNode ? t("nodes.migrating") : t("nodes.confirmMigrate")}
               </Button>
             </div>
           </div>

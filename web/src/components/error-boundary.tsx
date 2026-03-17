@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import i18next from "i18next";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -42,9 +43,9 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
           <div className="mb-4 rounded-full bg-destructive/10 p-3">
             <AlertTriangle className="size-6 text-destructive" />
           </div>
-          <h3 className="text-sm font-semibold">页面渲染出错</h3>
+          <h3 className="text-sm font-semibold">{i18next.t('errorBoundary.renderError')}</h3>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            {this.state.error?.message ?? "发生了未知错误"}
+            {this.state.error?.message ?? i18next.t('errorBoundary.unknownError')}
           </p>
           <Button
             variant="outline"
@@ -52,7 +53,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
             className="mt-4"
             onClick={this.handleReset}
           >
-            重试
+            {i18next.t('common.retry')}
           </Button>
         </div>
       );

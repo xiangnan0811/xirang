@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ type DeliveryStatsProps = {
 const collapsedStorageKey = "xirang.notifications.stats-collapsed";
 
 export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProps) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = usePersistentState(collapsedStorageKey, true);
   const [statsWindow, setStatsWindow] = useState<24 | 72 | 168>(24);
   const [deliveryStats, setDeliveryStats] = useState<AlertDeliveryStats | null>(null);
@@ -57,8 +59,8 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
   }, [loadDeliveryStats, statsWindow]);
 
   const summaryText = deliveryStats
-    ? `过去 ${statsWindow}h 投递 ${deliveryStats.totalSent + deliveryStats.totalFailed} 条，成功率 ${deliveryStats.successRate}%`
-    : "加载中...";
+    ? t("notifications.statsSummary", { hours: statsWindow, total: deliveryStats.totalSent + deliveryStats.totalFailed, rate: deliveryStats.successRate })
+    : t("common.loading");
 
   return (
     <Card className="border-border/75">
@@ -71,7 +73,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
             aria-expanded={!collapsed}
           >
             {collapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
-            <CardTitle className="text-base">通知投递统计</CardTitle>
+            <CardTitle className="text-base">{t("notifications.deliveryStatsTitle")}</CardTitle>
             {collapsed && (
               <span className="text-xs text-muted-foreground">{summaryText}</span>
             )}
@@ -90,7 +92,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
               ))}
               <Button size="sm" variant="outline" onClick={() => loadDeliveryStats(statsWindow, true)} disabled={deliveryStatsLoading}>
                 <RefreshCw className="mr-1 size-4" />
-                {deliveryStatsLoading ? "加载中" : "刷新"}
+                {deliveryStatsLoading ? t("notifications.statsLoading") : t("common.refresh")}
               </Button>
             </div>
           )}
@@ -100,23 +102,23 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
         <CardContent className="space-y-3">
           {deliveryStatsLoading ? (
             <LoadingState
-              title="投递统计加载中"
-              description="正在统计各通知渠道的成功率与失败次数..."
+              title={t("notifications.statsLoadingTitle")}
+              description={t("notifications.statsLoadingDesc")}
               rows={3}
             />
           ) : deliveryStats ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-success/30 bg-success/10 p-3 shadow-sm">
-                  <p className="text-xs text-muted-foreground">发送成功</p>
+                  <p className="text-xs text-muted-foreground">{t("notifications.deliverySent")}</p>
                   <p className="mt-1 text-2xl font-semibold text-success">{deliveryStats.totalSent}</p>
                 </div>
                 <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 shadow-sm">
-                  <p className="text-xs text-muted-foreground">发送失败</p>
+                  <p className="text-xs text-muted-foreground">{t("notifications.deliveryFailed")}</p>
                   <p className="mt-1 text-2xl font-semibold text-destructive">{deliveryStats.totalFailed}</p>
                 </div>
                 <div className="rounded-xl border border-info/30 bg-info/10 p-3 shadow-sm">
-                  <p className="text-xs text-muted-foreground">成功率</p>
+                  <p className="text-xs text-muted-foreground">{t("notifications.successRate")}</p>
                   <p className="mt-1 text-2xl font-semibold text-info">{deliveryStats.successRate}%</p>
                 </div>
               </div>
@@ -130,21 +132,21 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
                         <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                        <p>成功 {item.sent}</p>
-                        <p>失败 {item.failed}</p>
+                        <p>{t("notifications.statsSent", { count: item.sent })}</p>
+                        <p>{t("notifications.statsFailed", { count: item.failed })}</p>
                         <p className={cn(item.successRate >= 95 ? "text-success" : "text-warning")}>
-                          成功率 {item.successRate}%
+                          {t("notifications.statsSuccessRate", { rate: item.successRate })}
                         </p>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">当前时间窗口内暂无投递记录。</p>
+                <p className="text-sm text-muted-foreground">{t("notifications.noDeliveryInWindow")}</p>
               )}
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">暂无统计数据。</p>
+            <p className="text-sm text-muted-foreground">{t("notifications.noStatsData")}</p>
           )}
         </CardContent>
       )}

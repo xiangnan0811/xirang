@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, Clock3 } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,7 @@ export function PolicyEditorDialog({
   onSave,
   nodes = [],
 }: PolicyEditorDialogProps) {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
@@ -113,17 +115,17 @@ export function PolicyEditorDialog({
       open={open}
       onOpenChange={onOpenChange}
       icon={<Clock3 className="size-5 text-primary" />}
-      title={isEditing ? `编辑策略 - ${draft.name}` : "新增策略"}
+      title={isEditing ? t('policyEditor.titleEdit', { name: draft.name }) : t('policyEditor.titleCreate')}
       description={isEditing
-        ? `修改策略 ${draft.name} 的调度规则和路径配置。`
-        : "创建新的备份策略，配置 Cron 调度和同步路径。"}
+        ? t('policyEditor.descEdit', { name: draft.name })
+        : t('policyEditor.descCreate')}
       saving={saving}
       onSubmit={handleSave}
-      submitLabel={isEditing ? "更新策略" : "保存策略"}
+      submitLabel={isEditing ? t('policyEditor.submitEdit') : t('policyEditor.submitCreate')}
     >
       <div>
-        <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">策略名称</label>
-        <Input id="policy-edit-name" placeholder="例如：每日全量备份"
+        <label htmlFor="policy-edit-name" className="mb-1 block text-sm font-medium">{t('policyEditor.policyName')}</label>
+        <Input id="policy-edit-name" placeholder={t('policyEditor.policyNamePlaceholder')}
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -133,7 +135,7 @@ export function PolicyEditorDialog({
 
       <div>
         <label htmlFor="policy-edit-cron" className="mb-1 block text-sm font-medium">
-          Cron 表达式
+          {t('policyEditor.cronExpression')}
         </label>
         <CronGenerator
           id="policy-edit-cron"
@@ -145,8 +147,8 @@ export function PolicyEditorDialog({
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">源路径</label>
-          <Input id="policy-edit-source" placeholder="/data/source"
+          <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">{t('policyEditor.sourcePath')}</label>
+          <Input id="policy-edit-source" placeholder={t('policyEditor.sourcePathPlaceholder')}
             value={draft.sourcePath}
             onChange={(event) =>
               setDraft((prev) => ({
@@ -157,8 +159,8 @@ export function PolicyEditorDialog({
           />
         </div>
         <div>
-          <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">目标路径</label>
-          <Input id="policy-edit-target" placeholder="/backup/target"
+          <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">{t('policyEditor.targetPath')}</label>
+          <Input id="policy-edit-target" placeholder={t('policyEditor.targetPathPlaceholder')}
             value={draft.targetPath}
             onChange={(event) =>
               setDraft((prev) => ({
@@ -173,7 +175,7 @@ export function PolicyEditorDialog({
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label htmlFor="policy-edit-threshold" className="mb-1 block text-sm font-medium">
-            失败阈值（连续失败次数触发告警）
+            {t('policyEditor.failureThreshold')}
           </label>
           <Input
             id="policy-edit-threshold"
@@ -190,7 +192,7 @@ export function PolicyEditorDialog({
           />
         </div>
         <div>
-          <div id="policy-status-label" className="mb-1 text-sm font-medium">策略状态</div>
+          <div id="policy-status-label" className="mb-1 text-sm font-medium">{t('policyEditor.policyStatus')}</div>
           <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
             <Switch
               aria-labelledby="policy-status-label"
@@ -199,7 +201,7 @@ export function PolicyEditorDialog({
                 setDraft((prev) => ({ ...prev, enabled: checked }))
               }
             />
-            <span className="text-muted-foreground">{draft.enabled ? "启用" : "停用"}</span>
+            <span className="text-muted-foreground">{draft.enabled ? t('common.enabled') : t('common.disabled')}</span>
           </div>
         </div>
       </div>
@@ -208,10 +210,10 @@ export function PolicyEditorDialog({
       {nodes.length > 0 ? (
         <div>
           <div className="mb-1 text-sm font-medium">
-            关联节点
+            {t('policyEditor.relatedNodes')}
             {draft.nodeIds.length > 0 ? (
               <span className="ml-1 text-xs text-muted-foreground">
-                （已选 {draft.nodeIds.length} 个）
+                {t('policyEditor.relatedNodesSelected', { count: draft.nodeIds.length })}
               </span>
             ) : null}
           </div>
@@ -229,7 +231,7 @@ export function PolicyEditorDialog({
                       className="size-4 shrink-0"
                       checked={checked}
                       onChange={(event) => handleNodeToggle(node.id, event.target.checked)}
-                      aria-label={`选择节点 ${node.name}`}
+                      aria-label={t('policyEditor.selectNode', { name: node.name })}
                     />
                     <span className="truncate">{node.name}</span>
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">{node.host}</span>
@@ -244,7 +246,7 @@ export function PolicyEditorDialog({
       {/* 校验配置 */}
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <div id="policy-verify-label" className="mb-1 text-sm font-medium">备份校验</div>
+          <div id="policy-verify-label" className="mb-1 text-sm font-medium">{t('policyEditor.backupVerify')}</div>
           <div className="glass-panel flex h-10 items-center gap-2 px-3 text-sm">
             <Switch
               aria-labelledby="policy-verify-label"
@@ -253,13 +255,13 @@ export function PolicyEditorDialog({
                 setDraft((prev) => ({ ...prev, verifyEnabled: checked }))
               }
             />
-            <span className="text-muted-foreground">{draft.verifyEnabled ? "启用" : "停用"}</span>
+            <span className="text-muted-foreground">{draft.verifyEnabled ? t('common.enabled') : t('common.disabled')}</span>
           </div>
         </div>
         {draft.verifyEnabled ? (
           <div>
             <label htmlFor="policy-edit-sample-rate" className="mb-1 block text-sm font-medium">
-              抽样率（%）
+              {t('policyEditor.sampleRate')}
             </label>
             <Input
               id="policy-edit-sample-rate"
@@ -286,7 +288,7 @@ export function PolicyEditorDialog({
           onClick={() => setAdvancedOpen(!advancedOpen)}
           aria-expanded={advancedOpen}
         >
-          高级设置
+          {t('policyEditor.advancedSettings')}
           <ChevronDown className={`size-4 text-muted-foreground transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
         </button>
 
@@ -295,7 +297,7 @@ export function PolicyEditorDialog({
             {/* Hook template selector */}
             {hookTemplates.length > 0 && (
               <div>
-                <label className="mb-1 block text-sm font-medium">插入模板</label>
+                <label className="mb-1 block text-sm font-medium">{t('policyEditor.insertTemplate')}</label>
                 <div className="flex flex-wrap gap-1.5">
                   {hookTemplates.map((tpl) => (
                     <button
@@ -320,12 +322,12 @@ export function PolicyEditorDialog({
 
             <div>
               <label htmlFor="policy-edit-pre-hook" className="mb-1 block text-sm font-medium">
-                备份前钩子
+                {t('policyEditor.preHook')}
               </label>
               <AppTextarea
                 id="policy-edit-pre-hook"
                 className="min-h-16 text-xs font-mono"
-                placeholder="例如: mysqldump -u root --all-databases > /tmp/db_backup.sql"
+                placeholder={t('policyEditor.preHookPlaceholder')}
                 value={draft.preHook ?? ""}
                 onChange={(e) =>
                   setDraft((prev) => ({ ...prev, preHook: e.target.value }))
@@ -335,12 +337,12 @@ export function PolicyEditorDialog({
 
             <div>
               <label htmlFor="policy-edit-post-hook" className="mb-1 block text-sm font-medium">
-                备份后钩子
+                {t('policyEditor.postHook')}
               </label>
               <AppTextarea
                 id="policy-edit-post-hook"
                 className="min-h-16 text-xs font-mono"
-                placeholder="例如: rm -f /tmp/db_backup.sql"
+                placeholder={t('policyEditor.postHookPlaceholder')}
                 value={draft.postHook ?? ""}
                 onChange={(e) =>
                   setDraft((prev) => ({ ...prev, postHook: e.target.value }))
@@ -350,7 +352,7 @@ export function PolicyEditorDialog({
 
             <div>
               <label htmlFor="policy-edit-hook-timeout" className="mb-1 block text-sm font-medium">
-                钩子超时（秒）
+                {t('policyEditor.hookTimeout')}
               </label>
               <Input
                 id="policy-edit-hook-timeout"
@@ -370,7 +372,7 @@ export function PolicyEditorDialog({
             <div className="grid gap-3 md:grid-cols-2">
               <div>
                 <label htmlFor="policy-edit-max-retries" className="mb-1 block text-sm font-medium">
-                  最大重试次数
+                  {t('policyEditor.maxRetries')}
                 </label>
                 <Input
                   id="policy-edit-max-retries"
@@ -388,7 +390,7 @@ export function PolicyEditorDialog({
               </div>
               <div>
                 <label htmlFor="policy-edit-retry-base" className="mb-1 block text-sm font-medium">
-                  重试基础间隔（秒）
+                  {t('policyEditor.retryBaseSeconds')}
                 </label>
                 <Input
                   id="policy-edit-retry-base"
@@ -408,7 +410,7 @@ export function PolicyEditorDialog({
 
             {(draft.maxRetries ?? 0) > 0 && (
               <p className="text-xs text-muted-foreground">
-                重试延迟预览：
+                {t('policyEditor.retryPreview')}
                 {Array.from({ length: draft.maxRetries ?? 0 }, (_, i) => {
                   const delay = (draft.retryBaseSeconds ?? 30) * Math.pow(2, i);
                   return delay >= 60 ? `${(delay / 60).toFixed(1)}m` : `${delay}s`;

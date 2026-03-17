@@ -203,7 +203,7 @@ describe("NodesPage", () => {
     );
 
     const logButtons = screen.getAllByRole("button", {
-      name: "查看节点 node-prod-1 日志",
+      name: /[Vv]iew logs.*node-prod-1|查看节点 node-prod-1 日志/,
     });
     await user.click(logButtons[0]);
 
@@ -268,7 +268,7 @@ describe("NodesPage", () => {
       </MemoryRouter>
     );
 
-    const testButtons = screen.getAllByRole("button", { name: /测试节点.*连接/ });
+    const testButtons = screen.getAllByRole("button", { name: /测试节点.*连接|Test connection to node/ });
     await user.click(testButtons[0]);
 
     expect(toastErrorMock).toHaveBeenCalledWith(

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   BellRing,
   Loader2,
@@ -62,6 +63,7 @@ export function AlertCenter({
   initialAlertId,
   onAlertHighlighted,
 }: AlertCenterProps) {
+  const { t } = useTranslation();
   const {
     keyword, setKeyword,
     severity: severityFilter, setSeverity: setSeverityFilter,
@@ -150,51 +152,51 @@ export function AlertCenter({
       <CardContent className="space-y-4 pt-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-2 font-medium">
-            通知中心（按节点 / 任务分流）
+            {t("notifications.alertCenterTitle")}
           </div>
           <Button size="sm" variant="outline" onClick={resetFilters}>
             <RefreshCw className="mr-1 size-3.5" />
-            重置筛选
+            {t("common.resetFilter")}
           </Button>
         </div>
         <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
           <SearchInput
             containerClassName="w-full"
-            aria-label="告警关键词筛选"
+            aria-label={t("notifications.keywordFilter")}
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="搜索节点 / 任务 / 错误码"
+            placeholder={t("notifications.keywordPlaceholder")}
           />
           <AppSelect
             containerClassName="w-full"
-            aria-label="告警级别筛选"
+            aria-label={t("notifications.severityFilter")}
             value={severityFilter}
             onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
           >
-            <option value="all">全部级别</option>
-            <option value="critical">严重</option>
-            <option value="warning">警告</option>
-            <option value="info">信息</option>
+            <option value="all">{t("notifications.allSeverities")}</option>
+            <option value="critical">{t("status.alert.critical")}</option>
+            <option value="warning">{t("status.alert.warning")}</option>
+            <option value="info">{t("status.alert.info")}</option>
           </AppSelect>
           <AppSelect
             containerClassName="w-full"
-            aria-label="告警状态筛选"
+            aria-label={t("notifications.statusFilter")}
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
           >
-            <option value="all">全部状态</option>
-            <option value="open">待处理</option>
-            <option value="acked">已确认</option>
-            <option value="resolved">已恢复</option>
+            <option value="all">{t("common.all")}{t("common.status")}</option>
+            <option value="open">{t("notifications.statusOpen")}</option>
+            <option value="acked">{t("notifications.statusAcked")}</option>
+            <option value="resolved">{t("notifications.statusResolved")}</option>
           </AppSelect>
           <div className="flex items-center justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
             <Button size="sm" variant="outline" onClick={resetFilters}>
-              重置
+              {t("common.reset")}
             </Button>
           </div>
         </FilterPanel>
 
-        <FilterSummary filtered={filteredAlerts.length} total={alerts.length} unit="条告警" />
+        <FilterSummary filtered={filteredAlerts.length} total={alerts.length} unit={t("notifications.alertUnit")} />
 
         <div className="space-y-2">
           {filteredAlerts.length ? (
@@ -209,7 +211,7 @@ export function AlertCenter({
                     <div className="flex items-center gap-2">
                       <StatusPulse tone={severityToTone(alert.severity)} />
                       <p className="font-medium">
-                        {alert.nodeName} · {alert.taskId ? `任务 #${alert.taskId}${alert.taskRunId ? ` 执行 #${alert.taskRunId}` : ""}` : "节点探测"}
+                        {alert.nodeName} · {alert.taskId ? `${t("notifications.taskLabel", { id: alert.taskId })}${alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}` : t("notifications.nodeProbe")}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">
@@ -220,9 +222,9 @@ export function AlertCenter({
 
                   <p className="mt-2 text-sm">{alert.message}</p>
                   <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>策略：{alert.policyName}</span>
-                    <span>错误码：{alert.errorCode}</span>
-                    <span>触发时间：{alert.triggeredAt}</span>
+                    <span>{t("notifications.alertPolicy", { name: alert.policyName })}</span>
+                    <span>{t("notifications.alertErrorCode", { code: alert.errorCode })}</span>
+                    <span>{t("notifications.alertTriggeredAt", { time: alert.triggeredAt })}</span>
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -230,21 +232,21 @@ export function AlertCenter({
                       size="sm"
                       onClick={() => {
                         if (!alert.taskId) {
-                          toast.error("该告警未绑定任务，请先修复节点连接。");
+                          toast.error(t("notifications.noAlertTask"));
                           return;
                         }
                         void retryAlert(alert.id)
-                          .then(() => toast.success(`已触发重试：任务 #${alert.taskId}`))
+                          .then(() => toast.success(t("notifications.retryTriggered", { id: alert.taskId })))
                           .catch((error) => toast.error(getErrorMessage(error)));
                       }}
                       disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
                     >
-                      一键重试
+                      {t("notifications.oneClickRetry")}
                     </Button>
 
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button size="sm" variant="outline" aria-label="更多操作">
+                        <Button size="sm" variant="outline" aria-label={t("common.more")}>
                           <MoreHorizontal className="size-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -253,26 +255,26 @@ export function AlertCenter({
                           disabled={alert.status !== "open"}
                           onClick={() => {
                             void acknowledgeAlert(alert.id)
-                              .then(() => toast.success(`已确认告警：${alert.errorCode}`))
+                              .then(() => toast.success(t("notifications.ackSuccess", { code: alert.errorCode })))
                               .catch((error) => toast.error(getErrorMessage(error)));
                           }}
                         >
-                          标记已读
+                          {t("notifications.markRead")}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           disabled={alert.status === "resolved"}
                           onClick={() => {
                             void resolveAlert(alert.id)
-                              .then(() => toast.success(`已标记恢复：${alert.errorCode}`))
+                              .then(() => toast.success(t("notifications.resolveSuccess", { code: alert.errorCode })))
                               .catch((error) => toast.error(getErrorMessage(error)));
                           }}
                         >
-                          标记恢复
+                          {t("notifications.markResolved")}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => toggleDeliveries(alert.id)}
                         >
-                          {isDeliveryOpen ? "收起投递" : "投递记录"}
+                          {isDeliveryOpen ? t("notifications.collapseDelivery") : t("notifications.deliveryRecords")}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -282,12 +284,12 @@ export function AlertCenter({
                     <div
                       id={deliveryPanelId}
                       role="region"
-                      aria-label={`告警 ${alert.errorCode} 的投递记录`}
+                      aria-label={t("notifications.deliveryPanelAriaLabel", { code: alert.errorCode })}
                       aria-busy={deliveryLoadingAlertId === alert.id}
                       className="mt-3 rounded-md border border-border/70 bg-muted/25 p-2"
                     >
                       {deliveryLoadingAlertId === alert.id ? (
-                        <p className="text-xs text-muted-foreground">投递记录加载中...</p>
+                        <p className="text-xs text-muted-foreground">{t("notifications.deliveryLoading")}</p>
                       ) : (deliveryMap[alert.id] ?? []).length ? (
                         <div className="space-y-2">
                           {(deliveryMap[alert.id] ?? []).some((d) => d.status === "failed") ? (
@@ -307,7 +309,7 @@ export function AlertCenter({
                               }}
                             >
                               {retryingAllAlertId === alert.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                              重发全部失败投递
+                              {t("notifications.resendAllFailed")}
                             </Button>
                           ) : null}
 
@@ -318,11 +320,11 @@ export function AlertCenter({
                                   {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
                                 </span>
                                 <Badge variant={delivery.status === "sent" ? "success" : "danger"}>
-                                  {delivery.status === "sent" ? "发送成功" : "发送失败"}
+                                  {delivery.status === "sent" ? t("notifications.deliverySent") : t("notifications.deliveryFailed")}
                                 </Badge>
                               </div>
-                              <p className="mt-1 text-muted-foreground">时间：{delivery.createdAt}</p>
-                              {delivery.error ? <p className="mt-1 text-destructive">错误：{delivery.error}</p> : null}
+                              <p className="mt-1 text-muted-foreground">{t("notifications.deliveryTime", { time: delivery.createdAt })}</p>
+                              {delivery.error ? <p className="mt-1 text-destructive">{t("notifications.deliveryError", { error: delivery.error })}</p> : null}
                               {delivery.status === "failed" ? (
                                 <Button
                                   className="mt-2"
@@ -342,14 +344,14 @@ export function AlertCenter({
                                   }}
                                 >
                                   {retryingDeliveryKey === `${alert.id}:${delivery.integrationId}` && <Loader2 className="mr-1 size-4 animate-spin" />}
-                                  重发通知
+                                  {t("notifications.resendNotification")}
                                 </Button>
                               ) : null}
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground">暂无投递记录。</p>
+                        <p className="text-xs text-muted-foreground">{t("notifications.noDeliveryRecords")}</p>
                       )}
                     </div>
                   ) : null}
@@ -359,8 +361,8 @@ export function AlertCenter({
           ) : !loading ? (
             <FilteredEmptyState
               icon={BellRing}
-              title="当前筛选条件下没有待处理通知"
-              description="可以重置筛选条件，或等待下一次告警触发。"
+              title={t("notifications.emptyTitle")}
+              description={t("notifications.emptyDesc")}
               onReset={resetFilters}
             />
           ) : null}

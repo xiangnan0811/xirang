@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Download, File, Folder, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
@@ -13,6 +14,7 @@ interface SnapshotBrowserProps {
 }
 
 export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
+  const { t } = useTranslation();
   const [snapshots, setSnapshots] = useState<ResticSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +32,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
     apiClient
       .listSnapshots(token, taskId)
       .then(setSnapshots)
-      .catch((err) => setError(getErrorMessage(err, "加载快照列表失败")))
+      .catch((err) => setError(getErrorMessage(err, t('snapshots.loadFailed'))))
       .finally(() => setLoading(false));
   }, [token, taskId]);
 
@@ -42,7 +44,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
     apiClient
       .listSnapshotFiles(token, taskId, snapshot.id, path)
       .then(setFiles)
-      .catch((err) => toast.error(getErrorMessage(err, "加载文件列表失败")))
+      .catch((err) => toast.error(getErrorMessage(err, t('snapshots.fileLoadFailed'))))
       .finally(() => setFilesLoading(false));
   };
 
@@ -74,17 +76,17 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
         Array.from(selectedPaths),
         restoreTarget
       );
-      toast.success(`已恢复 ${selectedPaths.size} 个项目到 ${restoreTarget}`);
+      toast.success(t('snapshots.restoreSuccess', { count: selectedPaths.size, target: restoreTarget }));
       setSelectedPaths(new Set());
     } catch (err) {
-      toast.error(getErrorMessage(err, "恢复失败"));
+      toast.error(getErrorMessage(err, t('snapshots.restoreFailed')));
     } finally {
       setRestoring(false);
     }
   };
 
   if (loading) {
-    return <LoadingState title="加载快照列表..." rows={3} />;
+    return <LoadingState title={t('snapshots.loadingList')} rows={3} />;
   }
 
   if (error) {
@@ -98,10 +100,10 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => setSelectedSnapshot(null)}>
             <ArrowLeft className="mr-1 size-3.5" />
-            返回快照列表
+            {t('snapshots.backToList')}
           </Button>
           <span className="text-xs text-muted-foreground">
-            快照 {selectedSnapshot.short_id} — {new Date(selectedSnapshot.time).toLocaleString("zh-CN")}
+            {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: new Date(selectedSnapshot.time).toLocaleString("zh-CN") })}
           </span>
         </div>
 
@@ -132,11 +134,11 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
         </div>
 
         {filesLoading ? (
-          <LoadingState title="加载文件列表..." rows={3} />
+          <LoadingState title={t('snapshots.loadingFiles')} rows={3} />
         ) : (
           <div className="rounded-md border border-border/60 divide-y divide-border/30 max-h-64 overflow-y-auto">
             {files.length === 0 && (
-              <p className="px-3 py-4 text-sm text-muted-foreground text-center">目录为空</p>
+              <p className="px-3 py-4 text-sm text-muted-foreground text-center">{t('common.noData')}</p>
             )}
             {files.map((entry) => (
               <label
@@ -184,7 +186,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
               type="text"
               value={restoreTarget}
               onChange={(e) => setRestoreTarget(e.target.value)}
-              placeholder="恢复目标路径"
+              placeholder={t('snapshots.restoreTargetPlaceholder')}
               className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
             />
             <Button size="sm" onClick={handleRestore} disabled={restoring}>
@@ -193,7 +195,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
               ) : (
                 <Download className="mr-1 size-3.5" />
               )}
-              恢复 {selectedPaths.size} 项
+              {t('snapshots.restoreCount', { count: selectedPaths.size })}
             </Button>
           </div>
         )}
@@ -204,7 +206,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
   return (
     <div className="space-y-2">
       {snapshots.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-4">暂无快照</p>
+        <p className="text-sm text-muted-foreground text-center py-4">{t('common.noData')}</p>
       ) : (
         <div className="rounded-md border border-border/60 divide-y divide-border/30 max-h-64 overflow-y-auto">
           {snapshots.map((snap) => (

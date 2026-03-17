@@ -7,6 +7,7 @@ import {
   useState,
   type PropsWithChildren
 } from "react";
+import i18n from "@/i18n";
 import {
   applyDensityData,
   applyPowerData,
@@ -135,7 +136,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 export function useTheme() {
   const context = useContext(ThemeContext);
   if (!context) {
-    throw new Error("useTheme 必须在 ThemeProvider 中使用");
+    throw new Error(i18n.t("context.useThemeError"));
   }
   return context;
 }

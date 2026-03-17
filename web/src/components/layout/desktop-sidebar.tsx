@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ type DesktopSidebarProps = {
 };
 
 export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggleCollapse }: DesktopSidebarProps) {
+  const { t } = useTranslation();
   const location = useLocation();
   const navItems = getVisibleNavItems(role);
   const navItemBaseClass =
@@ -39,8 +41,8 @@ export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggle
             <Link
               key={item.path}
               to={item.path}
-              title={item.title}
-              aria-label={item.title}
+              title={t(item.titleKey)}
+              aria-label={t(item.titleKey)}
               aria-current={active ? "page" : undefined}
               className={cn(
                 navItemBaseClass,
@@ -49,7 +51,7 @@ export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggle
               )}
             >
               <Icon className={cn("shrink-0", isCollapsed ? "size-5" : "size-4")} />
-              <span className={cn("hidden", isCollapsed ? "" : "md:inline text-[13px] font-medium")}>{item.title}</span>
+              <span className={cn("hidden", isCollapsed ? "" : "md:inline text-[13px] font-medium")}>{t(item.titleKey)}</span>
             </Link>
           );
         })}
@@ -63,15 +65,15 @@ export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggle
           size={isCollapsed ? "icon" : "default"}
           className={cn("text-muted-foreground", isCollapsed ? "size-10" : "w-full justify-start px-3 h-10")}
           onClick={onToggleCollapse}
-          aria-label={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
-          title={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
+          aria-label={isCollapsed ? t('appShell.expandSidebar') : t('appShell.collapseSidebar')}
+          title={isCollapsed ? t('appShell.expandSidebar') : t('appShell.collapseSidebar')}
         >
           {isCollapsed ? (
             <PanelLeftOpen className="size-5" />
           ) : (
             <>
               <PanelLeftClose className="mr-3 size-[18px]" />
-              <span className="text-[13px] font-medium">收起面板</span>
+              <span className="text-[13px] font-medium">{t('appShell.collapsePanel')}</span>
             </>
           )}
         </Button>

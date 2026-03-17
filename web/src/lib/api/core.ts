@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const DEV_DIRECT_API_BASE_URL = import.meta.env.VITE_DEV_API_DIRECT_URL ?? "http://127.0.0.1:8080/api/v1";
 
@@ -86,7 +88,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, `请求失败：${response.status}`, payload);
+    throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload);
   }
 
   if (payload && typeof payload === "object") {
@@ -128,7 +130,7 @@ export function unwrapData<T>(payload: Envelope<T> | T): T {
 export function parseNumericId(rawId: string, prefix: string): number {
   const value = rawId.trim();
   if (!value) {
-    throw new Error(`无效的 ${prefix} ID：不能为空`);
+    throw new Error(i18n.t("common.invalidIdEmpty", { prefix }));
   }
 
   if (value.startsWith(`${prefix}-`)) {
@@ -146,7 +148,7 @@ export function parseNumericId(rawId: string, prefix: string): number {
     }
   }
 
-  throw new Error(`无效的 ${prefix} ID：${rawId}（期望格式：${prefix}-123 或 123）`);
+  throw new Error(i18n.t("common.invalidIdFormat", { prefix, rawId }));
 }
 
 export function formatTime(input?: string | null): string {
@@ -157,7 +159,8 @@ export function formatTime(input?: string | null): string {
   if (Number.isNaN(date.getTime())) {
     return input;
   }
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const locale = i18n.language === "en" ? "en-US" : "zh-CN";
+  return date.toLocaleString(locale, { hour12: false });
 }
 
 export function extractErrorCode(message?: string): string | undefined {

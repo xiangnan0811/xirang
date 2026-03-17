@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { request } from "./core";
 
 interface BatchCreateResponse {
@@ -78,7 +79,7 @@ export function createBatchApi() {
           name: t.name,
           status: t.status,
           nodeId: t.node?.id ?? t.node_id,
-          nodeName: t.node?.name ?? `节点-${t.node_id}`,
+          nodeName: t.node?.name ?? i18n.t("common.nodeDefault", { id: t.node_id }),
           lastError: t.last_error,
         })),
       };

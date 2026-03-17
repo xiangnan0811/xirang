@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface LoadingStateProps {
@@ -9,11 +10,13 @@ interface LoadingStateProps {
 }
 
 function LoadingState({
-  title = "数据加载中...",
+  title,
   description,
   rows = 3,
   className,
 }: LoadingStateProps) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t('common.loading');
   const skeletonRows = Array.from({ length: Math.max(1, rows) }, (_, index) => ({
     id: index,
     width: `${Math.max(44, 92 - index * 13)}%`,
@@ -30,7 +33,7 @@ function LoadingState({
     >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin text-primary" />
-        <span className="font-medium text-foreground">{title}</span>
+        <span className="font-medium text-foreground">{resolvedTitle}</span>
       </div>
 
       {description ? (
@@ -39,7 +42,7 @@ function LoadingState({
         </p>
       ) : null}
 
-      <span className="sr-only">{title}</span>
+      <span className="sr-only">{resolvedTitle}</span>
 
       <div className="mt-3 space-y-2">
         {skeletonRows.map((row) => (

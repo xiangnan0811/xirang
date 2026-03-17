@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, ShieldAlert, TrendingUp } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   Area,
   Bar,
@@ -18,6 +19,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { BackupHealthData } from "@/types/domain";
 
 export function BackupHealthPanel() {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const [data, setData] = useState<BackupHealthData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,7 +40,7 @@ export function BackupHealthPanel() {
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setError(getErrorMessage(err, "备份健康数据加载失败"));
+          setError(getErrorMessage(err, t('backupHealth.loadFailed')));
         }
       })
       .finally(() => {
@@ -54,10 +56,10 @@ export function BackupHealthPanel() {
     return (
       <Card className="glass-panel border-border/70">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">备份健康概览</CardTitle>
+          <CardTitle className="text-base">{t('backupHealth.title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <LoadingState title="加载备份健康数据..." rows={2} />
+          <LoadingState title={t('backupHealth.loadingTitle')} rows={2} />
         </CardContent>
       </Card>
     );
@@ -67,11 +69,11 @@ export function BackupHealthPanel() {
     return (
       <Card className="glass-panel border-border/70">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">备份健康概览</CardTitle>
+          <CardTitle className="text-base">{t('backupHealth.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-4 text-sm text-warning">
-            {error ?? "暂无数据"}
+            {error ?? t('common.noData')}
           </p>
         </CardContent>
       </Card>
@@ -84,13 +86,13 @@ export function BackupHealthPanel() {
     ...staleNodes.map((n) => ({
       key: `node-${n.nodeId}`,
       label: n.nodeName,
-      detail: n.lastBackupAt ? `${Math.round(n.hoursSince)}h 未备份` : "从未备份",
+      detail: n.lastBackupAt ? t('backupHealth.hoursSinceBackup', { hours: Math.round(n.hoursSince) }) : t('backupHealth.neverBackedUp'),
       severity: n.hoursSince > 72 || !n.lastBackupAt ? ("critical" as const) : ("warning" as const),
     })),
     ...degradedPolicies.map((p) => ({
       key: `policy-${p.policyId}`,
       label: p.policyName,
-      detail: `连续失败 ${p.consecutiveFailures} 次`,
+      detail: t('backupHealth.consecutiveFailures', { count: p.consecutiveFailures }),
       severity: "critical" as const,
     })),
   ];
@@ -100,29 +102,29 @@ export function BackupHealthPanel() {
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <ShieldAlert className="size-4 text-primary" />
-          备份健康概览
+          {t('backupHealth.title')}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Mini stat cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <MiniStat
-            label="从未备份"
+            label={t('backupHealth.neverBackedUp')}
             value={summary.neverBackedUp}
             tone={summary.neverBackedUp > 0 ? "destructive" : "success"}
           />
           <MiniStat
-            label="超48h未备份"
+            label={t('backupHealth.stale48h')}
             value={summary.stale48h}
             tone={summary.stale48h > 0 ? "warning" : "success"}
           />
           <MiniStat
-            label="策略健康"
+            label={t('backupHealth.policiesHealthy')}
             value={`${summary.policiesHealthy}/${summary.policiesHealthy + summary.policiesDegraded}`}
             tone={summary.policiesDegraded > 0 ? "warning" : "success"}
           />
           <MiniStat
-            label="7日成功率"
+            label={t('backupHealth.successRate7d')}
             value={`${Math.round(summary.successRate7d)}%`}
             tone={summary.successRate7d >= 95 ? "success" : summary.successRate7d >= 80 ? "warning" : "destructive"}
           />
@@ -132,7 +134,7 @@ export function BackupHealthPanel() {
         {problems.length > 0 && (
           <div className="rounded-md border border-border/60 overflow-hidden">
             <div className="px-3 py-2 bg-muted/30 text-xs font-medium text-muted-foreground">
-              需要关注的问题 ({problems.length})
+              {t('backupHealth.problemsTitle', { count: problems.length })}
             </div>
             <div className="divide-y divide-border/30 max-h-40 overflow-y-auto">
               {problems.map((p) => (
@@ -158,7 +160,7 @@ export function BackupHealthPanel() {
         {problems.length === 0 && (
           <div className="flex items-center gap-2 rounded-md border border-success/30 bg-success/5 px-3 py-3 text-sm text-success">
             <CheckCircle2 className="size-4" />
-            所有节点备份状态正常
+            {t('backupHealth.allHealthy')}
           </div>
         )}
 
@@ -167,9 +169,9 @@ export function BackupHealthPanel() {
           <div>
             <p className="mb-2 text-xs font-medium text-muted-foreground flex items-center gap-1.5">
               <TrendingUp className="size-3.5" />
-              近 7 天备份趋势
+              {t('backupHealth.trend7d')}
             </p>
-            <div role="img" aria-label="近 7 天备份成功率趋势图">
+            <div role="img" aria-label={t('backupHealth.trendAriaLabel')}>
               <ResponsiveContainer width="100%" height={160}>
                 <ComposedChart data={healthTrend} margin={{ top: 4, right: 4, left: -20, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
@@ -194,11 +196,11 @@ export function BackupHealthPanel() {
                     }}
                     labelStyle={{ color: "hsl(var(--muted-foreground))" }}
                   />
-                  <Bar dataKey="total" name="总次数" fill="hsl(var(--chart-egress))" opacity={0.2} maxBarSize={12} radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="total" name={t('backupHealth.totalRuns')} fill="hsl(var(--chart-egress))" opacity={0.2} maxBarSize={12} radius={[2, 2, 0, 0]} />
                   <Area
                     type="monotone"
                     dataKey="rate"
-                    name="成功率 %"
+                    name={t('backupHealth.successRatePercent')}
                     stroke="hsl(var(--chart-ingress))"
                     strokeWidth={2}
                     fill="hsl(var(--chart-ingress))"

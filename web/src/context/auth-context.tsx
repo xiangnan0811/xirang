@@ -6,6 +6,7 @@ import {
   useState,
   type PropsWithChildren
 } from "react";
+import i18n from "@/i18n";
 
 const AUTH_TOKEN_KEY = "xirang-auth-token";
 const AUTH_USERNAME_KEY = "xirang-username";
@@ -221,7 +222,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth 必须在 AuthProvider 中使用");
+    throw new Error(i18n.t("context.useAuthError"));
   }
   return context;
 }

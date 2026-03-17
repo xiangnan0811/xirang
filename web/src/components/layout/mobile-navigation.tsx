@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { LogOut, Menu, RefreshCw, ShieldCheck, ShieldOff, X } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -19,6 +20,7 @@ type MobileNavigationProps = {
 };
 
 export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefresh, onTotpSetup, onTotpDisable }: MobileNavigationProps) {
+  const { t } = useTranslation();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -116,7 +118,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                     ? "text-[hsl(var(--nav-active-foreground))]"
                     : "text-muted-foreground"
                 )}
-                aria-label={`切换到${item.title}`}
+                aria-label={t('appShell.switchTo', { name: t(item.titleKey) })}
                 aria-current={active ? "page" : undefined}
               >
                 <span
@@ -129,7 +131,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                 >
                   <Icon className="size-4" />
                 </span>
-                {item.title}
+                {t(item.titleKey)}
               </Link>
             );
           })}
@@ -140,7 +142,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
         ref={menuButtonRef}
         className="fixed right-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-50 rounded-full border border-border/80 bg-background/85 p-2.5 shadow-panel md:hidden"
         onClick={() => setDrawerOpen(true)}
-        aria-label="打开快捷菜单"
+        aria-label={t('appShell.openQuickMenu')}
         aria-controls={drawerId}
         aria-expanded={drawerOpen}
         type="button"
@@ -152,7 +154,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             className="absolute inset-0 bg-black/50"
-            aria-label="关闭抽屉"
+            aria-label={t('appShell.closeDrawer')}
             onClick={() => setDrawerOpen(false)}
             type="button"
           />
@@ -168,9 +170,9 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
             <div className="mb-4 flex items-center justify-between">
               <p id={drawerTitleId} className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <img src="/xirang-mark.svg" alt="XiRang" className="size-5 rounded-sm" />
-                运维快捷操作
+                {t('appShell.quickOps')}
               </p>
-              <Button variant="ghost" size="icon" aria-label="关闭快捷菜单" title="关闭快捷菜单" onClick={() => setDrawerOpen(false)}>
+              <Button variant="ghost" size="icon" aria-label={t('appShell.closeQuickMenu')} title={t('appShell.closeQuickMenu')} onClick={() => setDrawerOpen(false)}>
                 <X className="size-5" />
               </Button>
             </div>
@@ -193,7 +195,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                     )}
                   >
                     <Icon className="size-4" />
-                    {item.title}
+                    {t(item.titleKey)}
                   </Link>
                 );
               })}
@@ -202,7 +204,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
             <div className="mt-6 grid grid-cols-2 gap-2">
               <Button variant="outline" className="h-10" onClick={onRefresh}>
                 <RefreshCw className="mr-1 size-4" />
-                刷新
+                {t('appShell.refreshData')}
               </Button>
               <Button
                 variant="destructive"
@@ -213,7 +215,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                 }}
               >
                 <LogOut className="mr-1 size-4" />
-                退出
+                {t('appShell.logoutShort')}
               </Button>
               {totpEnabled ? (
                 <Button
@@ -225,7 +227,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                   }}
                 >
                   <ShieldCheck className="mr-1 size-4" />
-                  已启用两步验证（点击禁用）
+                  {t('appShell.totpEnabledClickDisable')}
                 </Button>
               ) : (
                 <Button
@@ -237,13 +239,13 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                   }}
                 >
                   <ShieldOff className="mr-1 size-4" />
-                  启用两步验证
+                  {t('appShell.enableTotp')}
                 </Button>
               )}
             </div>
 
             <div className="mt-auto flex items-center justify-between border-t border-border/80 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-              <p className="text-xs text-muted-foreground">当前用户：{username ?? "未知"}</p>
+              <p className="text-xs text-muted-foreground">{t('appShell.currentUser', { name: username ?? t('common.unknown') })}</p>
               <div className="flex items-center gap-1">
                 <DisplayPreferencesToggle />
                 <ThemeToggle />

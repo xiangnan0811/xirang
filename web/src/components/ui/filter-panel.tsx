@@ -1,4 +1,5 @@
 import type { PropsWithChildren } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 type FilterPanelProps = PropsWithChildren<{
@@ -24,12 +25,13 @@ type FilterSummaryProps = {
 export function FilterSummary({
   filtered,
   total,
-  unit = "项",
+  unit,
   className,
 }: FilterSummaryProps) {
+  const { t } = useTranslation();
   return (
     <p className={cn("text-xs text-muted-foreground", className)}>
-      当前筛选 {filtered} / {total} {unit}
+      {t('common.filterSummary', { filtered, total, unit: unit ?? t('common.unit') })}
     </p>
   );
 }

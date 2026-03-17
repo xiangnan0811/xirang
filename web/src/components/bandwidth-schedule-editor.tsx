@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -24,6 +25,7 @@ function parseRules(json: string): BandwidthRule[] {
 }
 
 export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEditorProps) {
+  const { t } = useTranslation();
   const rules = parseRules(value);
 
   const emit = (next: BandwidthRule[]) => {
@@ -53,15 +55,15 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <label className="block text-sm font-medium">带宽时段调度</label>
+        <label className="block text-sm font-medium">{t('bandwidth.scheduleTitle')}</label>
         <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={addRule}>
           <Plus className="mr-1 size-3" />
-          添加规则
+          {t('bandwidth.addRule')}
         </Button>
       </div>
 
       {rules.length === 0 && (
-        <p className="text-xs text-muted-foreground">未配置带宽调度规则，将使用策略的静态限速或不限速。</p>
+        <p className="text-xs text-muted-foreground">{t('bandwidth.noRules')}</p>
       )}
 
       {rules.map((rule, i) => (
@@ -71,15 +73,15 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
             className="w-28 text-xs"
             value={rule.start}
             onChange={(e) => updateRule(i, "start", e.target.value)}
-            aria-label="开始时间"
+            aria-label={t('bandwidthEditor.startTime')}
           />
-          <span className="text-xs text-muted-foreground">至</span>
+          <span className="text-xs text-muted-foreground">{t('bandwidth.to')}</span>
           <Input
             type="time"
             className="w-28 text-xs"
             value={rule.end}
             onChange={(e) => updateRule(i, "end", e.target.value)}
-            aria-label="结束时间"
+            aria-label={t('bandwidthEditor.endTime')}
           />
           <Input
             type="number"
@@ -87,7 +89,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
             min={0}
             value={rule.limit_mbps}
             onChange={(e) => updateRule(i, "limit_mbps", e.target.value)}
-            aria-label="限速 (Mbps)"
+            aria-label={t('bandwidthEditor.limitMbps')}
           />
           <span className="text-xs text-muted-foreground shrink-0">Mbps</span>
           <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => removeRule(i)}>
@@ -98,7 +100,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
 
       {rules.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          在指定时段内使用对应限速，未匹配时段不限速。支持跨午夜（如 22:00 至 06:00）。
+          {t('bandwidth.rulesHint')}
         </p>
       )}
     </div>

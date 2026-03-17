@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { KeyRound, Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -6,7 +7,11 @@ import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
 import { AppTextarea } from "@/components/ui/app-textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
-import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
+import {
+  parseSSHKeyType,
+  type NewSSHKeyInput,
+  type SSHKeyRecord,
+} from "@/types/domain";
 
 type SSHKeyDraft = NewSSHKeyInput & {
   id?: string;
@@ -42,7 +47,13 @@ export function SSHKeyEditorDialog({
   editingKey,
   onSave,
 }: SSHKeyEditorDialogProps) {
-  const [draft, setDraft] = useDialogDraft<SSHKeyDraft, SSHKeyRecord>(open, emptyDraft, editingKey, toDraft);
+  const { t } = useTranslation();
+  const [draft, setDraft] = useDialogDraft<SSHKeyDraft, SSHKeyRecord>(
+    open,
+    emptyDraft,
+    editingKey,
+    toDraft,
+  );
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -50,7 +61,7 @@ export function SSHKeyEditorDialog({
     const file = event.target.files?.[0];
     if (!file) return;
     if (file.size > 128 * 1024) {
-      toast.error("文件过大，SSH 密钥文件通常不超过 128 KB");
+      toast.error(t("sshKeys.fileTooLarge"));
       event.target.value = "";
       return;
     }
@@ -62,7 +73,7 @@ export function SSHKeyEditorDialog({
       }
     };
     reader.onerror = () => {
-      toast.error("密钥文件读取失败，请检查文件是否有效");
+      toast.error(t("sshKeys.fileReadFailed"));
     };
     reader.readAsText(file);
     // 重置 input 以便同一文件可再次选择
@@ -86,17 +97,28 @@ export function SSHKeyEditorDialog({
       onOpenChange={onOpenChange}
       size="sm"
       icon={<KeyRound className="size-5 text-primary" />}
-      title={isEditing ? `编辑 SSH Key - ${draft.name}` : "新增 SSH Key"}
-      description={isEditing
-        ? "修改密钥配置。私钥留空表示不修改，填写后会更新私钥。"
-        : "添加新的 SSH 密钥，用于节点连接认证。"}
+      title={
+        isEditing
+          ? t("sshKeys.editKeyTitle", { name: draft.name })
+          : t("sshKeys.addKey")
+      }
+      description={
+        isEditing ? t("sshKeys.editKeyDesc") : t("sshKeys.addKeyDesc")
+      }
       saving={saving}
       onSubmit={handleSave}
-      submitLabel={isEditing ? "更新 Key" : "保存 Key"}
+      submitLabel={isEditing ? t("sshKeys.updateKey") : t("sshKeys.saveKey")}
     >
       <div>
-        <label htmlFor="ssh-key-edit-name" className="mb-1 block text-sm font-medium">Key 名称</label>
-        <Input id="ssh-key-edit-name" placeholder="例如：prod-deploy-key"
+        <label
+          htmlFor="ssh-key-edit-name"
+          className="mb-1 block text-sm font-medium"
+        >
+          {t("sshKeys.keyName")}
+        </label>
+        <Input
+          id="ssh-key-edit-name"
+          placeholder="prod-deploy-key"
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -105,8 +127,15 @@ export function SSHKeyEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="ssh-key-edit-username" className="mb-1 block text-sm font-medium">默认用户名</label>
-        <Input id="ssh-key-edit-username" placeholder="默认用户名"
+        <label
+          htmlFor="ssh-key-edit-username"
+          className="mb-1 block text-sm font-medium"
+        >
+          {t("sshKeys.defaultUsername")}
+        </label>
+        <Input
+          id="ssh-key-edit-username"
+          placeholder={t("sshKeys.defaultUsername")}
           value={draft.username}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, username: event.target.value }))
@@ -115,8 +144,15 @@ export function SSHKeyEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="ssh-key-edit-type" className="mb-1 block text-sm font-medium">密钥类型</label>
-        <AppSelect id="ssh-key-edit-type" containerClassName="w-full"
+        <label
+          htmlFor="ssh-key-edit-type"
+          className="mb-1 block text-sm font-medium"
+        >
+          {t("sshKeys.keyTypeLabel")}
+        </label>
+        <AppSelect
+          id="ssh-key-edit-type"
+          containerClassName="w-full"
           value={draft.keyType}
           onChange={(event) =>
             setDraft((prev) => ({
@@ -125,20 +161,25 @@ export function SSHKeyEditorDialog({
             }))
           }
         >
-          <option value="auto">自动识别（推荐）</option>
+          <option value="auto">{t("sshKeys.keyTypeAuto")}</option>
           <option value="rsa">RSA</option>
           <option value="ed25519">ED25519</option>
           <option value="ecdsa">ECDSA</option>
         </AppSelect>
         <p className="mt-1 text-xs text-muted-foreground">
-          保存时会校验私钥内容与所选类型是否一致。
+          {t("sshKeys.keyTypeHint")}
         </p>
       </div>
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <label htmlFor="ssh-key-edit-private-key" className="block text-sm font-medium">
-            {isEditing ? "私钥内容（留空表示不修改）" : "私钥内容"}
+          <label
+            htmlFor="ssh-key-edit-private-key"
+            className="block text-sm font-medium"
+          >
+            {isEditing
+              ? t("sshKeys.privateKeyLabelEdit")
+              : t("sshKeys.privateKeyLabel")}
           </label>
           <button
             type="button"
@@ -147,7 +188,7 @@ export function SSHKeyEditorDialog({
             disabled={saving}
           >
             <Upload className="size-3.5" />
-            上传密钥文件
+            {t("sshKeys.uploadKeyFile")}
           </button>
           <input
             ref={fileInputRef}
@@ -160,9 +201,11 @@ export function SSHKeyEditorDialog({
         <AppTextarea
           id="ssh-key-edit-private-key"
           className="min-h-36 text-xs"
-          placeholder={isEditing
-            ? "留空表示不修改现有私钥；如需更新请粘贴新的 OpenSSH 私钥"
-            : "粘贴 OpenSSH 私钥（支持粘贴带 \\n 转义的内容）"}
+          placeholder={
+            isEditing
+              ? t("sshKeys.privateKeyPlaceholderEdit")
+              : t("sshKeys.privateKeyPlaceholder")
+          }
           value={draft.privateKey}
           onChange={(event) =>
             setDraft((prev) => ({

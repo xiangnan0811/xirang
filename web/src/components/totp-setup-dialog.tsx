@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ interface TOTPSetupDialogProps {
 }
 
 export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSetupDialogProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>("setup");
   const [secret, setSecret] = useState("");
   const [qrUrl, setQrUrl] = useState("");
@@ -53,9 +55,9 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
         const msg =
           err instanceof ApiError
             ? (err.detail && typeof err.detail === "object"
-                ? ((err.detail as { error?: string }).error ?? "生成密钥失败")
-                : "生成密钥失败")
-            : "生成密钥失败";
+                ? ((err.detail as { error?: string }).error ?? t("totp.generateKeyFailed"))
+                : t("totp.generateKeyFailed"))
+            : t("totp.generateKeyFailed");
         setError(msg);
       })
       .finally(() => {
@@ -63,7 +65,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
       });
 
     return () => { cancelled = true; };
-  }, [open, step, secret, token]);
+  }, [open, step, secret, token, t]);
 
   const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
@@ -93,9 +95,9 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     } catch (err) {
       const msg = err instanceof ApiError
         ? (err.detail && typeof err.detail === "object"
-            ? ((err.detail as { error?: string }).error ?? "验证码错误")
-            : "验证码错误")
-        : "验证失败";
+            ? ((err.detail as { error?: string }).error ?? t("totp.codeError"))
+            : t("totp.codeError"))
+        : t("totp.verifyFailed");
       setError(msg);
     } finally {
       setLoading(false);
@@ -112,11 +114,11 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent size="sm">
         <DialogHeader>
-          <DialogTitle>设置两步验证</DialogTitle>
+          <DialogTitle>{t("totp.setupTitle")}</DialogTitle>
           <DialogDescription>
-            {step === "setup" && "使用 Google Authenticator 或其他 TOTP 应用扫描二维码。"}
-            {step === "verify" && "输入验证器 App 显示的 6 位验证码以完成绑定。"}
-            {step === "recovery" && "请保存以下恢复码，每个恢复码只能使用一次。"}
+            {step === "setup" && t("totp.setupStepScan")}
+            {step === "verify" && t("totp.setupStepVerify")}
+            {step === "recovery" && t("totp.setupStepRecovery")}
           </DialogDescription>
           <DialogCloseButton />
         </DialogHeader>
@@ -125,7 +127,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
           {step === "setup" && (
             <>
               {loading ? (
-                <p className="text-center text-sm text-muted-foreground">正在生成密钥…</p>
+                <p className="text-center text-sm text-muted-foreground">{t("totp.generatingKey")}</p>
               ) : error ? (
                 <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {error}
@@ -140,7 +142,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                     </div>
                   )}
                   <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">无法扫码？手动输入密钥：</p>
+                    <p className="text-xs text-muted-foreground">{t("totp.cannotScanHint")}</p>
                     <p className="break-all rounded-lg bg-muted px-3 py-2 font-mono text-xs select-all">
                       {secret}
                     </p>
@@ -154,14 +156,14 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
             <form id="totp-verify-form" className="space-y-3" onSubmit={handleVerify}>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="totp-verify-code">
-                  验证码
+                  {t("totp.verificationCode")}
                 </label>
                 <Input
                   id="totp-verify-code"
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value)}
                   autoComplete="one-time-code"
-                  placeholder="请输入 6 位验证码"
+                  placeholder={t("totp.codePlaceholder")}
                   autoFocus
                   required
                 />
@@ -177,7 +179,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
           {step === "recovery" && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                两步验证已成功开启。请将以下恢复码保存在安全位置，忘记验证器时可用于登录。
+                {t("totp.recoverySuccess")}
               </p>
               <div className="rounded-lg bg-muted p-3 font-mono text-sm">
                 {recoveryCodes.map((code) => (
@@ -192,7 +194,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                 onClick={handleCopyCodes}
               >
                 {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-                {copied ? "已复制" : "复制恢复码"}
+                {copied ? t("totp.copiedRecovery") : t("totp.copyRecovery")}
               </Button>
             </div>
           )}
@@ -205,22 +207,22 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
               disabled={loading || !secret}
               onClick={() => { setStep("verify"); setError(null); }}
             >
-              下一步
+              {t("common.next")}
             </Button>
           )}
           {step === "verify" && (
             <>
               <Button type="button" variant="ghost" onClick={() => { setStep("setup"); setError(null); }}>
-                上一步
+                {t("common.prev")}
               </Button>
               <Button type="submit" form="totp-verify-form" loading={loading}>
-                验证并开启
+                {t("totp.verifyAndEnable")}
               </Button>
             </>
           )}
           {step === "recovery" && (
             <Button type="button" onClick={() => handleClose(false)}>
-              完成
+              {t("common.finish")}
             </Button>
           )}
         </DialogFooter>

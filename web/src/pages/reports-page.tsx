@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { BarChart3, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import {
+  BarChart3,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { useAuth } from "@/context/auth-context";
-import { createReportsApi, type Report, type ReportConfig } from "@/lib/api/reports-api";
+import {
+  createReportsApi,
+  type Report,
+  type ReportConfig,
+} from "@/lib/api/reports-api";
 import { getErrorMessage } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,31 +35,46 @@ function SuccessRateBadge({ rate }: { rate: number }) {
 }
 
 function ReportRow({ report }: { report: Report }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
-  let topFailures: { node_name: string; task_name: string; count: number; last_err: string }[] = [];
+  let topFailures: {
+    node_name: string;
+    task_name: string;
+    count: number;
+    last_err: string;
+  }[] = [];
   try {
     topFailures = JSON.parse(report.top_failures) as typeof topFailures;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   return (
     <div className="border-b border-border/40 last:border-0">
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/20 transition-colors"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/20"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        {open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+        {open ? (
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+        )}
         <span className="flex-1 text-sm">
           {formatDate(report.period_start)} — {formatDate(report.period_end)}
         </span>
         <SuccessRateBadge rate={report.success_rate} />
-        <span className="ml-3 text-xs text-muted-foreground tabular-nums">
-          {report.success_runs}/{report.total_runs} 次成功
+        <span className="ml-3 text-xs tabular-nums text-muted-foreground">
+          {t("reports.successRuns", {
+            success: report.success_runs,
+            total: report.total_runs,
+          })}
         </span>
-        <span className="ml-3 text-xs text-muted-foreground tabular-nums">
-          均耗时 {report.avg_duration_ms}ms
+        <span className="ml-3 text-xs tabular-nums text-muted-foreground">
+          {t("reports.avgDuration", { ms: report.avg_duration_ms })}
         </span>
       </button>
 
@@ -54,30 +82,39 @@ function ReportRow({ report }: { report: Report }) {
         <div className="px-6 pb-4 pt-1 text-sm text-muted-foreground">
           {topFailures.length > 0 ? (
             <div>
-              <p className="mb-2 font-medium text-foreground">失败热点 Top {topFailures.length}</p>
+              <p className="mb-2 font-medium text-foreground">
+                {t("reports.topFailures", { count: topFailures.length })}
+              </p>
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/40 text-left">
-                    <th className="pb-1.5 pr-4">节点</th>
-                    <th className="pb-1.5 pr-4">任务</th>
-                    <th className="pb-1.5 pr-4">失败次数</th>
-                    <th className="pb-1.5">最后错误</th>
+                    <th className="pb-1.5 pr-4">{t("reports.colNode")}</th>
+                    <th className="pb-1.5 pr-4">{t("reports.colTask")}</th>
+                    <th className="pb-1.5 pr-4">
+                      {t("reports.colFailCount")}
+                    </th>
+                    <th className="pb-1.5">{t("reports.colLastError")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topFailures.map((f, i) => (
-                    <tr key={i} className="border-b border-border/20 last:border-0">
+                    <tr
+                      key={i}
+                      className="border-b border-border/20 last:border-0"
+                    >
                       <td className="py-1 pr-4">{f.node_name}</td>
                       <td className="py-1 pr-4">{f.task_name}</td>
                       <td className="py-1 pr-4 tabular-nums">{f.count}</td>
-                      <td className="py-1 max-w-xs truncate">{f.last_err || "—"}</td>
+                      <td className="max-w-xs truncate py-1">
+                        {f.last_err || "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <p>期间内无失败记录。</p>
+            <p>{t("reports.noFailures")}</p>
           )}
         </div>
       )}
@@ -98,6 +135,7 @@ function ConfigCard({
   onDelete: (id: number) => void;
   onGenerate: (id: number) => void;
 }) {
+  const { t } = useTranslation();
   const [reports, setReports] = useState<Report[] | null>(null);
   const [loadingReports, setLoadingReports] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -109,12 +147,12 @@ function ConfigCard({
       const data = await reportsApi.listReports(token, cfg.id);
       setReports(data);
     } catch (err) {
-      toast.error("加载报告失败: " + getErrorMessage(err));
+      toast.error(t("reports.loadFailed") + ": " + getErrorMessage(err));
       setReports([]);
     } finally {
       setLoadingReports(false);
     }
-  }, [token, cfg.id]);
+  }, [token, cfg.id, t]);
 
   const handleExpand = () => {
     if (!expanded && reports === null) {
@@ -135,9 +173,11 @@ function ConfigCard({
   };
 
   const scopeLabel =
-    cfg.scope_type === "all" ? "全部节点" :
-    cfg.scope_type === "tag" ? `标签: ${cfg.scope_value}` :
-    "指定节点";
+    cfg.scope_type === "all"
+      ? t("reports.scopeLabels.all")
+      : cfg.scope_type === "tag"
+        ? t("reports.scopeTagValue", { value: cfg.scope_value })
+        : t("reports.scopeLabels.node_ids");
 
   return (
     <Card>
@@ -145,28 +185,37 @@ function ConfigCard({
         <div>
           <p className="font-semibold">{cfg.name}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {cfg.period === "weekly" ? "每周" : "每月"} · {scopeLabel} · {cfg.cron}
+            {cfg.period === "weekly"
+              ? t("reports.periodLabels.weekly")
+              : t("reports.periodLabels.monthly")}{" "}
+            · {scopeLabel} · {cfg.cron}
           </p>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Badge variant={cfg.enabled ? "success" : "outline"}>{cfg.enabled ? "启用" : "停用"}</Badge>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge variant={cfg.enabled ? "success" : "outline"}>
+            {cfg.enabled ? t("common.enabled") : t("common.disabled")}
+          </Badge>
           {isAdmin && (
             <>
               <Button
                 variant="ghost"
                 size="icon"
                 className="size-8 text-muted-foreground hover:text-foreground"
-                title="立即生成"
+                title={t("reports.generateNow")}
                 disabled={generating}
                 onClick={() => void handleGenerate()}
               >
-                {generating ? <RefreshCw className="size-4 animate-spin" /> : <Zap className="size-4" />}
+                {generating ? (
+                  <RefreshCw className="size-4 animate-spin" />
+                ) : (
+                  <Zap className="size-4" />
+                )}
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 className="size-8 text-destructive/80 hover:text-destructive"
-                title="删除配置"
+                title={t("reports.deleteConfig")}
                 onClick={() => onDelete(cfg.id)}
               >
                 <Trash2 className="size-4" />
@@ -183,16 +232,24 @@ function ConfigCard({
           onClick={handleExpand}
           aria-expanded={expanded}
         >
-          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          历史报告
+          {expanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+          {t("reports.historyReports")}
         </button>
 
         {expanded && (
           <div className="mt-2 rounded-lg border border-border/50 bg-muted/10">
             {loadingReports ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">加载中...</div>
+              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                {t("common.loading")}
+              </div>
             ) : !reports?.length ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">暂无报告，点击闪电按钮立即生成。</div>
+              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                {t("reports.noReportsHint")}
+              </div>
             ) : (
               reports.map((r) => <ReportRow key={r.id} report={r} />)
             )}
@@ -204,6 +261,7 @@ function ConfigCard({
 }
 
 export function ReportsPage() {
+  const { t } = useTranslation();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
   const [configs, setConfigs] = useState<ReportConfig[]>([]);
@@ -217,22 +275,24 @@ export function ReportsPage() {
       const data = await reportsApi.listConfigs(token);
       setConfigs(data);
     } catch (err) {
-      toast.error("加载失败: " + getErrorMessage(err));
+      toast.error(t("reports.loadFailed") + ": " + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, t]);
 
-  useEffect(() => { void loadConfigs(); }, [loadConfigs]);
+  useEffect(() => {
+    void loadConfigs();
+  }, [loadConfigs]);
 
   const handleDelete = async (id: number) => {
     if (!token) return;
     try {
       await reportsApi.deleteConfig(token, id);
-      toast.success("已删除");
+      toast.success(t("reports.deletedSuccess"));
       setConfigs((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
-      toast.error("删除失败: " + getErrorMessage(err));
+      toast.error(t("reports.deleteFailed") + ": " + getErrorMessage(err));
     }
   };
 
@@ -240,9 +300,11 @@ export function ReportsPage() {
     if (!token) return;
     try {
       await reportsApi.generateNow(token, id);
-      toast.success("报告已生成");
+      toast.success(t("reports.generatedSuccess"));
     } catch (err) {
-      toast.error("生成失败: " + getErrorMessage(err));
+      toast.error(
+        t("reports.generateFailed") + ": " + getErrorMessage(err),
+      );
     }
   };
 
@@ -250,18 +312,27 @@ export function ReportsPage() {
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">SLA 报告</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">按策略/节点组维度生成备份健康报告</p>
+          <h1 className="text-xl font-semibold">{t("reports.pageTitle")}</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {t("reports.pageDesc")}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void loadConfigs()} disabled={loading}>
-            <RefreshCw className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`} />
-            刷新
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void loadConfigs()}
+            disabled={loading}
+          >
+            <RefreshCw
+              className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`}
+            />
+            {t("common.refresh")}
           </Button>
           {isAdmin && (
             <Button size="sm" onClick={() => setDialogOpen(true)}>
               <Plus className="mr-1.5 size-4" />
-              新增配置
+              {t("reports.addConfig")}
             </Button>
           )}
         </div>
@@ -270,8 +341,12 @@ export function ReportsPage() {
       {!loading && configs.length === 0 ? (
         <EmptyState
           icon={BarChart3}
-          title="暂无报告配置"
-          description={isAdmin ? '点击"新增配置"创建第一个 SLA 报告配置。' : "管理员尚未创建报告配置。"}
+          title={t("reports.emptyTitle")}
+          description={
+            isAdmin
+              ? t("reports.emptyDescAdmin")
+              : t("reports.emptyDescViewer")
+          }
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

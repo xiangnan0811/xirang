@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,10 +37,12 @@ export function FormDialog({
   saving,
   onSubmit,
   submitLabel,
-  savingLabel = "保存中...",
+  savingLabel,
   extraFooter,
   children,
 }: FormDialogProps) {
+  const { t } = useTranslation();
+  const resolvedSavingLabel = savingLabel ?? t('common.saving');
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size={size}>
@@ -62,11 +65,11 @@ export function FormDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {t('common.cancel')}
           </Button>
           {extraFooter}
           <Button onClick={() => void onSubmit()} disabled={saving}>
-            {saving ? savingLabel : submitLabel}
+            {saving ? resolvedSavingLabel : submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

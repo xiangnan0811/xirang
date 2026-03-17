@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ServerCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -136,6 +137,7 @@ export function NodeEditorDialog({
   onSave,
   onTestConnection,
 }: NodeEditorDialogProps) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<NodeEditorDraft, NodeRecord>(open, emptyDraft, editingNode, toDraft);
   const [saving, setSaving] = useState(false);
 
@@ -162,26 +164,26 @@ export function NodeEditorDialog({
       onOpenChange={onOpenChange}
       size="lg"
       icon={<ServerCog className="size-5 text-primary" />}
-      title={isEditing ? `编辑节点 - ${draft.name}` : "新增节点"}
+      title={isEditing ? t('nodeEditor.titleEdit', { name: draft.name }) : t('nodeEditor.titleCreate')}
       description={isEditing
-        ? `修改 ${draft.name} 的连接配置。`
-        : "添加新的远程服务器节点，保存后自动探测连接状态。"}
+        ? t('nodeEditor.descEdit', { name: draft.name })
+        : t('nodeEditor.descCreate')}
       saving={saving}
       onSubmit={handleSave}
-      submitLabel="保存并探测"
+      submitLabel={t('nodeEditor.submitLabel')}
       extraFooter={isEditing ? (
         <Button
           variant="outline"
           onClick={handleTestConnection}
           disabled={saving}
         >
-          测试连接
+          {t('nodeEditor.testConnection')}
         </Button>
       ) : null}
     >
       <div>
-        <label htmlFor="node-edit-name" className="mb-1 block text-sm font-medium">节点名称</label>
-        <Input id="node-edit-name" placeholder="例如：prod-app-01"
+        <label htmlFor="node-edit-name" className="mb-1 block text-sm font-medium">{t('nodeEditor.nodeName')}</label>
+        <Input id="node-edit-name" placeholder={t('nodeEditor.namePlaceholder')}
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -191,7 +193,7 @@ export function NodeEditorDialog({
 
       <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
         <div>
-          <label htmlFor="node-edit-host" className="mb-1 block text-sm font-medium">主机 / IP</label>
+          <label htmlFor="node-edit-host" className="mb-1 block text-sm font-medium">{t('nodeEditor.host')}</label>
           <Input id="node-edit-host" placeholder="10.10.0.11"
             value={draft.host}
             onChange={(event) =>
@@ -200,7 +202,7 @@ export function NodeEditorDialog({
           />
         </div>
         <div>
-          <label htmlFor="node-edit-port" className="mb-1 block text-sm font-medium">端口</label>
+          <label htmlFor="node-edit-port" className="mb-1 block text-sm font-medium">{t('nodeEditor.port')}</label>
           <Input id="node-edit-port" type="number"
             placeholder="22"
             value={draft.port}
@@ -215,7 +217,7 @@ export function NodeEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="node-edit-username" className="mb-1 block text-sm font-medium">SSH 用户名</label>
+        <label htmlFor="node-edit-username" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshUsername')}</label>
         <Input id="node-edit-username" placeholder="root"
           value={draft.username}
           onChange={(event) =>
@@ -225,7 +227,7 @@ export function NodeEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">认证方式</label>
+        <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">{t('nodeEditor.authMethod')}</label>
         <AppSelect id="node-edit-auth" containerClassName="w-full"
           value={draft.authType}
           onChange={(event) =>
@@ -235,34 +237,34 @@ export function NodeEditorDialog({
               }))
             }
           >
-          <option value="key">密钥认证</option>
-          <option value="password">密码认证</option>
+          <option value="key">{t('nodeEditor.keyAuth')}</option>
+          <option value="password">{t('nodeEditor.passwordAuth')}</option>
         </AppSelect>
       </div>
 
       {draft.authType === "key" ? (
         <div>
-          <label htmlFor="node-edit-ssh-key" className="mb-1 block text-sm font-medium">SSH Key</label>
+          <label htmlFor="node-edit-ssh-key" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshKey')}</label>
           <AppSelect id="node-edit-ssh-key" containerClassName="w-full"
             value={draft.keyId}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, keyId: event.target.value }))
             }
           >
-            <option value="">选择已有 SSH Key</option>
+            <option value="">{t('nodeEditor.selectExistingKey')}</option>
             {sshKeys.map((key) => (
               <option key={key.id} value={key.id}>
                 {key.name} ({key.username})
               </option>
             ))}
-            <option value="__new__">+ 新增 SSH Key</option>
+            <option value="__new__">{t('nodeEditor.newSshKey')}</option>
           </AppSelect>
         </div>
       ) : (
         <div>
-          <label htmlFor="node-edit-password" className="mb-1 block text-sm font-medium">SSH 密码</label>
+          <label htmlFor="node-edit-password" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshPassword')}</label>
           <Input id="node-edit-password" type="password"
-            placeholder={isEditing ? "留空则不修改" : "请输入 SSH 密码"}
+            placeholder={isEditing ? t('nodeEditor.passwordPlaceholderEdit') : t('nodeEditor.passwordPlaceholder')}
             value={draft.password}
             onChange={(event) =>
               setDraft((prev) => ({
@@ -277,16 +279,16 @@ export function NodeEditorDialog({
       {draft.authType === "key" && draft.keyId === "__new__" ? (
         <div className="space-y-2 rounded-md border border-dashed bg-muted/20 p-3">
           <label htmlFor="node-edit-inline-private-key" className="block text-xs font-medium text-muted-foreground">
-            内联新增 SSH Key
+            {t('nodeEditor.inlineNewKey')}
           </label>
           <div className="grid gap-2 md:grid-cols-2">
             <div>
               <label htmlFor="node-edit-inline-key-name" className="mb-1 block text-xs font-medium">
-                Key 名称
+                {t('nodeEditor.keyName')}
               </label>
               <Input
                 id="node-edit-inline-key-name"
-                placeholder="新 Key 名称"
+                placeholder={t('nodeEditor.newKeyName')}
                 value={draft.inlineKeyName}
                 onChange={(event) =>
                   setDraft((prev) => ({
@@ -298,7 +300,7 @@ export function NodeEditorDialog({
             </div>
             <div>
               <label htmlFor="node-edit-inline-key-type" className="mb-1 block text-xs font-medium">
-                密钥类型
+                {t('nodeEditor.keyType')}
               </label>
               <AppSelect
                 id="node-edit-inline-key-type"
@@ -311,7 +313,7 @@ export function NodeEditorDialog({
                   }))
                 }
               >
-                <option value="auto">自动识别（推荐）</option>
+                <option value="auto">{t('nodeEditor.autoDetect')}</option>
                 <option value="rsa">RSA</option>
                 <option value="ed25519">ED25519</option>
                 <option value="ecdsa">ECDSA</option>
@@ -321,7 +323,7 @@ export function NodeEditorDialog({
           <AppTextarea
             id="node-edit-inline-private-key"
             className="mt-1 min-h-28 text-xs"
-            placeholder="粘贴 OpenSSH 私钥（支持粘贴带 \n 转义的内容）"
+            placeholder={t('nodeEditor.privateKeyPlaceholder')}
             value={draft.inlinePrivateKey}
             onChange={(event) =>
               setDraft((prev) => ({
@@ -334,7 +336,7 @@ export function NodeEditorDialog({
       ) : null}
 
       <div>
-        <label htmlFor="node-edit-base-path" className="mb-1 block text-sm font-medium">基础路径</label>
+        <label htmlFor="node-edit-base-path" className="mb-1 block text-sm font-medium">{t('nodeEditor.basePath')}</label>
         <Input id="node-edit-base-path" placeholder="/"
           value={draft.basePath}
           onChange={(event) =>
@@ -344,8 +346,8 @@ export function NodeEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="node-edit-tags" className="mb-1 block text-sm font-medium">标签</label>
-        <Input id="node-edit-tags" placeholder="逗号分隔，例如：prod,app"
+        <label htmlFor="node-edit-tags" className="mb-1 block text-sm font-medium">{t('nodeEditor.tags')}</label>
+        <Input id="node-edit-tags" placeholder={t('nodeEditor.tagsPlaceholder')}
           value={draft.tags}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, tags: event.target.value }))
@@ -355,7 +357,7 @@ export function NodeEditorDialog({
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <label htmlFor="node-edit-maint-start" className="mb-1 block text-sm font-medium">维护窗口开始</label>
+          <label htmlFor="node-edit-maint-start" className="mb-1 block text-sm font-medium">{t('nodeEditor.maintenanceStart')}</label>
           <Input id="node-edit-maint-start" type="datetime-local"
             value={draft.maintenanceStart}
             onChange={(event) =>
@@ -364,7 +366,7 @@ export function NodeEditorDialog({
           />
         </div>
         <div>
-          <label htmlFor="node-edit-maint-end" className="mb-1 block text-sm font-medium">维护窗口结束</label>
+          <label htmlFor="node-edit-maint-end" className="mb-1 block text-sm font-medium">{t('nodeEditor.maintenanceEnd')}</label>
           <Input id="node-edit-maint-end" type="datetime-local"
             value={draft.maintenanceEnd}
             onChange={(event) =>
@@ -373,7 +375,7 @@ export function NodeEditorDialog({
           />
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">维护窗口内将跳过探测和任务执行。留空表示无维护计划。</p>
+      <p className="text-xs text-muted-foreground">{t('nodeEditor.maintenanceHint')}</p>
     </FormDialog>
   );
 }

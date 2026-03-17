@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import {
   buildMockOverviewTrafficSeries,
@@ -136,7 +137,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       if (demoModeEnabled) {
         return;
       }
-      const message = `${action}失败：当前未连接后端，请检查登录态或服务状态后重试。`;
+      const message = i18n.t("console.actionFailedNoBackend", { action });
       setWarning(message);
       throw new Error(message);
     },
@@ -145,12 +146,12 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const handleWriteApiError = useCallback(
     (action: string, error: unknown) => {
-      const detail = getErrorMessage(error, `${action}请求失败`);
+      const detail = getErrorMessage(error, i18n.t("console.actionRequestFailed", { action }));
       if (demoModeEnabled) {
         setWarning(detail);
         return;
       }
-      const message = `${action}失败：${detail}`;
+      const message = i18n.t("console.actionFailed", { action, detail });
       setWarning(message);
       throw error instanceof Error ? error : new Error(message);
     },
@@ -178,7 +179,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       }
       setOverviewSummary(null);
       setAlerts([]);
-      setWarning("未检测到登录态，请重新登录后刷新数据。");
+      setWarning(i18n.t("console.notLoggedIn"));
       setLoading(false);
       setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
       return;
@@ -201,23 +202,21 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     if (alertsResult.status === "fulfilled") {
       setAlerts(alertsResult.value);
     } else {
-      failedInterfaces.push("告警");
+      failedInterfaces.push(i18n.t("console.failedAlerts"));
     }
 
     if (overviewResult.status === "fulfilled") {
       setOverviewSummary(overviewResult.value);
     } else {
-      failedInterfaces.push("概览");
+      failedInterfaces.push(i18n.t("console.failedOverview"));
     }
 
     if (failedInterfaces.length > 0) {
       if (failedInterfaces.length === 2) {
-        setWarning(
-          '登录后数据加载失败：当前无法从后端获取任何控制台数据。\n请先点击顶部\u201c刷新数据\u201d重试；若仍失败，请检查后端服务状态、网络连通性与 VITE_API_BASE_URL 配置，并重新登录。'
-        );
+        setWarning(i18n.t("console.allDataLoadFailed"));
       } else {
         setWarning(
-          `部分数据加载失败（${failedInterfaces.join('\u3001')}）。已保留已成功加载的数据。\n请点击顶部\u201c刷新数据\u201d重试；若持续失败，请检查后端服务状态或重新登录。`
+          i18n.t("console.partialDataLoadFailed", { interfaces: failedInterfaces.join(i18n.t("console.separator")) })
         );
       }
     }

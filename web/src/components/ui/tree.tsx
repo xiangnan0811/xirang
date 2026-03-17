@@ -1,5 +1,6 @@
 import { useState, useCallback, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronRight, Folder, FolderOpen, File } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 type TreeItemData = {
@@ -32,6 +33,7 @@ function TreeItem({
   onLoadChildren,
   loadingIds,
 }: TreeItemProps) {
+  const { t } = useTranslation();
   const isExpanded = expanded?.has(item.id) ?? false;
   const isSelected = selected === item.id;
   const isLoading = loadingIds?.has(item.id) ?? false;
@@ -77,7 +79,7 @@ function TreeItem({
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
-        aria-label={`${hasChildren ? (isExpanded ? "折叠" : "展开") : "选择"} ${item.label}`}
+        aria-label={`${hasChildren ? (isExpanded ? t('tree.collapse') : t('tree.expand')) : t('tree.select')} ${item.label}`}
       >
         {hasChildren ? (
           <ChevronRight
@@ -129,6 +131,7 @@ type TreeProps = {
 };
 
 function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoadChildren }: TreeProps) {
+  const { t } = useTranslation();
   const [internalSelected, setInternalSelected] = useState<string | undefined>(selected);
   const [internalExpanded, setInternalExpanded] = useState<Set<string>>(expanded ?? new Set());
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
@@ -183,7 +186,7 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
   );
 
   return (
-    <div role="tree" className={cn("space-y-0.5", className)} aria-label="树形视图">
+    <div role="tree" className={cn("space-y-0.5", className)} aria-label={t('tree.treeViewLabel')}>
       {items.map((item) => (
         <TreeItem
           key={item.id}

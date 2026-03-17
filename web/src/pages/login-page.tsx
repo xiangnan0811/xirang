@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,7 @@ type LocationState = {
 };
 
 export function LoginPage() {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
@@ -89,22 +91,22 @@ export function LoginPage() {
             : undefined;
 
         if (error.status === 401) {
-          setError(payload?.error ?? "用户名或密码错误。");
+          setError(payload?.error ?? t("login.errorInvalidCredentials"));
           return;
         }
         if (error.status === 403) {
-          setError("当前账号无权访问该系统。");
+          setError(t("login.errorForbidden"));
           return;
         }
         if (error.status === 404) {
-          setError("登录接口不存在：请检查前端代理或 VITE_API_BASE_URL 配置。");
+          setError(t("login.errorNotFound"));
           return;
         }
 
-        setError(payload?.error ?? payload?.message ?? `登录失败（HTTP ${error.status}）`);
+        setError(payload?.error ?? payload?.message ?? t("login.errorLoginFailed", { status: error.status }));
         return;
       }
-      setError("登录失败：后端服务不可达，请检查服务状态与网络连接。");
+      setError(t("login.errorNetworkFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -125,10 +127,10 @@ export function LoginPage() {
           error.detail && typeof error.detail === "object"
             ? (error.detail as { error?: string; message?: string })
             : undefined;
-        setError(payload?.error ?? `验证失败（HTTP ${error.status}）`);
+        setError(payload?.error ?? t("login.errorVerifyFailed", { status: error.status }));
         return;
       }
-      setError("验证失败：后端服务不可达。");
+      setError(t("login.errorVerifyNetworkFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -145,10 +147,10 @@ export function LoginPage() {
             <span>XiRang / X-Soil</span>
           </div>
           <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
-            <span className="text-gradient">息壤集中备份管理平台</span>
+            <span className="text-gradient">{t("login.platformName")}</span>
           </h1>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
-            如神话中的“息壤”般持续生长，面对不断变化的数据洪流，提供可追踪、可恢复、可审计的增量备份能力。
+            {t("login.platformSlogan")}
           </p>
 
           <div className="mt-8 grid gap-4 sm:grid-cols-2 animate-slide-up [animation-delay:250ms]">
@@ -156,22 +158,22 @@ export function LoginPage() {
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
-              <p className="text-sm font-semibold">实时监控</p>
-              <p className="mt-1 text-xs text-muted-foreground">节点状态矩阵 + 告警分流 + 流式日志</p>
+              <p className="text-sm font-semibold">{t("login.featureMonitor")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureMonitorDesc")}</p>
             </div>
             <div className="glass-panel p-4 interactive-surface">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
-              <p className="text-sm font-semibold">统一编排</p>
-              <p className="mt-1 text-xs text-muted-foreground">策略、任务、通知与 SSH Key 管理</p>
+              <p className="text-sm font-semibold">{t("login.featureOrchestrate")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureOrchestrateDesc")}</p>
             </div>
             <div className="glass-panel p-4 interactive-surface sm:col-span-2">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
-              <p className="text-sm font-semibold">安全合规</p>
-              <p className="mt-1 text-xs text-muted-foreground">权限控制 + 审计追踪 + 失败快速闭环</p>
+              <p className="text-sm font-semibold">{t("login.featureCompliance")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureComplianceDesc")}</p>
             </div>
           </div>
         </section>
@@ -181,16 +183,16 @@ export function LoginPage() {
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
               <ShieldCheck className="size-6" />
             </div>
-            <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">息壤控制台</h1>
+            <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</h1>
             {requires2FA ? (
               <>
-                <CardTitle className="text-2xl font-bold">两步验证</CardTitle>
-                <CardDescription className="text-base">请输入验证器 App 中的验证码，或使用恢复码登录。</CardDescription>
+                <CardTitle className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
+                <CardDescription className="text-base">{t("login.twoFactorDesc")}</CardDescription>
               </>
             ) : (
               <>
-                <CardTitle className="text-2xl font-bold">欢迎登录</CardTitle>
-                <CardDescription className="text-base">输入管理员账号，进入节点与任务统一管理。</CardDescription>
+                <CardTitle className="text-2xl font-bold">{t("login.welcomeTitle")}</CardTitle>
+                <CardDescription className="text-base">{t("login.welcomeDesc")}</CardDescription>
               </>
             )}
           </CardHeader>
@@ -199,14 +201,14 @@ export function LoginPage() {
               <form className="space-y-4" onSubmit={handle2FASubmit}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="totp-code">
-                    验证码
+                    {t("login.totpLabel")}
                   </label>
                   <Input
                     id="totp-code"
                     value={totpCode}
                     onChange={(event) => setTotpCode(event.target.value)}
                     autoComplete="one-time-code"
-                    placeholder="请输入 6 位验证码或恢复码"
+                    placeholder={t("login.totpPlaceholder")}
                     aria-invalid={Boolean(error)}
                     aria-describedby={error ? errorId : undefined}
                     autoFocus
@@ -225,7 +227,7 @@ export function LoginPage() {
                 ) : null}
 
                 <Button className="w-full" type="submit" loading={submitting}>
-                  验证
+                  {t("login.verifyButton")}
                 </Button>
                 <Button
                   className="w-full"
@@ -233,21 +235,21 @@ export function LoginPage() {
                   variant="ghost"
                   onClick={() => { setRequires2FA(false); setError(null); setTotpCode(""); }}
                 >
-                  返回登录
+                  {t("login.backToLogin")}
                 </Button>
               </form>
             ) : (
               <form className="space-y-4" onSubmit={handleSubmit}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="username">
-                    用户名
+                    {t("login.username")}
                   </label>
                   <Input
                     id="username"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
                     autoComplete="username"
-                    placeholder="请输入用户名"
+                    placeholder={t("login.usernamePlaceholder")}
                     aria-invalid={Boolean(error)}
                     aria-describedby={error ? errorId : undefined}
                     required
@@ -256,7 +258,7 @@ export function LoginPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="password">
-                    密码
+                    {t("login.password")}
                   </label>
                   <Input
                     id="password"
@@ -264,7 +266,7 @@ export function LoginPage() {
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     autoComplete="current-password"
-                    placeholder="请输入密码"
+                    placeholder={t("login.passwordPlaceholder")}
                     aria-invalid={Boolean(error)}
                     aria-describedby={error ? errorId : undefined}
                     required
@@ -274,7 +276,7 @@ export function LoginPage() {
                 {captchaQuestion ? (
                   <div className="space-y-2">
                     <label className="text-sm font-medium" htmlFor="captcha-answer">
-                      验证码
+                      {t("login.captcha")}
                     </label>
                     <p className="text-sm text-muted-foreground">{captchaQuestion}</p>
                     <Input
@@ -283,7 +285,7 @@ export function LoginPage() {
                       inputMode="numeric"
                       value={captchaAnswer}
                       onChange={(event) => setCaptchaAnswer(event.target.value)}
-                      placeholder="请输入计算结果"
+                      placeholder={t("login.captchaPlaceholder")}
                       autoComplete="off"
                       required
                     />
@@ -301,7 +303,7 @@ export function LoginPage() {
                 ) : null}
 
                 <Button className="w-full" type="submit" loading={submitting}>
-                  登录控制台
+                  {t("login.loginButton")}
                 </Button>
               </form>
             )}

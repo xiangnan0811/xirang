@@ -1,4 +1,5 @@
 import type { LogEvent, NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
+import i18n from "@/i18n";
 import { extractErrorCode, formatTime, request, type Envelope, unwrapData } from "./core";
 
 type TaskResponse = {
@@ -115,7 +116,7 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     name: row.name,
     policyName: row.policy?.name ?? row.name,
     policyId: row.policy?.id ?? row.policy_id ?? null,
-    nodeName: row.node?.name ?? `节点-${row.node_id ?? 0}`,
+    nodeName: row.node?.name ?? i18n.t("common.nodeDefault", { id: row.node_id ?? 0 }),
     nodeId: row.node?.id ?? row.node_id ?? 0,
     dependsOnTaskId: row.depends_on_task_id ?? null,
     createdAt: formatTime(row.created_at),

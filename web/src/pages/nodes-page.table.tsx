@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Activity, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
@@ -30,6 +31,7 @@ export const NodesTable = React.memo(function NodesTable({
   onOpenFileBrowser,
   isAdmin,
 }: NodesViewProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   return (
@@ -40,7 +42,7 @@ export const NodesTable = React.memo(function NodesTable({
             <th className="px-3 py-2.5">
               <input
                 type="checkbox"
-                aria-label="全选当前页可见节点"
+                aria-label={t("nodes.selectAllVisible")}
                 className="size-4"
                 checked={allVisibleSelected}
                 onChange={(event) =>
@@ -48,21 +50,21 @@ export const NodesTable = React.memo(function NodesTable({
                 }
               />
             </th>
-            <th className="px-3 py-2.5">节点</th>
-            <th className="px-3 py-2.5">地址</th>
-            <th className="px-3 py-2.5">认证</th>
-            <th className="px-3 py-2.5">状态</th>
-            <th className="px-3 py-2.5">磁盘探测</th>
-            <th className="px-3 py-2.5">最后备份</th>
-            <th className="px-3 py-2.5">标签</th>
-            <th className="px-3 py-2.5 text-right">操作</th>
+            <th className="px-3 py-2.5">{t("nodes.colNode")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colAddress")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colAuth")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colStatus")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colDiskProbe")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
+            <th className="px-3 py-2.5">{t("nodes.colTags")}</th>
+            <th className="px-3 py-2.5 text-right">{t("nodes.colActions")}</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             <tr>
               <td colSpan={9} className="px-3 py-4 text-muted-foreground">
-                节点数据加载中...
+                {t("nodes.tableLoading")}
               </td>
             </tr>
           ) : !sortedNodes.length ? (
@@ -70,11 +72,11 @@ export const NodesTable = React.memo(function NodesTable({
               <td colSpan={9} className="px-3 py-6">
                 <FilteredEmptyState
                   className="py-8"
-                  title="当前筛选条件下暂无节点"
-                  description="可以重置筛选条件，或新增一个节点继续测试。"
+                  title={t("nodes.emptyTitle")}
+                  description={t("nodes.emptyDesc")}
                   onReset={resetFilters}
                   onCreate={openCreateDialog}
-                  createLabel="新增节点"
+                  createLabel={t("nodes.emptyCreateLabel")}
                   createIcon={ServerCog}
                 />
               </td>
@@ -83,15 +85,15 @@ export const NodesTable = React.memo(function NodesTable({
             sortedNodes.map((node) => {
               const status = getNodeStatusMeta(node.status);
               const keyLabel = node.keyId
-                ? sshKeys.find((key) => key.id === node.keyId)?.name || "已绑定 Key"
-                : "未绑定";
+                ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
+                : t("common.keyUnbound");
 
               return (
                 <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"
-                      aria-label={`选择节点 ${node.name}`}
+                      aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
                       className="size-4"
                       checked={selectedNodeSet.has(node.id)}
                       onChange={(event) =>
@@ -110,7 +112,7 @@ export const NodesTable = React.memo(function NodesTable({
                   </td>
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">
                     <p>
-                      {node.authType === "key" ? "密钥" : "密码"}
+                      {node.authType === "key" ? t("nodes.authKey") : t("nodes.authPassword")}
                     </p>
                     <p>
                       {node.authType === "key" ? keyLabel : "-"}
@@ -127,7 +129,7 @@ export const NodesTable = React.memo(function NodesTable({
                   <td className="px-3 py-2.5">
                     <div className="w-44">
                       <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{node.diskFreePercent}% 可用</span>
+                        <span>{t("nodes.diskFreePercent", { pct: node.diskFreePercent })}</span>
                         <span>
                           {node.connectionLatencyMs
                             ? `${node.connectionLatencyMs} ms`
@@ -146,7 +148,7 @@ export const NodesTable = React.memo(function NodesTable({
                         />
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        探测：{node.diskProbeAt || "未探测"}
+                        {t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}
                       </p>
                     </div>
                   </td>
@@ -168,7 +170,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`测试节点 ${node.name} 连接`} title="测试连接"
+                        aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
                         onClick={() => void onTestNode(node)}
                         disabled={testingNodeId === node.id}
                       >
@@ -178,7 +180,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`查看节点 ${node.name} 日志`} title="查看日志"
+                        aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
                         onClick={() =>
                           navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
                         }
@@ -190,7 +192,7 @@ export const NodesTable = React.memo(function NodesTable({
                           variant="ghost"
                           size="icon"
                           className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={`打开节点 ${node.name} Web 终端`} title="Web 终端"
+                          aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                           onClick={() => onOpenTerminal?.(node)}
                         >
                           <MonitorPlay className="size-4" />
@@ -200,7 +202,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`浏览节点 ${node.name} 文件`} title="文件浏览"
+                        aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                         onClick={() => onOpenFileBrowser?.(node)}
                       >
                         <FolderOpen className="size-4" />
@@ -209,7 +211,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`编辑节点 ${node.name}`} title="编辑节点"
+                        aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                         onClick={() => openEditDialog(node)}
                       >
                         <Wrench className="size-4" />
@@ -218,7 +220,7 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                        aria-label={`删除节点 ${node.name}`} title="删除节点"
+                        aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                         onClick={() => onDeleteNode(node)}
                       >
                         <Trash2 className="size-4" />
@@ -230,7 +232,7 @@ export const NodesTable = React.memo(function NodesTable({
                         onClick={() => void handleTriggerBackup(node.id, node.name)}
                       >
                         {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
-                        手动备份
+                        {t("nodes.manualBackup")}
                       </Button>
                     </div>
                   </td>

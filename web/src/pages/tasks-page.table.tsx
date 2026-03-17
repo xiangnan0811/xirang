@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { History, Loader2, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,7 @@ export const TasksTable = React.memo(function TasksTable({
   onEdit,
   onViewHistory,
 }: TasksViewProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   return (
@@ -29,14 +31,14 @@ export const TasksTable = React.memo(function TasksTable({
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
           <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2.5">任务</th>
-            <th className="px-3 py-2.5">节点</th>
-            <th className="px-3 py-2.5">状态</th>
-            <th className="px-3 py-2.5">类型</th>
-            <th className="px-3 py-2.5">进度</th>
-            <th className="px-3 py-2.5">调度</th>
-            <th className="px-3 py-2.5">错误</th>
-            <th className="px-3 py-2.5 text-right">操作</th>
+            <th className="px-3 py-2.5">{t('tasks.columnTask')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnNode')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnStatus')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnType')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnProgress')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnSchedule')}</th>
+            <th className="px-3 py-2.5">{t('tasks.columnError')}</th>
+            <th className="px-3 py-2.5 text-right">{t('tasks.columnActions')}</th>
           </tr>
         </thead>
         <tbody>
@@ -63,14 +65,14 @@ export const TasksTable = React.memo(function TasksTable({
                           variant={task.verifyStatus === "passed" ? "success" : "warning"}
                           className="text-[10px]"
                         >
-                          {task.verifyStatus === "passed" ? "校验通过" : task.verifyStatus === "warning" ? "校验异常" : "校验失败"}
+                          {task.verifyStatus === "passed" ? t('tasks.verifyPassed') : task.verifyStatus === "warning" ? t('tasks.verifyWarning') : t('tasks.verifyFailed')}
                         </Badge>
                       )}
                     </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge variant={task.cronSpec ? "secondary" : "outline"} className="text-[10px]">
-                      {task.cronSpec ? "定时" : "手动"}
+                      {task.cronSpec ? t('tasks.typeCron') : t('tasks.typeManual')}
                     </Badge>
                   </td>
                   <td className="px-3 py-2.5">
@@ -96,8 +98,8 @@ export const TasksTable = React.memo(function TasksTable({
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                    <p>开始：{task.startedAt}</p>
-                    <p>下次：{task.nextRunAt ?? "-"}</p>
+                    <p>{t('tasks.startedAtLabel', { time: task.startedAt })}</p>
+                    <p>{t('tasks.nextRunAtLabel', { time: task.nextRunAt ?? "-" })}</p>
                   </td>
                   <td className="px-3 py-2.5 text-xs">
                     <span
@@ -115,7 +117,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="重试任务"
+                        aria-label={t('tasks.retryAriaLabel')}
                         disabled={task.status !== "failed" || isPendingAny}
                         onClick={() => void handleRetry(task.id)}
                       >
@@ -125,7 +127,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`查看任务 #${task.id} 日志`}
+                        aria-label={t('tasks.viewLogsAriaLabel', { id: task.id })}
                         onClick={() => navigate(`/app/logs?task=${task.id}`)}
                       >
                         <Terminal className="size-4" />
@@ -134,7 +136,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`查看任务 #${task.id} 执行历史`}
+                        aria-label={t('tasks.viewHistoryAriaLabel', { id: task.id })}
                         onClick={() => onViewHistory(task)}
                       >
                         <History className="size-4" />
@@ -143,7 +145,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="编辑任务"
+                        aria-label={t('tasks.editAriaLabel')}
                         disabled={isPendingAny}
                         onClick={() => onEdit(task)}
                       >
@@ -153,7 +155,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="取消任务"
+                        aria-label={t('tasks.cancelAriaLabel')}
                         disabled={!canCancel(task.status) || isPendingAny}
                         onClick={() => void handleCancel(task.id)}
                       >
@@ -163,7 +165,7 @@ export const TasksTable = React.memo(function TasksTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                        aria-label="删除任务"
+                        aria-label={t('tasks.deleteAriaLabel')}
                         disabled={isPendingAny}
                         onClick={() => void handleDelete(task.id)}
                       >
@@ -176,7 +178,7 @@ export const TasksTable = React.memo(function TasksTable({
                         onClick={() => void handleTrigger(task.id)}
                       >
                         {isPendingTrigger ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Play className="size-4 mr-1" />}
-                        触发
+                        {t('tasks.trigger')}
                       </Button>
                     </div>
                   </td>
@@ -188,11 +190,11 @@ export const TasksTable = React.memo(function TasksTable({
               <td colSpan={8} className="px-3 py-6">
                 <FilteredEmptyState
                   className="py-8"
-                  title="当前筛选条件下没有任务"
-                  description="可重置筛选条件，或直接新建一个任务。"
+                  title={t('tasks.emptyTitle')}
+                  description={t('tasks.emptyDesc')}
                   onReset={resetFilters}
                   onCreate={() => setCreateDialogOpen(true)}
-                  createLabel="新建任务"
+                  createLabel={t('tasks.emptyCreateLabel')}
                   createIcon={Plus}
                 />
               </td>

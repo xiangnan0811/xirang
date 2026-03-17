@@ -1,13 +1,17 @@
+import { useTranslation } from "react-i18next";
+
 interface ExpiryCountdownBadgeProps {
   expiryDate?: string;
   archived?: boolean;
 }
 
 export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBadgeProps) {
+  const { t } = useTranslation();
+
   if (archived) {
     return (
       <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-        已归档
+        {t('expiry.archived')}
       </span>
     );
   }
@@ -27,7 +31,7 @@ export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBa
   if (daysRemaining < 0) {
     return (
       <span className="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
-        已到期
+        {t('expiry.expired')}
       </span>
     );
   }
@@ -35,7 +39,7 @@ export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBa
   if (daysRemaining <= 3) {
     return (
       <span className="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
-        还剩 {daysRemaining}d
+        {t('expiry.daysLeft', { days: daysRemaining })}
       </span>
     );
   }
@@ -43,14 +47,14 @@ export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBa
   if (daysRemaining <= 7) {
     return (
       <span className="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-        还剩 {daysRemaining}d
+        {t('expiry.daysLeft', { days: daysRemaining })}
       </span>
     );
   }
 
   return (
     <span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
-      还剩 {daysRemaining}d
+      {t('expiry.daysLeft', { days: daysRemaining })}
     </span>
   );
 }

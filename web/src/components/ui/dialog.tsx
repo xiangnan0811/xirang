@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 const Dialog = DialogPrimitive.Root;
@@ -126,10 +127,11 @@ const DialogDescription = React.forwardRef<
 DialogDescription.displayName = DialogPrimitive.Description.displayName;
 
 function DialogCloseButton({ className }: React.HTMLAttributes<HTMLButtonElement>) {
+  const { t } = useTranslation();
   return (
     <DialogPrimitive.Close className={cn("absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none", className)}>
       <X className="size-4" />
-      <span className="sr-only">关闭</span>
+      <span className="sr-only">{t('common.close')}</span>
     </DialogPrimitive.Close>
   );
 }

@@ -1,4 +1,5 @@
 import type { IntegrationChannel, IntegrationProbeResult, NewIntegrationInput } from "@/types/domain";
+import i18n from "@/i18n";
 import { parseNumericId, request, type Envelope, unwrapData } from "./core";
 
 type IntegrationResponse = {
@@ -112,7 +113,7 @@ export function createIntegrationsApi() {
       const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
-        message: data?.message ?? "测试完成",
+        message: data?.message ?? i18n.t("common.testComplete"),
         latencyMs: Number(data?.latency_ms ?? 0)
       };
     },

@@ -1,11 +1,12 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import i18n from "@/i18n";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function getErrorMessage(error: unknown, fallback = "操作失败"): string {
+export function getErrorMessage(error: unknown, fallback = i18n.t("common.operationFailed")): string {
   if (typeof error === "string") {
     const trimmed = error.trim();
     return trimmed || fallback;

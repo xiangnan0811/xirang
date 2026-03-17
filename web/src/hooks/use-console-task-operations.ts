@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
@@ -42,7 +43,7 @@ export function useTaskOperations({
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
   const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
-    const result = await exec("创建任务", (t) => apiClient.createTask(t, input));
+    const result = await exec(i18n.t("tasks.actions.createTask"), (t) => apiClient.createTask(t, input));
     if (result) {
       if (result.ok) {
         markTasksMutated();
@@ -58,14 +59,14 @@ export function useTaskOperations({
   }, [exec, markTasksMutated, nodes, policies, setTasks, tasks]);
 
   const updateTask = useCallback(async (taskID: number, input: NewTaskInput): Promise<void> => {
-    const result = await exec("更新任务", (t) => apiClient.updateTask(t, taskID, input));
+    const result = await exec(i18n.t("tasks.actions.updateTask"), (t) => apiClient.updateTask(t, taskID, input));
     if (result) {
       if (result.ok) {
         markTasksMutated();
         setTasks((prev) => prev.map((task) => (task.id === taskID ? result.data : task)));
         return;
       }
-      throw new Error("更新任务失败");
+      throw new Error(i18n.t("tasks.actions.updateTaskFailed"));
     }
     // demo mode fallback: update in-memory (与 buildDemoTask 保持一致的派生逻辑)
     const node = nodes.find((n) => n.id === input.nodeId);
@@ -79,7 +80,7 @@ export function useTaskOperations({
               name: input.name,
               policyName: policy?.name ?? input.name,
               nodeId: input.nodeId,
-              nodeName: node?.name ?? `节点-${input.nodeId}`,
+              nodeName: node?.name ?? i18n.t("common.nodeDefault", { id: input.nodeId }),
               policyId: input.policyId ?? null,
               rsyncSource: input.rsyncSource ?? policy?.sourcePath,
               rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
@@ -92,14 +93,14 @@ export function useTaskOperations({
   }, [exec, markTasksMutated, nodes, policies, setTasks]);
 
   const deleteTask = useCallback(async (taskID: number) => {
-    await exec("删除任务", (t) => apiClient.deleteTask(t, taskID));
+    await exec(i18n.t("tasks.actions.deleteTask"), (t) => apiClient.deleteTask(t, taskID));
     markTasksMutated();
     setTasks((prev) => prev.filter((task) => task.id !== taskID));
     setAlerts((prev) => prev.filter((alert) => alert.taskId !== taskID));
   }, [exec, markTasksMutated, setAlerts, setTasks]);
 
   const triggerTask = useCallback(async (taskID: number) => {
-    const result = await exec("触发任务", async (t) => {
+    const result = await exec(i18n.t("tasks.actions.triggerTask"), async (t) => {
       await apiClient.triggerTask(t, taskID);
       return apiClient.getTask(t, taskID).catch(() => null);
     });
@@ -124,7 +125,7 @@ export function useTaskOperations({
   }, [exec, markTasksMutated, setTasks]);
 
   const cancelTask = useCallback(async (taskID: number) => {
-    const result = await exec("取消任务", async (t) => {
+    const result = await exec(i18n.t("tasks.actions.cancelTask"), async (t) => {
       await apiClient.cancelTask(t, taskID);
       return apiClient.getTask(t, taskID).catch(() => null);
     });
@@ -156,7 +157,7 @@ export function useTaskOperations({
               ...alert,
               status: "resolved",
               retryable: false,
-              message: "已触发重试，等待任务结果回传"
+              message: i18n.t("tasks.retriedMessage")
             }
           : alert
       )
@@ -164,7 +165,7 @@ export function useTaskOperations({
   }, [alerts, setAlerts, token, triggerTask]);
 
   const refreshTask = useCallback(async (taskID: number) => {
-    const result = await exec("刷新任务状态", (t) => apiClient.getTask(t, taskID));
+    const result = await exec(i18n.t("tasks.actions.refreshTask"), (t) => apiClient.getTask(t, taskID));
     if (result?.ok) {
       markTasksMutated();
       setTasks((prev) => prev.map((task) => (task.id === taskID ? result.data : task)));
@@ -176,7 +177,7 @@ export function useTaskOperations({
       try {
         return await apiClient.getTaskLogs(token, taskID, options);
       } catch (error) {
-        setWarning(getErrorMessage(error, "获取任务日志失败"));
+        setWarning(getErrorMessage(error, i18n.t("tasks.fetchLogsFailed")));
         return [];
       }
     }

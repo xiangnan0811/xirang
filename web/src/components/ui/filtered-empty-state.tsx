@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -17,30 +18,35 @@ type FilteredEmptyStateProps = {
 };
 
 export function FilteredEmptyState({
-  title = "当前筛选条件下暂无结果",
-  description = "可调整筛选条件后重试。",
+  title,
+  description,
   className,
   icon,
   onReset,
-  resetLabel = "重置筛选",
+  resetLabel,
   onCreate,
   createLabel,
   createIcon: CreateIcon,
   action,
 }: FilteredEmptyStateProps) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t('filteredEmpty.defaultTitle');
+  const resolvedDescription = description ?? t('filteredEmpty.defaultDescription');
+  const resolvedResetLabel = resetLabel ?? t('filteredEmpty.resetFilter');
+
   const builtInAction =
     action ??
     (onReset || onCreate ? (
       <div className="flex flex-wrap items-center justify-center gap-2">
         {onReset ? (
           <Button size="sm" variant="outline" onClick={onReset}>
-            {resetLabel}
+            {resolvedResetLabel}
           </Button>
         ) : null}
         {onCreate ? (
           <Button size="sm" onClick={onCreate}>
             {CreateIcon ? <CreateIcon className="mr-1 size-4" /> : null}
-            {createLabel ?? "新建"}
+            {createLabel ?? t('common.create')}
           </Button>
         ) : null}
       </div>
@@ -50,8 +56,8 @@ export function FilteredEmptyState({
     <EmptyState
       icon={icon}
       className={className}
-      title={title}
-      description={description}
+      title={resolvedTitle}
+      description={resolvedDescription}
       action={builtInAction}
     />
   );

@@ -1,4 +1,5 @@
 import { Mail, MessageSquare, Send, Webhook } from "lucide-react";
+import i18n from "@/i18n";
 import type { AlertRecord, IntegrationChannel } from "@/types/domain";
 
 export function integrationIcon(type: IntegrationChannel["type"]) {
@@ -17,11 +18,11 @@ export function integrationIcon(type: IntegrationChannel["type"]) {
 export function alertStatusMeta(status: AlertRecord["status"]) {
   switch (status) {
     case "open":
-      return { label: "待处理", variant: "danger" as const };
+      return { label: i18n.t("notifications.alertStatusOpen"), variant: "danger" as const };
     case "acked":
-      return { label: "已确认", variant: "warning" as const };
+      return { label: i18n.t("notifications.alertStatusAcked"), variant: "warning" as const };
     default:
-      return { label: "已恢复", variant: "success" as const };
+      return { label: i18n.t("notifications.alertStatusResolved"), variant: "success" as const };
   }
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, HardDrive, FolderInput } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { apiClient } from "@/lib/api/client";
 import type { DockerVolume } from "@/lib/api/docker-api";
 
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
+  const { t } = useTranslation();
   const [volumes, setVolumes] = useState<DockerVolume[]>([]);
   const [warning, setWarning] = useState<string>();
   const [loading, setLoading] = useState(true);
@@ -30,7 +32,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "获取 Docker 卷失败");
+        setError(err instanceof Error ? err.message : t('dockerVolumes.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -46,7 +48,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
       <div className="flex items-center justify-center py-6">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         <span className="ml-2 text-sm text-muted-foreground">
-          正在扫描 Docker 卷...
+          {t('dockerVolumes.scanning')}
         </span>
       </div>
     );
@@ -62,7 +64,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
     return (
       <div className="py-4 text-center text-sm text-muted-foreground">
         <HardDrive className="mx-auto mb-2 size-5 opacity-40" />
-        <p>未发现 Docker 卷（可能 Docker 未安装）</p>
+        <p>{t('dockerVolumes.noVolumes')}</p>
         {warning && (
           <p className="mt-1 text-xs text-muted-foreground/70">{warning}</p>
         )}
@@ -79,11 +81,11 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border/40 text-left text-xs text-muted-foreground">
-              <th className="px-3 py-2 font-medium">卷名称</th>
-              <th className="px-3 py-2 font-medium">驱动</th>
-              <th className="px-3 py-2 font-medium">挂载路径</th>
+              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colName')}</th>
+              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colDriver')}</th>
+              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colMountpoint')}</th>
               {onSelectPath && (
-                <th className="px-3 py-2 font-medium text-right">操作</th>
+                <th className="px-3 py-2 font-medium text-right">{t('common.actions')}</th>
               )}
             </tr>
           </thead>
@@ -105,11 +107,11 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
                       className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-primary hover:bg-primary/10 transition-colors"
                       onClick={() => onSelectPath(vol.mountpoint)}
                       disabled={!vol.mountpoint}
-                      aria-label={`使用 ${vol.name} 的挂载路径`}
-                      title="使用此路径作为备份源"
+                      aria-label={t('dockerVolumes.usePathAriaLabel', { name: vol.name })}
+                      title={t('dockerVolumes.useAsSource')}
                     >
                       <FolderInput className="size-3.5" />
-                      使用此路径
+                      {t('dockerVolumes.usePath')}
                     </button>
                   </td>
                 )}

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { RefreshCw, Search, ShieldCheck, ShieldOff } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { NotificationBell } from "@/components/notification-bell";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
@@ -47,6 +49,7 @@ function isTypingTarget(target: EventTarget | null) {
 }
 
 export function AppShell() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { username, role, token, logout, totpEnabled, setTotpEnabled } = useAuth();
   const consoleData = useConsoleData(token);
@@ -129,7 +132,7 @@ export function AppShell() {
         href="#main-content"
         className="sr-only absolute left-3 top-3 z-[70] rounded-md border border-border/80 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm focus:not-sr-only"
       >
-        跳到主内容
+        {t('appShell.skipToContent')}
       </a>
 
       {/* 顶部固定导航栏 */}
@@ -146,7 +149,7 @@ export function AppShell() {
               alt="XiRang"
               className="size-8 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-sm"
             />
-            <span className="ml-2 text-base font-semibold tracking-tight">息壤</span>
+            <span className="ml-2 text-base font-semibold tracking-tight">{t('appShell.brandName')}</span>
           </div>
 
           <div
@@ -162,7 +165,7 @@ export function AppShell() {
             />
             {!sidebarCollapsed ? (
               <div className="ml-3 min-w-0 leading-none">
-                <span className="block truncate text-base font-semibold tracking-tight">息壤</span>
+                <span className="block truncate text-base font-semibold tracking-tight">{t('appShell.brandName')}</span>
               </div>
             ) : null}
           </div>
@@ -176,9 +179,9 @@ export function AppShell() {
                   value={consoleData.globalSearch}
                   onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
                   className="h-8 w-60 pl-9 pr-16 bg-background/50 text-xs xl:w-72"
-                  aria-label="全局搜索节点（名称、IP、标签、状态）"
+                  aria-label={t('appShell.searchAriaLabel')}
                   aria-keyshortcuts="Control+K Meta+K /"
-                  placeholder="搜索节点、IP、标签…"
+                  placeholder={t('appShell.searchPlaceholder')}
                 />
                 <span className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground xl:inline-flex border border-border/50 shadow-sm font-mono">
                   ⌘ K
@@ -187,11 +190,11 @@ export function AppShell() {
             </div>
 
             <div className="hidden min-w-0 md:flex items-center gap-2 mt-0.5 overflow-hidden">
-              <Badge variant="success" className="h-6 shrink-0 px-2 text-[10px]">在线 {consoleData.overview.healthyNodes}</Badge>
-              <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">运行中 {consoleData.overview.runningTasks}</Badge>
-              <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">异常 {consoleData.overview.failedTasks24h}</Badge>
+              <Badge variant="success" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.onlineBadge', { count: consoleData.overview.healthyNodes })}</Badge>
+              <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.runningBadge', { count: consoleData.overview.runningTasks })}</Badge>
+              <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.failedBadge', { count: consoleData.overview.failedTasks24h })}</Badge>
               <div className="h-4 w-px shrink-0 bg-border/50 mx-1" />
-              <span className="truncate text-[11px] text-muted-foreground">总数 {consoleData.overview.totalNodes}</span>
+              <span className="truncate text-[11px] text-muted-foreground">{t('appShell.totalLabel', { count: consoleData.overview.totalNodes })}</span>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
@@ -200,7 +203,7 @@ export function AppShell() {
                 size="icon"
                 className="xl:hidden size-8"
                 onClick={() => setMobileSearchOpen(true)}
-                aria-label="打开全局搜索"
+                aria-label={t('appShell.openSearch')}
               >
                 <Search className="size-4" />
               </Button>
@@ -212,7 +215,7 @@ export function AppShell() {
                 className="size-8 text-muted-foreground hover:text-foreground"
                 disabled={consoleData.loading}
                 aria-busy={consoleData.loading}
-                title="刷新数据"
+                title={t('appShell.refreshData')}
               >
                 <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} />
               </Button>
@@ -222,17 +225,18 @@ export function AppShell() {
               <div className="flex items-center h-8 [&>button]:size-8 [&_svg]:size-4">
                 <ThemeToggle />
               </div>
+              <LanguageSwitcher className="size-8" />
 
               <div className="hidden md:flex items-center pl-1 gap-2">
-                <span className="text-xs text-muted-foreground">{username ?? "未知"}</span>
+                <span className="text-xs text-muted-foreground">{username ?? t('common.unknown')}</span>
                 {totpEnabled ? (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="size-8 text-green-600 hover:text-green-700 dark:text-green-500 dark:hover:text-green-400"
                     onClick={() => setTotpDisableOpen(true)}
-                    title="禁用两步验证"
-                    aria-label="禁用两步验证"
+                    title={t('appShell.disableTotp')}
+                    aria-label={t('appShell.disableTotp')}
                   >
                     <ShieldCheck className="size-4" />
                   </Button>
@@ -242,14 +246,14 @@ export function AppShell() {
                     size="icon"
                     className="size-8 text-muted-foreground hover:text-foreground"
                     onClick={() => setTotpSetupOpen(true)}
-                    title="启用两步验证"
-                    aria-label="启用两步验证"
+                    title={t('appShell.enableTotp')}
+                    aria-label={t('appShell.enableTotp')}
                   >
                     <ShieldOff className="size-4" />
                   </Button>
                 )}
                 <Button variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleLogout}>
-                  退出登录
+                  {t('appShell.logout')}
                 </Button>
               </div>
             </div>
@@ -293,8 +297,8 @@ export function AppShell() {
       <Dialog open={mobileSearchOpen} onOpenChange={setMobileSearchOpen}>
         <DialogContent size="sm">
           <DialogHeader>
-            <DialogTitle>全局搜索节点</DialogTitle>
-            <DialogDescription>按名称、IP、标签或状态快速筛选节点。</DialogDescription>
+            <DialogTitle>{t('appShell.searchDialogTitle')}</DialogTitle>
+            <DialogDescription>{t('appShell.searchDialogDesc')}</DialogDescription>
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody className="space-y-3">
@@ -305,8 +309,8 @@ export function AppShell() {
                 value={consoleData.globalSearch}
                 onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
                 className="pl-9"
-                aria-label="全局搜索节点（名称、IP、标签、状态）"
-                placeholder="搜索节点…"
+                aria-label={t('appShell.searchAriaLabel')}
+                placeholder={t('appShell.searchPlaceholderShort')}
               />
             </div>
           </DialogBody>

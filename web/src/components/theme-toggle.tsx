@@ -1,10 +1,12 @@
 import { Moon, SunMedium } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useTheme } from "@/context/theme-context";
 import { Button } from "@/components/ui/button";
 
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const { theme, toggleTheme } = useTheme();
-  const nextLabel = theme === "dark" ? "切换浅色模式" : "切换暗黑模式";
+  const nextLabel = theme === "dark" ? t('theme.toggleLight') : t('theme.toggleDark');
 
   return (
     <Button

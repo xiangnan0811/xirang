@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { KeyRound, LogOut, Shield, UserPlus, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -16,18 +17,19 @@ import type { UserRecord } from "@/types/domain";
 
 type RoleType = UserRecord["role"];
 
-const roleOptions: Array<{ value: RoleType; label: string }> = [
-  { value: "admin", label: "管理员" },
-  { value: "operator", label: "运维" },
-  { value: "viewer", label: "只读" }
-];
-
-function roleLabel(role: RoleType) {
-  return roleOptions.find((item) => item.value === role)?.label ?? role;
-}
+const roleKeys: RoleType[] = ["admin", "operator", "viewer"];
 
 export function UsersPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
+
+  const roleOptions = roleKeys.map((key) => ({
+    value: key,
+    label: t(`users.roles.${key}`),
+  }));
+
+  const roleLabel = (role: RoleType) =>
+    roleOptions.find((item) => item.value === role)?.label ?? role;
   const { confirm, dialog } = useConfirm();
   const { token, username, role, userId, logout } = useAuth();
   const isAdmin = role === "admin";
@@ -46,8 +48,12 @@ export function UsersPage() {
   const [creatingUser, setCreatingUser] = useState(false);
 
   const [roleDrafts, setRoleDrafts] = useState<Record<number, RoleType>>({});
-  const [passwordDrafts, setPasswordDrafts] = useState<Record<number, string>>({});
-  const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>({});
+  const [passwordDrafts, setPasswordDrafts] = useState<Record<number, string>>(
+    {},
+  );
+  const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>(
+    {},
+  );
 
   const loadUsers = useCallback(async () => {
     if (!token || !isAdmin) {
@@ -58,13 +64,18 @@ export function UsersPage() {
     try {
       const rows = await apiClient.getUsers(token);
       setUsers(rows);
-      setRoleDrafts(Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<number, RoleType>);
+      setRoleDrafts(
+        Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<
+          number,
+          RoleType
+        >,
+      );
     } catch (error) {
-      toast.error(`加载用户失败：${getErrorMessage(error)}`);
+      toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
     } finally {
       setLoadingUsers(false);
     }
-  }, [isAdmin, token]);
+  }, [isAdmin, t, token]);
 
   useEffect(() => {
     void loadUsers();
@@ -76,15 +87,15 @@ export function UsersPage() {
 
   const handleChangePassword = async () => {
     if (!token) {
-      toast.error("当前未登录，请重新登录后重试。");
+      toast.error(t("users.errorNotLoggedIn"));
       return;
     }
     if (!currentPassword.trim() || !newPassword.trim()) {
-      toast.error("请填写当前密码和新密码。");
+      toast.error(t("users.errorPasswordRequired"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error("两次输入的新密码不一致。");
+      toast.error(t("users.errorPasswordMismatch"));
       return;
     }
 
@@ -93,10 +104,12 @@ export function UsersPage() {
       await apiClient.changePassword(token, currentPassword, newPassword);
       await apiClient.logout(token).catch(() => undefined);
       logout();
-      toast.success("密码修改成功，请重新登录。");
+      toast.success(t("users.passwordChanged"));
       navigate("/login", { replace: true });
     } catch (error) {
-      toast.error(`修改密码失败：${getErrorMessage(error)}`);
+      toast.error(
+        t("users.changePasswordFailed", { error: getErrorMessage(error) }),
+      );
     } finally {
       setChangingPassword(false);
     }
@@ -104,15 +117,15 @@ export function UsersPage() {
 
   const handleCreateUser = async () => {
     if (!token) {
-      toast.error("当前未登录，请重新登录后重试。");
+      toast.error(t("users.errorNotLoggedIn"));
       return;
     }
     if (!newUsername.trim() || !newUserPassword.trim()) {
-      toast.error("用户名和初始密码不能为空。");
+      toast.error(t("users.errorUsernamePasswordRequired"));
       return;
     }
     if (newUserPassword.trim().length < 12) {
-      toast.error("初始密码至少需要 12 位，且包含大小写字母、数字和符号。");
+      toast.error(t("users.errorPasswordTooShort"));
       return;
     }
 
@@ -121,7 +134,7 @@ export function UsersPage() {
       const created = await apiClient.createUser(token, {
         username: newUsername.trim(),
         password: newUserPassword,
-        role: newUserRole
+        role: newUserRole,
       });
       setUsers((prev) => [...prev, created]);
       setRoleDrafts((prev) => ({ ...prev, [created.id]: created.role }));
@@ -129,9 +142,11 @@ export function UsersPage() {
       setNewUsername("");
       setNewUserPassword("");
       setNewUserRole("operator");
-      toast.success("用户创建成功");
+      toast.success(t("users.createSuccess"));
     } catch (error) {
-      toast.error(`创建用户失败：${getErrorMessage(error)}`);
+      toast.error(
+        t("users.createFailed", { error: getErrorMessage(error) }),
+      );
     } finally {
       setCreatingUser(false);
     }
@@ -139,7 +154,7 @@ export function UsersPage() {
 
   const handleUpdateUser = async (target: UserRecord) => {
     if (!token) {
-      toast.error("当前未登录，请重新登录后重试。");
+      toast.error(t("users.errorNotLoggedIn"));
       return;
     }
     const roleValue = roleDrafts[target.id] ?? target.role;
@@ -149,14 +164,18 @@ export function UsersPage() {
     try {
       const updated = await apiClient.updateUser(token, target.id, {
         role: roleValue,
-        password: passwordValue || undefined
+        password: passwordValue || undefined,
       });
-      setUsers((prev) => prev.map((item) => (item.id === target.id ? updated : item)));
+      setUsers((prev) =>
+        prev.map((item) => (item.id === target.id ? updated : item)),
+      );
       setRoleDrafts((prev) => ({ ...prev, [target.id]: updated.role }));
       setPasswordDrafts((prev) => ({ ...prev, [target.id]: "" }));
-      toast.success("用户更新成功");
+      toast.success(t("users.updateSuccess"));
     } catch (error) {
-      toast.error(`更新用户失败：${getErrorMessage(error)}`);
+      toast.error(
+        t("users.updateFailed", { error: getErrorMessage(error) }),
+      );
     } finally {
       setSavingUserMap((prev) => ({ ...prev, [target.id]: false }));
     }
@@ -164,15 +183,17 @@ export function UsersPage() {
 
   const handleDeleteUser = async (target: UserRecord) => {
     if (!token) {
-      toast.error("当前未登录，请重新登录后重试。");
+      toast.error(t("users.errorNotLoggedIn"));
       return;
     }
 
     const confirmed = await confirm({
-      title: "确认删除用户",
-      description: `删除后将无法恢复：${target.username}`,
-      confirmText: "删除",
-      cancelText: "取消"
+      title: t("users.confirmDeleteTitle"),
+      description: t("users.confirmDeleteDesc", {
+        username: target.username,
+      }),
+      confirmText: t("common.delete"),
+      cancelText: t("common.cancel"),
     });
     if (!confirmed) {
       return;
@@ -182,9 +203,11 @@ export function UsersPage() {
     try {
       await apiClient.deleteUser(token, target.id);
       setUsers((prev) => prev.filter((item) => item.id !== target.id));
-      toast.success("用户删除成功");
+      toast.success(t("users.deleteSuccess"));
     } catch (error) {
-      toast.error(`删除用户失败：${getErrorMessage(error)}`);
+      toast.error(
+        t("users.deleteFailed", { error: getErrorMessage(error) }),
+      );
     } finally {
       setSavingUserMap((prev) => ({ ...prev, [target.id]: false }));
     }
@@ -204,41 +227,44 @@ export function UsersPage() {
         <CardContent className="space-y-4 pt-6">
           <div className="flex items-center gap-2 font-medium">
             <KeyRound className="size-4" />
-            账号安全
+            {t("users.accountSecurity")}
           </div>
           <p className="text-sm text-muted-foreground">
-            当前登录：{username ?? "未知"} {role ? `(${roleLabel(role)})` : ""}
+            {t("users.currentLogin", {
+              username: username ?? t("common.unknown"),
+              role: role ? roleLabel(role) : "",
+            })}
           </p>
           <div className="grid gap-3 md:grid-cols-3">
             <Input
               type="password"
-              placeholder="当前密码"
-              aria-label="当前密码"
+              placeholder={t("users.currentPassword")}
+              aria-label={t("users.currentPassword")}
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
             />
             <Input
               type="password"
-              placeholder="新密码（至少12位，含大小写/数字/符号）"
-              aria-label="新密码"
+              placeholder={t("users.newPasswordPlaceholder")}
+              aria-label={t("users.newPassword")}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
             />
             <Input
               type="password"
-              placeholder="确认新密码"
-              aria-label="确认新密码"
+              placeholder={t("users.confirmPassword")}
+              aria-label={t("users.confirmPassword")}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
             />
           </div>
           <div className="flex flex-wrap gap-2">
             <Button loading={changingPassword} onClick={handleChangePassword}>
-              修改密码
+              {t("users.changePassword")}
             </Button>
             <Button variant="outline" onClick={handleLogout}>
               <LogOut className="mr-2 size-4" />
-              退出登录
+              {t("appShell.logout")}
             </Button>
           </div>
         </CardContent>
@@ -249,75 +275,100 @@ export function UsersPage() {
           <CardContent className="space-y-4 pt-6">
             <div className="flex items-center gap-2 font-medium">
               <Users className="size-4" />
-              用户管理
+              {t("users.userManagement")}
             </div>
             <div className="grid gap-2 md:grid-cols-4">
               <Input
-                placeholder="新用户名"
-                aria-label="新用户名"
+                placeholder={t("users.newUsername")}
+                aria-label={t("users.newUsername")}
                 value={newUsername}
                 onChange={(event) => setNewUsername(event.target.value)}
               />
               <Input
                 type="password"
-                placeholder="初始密码"
-                aria-label="初始密码"
+                placeholder={t("users.initialPassword")}
+                aria-label={t("users.initialPassword")}
                 value={newUserPassword}
                 onChange={(event) => setNewUserPassword(event.target.value)}
               />
               <Select
                 value={newUserRole}
-                onChange={(event) => setNewUserRole(event.target.value as RoleType)}
-                options={roleOptions.map((item) => ({ value: item.value, label: item.label }))}
+                onChange={(event) =>
+                  setNewUserRole(event.target.value as RoleType)
+                }
+                options={roleOptions.map((item) => ({
+                  value: item.value,
+                  label: item.label,
+                }))}
               />
               <Button loading={creatingUser} onClick={handleCreateUser}>
                 <UserPlus className="mr-2 size-4" />
-                创建用户
+                {t("users.createUser")}
               </Button>
             </div>
 
             {loadingUsers ? (
-              <LoadingState description="正在加载用户列表..." />
+              <LoadingState description={t("users.loadingDesc")} />
             ) : sortedUsers.length === 0 ? (
-              <EmptyState title="暂无用户" description="请先创建用户账号" />
+              <EmptyState
+                title={t("users.emptyTitle")}
+                description={t("users.emptyDesc")}
+              />
             ) : (
               <div className="space-y-2">
                 {sortedUsers.map((item) => {
                   const isSelf = userId === item.id;
                   return (
-                    <div key={item.id} className="rounded-xl border border-border/70 p-3">
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-border/70 p-3"
+                    >
                       <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_auto] md:items-center">
                         <div>
                           <p className="font-medium">{item.username}</p>
                           <p className="text-xs text-muted-foreground">
                             ID: {item.id} · {roleLabel(item.role)}
-                            {item.totpEnabled ? <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"><Shield className="size-2.5" />2FA</span> : null}
+                            {item.totpEnabled ? (
+                              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                <Shield className="size-2.5" />
+                                2FA
+                              </span>
+                            ) : null}
                           </p>
                         </div>
                         <Select
                           value={roleDrafts[item.id] ?? item.role}
                           onChange={(event) =>
-                            setRoleDrafts((prev) => ({ ...prev, [item.id]: event.target.value as RoleType }))
+                            setRoleDrafts((prev) => ({
+                              ...prev,
+                              [item.id]: event.target.value as RoleType,
+                            }))
                           }
-                          options={roleOptions.map((one) => ({ value: one.value, label: one.label }))}
+                          options={roleOptions.map((one) => ({
+                            value: one.value,
+                            label: one.label,
+                          }))}
                           disabled={isSelf}
                         />
                         <Input
                           type="password"
                           value={passwordDrafts[item.id] ?? ""}
                           onChange={(event) =>
-                            setPasswordDrafts((prev) => ({ ...prev, [item.id]: event.target.value }))
+                            setPasswordDrafts((prev) => ({
+                              ...prev,
+                              [item.id]: event.target.value,
+                            }))
                           }
-                          placeholder="留空则不改密码"
+                          placeholder={t("users.passwordKeepEmpty")}
                         />
-                        <div className="flex gap-2 justify-end">
+                        <div className="flex justify-end gap-2">
                           <Button
                             size="sm"
                             variant="outline"
                             loading={Boolean(savingUserMap[item.id])}
                             onClick={() => void handleUpdateUser(item)}
                           >
-                            保存
+                            {t("common.save")}
                           </Button>
                           <Button
                             size="sm"
@@ -326,7 +377,7 @@ export function UsersPage() {
                             loading={Boolean(savingUserMap[item.id])}
                             onClick={() => void handleDeleteUser(item)}
                           >
-                            删除
+                            {t("common.delete")}
                           </Button>
                         </div>
                       </div>
@@ -341,8 +392,8 @@ export function UsersPage() {
         <Card>
           <CardContent className="pt-6">
             <EmptyState
-              title="权限不足"
-              description="当前角色仅可修改自己的密码，不具备用户管理权限。"
+              title={t("users.insufficientPermission")}
+              description={t("users.insufficientPermissionDesc")}
               icon={Shield}
             />
           </CardContent>

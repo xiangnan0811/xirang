@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { KeyRound, Plus, ShieldAlert, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -16,8 +17,15 @@ import { getErrorMessage } from "@/lib/utils";
 import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
 
 export function SSHKeysPage() {
-  const { sshKeys, nodes, createSSHKey, updateSSHKey, deleteSSHKey, refreshSSHKeys } =
-    useOutletContext<ConsoleOutletContext>();
+  const { t } = useTranslation();
+  const {
+    sshKeys,
+    nodes,
+    createSSHKey,
+    updateSSHKey,
+    deleteSSHKey,
+    refreshSSHKeys,
+  } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
     void refreshSSHKeys();
@@ -71,12 +79,12 @@ export function SSHKeysPage() {
     const privateKey = draft.privateKey.trim();
 
     if (!name || !username) {
-      toast.error("保存失败：名称、用户名不能为空。");
+      toast.error(t("sshKeys.errorNameRequired"));
       return;
     }
 
     if (!draft.id && !privateKey) {
-      toast.error("保存失败：新建 SSH Key 时私钥不能为空。");
+      toast.error(t("sshKeys.errorPrivateKeyRequired"));
       return;
     }
 
@@ -90,10 +98,10 @@ export function SSHKeysPage() {
     try {
       if (draft.id) {
         await updateSSHKey(draft.id, input);
-        toast.success(`SSH Key ${draft.name} 已更新。`);
+        toast.success(t("sshKeys.keyUpdated", { name: draft.name }));
       } else {
         await createSSHKey(input);
-        toast.success(`SSH Key ${draft.name} 已新增。`);
+        toast.success(t("sshKeys.keyCreated", { name: draft.name }));
       }
 
       setEditorOpen(false);
@@ -105,8 +113,8 @@ export function SSHKeysPage() {
 
   const onDelete = async (key: SSHKeyRecord) => {
     const ok = await confirm({
-      title: "确认操作",
-      description: `确认删除 SSH Key ${key.name} 吗？`,
+      title: t("common.confirmAction"),
+      description: t("sshKeys.confirmDeleteDesc", { name: key.name }),
     });
     if (!ok) {
       return;
@@ -114,12 +122,10 @@ export function SSHKeysPage() {
 
     const success = await deleteSSHKey(key.id);
     if (!success) {
-      toast.error(
-        `删除失败：${key.name} 仍被节点使用，请先修改节点认证信息。`
-      );
+      toast.error(t("sshKeys.deleteFailedInUse", { name: key.name }));
       return;
     }
-    toast.success(`SSH Key ${key.name} 已删除。`);
+    toast.success(t("sshKeys.keyDeleted", { name: key.name }));
   };
 
   return (
@@ -130,28 +136,30 @@ export function SSHKeysPage() {
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={openCreateDialog}>
                 <Plus className="mr-1 size-3.5" />
-                新增 Key
+                {t("sshKeys.addKey")}
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="success">使用中 {keyStats.inUse}</Badge>
-              <Badge variant="outline">未使用 {keyStats.unused}</Badge>
-              <Badge variant="secondary">绑定节点 {keyStats.bindingCount}</Badge>
+              <Badge variant="success">
+                {t("sshKeys.inUse", { count: keyStats.inUse })}
+              </Badge>
+              <Badge variant="outline">
+                {t("sshKeys.unused", { count: keyStats.unused })}
+              </Badge>
+              <Badge variant="secondary">
+                {t("sshKeys.boundNodes", { count: keyStats.bindingCount })}
+              </Badge>
             </div>
           </div>
           <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
-            私钥仅用于演示环境。生产环境建议接入密钥管理系统（如
-            Vault/KMS），并启用审计与最小权限策略。
+            {t("sshKeys.securityWarning")}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {sshKeys.map((key) => {
               const usageCount = keyUsageMap.get(key.id) ?? 0;
               return (
-                <div
-                  key={key.id}
-                  className="interactive-surface p-3"
-                >
+                <div key={key.id} className="interactive-surface p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">
@@ -165,15 +173,25 @@ export function SSHKeysPage() {
                       </div>
                     </div>
                     <Badge variant={usageCount > 0 ? "warning" : "outline"}>
-                      使用中 {usageCount} 节点
+                      {t("sshKeys.inUseNodes", { count: usageCount })}
                     </Badge>
                   </div>
 
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                    <p>类型：{String(key.keyType).toUpperCase()}</p>
-                    <p className="break-all">指纹：{key.fingerprint}</p>
-                    <p>创建时间：{key.createdAt}</p>
-                    <p>最后使用：{key.lastUsedAt ?? "未使用"}</p>
+                    <p>
+                      {t("sshKeys.keyType", {
+                        type: String(key.keyType).toUpperCase(),
+                      })}
+                    </p>
+                    <p className="break-all">
+                      {t("sshKeys.fingerprint", { fp: key.fingerprint })}
+                    </p>
+                    <p>{t("sshKeys.createdAt", { time: key.createdAt })}</p>
+                    <p>
+                      {t("sshKeys.lastUsed", {
+                        time: key.lastUsedAt ?? t("common.neverUsed"),
+                      })}
+                    </p>
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border/40 pt-3">
@@ -182,7 +200,7 @@ export function SSHKeysPage() {
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       onClick={() => openEditDialog(key)}
-                      aria-label="编辑"
+                      aria-label={t("common.edit")}
                     >
                       <Wrench className="size-4" />
                     </Button>
@@ -191,7 +209,7 @@ export function SSHKeysPage() {
                       size="icon"
                       className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => onDelete(key)}
-                      aria-label="删除"
+                      aria-label={t("common.delete")}
                     >
                       <Trash2 className="size-4" />
                     </Button>
@@ -200,7 +218,7 @@ export function SSHKeysPage() {
                   {usageCount > 0 ? (
                     <p className="mt-2 text-[11px] text-warning">
                       <ShieldAlert className="mr-1 inline size-3" />
-                      该密钥正在被节点使用，删除前请先切换节点认证配置。
+                      {t("sshKeys.inUseWarning")}
                     </p>
                   ) : null}
                 </div>
@@ -210,8 +228,8 @@ export function SSHKeysPage() {
 
           {!sshKeys.length ? (
             <EmptyState
-              title="当前还没有 SSH Key"
-              description="请先新增密钥后再创建节点"
+              title={t("sshKeys.emptyTitle")}
+              description={t("sshKeys.emptyDesc")}
             />
           ) : null}
         </CardContent>

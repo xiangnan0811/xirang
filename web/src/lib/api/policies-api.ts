@@ -1,4 +1,5 @@
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
+import i18n from "@/i18n";
 import { request, type Envelope, unwrapData } from "./core";
 
 type PolicyResponse = {
@@ -27,7 +28,7 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     sourcePath: row.source_path,
     targetPath: row.target_path,
     cron: row.cron_spec,
-    naturalLanguage: `按照 ${row.cron_spec} 调度`,
+    naturalLanguage: i18n.t("policies.scheduledByCron", { cron: row.cron_spec }),
     enabled: row.enabled,
     criticalThreshold: 2,
     nodeIds: row.node_ids ?? [],

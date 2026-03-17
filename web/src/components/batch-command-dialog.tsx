@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { apiClient } from "@/lib/api/client";
@@ -43,6 +44,7 @@ export function BatchCommandDialog({
   defaultNodeIds,
   onSuccess,
 }: BatchCommandDialogProps) {
+  const { t } = useTranslation();
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
@@ -74,15 +76,15 @@ export function BatchCommandDialog({
 
   const handleSubmit = useCallback(async () => {
     if (selectedNodeIds.length === 0) {
-      setError("请至少选择一个节点");
+      setError(t("batchCommand.errorNoNodes"));
       return;
     }
     if (!command.trim()) {
-      setError("命令不能为空");
+      setError(t("batchCommand.errorEmptyCommand"));
       return;
     }
     if (command.length > 4096) {
-      setError("命令长度不能超过 4096 字符");
+      setError(t("batchCommand.errorCommandTooLong"));
       return;
     }
 
@@ -100,24 +102,24 @@ export function BatchCommandDialog({
       onOpenChange(false);
       onSuccess?.({ batchId: result.batchId, retain: result.retain });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "执行失败");
+      setError(err instanceof Error ? err.message : t("batchCommand.errorExecutionFailed"));
     } finally {
       setSaving(false);
     }
-  }, [selectedNodeIds, command, name, retain, token, onOpenChange, onSuccess]);
+  }, [selectedNodeIds, command, name, retain, token, onOpenChange, onSuccess, t]);
 
   return (
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="批量命令执行"
-      description="选择节点并输入要执行的命令"
+      title={t("batchCommand.title")}
+      description={t("batchCommand.desc")}
       icon={<Terminal className="size-5" />}
       size="lg"
       saving={saving}
       onSubmit={handleSubmit}
-      submitLabel="执行"
-      savingLabel="执行中..."
+      submitLabel={t("batchCommand.submitLabel")}
+      savingLabel={t("batchCommand.savingLabel")}
     >
       {error && (
         <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -126,11 +128,11 @@ export function BatchCommandDialog({
       )}
 
       <div>
-        <label className="mb-1.5 block text-sm font-medium">任务名称（可选）</label>
+        <label className="mb-1.5 block text-sm font-medium">{t("batchCommand.taskNameOptional")}</label>
         <input
           type="text"
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          placeholder="默认自动生成"
+          placeholder={t("batchCommand.batchNamePlaceholder")}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
@@ -139,14 +141,14 @@ export function BatchCommandDialog({
       <div>
         <div className="mb-1.5 flex items-center justify-between">
           <label className="text-sm font-medium">
-            选择节点 ({selectedNodeIds.length}/{nodes.length})
+            {t("batchCommand.selectNodes")} ({selectedNodeIds.length}/{nodes.length})
           </label>
           <button
             type="button"
             className="text-xs text-primary hover:underline"
             onClick={selectAll}
           >
-            全选
+            {t("common.selectAll")}
           </button>
         </div>
         <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-border p-2">
@@ -166,13 +168,13 @@ export function BatchCommandDialog({
             </label>
           ))}
           {nodes.length === 0 && (
-            <p className="py-2 text-center text-sm text-muted-foreground">暂无可用节点</p>
+            <p className="py-2 text-center text-sm text-muted-foreground">{t("batchCommand.noAvailableNodes")}</p>
           )}
         </div>
       </div>
 
       <div>
-        <label className="mb-1.5 block text-sm font-medium">命令</label>
+        <label className="mb-1.5 block text-sm font-medium">{t("batchCommand.command")}</label>
         {templates.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-1">
             {templates.slice(0, 5).map((tpl) => (
@@ -190,12 +192,12 @@ export function BatchCommandDialog({
         <textarea
           className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
           rows={3}
-          placeholder="输入要在所有选中节点上执行的命令，如: df -h"
+          placeholder={t("batchCommand.commandPlaceholder")}
           value={command}
           onChange={(e) => setCommand(e.target.value)}
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          命令将通过 SSH 在每个节点上执行，最大 4096 字符
+          {t("batchCommand.commandMaxHint")}
         </p>
       </div>
 
@@ -206,9 +208,9 @@ export function BatchCommandDialog({
           onChange={(e) => setRetain(e.target.checked)}
           className="size-4 rounded"
         />
-        <span className="text-sm">保留任务记录</span>
+        <span className="text-sm">{t("batchCommand.retainRecord")}</span>
         <span className="text-xs text-muted-foreground">
-          不勾选则查看结果后自动清理
+          {t("batchCommand.retainHint")}
         </span>
       </label>
     </FormDialog>

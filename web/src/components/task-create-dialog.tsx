@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Pencil, Plus } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
@@ -92,12 +93,7 @@ function taskRecordToDraft(task: TaskRecord): TaskDraft {
   };
 }
 
-const EXECUTOR_LABELS: Record<TaskExecutorType, string> = {
-  rsync: "Rsync（文件同步）",
-  command: "命令（SSH 执行）",
-  restic: "Restic（加密备份）",
-  rclone: "Rclone（云存储同步）",
-};
+// executor labels moved to translation keys: taskCreate.executorTypes.*
 
 function toNumberOrNull(value: string): number | null {
   const parsed = Number(value);
@@ -126,6 +122,7 @@ export function TaskEditorDialog({
   onSave,
   editingTask,
 }: TaskEditorDialogProps) {
+  const { t } = useTranslation();
   const isEditing = Boolean(editingTask);
   const [draft, setDraft] = useDialogDraft<TaskDraft, TaskRecord>(
     open,
@@ -138,12 +135,12 @@ export function TaskEditorDialog({
   const handleSave = async () => {
     const nodeId = toNumberOrNull(draft.nodeId);
     if (!nodeId) {
-      toast.error("保存失败：请选择目标节点。", { id: "task-editor-node-required" });
+      toast.error(t('taskCreate.errorNodeRequired'), { id: "task-editor-node-required" });
       return;
     }
 
     if (!draft.name.trim()) {
-      toast.error("保存失败：请输入任务名称。", { id: "task-editor-name-required" });
+      toast.error(t('taskCreate.errorNameRequired'), { id: "task-editor-name-required" });
       return;
     }
 
@@ -194,16 +191,16 @@ export function TaskEditorDialog({
       open={open}
       onOpenChange={onOpenChange}
       icon={isEditing ? <Pencil className="size-5 text-primary" /> : <Plus className="size-5 text-primary" />}
-      title={isEditing ? "编辑任务" : "新建任务"}
-      description={isEditing ? "修改任务配置，保存后立即生效。" : "创建新的备份或同步任务，选择目标节点和执行策略。"}
+      title={isEditing ? t('taskCreate.titleEdit') : t('taskCreate.titleCreate')}
+      description={isEditing ? t('taskCreate.descEdit') : t('taskCreate.descCreate')}
       saving={saving}
       onSubmit={handleSave}
-      submitLabel={isEditing ? "保存修改" : "创建任务"}
-      savingLabel={isEditing ? "保存中..." : "创建中..."}
+      submitLabel={isEditing ? t('taskCreate.submitEdit') : t('taskCreate.submitCreate')}
+      savingLabel={isEditing ? t('taskCreate.savingEdit') : t('taskCreate.savingCreate')}
     >
       <div>
-        <label htmlFor="task-editor-name" className="mb-1 block text-sm font-medium">任务名称</label>
-        <Input id="task-editor-name" placeholder="例如：每日全量备份-prod-01"
+        <label htmlFor="task-editor-name" className="mb-1 block text-sm font-medium">{t('taskCreate.taskName')}</label>
+        <Input id="task-editor-name" placeholder={t('taskCreate.taskNamePlaceholder')}
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -212,14 +209,14 @@ export function TaskEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="task-editor-node" className="mb-1 block text-sm font-medium">目标节点</label>
+        <label htmlFor="task-editor-node" className="mb-1 block text-sm font-medium">{t('taskCreate.targetNode')}</label>
         <AppSelect id="task-editor-node" containerClassName="w-full"
           value={draft.nodeId}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
           }
         >
-          <option value="">选择节点</option>
+          <option value="">{t('taskCreate.selectNode')}</option>
           {nodes.map((node) => (
             <option key={node.id} value={String(node.id)}>
               {node.name} ({node.host})
@@ -230,7 +227,7 @@ export function TaskEditorDialog({
 
       <div>
         <label htmlFor="task-editor-policy" className="mb-1 block text-sm font-medium">
-          关联策略（可选）
+          {t('taskCreate.relatedPolicy')}
         </label>
         <AppSelect
           id="task-editor-policy"
@@ -240,7 +237,7 @@ export function TaskEditorDialog({
             setDraft((prev) => ({ ...prev, policyId: event.target.value }))
           }
         >
-          <option value="">不绑定策略（自定义任务）</option>
+          <option value="">{t('taskCreate.noPolicyCustom')}</option>
           {policies.map((policy) => (
             <option key={policy.id} value={String(policy.id)}>
               {policy.name}
@@ -252,7 +249,7 @@ export function TaskEditorDialog({
       {tasks && tasks.length > 0 && (
         <div>
           <label htmlFor="task-editor-depends-on" className="mb-1 block text-sm font-medium">
-            前置任务（可选）
+            {t('taskCreate.dependsOnTask')}
           </label>
           <AppSelect
             id="task-editor-depends-on"
@@ -262,7 +259,7 @@ export function TaskEditorDialog({
               setDraft((prev) => ({ ...prev, dependsOnTaskId: event.target.value, cronSpec: event.target.value ? "" : prev.cronSpec }))
             }
           >
-            <option value="">无前置任务</option>
+            <option value="">{t('taskCreate.noDependency')}</option>
             {tasks
               .filter((t) => t.id !== editingTask?.id)
               .map((t) => (
@@ -273,14 +270,14 @@ export function TaskEditorDialog({
           </AppSelect>
           {draft.dependsOnTaskId && (
             <p className="mt-1 text-xs text-muted-foreground">
-              设置了前置任务后，Cron 调度将被忽略，任务仅在前置任务成功后自动触发。
+              {t('taskCreate.dependsOnHint')}
             </p>
           )}
         </div>
       )}
 
       <div>
-        <label htmlFor="task-editor-executor-type" className="mb-1 block text-sm font-medium">执行器类型</label>
+        <label htmlFor="task-editor-executor-type" className="mb-1 block text-sm font-medium">{t('taskCreate.executorType')}</label>
         <AppSelect
           id="task-editor-executor-type"
           containerClassName="w-full"
@@ -289,15 +286,16 @@ export function TaskEditorDialog({
             setDraft((prev) => ({ ...prev, executorType: event.target.value as TaskExecutorType }))
           }
         >
-          {(Object.keys(EXECUTOR_LABELS) as TaskExecutorType[]).map((type) => (
-            <option key={type} value={type}>{EXECUTOR_LABELS[type]}</option>
-          ))}
+          <option value="rsync">{t('taskCreate.executorTypes.rsync')}</option>
+          <option value="command">{t('taskCreate.executorTypes.command')}</option>
+          <option value="restic">{t('taskCreate.executorTypes.restic')}</option>
+          <option value="rclone">{t('taskCreate.executorTypes.rclone')}</option>
         </AppSelect>
       </div>
 
       <div>
         <label htmlFor="task-editor-cron" className="mb-1 block text-sm font-medium">
-          Cron（可选）
+          {t('taskCreate.cronOptional')}
         </label>
         <CronGenerator
           id="task-editor-cron"
@@ -308,25 +306,25 @@ export function TaskEditorDialog({
           disabled={saving}
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          留空则为手动触发任务，不会自动调度执行。
+          {t('taskCreate.cronEmptyHint')}
         </p>
       </div>
 
       {draft.executorType === "command" && (
         <div>
           <label htmlFor="task-editor-command" className="mb-1 block text-sm font-medium">
-            Shell 命令（可选）
+            {t('taskCreate.shellCommand')}
           </label>
           <Input
             id="task-editor-command"
-            placeholder="例如：/opt/scripts/backup.sh"
+            placeholder={t('taskCreate.commandPlaceholder')}
             value={draft.command}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, command: event.target.value }))
             }
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            在目标节点上通过 SSH 执行的 Shell 命令。
+            {t('taskCreate.shellCommandHint')}
           </p>
         </div>
       )}
@@ -335,7 +333,7 @@ export function TaskEditorDialog({
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
-              {draft.executorType === "rsync" ? "Rsync 源路径（可选）" : "源路径（可选）"}
+              {draft.executorType === "rsync" ? t('taskCreate.rsyncSourcePath') : t('taskCreate.sourcePath')}
             </label>
             <Input
               id="task-editor-rsync-source"
@@ -348,9 +346,9 @@ export function TaskEditorDialog({
           </div>
           <div>
             <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
-              {draft.executorType === "rsync" && "Rsync 目标路径（可选）"}
-              {draft.executorType === "restic" && "Restic 仓库路径（可选）"}
-              {draft.executorType === "rclone" && "Rclone 远端路径（可选）"}
+              {draft.executorType === "rsync" && t('taskCreate.rsyncTargetPath')}
+              {draft.executorType === "restic" && t('taskCreate.resticRepoPath')}
+              {draft.executorType === "rclone" && t('taskCreate.rcloneRemotePath')}
             </label>
             <Input
               id="task-editor-rsync-target"
@@ -374,12 +372,12 @@ export function TaskEditorDialog({
         <>
           <div>
             <label htmlFor="task-editor-restic-password" className="mb-1 block text-sm font-medium">
-              仓库密码
+              {t('taskCreate.resticRepoPassword')}
             </label>
             <Input
               id="task-editor-restic-password"
               type="password"
-              placeholder="Restic 仓库加密密码"
+              placeholder={t('taskCreate.resticPassword')}
               value={draft.resticPassword}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, resticPassword: event.target.value }))
@@ -388,7 +386,7 @@ export function TaskEditorDialog({
           </div>
           <div>
             <label htmlFor="task-editor-restic-excludes" className="mb-1 block text-sm font-medium">
-              排除规则（可选，每行一条）
+              {t('taskCreate.resticExcludeRules')}
             </label>
             <textarea
               id="task-editor-restic-excludes"
@@ -407,11 +405,11 @@ export function TaskEditorDialog({
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <label htmlFor="task-editor-rclone-bwlimit" className="mb-1 block text-sm font-medium">
-              带宽限制（可选）
+              {t('taskCreate.rcloneBandwidthLimit')}
             </label>
             <Input
               id="task-editor-rclone-bwlimit"
-              placeholder="例如：10M"
+              placeholder={t('taskCreate.bwLimitPlaceholder')}
               value={draft.rcloneBandwidthLimit}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, rcloneBandwidthLimit: event.target.value }))
@@ -420,14 +418,14 @@ export function TaskEditorDialog({
           </div>
           <div>
             <label htmlFor="task-editor-rclone-transfers" className="mb-1 block text-sm font-medium">
-              并发传输数（可选）
+              {t('taskCreate.rcloneConcurrentTransfers')}
             </label>
             <Input
               id="task-editor-rclone-transfers"
               type="number"
               min={1}
               max={32}
-              placeholder="默认 4"
+              placeholder={t('taskCreate.concurrencyPlaceholder')}
               value={draft.rcloneTransfers}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, rcloneTransfers: event.target.value }))

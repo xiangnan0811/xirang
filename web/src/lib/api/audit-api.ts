@@ -1,4 +1,5 @@
 import type { AuditLogRecord } from "@/types/domain";
+import i18n from "@/i18n";
 import { ApiError, fetchWithFallback, formatTime, request, type Envelope, unwrapData } from "./core";
 
 type AuditLogResponse = {
@@ -119,7 +120,7 @@ export function createAuditApi() {
             detail = text;
           }
         }
-        throw new ApiError(response.status, `请求失败：${response.status}`, detail);
+        throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), detail);
       }
 
       return response.blob();

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Clock, Play, RotateCcw, Timer, ChevronLeft, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,16 +24,14 @@ function getTriggerIcon(type: TaskRunRecord["triggerType"]) {
   }
 }
 
-function getTriggerLabel(type: TaskRunRecord["triggerType"]) {
+function getTriggerLabelKey(type: TaskRunRecord["triggerType"]): string {
   switch (type) {
     case "cron":
-      return "定时";
     case "retry":
-      return "重试";
     case "restore":
-      return "恢复";
+      return `tasks.triggerType.${type}`;
     default:
-      return "手动";
+      return "tasks.triggerType.manual";
   }
 }
 
@@ -55,6 +54,7 @@ type Props = {
 };
 
 export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
+  const { t } = useTranslation();
   const [runs, setRuns] = useState<TaskRunRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -72,7 +72,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
       setRuns(result.items);
       setTotal(result.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载执行历史失败");
+      setError(err instanceof Error ? err.message : t('taskRunHistory.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -86,7 +86,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
   const currentPage = page;
 
   if (loading && runs.length === 0) {
-    return <LoadingState title="加载执行历史" description="正在获取执行记录..." rows={3} />;
+    return <LoadingState title={t('taskRunHistory.loadingTitle')} description={t('taskRunHistory.loadingDesc')} rows={3} />;
   }
 
   if (error) {
@@ -94,7 +94,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
       <div className="py-8 text-center text-sm text-muted-foreground">
         <p>{error}</p>
         <Button variant="outline" size="sm" className="mt-2" onClick={() => void fetchRuns(page)}>
-          重试
+          {t('common.retry')}
         </Button>
       </div>
     );
@@ -103,7 +103,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
   if (!runs.length) {
     return (
       <div className="py-8 text-center text-sm text-muted-foreground">
-        暂无执行记录
+        {t('taskRunHistory.noRecords')}
       </div>
     );
   }
@@ -127,7 +127,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
                 <div className="flex items-center gap-2">
                   <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     {getTriggerIcon(run.triggerType)}
-                    {getTriggerLabel(run.triggerType)}
+                    {t(getTriggerLabelKey(run.triggerType))}
                   </span>
                   <Badge variant={statusMeta.variant} className="text-[10px] px-1.5 py-0">
                     {statusMeta.label}
@@ -137,16 +137,16 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
                       variant={run.verifyStatus === "passed" ? "success" : "warning"}
                       className="text-[10px] px-1.5 py-0"
                     >
-                      {run.verifyStatus === "passed" ? "校验通过" : run.verifyStatus === "warning" ? "校验异常" : "校验失败"}
+                      {run.verifyStatus === "passed" ? t('taskRunHistory.verifyPassed') : run.verifyStatus === "warning" ? t('taskRunHistory.verifyWarning') : t('taskRunHistory.verifyFailed')}
                     </Badge>
                   )}
                 </div>
                 <span className="text-xs text-muted-foreground">#{run.id}</span>
               </div>
               <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>开始：{run.startedAt}</span>
-                {run.durationMs > 0 && <span>耗时：{formatDuration(run.durationMs)}</span>}
-                {run.throughputMbps > 0 && <span>速率：{run.throughputMbps.toFixed(1)} MB/s</span>}
+                <span>{t('taskRunHistory.startedAt', { time: run.startedAt })}</span>
+                {run.durationMs > 0 && <span>{t('taskRunHistory.duration', { value: formatDuration(run.durationMs) })}</span>}
+                {run.throughputMbps > 0 && <span>{t('taskRunHistory.speed', { value: run.throughputMbps.toFixed(1) })}</span>}
               </div>
               {run.lastError && (
                 <p className="mt-1 truncate text-xs text-destructive">{run.lastError}</p>
@@ -159,7 +159,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
       {totalPages > 1 && (
         <div className="flex items-center justify-between pt-1">
           <span className="text-xs text-muted-foreground">
-            共 {total} 条，第 {currentPage}/{totalPages} 页
+            {t('taskRunHistory.pagination', { total, current: currentPage, pages: totalPages })}
           </span>
           <div className="flex items-center gap-1">
             <Button
@@ -168,7 +168,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               className="size-7"
               disabled={page <= 1 || loading}
               onClick={() => setPage(Math.max(1, page - 1))}
-              aria-label="上一页"
+              aria-label={t('taskRunHistory.prevPage')}
             >
               <ChevronLeft className="size-3.5" />
             </Button>
@@ -178,7 +178,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               className="size-7"
               disabled={page >= totalPages || loading}
               onClick={() => setPage(page + 1)}
-              aria-label="下一页"
+              aria-label={t('taskRunHistory.nextPage')}
             >
               <ChevronRight className="size-3.5" />
             </Button>

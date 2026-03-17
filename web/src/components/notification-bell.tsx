@@ -1,5 +1,7 @@
 import { useCallback } from "react";
 import { Bell } from "lucide-react";
+import i18next from "i18next";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +28,7 @@ function formatRelativeTime(dateString: string): string {
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
 
-  if (seconds < 60) return "刚刚";
+  if (seconds < 60) return i18next.t('common.justNow');
   if (minutes < 60) return `${minutes} 分钟前`;
   if (hours < 24) return `${hours} 小时前`;
   if (days < 30) return `${days} 天前`;
@@ -38,6 +40,7 @@ type NotificationBellProps = {
 };
 
 export function NotificationBell({ token }: NotificationBellProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { unreadCount, recentAlerts, loading, fetchRecent } = useAlertBell(token);
 
@@ -63,7 +66,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
           variant="ghost"
           size="icon"
           className="relative size-8 text-muted-foreground hover:text-foreground !transition-none"
-          aria-label={`通知${unreadCount.total > 0 ? `（${unreadCount.total} 条未读）` : ""}`}
+          aria-label={unreadCount.total > 0 ? t('notificationBell.labelWithCount', { count: unreadCount.total }) : t('notificationBell.label')}
         >
           <Bell className="size-4" />
           {unreadCount.total > 0 ? (
@@ -75,7 +78,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
         <div className="flex items-center justify-between px-2 py-1.5">
-          <DropdownMenuLabel className="p-0 text-sm font-semibold">通知</DropdownMenuLabel>
+          <DropdownMenuLabel className="p-0 text-sm font-semibold">{t('notificationBell.label')}</DropdownMenuLabel>
           <div className="flex items-center gap-1.5">
             {unreadCount.critical > 0 ? (
               <Badge variant="danger" className="h-5 px-1.5 text-[10px]">
@@ -93,11 +96,11 @@ export function NotificationBell({ token }: NotificationBellProps) {
 
         {loading ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            加载中...
+            {t('common.loading')}
           </div>
         ) : recentAlerts.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            暂无未读告警
+            {t('notificationBell.noUnread')}
           </div>
         ) : (
           <div className="max-h-72 overflow-y-auto">
@@ -137,7 +140,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
           className="justify-center text-xs text-primary"
           onSelect={handleViewAll}
         >
-          查看全部通知
+          {t('notificationBell.viewAll')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

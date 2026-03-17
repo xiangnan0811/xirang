@@ -14,7 +14,7 @@ import {
 import type { UserRecord } from "@/types/domain";
 
 export type NavItem = {
-  title: string;
+  titleKey: string;
   path: string;
   icon: LucideIcon;
   mobileTab?: boolean;
@@ -23,62 +23,62 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   {
-    title: "概览",
+    titleKey: "nav.overview",
     path: "/app/overview",
     icon: LayoutDashboard,
     mobileTab: true
   },
   {
-    title: "节点",
+    titleKey: "nav.nodes",
     path: "/app/nodes",
     icon: Server,
     mobileTab: true
   },
   {
-    title: "SSH Key",
+    titleKey: "nav.sshKeys",
     path: "/app/ssh-keys",
     icon: KeyRound,
     mobileTab: false
   },
   {
-    title: "策略",
+    titleKey: "nav.policies",
     path: "/app/policies",
     icon: ListChecks,
     mobileTab: true
   },
   {
-    title: "任务",
+    titleKey: "nav.tasks",
     path: "/app/tasks",
     icon: ClipboardList,
     mobileTab: true
   },
   {
-    title: "实时日志",
+    titleKey: "nav.logs",
     path: "/app/logs",
     icon: Monitor,
     mobileTab: true
   },
   {
-    title: "通知",
+    titleKey: "nav.notifications",
     path: "/app/notifications",
     icon: Bell,
     mobileTab: true
   },
   {
-    title: "审计",
+    titleKey: "nav.audit",
     path: "/app/audit",
     icon: FileSearch,
     mobileTab: false
   },
   {
-    title: "用户",
+    titleKey: "nav.users",
     path: "/app/users",
     icon: Users,
     mobileTab: false,
     adminOnly: true
   },
   {
-    title: "报告",
+    titleKey: "nav.reports",
     path: "/app/reports",
     icon: FileText,
     mobileTab: false

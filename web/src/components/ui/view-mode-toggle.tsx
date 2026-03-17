@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { LayoutGrid, List } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -24,10 +25,13 @@ export function ViewModeToggle({
   groupLabel,
   cardsButtonLabel,
   listButtonLabel,
-  cardsText = "卡片",
-  listText = "列表",
+  cardsText,
+  listText,
   className,
 }: ViewModeToggleProps) {
+  const { t } = useTranslation();
+  const resolvedCardsText = cardsText ?? t('viewMode.cards');
+  const resolvedListText = listText ?? t('viewMode.list');
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
   function handleKeyDown(e: React.KeyboardEvent, index: number) {
@@ -66,7 +70,7 @@ export function ViewModeToggle({
         onKeyDown={(e) => handleKeyDown(e, 0)}
       >
         <LayoutGrid className="mr-1 size-4" />
-        {cardsText}
+        {resolvedCardsText}
       </Button>
       <Button
         ref={(el) => { refs.current[1] = el; }}
@@ -81,7 +85,7 @@ export function ViewModeToggle({
         onKeyDown={(e) => handleKeyDown(e, 1)}
       >
         <List className="mr-1 size-4" />
-        {listText}
+        {resolvedListText}
       </Button>
     </div>
   );

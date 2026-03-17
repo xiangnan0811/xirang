@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Download, RefreshCw, Search } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, apiClient } from "@/lib/api/client";
@@ -21,7 +22,11 @@ function methodBadge(method: string) {
   if (normalized === "DELETE") {
     return "danger" as const;
   }
-  if (normalized === "POST" || normalized === "PUT" || normalized === "PATCH") {
+  if (
+    normalized === "POST" ||
+    normalized === "PUT" ||
+    normalized === "PATCH"
+  ) {
     return "warning" as const;
   }
   return "outline" as const;
@@ -47,11 +52,12 @@ function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
 
   return {
     from: from.toISOString(),
-    to: now.toISOString()
+    to: now.toISOString(),
   };
 }
 
 export function AuditPage() {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const [rows, setRows] = useState<AuditLogRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -72,7 +78,12 @@ export function AuditPage() {
     let errorStatus = 0;
     for (const row of rows) {
       const methodValue = row.method.toUpperCase();
-      if (methodValue === "POST" || methodValue === "PUT" || methodValue === "PATCH" || methodValue === "DELETE") {
+      if (
+        methodValue === "POST" ||
+        methodValue === "PUT" ||
+        methodValue === "PATCH" ||
+        methodValue === "DELETE"
+      ) {
         writeOps += 1;
       } else {
         readOps += 1;
@@ -86,7 +97,7 @@ export function AuditPage() {
 
   const load = async (nextPage: number) => {
     if (!token) {
-      toast.error("请先登录后查看审计日志。");
+      toast.error(t("audit.errorNotLoggedIn"));
       return;
     }
 
@@ -100,14 +111,14 @@ export function AuditPage() {
         from,
         to,
         pageSize,
-        page: nextPage
+        page: nextPage,
       });
       setRows(result.items);
       setTotal(result.total);
       setPage(result.page);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
-        toast.error("当前账号无权访问审计日志（仅管理员可读）。");
+        toast.error(t("audit.errorForbidden"));
       } else {
         toast.error(getErrorMessage(error));
       }
@@ -118,7 +129,7 @@ export function AuditPage() {
 
   const exportCSV = async () => {
     if (!token) {
-      toast.error("请先登录后导出审计日志。");
+      toast.error(t("audit.errorExportNotLoggedIn"));
       return;
     }
 
@@ -131,7 +142,7 @@ export function AuditPage() {
         method: method === "all" ? undefined : method,
         from,
         to,
-        pageSize: 5000
+        pageSize: 5000,
       });
 
       const link = document.createElement("a");
@@ -141,10 +152,10 @@ export function AuditPage() {
       link.click();
       URL.revokeObjectURL(url);
 
-      toast.success("审计日志 CSV 导出成功。");
+      toast.success(t("audit.exportSuccess"));
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
-        toast.error("当前账号无权导出审计日志（仅管理员可读）。");
+        toast.error(t("audit.errorExportForbidden"));
       } else {
         toast.error(getErrorMessage(error));
       }
@@ -168,25 +179,43 @@ export function AuditPage() {
   }, [keyword, method, timeRange, token]);
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="animate-fade-in space-y-5">
       <Card className="border-border/75">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => void load(page)} disabled={loading}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void load(page)}
+                disabled={loading}
+              >
                 <RefreshCw className="mr-1 size-3.5" />
-                刷新
+                {t("common.refresh")}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => void exportCSV()} disabled={exporting || loading}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void exportCSV()}
+                disabled={exporting || loading}
+              >
                 <Download className="mr-1 size-3.5" />
-                {exporting ? "导出中..." : "导出 CSV"}
+                {exporting ? t("audit.exporting") : t("audit.exportCSV")}
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">读操作 {auditStats.readOps}</Badge>
-              <Badge variant="warning">写操作 {auditStats.writeOps}</Badge>
-              <Badge variant="danger">异常状态 {auditStats.errorStatus}</Badge>
-              <Badge variant="secondary">总计 {total}</Badge>
+              <Badge variant="outline">
+                {t("audit.readOps", { count: auditStats.readOps })}
+              </Badge>
+              <Badge variant="warning">
+                {t("audit.writeOps", { count: auditStats.writeOps })}
+              </Badge>
+              <Badge variant="danger">
+                {t("audit.errorStatus", { count: auditStats.errorStatus })}
+              </Badge>
+              <Badge variant="secondary">
+                {t("audit.total", { count: total })}
+              </Badge>
             </div>
           </div>
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
@@ -194,8 +223,8 @@ export function AuditPage() {
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="pl-9"
-                placeholder="按路径关键字过滤，例如 /nodes /policies"
-                aria-label="按路径关键字过滤"
+                placeholder={t("audit.pathFilterPlaceholder")}
+                aria-label={t("audit.pathFilterAriaLabel")}
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
               />
@@ -204,26 +233,32 @@ export function AuditPage() {
               value={method}
               onChange={(event) => setMethod(event.target.value)}
             >
-              <option value="all">全部方法</option>
+              <option value="all">{t("audit.allMethods")}</option>
               <option value="GET">GET</option>
               <option value="POST">POST</option>
               <option value="PUT">PUT</option>
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
             </AppSelect>
-            <Button className="md:col-span-2 lg:col-span-1" onClick={() => void load(1)} disabled={loading}>
-              查询
+            <Button
+              className="md:col-span-2 lg:col-span-1"
+              onClick={() => void load(1)}
+              disabled={loading}
+            >
+              {t("audit.query")}
             </Button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {[
-              { label: "全部", value: "all" as const },
-              { label: "近 1 小时", value: "1h" as const },
-              { label: "近 24 小时", value: "24h" as const },
-              { label: "近 7 天", value: "7d" as const },
-              { label: "近 30 天", value: "30d" as const }
-            ].map((item) => (
+            {(
+              [
+                { label: t("audit.timeRanges.all"), value: "all" as const },
+                { label: t("audit.timeRanges.1h"), value: "1h" as const },
+                { label: t("audit.timeRanges.24h"), value: "24h" as const },
+                { label: t("audit.timeRanges.7d"), value: "7d" as const },
+                { label: t("audit.timeRanges.30d"), value: "30d" as const },
+              ] as const
+            ).map((item) => (
               <Button
                 key={item.value}
                 size="sm"
@@ -236,27 +271,35 @@ export function AuditPage() {
           </div>
 
           {/* 小屏卡片，大屏表格 */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 md:hidden">
+          <div className="grid gap-3 sm:grid-cols-2 md:hidden lg:grid-cols-3">
             {rows.map((row) => (
-              <div
-                key={row.id}
-                className="interactive-surface p-3"
-              >
+              <div key={row.id} className="interactive-surface p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{row.username || "-"}</p>
                   <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
                 </div>
                 <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  <p>时间：{row.createdAt}</p>
-                  <p>角色：{row.role || "-"}</p>
-                  <p>路径：<span className="break-all font-mono">{row.path}</span></p>
-                  <p>状态码：{row.statusCode}</p>
-                  <p>来源 IP：{row.clientIP}</p>
+                  <p>
+                    {t("audit.colTime")}：{row.createdAt}
+                  </p>
+                  <p>
+                    {t("audit.colRole")}：{row.role || "-"}
+                  </p>
+                  <p>
+                    {t("audit.colPath")}：
+                    <span className="break-all font-mono">{row.path}</span>
+                  </p>
+                  <p>
+                    {t("audit.colStatusCode")}：{row.statusCode}
+                  </p>
+                  <p>
+                    {t("audit.colClientIP")}：{row.clientIP}
+                  </p>
                 </div>
               </div>
             ))}
             {!rows.length && !loading ? (
-              <EmptyState title="当前筛选条件下没有审计记录。" />
+              <EmptyState title={t("audit.emptyTitle")} />
             ) : null}
           </div>
 
@@ -264,40 +307,49 @@ export function AuditPage() {
             <table className="min-w-[1080px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2.5">时间</th>
-                  <th className="px-3 py-2.5">用户</th>
-                  <th className="px-3 py-2.5">角色</th>
-                  <th className="px-3 py-2.5">方法</th>
-                  <th className="px-3 py-2.5">路径</th>
-                  <th className="px-3 py-2.5">状态码</th>
-                  <th className="px-3 py-2.5">来源 IP</th>
+                  <th className="px-3 py-2.5">{t("audit.colTime")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colUser")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colRole")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colMethod")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colPath")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colStatusCode")}</th>
+                  <th className="px-3 py-2.5">{t("audit.colClientIP")}</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
+                  <tr
+                    key={row.id}
+                    className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35"
+                  >
                     <td className="px-3 py-2.5">{row.createdAt}</td>
                     <td className="px-3 py-2.5">{row.username || "-"}</td>
                     <td className="px-3 py-2.5">{row.role || "-"}</td>
                     <td className="px-3 py-2.5">
-                      <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
+                      <Badge variant={methodBadge(row.method)}>
+                        {row.method}
+                      </Badge>
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{row.path}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+                      {row.path}
+                    </td>
                     <td className="px-3 py-2.5">{row.statusCode}</td>
-                    <td className="px-3 py-2.5 text-muted-foreground">{row.clientIP}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground">
+                      {row.clientIP}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {!rows.length && !loading ? (
-              <div className="px-3 py-4 text-sm text-muted-foreground">当前筛选条件下没有审计记录。</div>
+              <div className="px-3 py-4 text-sm text-muted-foreground">
+                {t("audit.emptyTitle")}
+              </div>
             ) : null}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>
-              第 {pageIndex} 页 · 共 {total} 条
-            </span>
+            <span>{t("common.pageInfo", { page: pageIndex, total })}</span>
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -305,7 +357,7 @@ export function AuditPage() {
                 onClick={() => void load(Math.max(1, page - 1))}
                 disabled={loading || page <= 1}
               >
-                上一页
+                {t("common.prevPage")}
               </Button>
               <Button
                 size="sm"
@@ -313,13 +365,12 @@ export function AuditPage() {
                 onClick={() => void load(page + 1)}
                 disabled={loading || !hasNext}
               >
-                下一页
+                {t("common.nextPage")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-
     </div>
   );
 }

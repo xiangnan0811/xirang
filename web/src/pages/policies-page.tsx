@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CheckSquare, Copy, Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -24,6 +25,7 @@ import { useAuth } from "@/context/auth-context";
 const keywordStorageKey = "xirang.policies.keyword";
 
 export function PoliciesPage() {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const {
     policies,
@@ -66,7 +68,7 @@ export function PoliciesPage() {
     if (!selectedPolicyIds.length || !token) return;
     try {
       await apiClient.batchTogglePolicies(token, selectedPolicyIds, enabled);
-      toast.success(`已批量${enabled ? "启用" : "停用"} ${selectedPolicyIds.length} 个策略。`);
+      toast.success(t('policies.batchToggleSuccess', { action: enabled ? t('common.enable') : t('common.disable'), count: selectedPolicyIds.length }));
       setSelectedPolicyIds([]);
       void refreshPolicies();
     } catch (error) {
@@ -106,7 +108,7 @@ export function PoliciesPage() {
       !draft.targetPath.trim() ||
       !draft.cron.trim()
     ) {
-      toast.error("保存失败：策略名称、源路径、目标路径、Cron 必填。");
+      toast.error(t('policies.saveError'));
       return;
     }
 
@@ -125,10 +127,10 @@ export function PoliciesPage() {
     try {
       if (draft.id) {
         await updatePolicy(draft.id, input);
-        toast.success(`策略 ${draft.name} 已更新。`);
+        toast.success(t('policies.updateSuccess', { name: draft.name }));
       } else {
         await createPolicy(input);
-        toast.success(`策略 ${draft.name} 已新增。`);
+        toast.success(t('policies.createSuccess', { name: draft.name }));
       }
 
       setEditorOpen(false);
@@ -140,15 +142,15 @@ export function PoliciesPage() {
 
   const onDelete = async (policy: PolicyRecord) => {
     const ok = await confirm({
-      title: "确认删除",
-      description: `确认删除策略 ${policy.name} 吗？`,
+      title: t('policies.confirmDelete'),
+      description: t('policies.confirmDeleteDesc', { name: policy.name }),
     });
     if (!ok) {
       return;
     }
     try {
       await deletePolicy(policy.id);
-      toast.success(`策略 ${policy.name} 已删除。`);
+      toast.success(t('policies.deleteSuccess', { name: policy.name }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -157,7 +159,7 @@ export function PoliciesPage() {
   const onTogglePolicy = async (policy: PolicyRecord) => {
     try {
       await togglePolicy(policy.id);
-      toast.success(`策略 ${policy.name} 已${policy.enabled ? "停用" : "启用"}。`);
+      toast.success(t('policies.toggleSuccess', { name: policy.name, action: policy.enabled ? t('common.disable') : t('common.enable') }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -167,7 +169,7 @@ export function PoliciesPage() {
     if (!token) return;
     try {
       await apiClient.clonePolicyFromTemplate(token, policy.id);
-      toast.success(`已从模板 ${policy.name} 创建新策略。`);
+      toast.success(t('policies.cloneSuccess', { name: policy.name }));
       void refreshPolicies();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -182,34 +184,34 @@ export function PoliciesPage() {
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={openCreateDialog}>
                 <Plus className="mr-1 size-3.5" />
-                新增策略
+                {t('policies.addPolicy')}
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="success">启用 {activeCount}</Badge>
-              <Badge variant="outline">停用 {disabledCount}</Badge>
-              <Badge variant="secondary" className="hidden lg:inline-flex">筛选 {filteredPolicies.length}</Badge>
+              <Badge variant="success">{t('policies.enabledCount', { count: activeCount })}</Badge>
+              <Badge variant="outline">{t('policies.disabledCount', { count: disabledCount })}</Badge>
+              <Badge variant="secondary" className="hidden lg:inline-flex">{t('policies.filteredCount', { count: filteredPolicies.length })}</Badge>
             </div>
           </div>
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <Input
-              placeholder="搜索策略 / 路径 / cron"
-              aria-label="搜索策略、路径或cron表达式"
+              placeholder={t('policies.searchPlaceholder')}
+              aria-label={t('policies.searchAriaLabel')}
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
             />
             <Badge variant="secondary" className="hidden lg:inline-flex">
-              启用 {activeCount}/{policies.length}
+              {t('policies.enabledRatio', { active: activeCount, total: policies.length })}
             </Badge>
             <Button size="sm" variant="outline" onClick={resetFilters}>
-              重置
+              {t('common.resetFilter')}
             </Button>
           </div>
 
           {loading ? (
             <LoadingState
-              title="策略数据加载中"
-              description="正在拉取策略配置与启停状态..."
+              title={t('policies.loadingTitle')}
+              description={t('policies.loadingDesc')}
               rows={3}
             />
           ) : null}
@@ -227,28 +229,28 @@ export function PoliciesPage() {
                     <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {policy.isTemplate && <Badge variant="secondary">模板</Badge>}
+                    {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
                     <Badge variant={policy.enabled ? "success" : "outline"}>
-                      {policy.enabled ? "启用" : "停用"}
+                      {policy.enabled ? t('common.enabled') : t('common.disabled')}
                     </Badge>
                   </div>
                 </div>
 
                 <div className="mt-3 grid gap-2 text-sm text-muted-foreground flex-1">
-                  <p className="break-all">源路径：{policy.sourcePath}</p>
-                  <p className="break-all">目标路径：{policy.targetPath}</p>
+                  <p className="break-all">{t('policies.sourcePath', { path: policy.sourcePath })}</p>
+                  <p className="break-all">{t('policies.targetPath', { path: policy.targetPath })}</p>
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Badge variant="outline">Cron: {policy.cron}</Badge>
-                  <Badge variant="outline">失败阈值: {policy.criticalThreshold}</Badge>
-                  <Badge variant="secondary">{policy.nodeIds?.length ?? 0}/{nodes?.length ?? 0} 节点</Badge>
+                  <Badge variant="outline">{t('policies.failureThreshold', { value: policy.criticalThreshold })}</Badge>
+                  <Badge variant="secondary">{t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}</Badge>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
                   <Switch
                     checked={policy.enabled}
-                    aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
+                    aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
                     onCheckedChange={() => void onTogglePolicy(policy)}
                   />
                   <div className="flex items-center gap-1">
@@ -258,7 +260,7 @@ export function PoliciesPage() {
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         onClick={() => void onCloneFromTemplate(policy)}
-                        aria-label={`从模板 ${policy.name} 创建策略`}
+                        aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
                       >
                         <Copy className="size-4" />
                       </Button>
@@ -268,7 +270,7 @@ export function PoliciesPage() {
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       onClick={() => openEditDialog(policy)}
-                      aria-label="编辑策略"
+                      aria-label={t('policies.editAriaLabel')}
                     >
                       <Wrench className="size-4" />
                     </Button>
@@ -276,7 +278,7 @@ export function PoliciesPage() {
                       variant="ghost"
                       size="icon"
                       className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={`删除策略 ${policy.name}`}
+                      aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
                       onClick={() => onDelete(policy)}
                     >
                       <Trash2 className="size-4" />
@@ -289,16 +291,16 @@ export function PoliciesPage() {
             {!filteredPolicies.length ? (
               <EmptyState
                 className="md:col-span-2 lg:col-span-3"
-                title="暂无匹配策略"
-                description="可调整关键词筛选，或新增策略模板。"
+                title={t('policies.noMatchTitle')}
+                description={t('policies.noMatchDesc')}
                 action={(
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     <Button size="sm" variant="outline" onClick={resetFilters}>
-                      清空筛选
+                      {t('policies.clearFilter')}
                     </Button>
                     <Button size="sm" onClick={openCreateDialog}>
                       <Plus className="mr-1 size-4" />
-                      新增策略
+                      {t('policies.addPolicy')}
                     </Button>
                   </div>
                 )}
@@ -322,16 +324,16 @@ export function PoliciesPage() {
                           setSelectedPolicyIds([]);
                         }
                       }}
-                      aria-label="全选策略"
+                      aria-label={t('policies.selectAllAriaLabel')}
                     />
                   </th>
-                  <th className="px-3 py-2.5">策略名</th>
-                  <th className="px-3 py-2.5">Cron</th>
-                  <th className="px-3 py-2.5">源路径</th>
-                  <th className="px-3 py-2.5">目标路径</th>
-                  <th className="px-3 py-2.5">覆盖节点</th>
-                  <th className="px-3 py-2.5">状态</th>
-                  <th className="px-3 py-2.5 text-right">操作</th>
+                  <th className="px-3 py-2.5">{t('policies.columnName')}</th>
+                  <th className="px-3 py-2.5">{t('policies.columnCron')}</th>
+                  <th className="px-3 py-2.5">{t('policies.columnSource')}</th>
+                  <th className="px-3 py-2.5">{t('policies.columnTarget')}</th>
+                  <th className="px-3 py-2.5">{t('policies.columnNodes')}</th>
+                  <th className="px-3 py-2.5">{t('policies.columnStatus')}</th>
+                  <th className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -344,15 +346,15 @@ export function PoliciesPage() {
                           className="size-3.5 accent-primary"
                           checked={selectedPolicyIds.includes(policy.id)}
                           onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
-                          aria-label={`选择策略 ${policy.name}`}
+                          aria-label={t('policies.selectAriaLabel', { name: policy.name })}
                         />
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5">
                           <p className="font-medium">{policy.name}</p>
-                          {policy.isTemplate && <Badge variant="secondary">模板</Badge>}
+                          {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
                         </div>
-                        <p className="text-xs text-muted-foreground">阈值 {policy.criticalThreshold}</p>
+                        <p className="text-xs text-muted-foreground">{t('policies.threshold', { value: policy.criticalThreshold })}</p>
                       </td>
                       <td className="px-3 py-2.5">
                         <p className="font-mono text-xs">{policy.cron}</p>
@@ -361,12 +363,12 @@ export function PoliciesPage() {
                       <td className="px-3 py-2.5 text-muted-foreground">{policy.sourcePath}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">{policy.targetPath}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">
-                        {(policy.nodeIds?.length ?? 0)}/{nodes?.length ?? 0} 节点
+                        {t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}
                       </td>
                       <td className="px-3 py-2.5">
                         <Switch
                           checked={policy.enabled}
-                          aria-label={`${policy.enabled ? "停用" : "启用"}策略 ${policy.name}`}
+                          aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
                           onCheckedChange={() => void onTogglePolicy(policy)}
                         />
                       </td>
@@ -378,7 +380,7 @@ export function PoliciesPage() {
                               size="icon"
                               className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                               onClick={() => void onCloneFromTemplate(policy)}
-                              aria-label={`从模板 ${policy.name} 创建策略`}
+                              aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
                             >
                               <Copy className="size-4" />
                             </Button>
@@ -388,7 +390,7 @@ export function PoliciesPage() {
                             size="icon"
                             className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                             onClick={() => openEditDialog(policy)}
-                            aria-label="编辑策略"
+                            aria-label={t('policies.editAriaLabel')}
                           >
                             <Wrench className="size-4" />
                           </Button>
@@ -396,7 +398,7 @@ export function PoliciesPage() {
                             variant="ghost"
                             size="icon"
                             className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                            aria-label={`删除策略 ${policy.name}`}
+                            aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
                             onClick={() => onDelete(policy)}
                           >
                             <Trash2 className="size-4" />
@@ -410,16 +412,16 @@ export function PoliciesPage() {
                     <td colSpan={8} className="px-3 py-5">
                       <EmptyState
                         className="py-8"
-                        title="暂无匹配策略"
-                        description="可调整筛选关键词，或新增策略。"
+                        title={t('policies.noMatchTitle')}
+                        description={t('policies.noMatchDescAlt')}
                         action={(
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <Button size="sm" variant="outline" onClick={resetFilters}>
-                              清空筛选
+                              {t('policies.clearFilter')}
                             </Button>
                             <Button size="sm" onClick={openCreateDialog}>
                               <Plus className="mr-1 size-4" />
-                              新增策略
+                              {t('policies.addPolicy')}
                             </Button>
                           </div>
                         )}
@@ -438,17 +440,17 @@ export function PoliciesPage() {
           <div className="mx-auto flex max-w-5xl items-center justify-between">
             <span className="text-sm text-muted-foreground">
               <CheckSquare className="mr-1 inline size-4" />
-              已选 {selectedPolicyIds.length} 个策略
+              {t('policies.selectedCount', { count: selectedPolicyIds.length })}
             </span>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
-                批量启用
+                {t('policies.batchEnable')}
               </Button>
               <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
-                批量停用
+                {t('policies.batchDisable')}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
-                取消
+                {t('common.cancel')}
               </Button>
             </div>
           </div>

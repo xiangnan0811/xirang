@@ -57,6 +57,11 @@ function ensureStorage(name: "localStorage" | "sessionStorage") {
 ensureStorage("localStorage");
 ensureStorage("sessionStorage");
 
+// Default to Chinese for tests (matches existing test assertions)
+if (typeof window !== "undefined") {
+  window.localStorage.setItem("xirang.language", "zh");
+}
+
 if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
@@ -11,6 +12,7 @@ import { toast } from "@/components/ui/toast";
 import type { IntegrationChannel } from "@/types/domain";
 
 export function NotificationsPage() {
+  const { t } = useTranslation();
   const {
     alerts,
     integrations,
@@ -80,7 +82,7 @@ export function NotificationsPage() {
       secret: draft.secret || undefined,
       skipEndpointHint: draft.skipEndpointHint,
     });
-    toast.success(`通知方式 ${draft.name} 已保存。`);
+    toast.success(t("notifications.integrationSaved", { name: draft.name }));
     setEditDialogOpen(false);
     setEditingIntegration(null);
   };
@@ -91,27 +93,27 @@ export function NotificationsPage() {
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
-            title: "待处理告警",
+            title: t("notifications.statOpenAlerts"),
             value: openAlerts.length,
-            description: "实时推流中的异常项",
+            description: t("notifications.statOpenAlertsDesc"),
             tone: "destructive",
           },
           {
-            title: "严重告警",
+            title: t("notifications.statCriticalAlerts"),
             value: criticalAlerts.length,
-            description: "优先处置，建议立即重试",
+            description: t("notifications.statCriticalAlertsDesc"),
             tone: "warning",
           },
           {
-            title: "已启用通道",
+            title: t("notifications.statEnabledChannels"),
             value: `${activeIntegrations}/${integrations.length || 0}`,
-            description: "由用户手动新增通知方式",
+            description: t("notifications.statEnabledChannelsDesc"),
             tone: "success",
           },
           {
-            title: "24h 失败任务",
+            title: t("notifications.statFailedTasks24h"),
             value: failedTasks,
-            description: "支持通知中心一键重试",
+            description: t("notifications.statFailedTasks24hDesc"),
             tone: "info",
           },
         ]}
@@ -152,7 +154,7 @@ export function NotificationsPage() {
         onSave={async (input) => {
           await addIntegration(input);
           setCreateDialogOpen(false);
-          toast.success("通知方式已新增，可按需启停。");
+          toast.success(t("notifications.integrationCreated"));
         }}
       />
 

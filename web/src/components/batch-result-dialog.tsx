@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   CheckCircle2,
   ChevronDown,
@@ -35,14 +36,6 @@ const statusIcon: Record<string, React.ReactNode> = {
   pending: <Circle className="size-4 shrink-0 text-muted-foreground" />,
 };
 
-const statusLabel: Record<string, string> = {
-  success: "成功",
-  failed: "失败",
-  running: "执行中",
-  pending: "等待中",
-  canceled: "已取消",
-};
-
 export function BatchResultDialog({
   open,
   onOpenChange,
@@ -50,6 +43,7 @@ export function BatchResultDialog({
   retain,
   token,
 }: BatchResultDialogProps) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<BatchStatus | null>(null);
   const [error, setError] = useState("");
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
@@ -79,9 +73,9 @@ export function BatchResultDialog({
         stopPolling();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "获取批次状态失败");
+      setError(err instanceof Error ? err.message : t("batch.fetchStatusFailed"));
     }
-  }, [batchId, token, stopPolling]);
+  }, [batchId, token, stopPolling, t]);
 
   // 打开时开始轮询
   useEffect(() => {
@@ -113,14 +107,14 @@ export function BatchResultDialog({
         taskLogsRef.current[taskId] = logs;
         setTaskLogs((prev) => ({ ...prev, [taskId]: logs }));
       } catch {
-        const fallback: LogEvent[] = [{ id: "0", level: "error", message: "加载日志失败", timestamp: "" }];
+        const fallback: LogEvent[] = [{ id: "0", level: "error", message: t("batch.logLoadFailed"), timestamp: "" }];
         taskLogsRef.current[taskId] = fallback;
         setTaskLogs((prev) => ({ ...prev, [taskId]: fallback }));
       } finally {
         setLoadingLogs(null);
       }
     },
-    [token]
+    [token, t]
   );
 
   const handleToggleExpand = useCallback(
@@ -160,26 +154,26 @@ export function BatchResultDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>批量执行结果</DialogTitle>
+          <DialogTitle>{t("batch.resultTitle")}</DialogTitle>
           <DialogDescription>
-            批次 {batchId}
+            {t("batch.batchId", { id: batchId })}
             {status && (
               <span className="ml-2">
-                — {allDone ? "已完成" : "执行中"}
+                — {allDone ? t("batch.done") : t("batch.running")}
                 {status.total > 0 && (
                   <span className="ml-1 text-xs">
-                    ({successCount} 成功
+                    ({successCount} {t("batch.successCount")}
                     {failedCount > 0 && (
-                      <span className="text-destructive">，{failedCount} 失败</span>
+                      <span className="text-destructive">，{failedCount} {t("batch.failedCount")}</span>
                     )}
-                    ，共 {status.total})
+                    ，{t("batch.total", { count: status.total })})
                   </span>
                 )}
               </span>
             )}
             {!retain && (
               <span className="ml-2 text-xs text-muted-foreground">
-                · 关闭后自动清理任务记录
+                · {t("batch.autoCleanHint")}
               </span>
             )}
           </DialogDescription>
@@ -195,7 +189,7 @@ export function BatchResultDialog({
           {!status && !error && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">加载中...</span>
+              <span className="ml-2 text-sm text-muted-foreground">{t("common.loading")}</span>
             </div>
           )}
 
@@ -223,7 +217,7 @@ export function BatchResultDialog({
                             {task.nodeName}
                           </span>
                           <span className="shrink-0 text-xs text-muted-foreground">
-                            {statusLabel[task.status] ?? task.status}
+                            {t(`status.batch.${task.status}`, task.status)}
                           </span>
                         </div>
                         {task.lastError && !isExpanded && (
@@ -251,11 +245,11 @@ export function BatchResultDialog({
                         {loadingLogs === task.id && (
                           <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                             <Loader2 className="size-3 animate-spin" />
-                            加载日志...
+                            {t("batch.loadingLogs")}
                           </div>
                         )}
                         {logs && logs.length === 0 && (
-                          <p className="text-xs text-muted-foreground">无日志输出</p>
+                          <p className="text-xs text-muted-foreground">{t("batch.noLogOutput")}</p>
                         )}
                         {logs && logs.length > 0 && (
                           <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">

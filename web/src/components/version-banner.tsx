@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { X, ExternalLink } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
 
 const DISMISSED_VERSION_KEY = "xirang.dismissed-version";
 
 export function VersionBanner() {
+  const { t } = useTranslation();
   const { token, role } = useAuth();
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [currentVersion, setCurrentVersion] = useState("");
@@ -60,8 +62,8 @@ export function VersionBanner() {
       className="bg-primary/10 text-primary text-xs py-1.5 px-4 flex items-center justify-center gap-3"
     >
       <span>
-        新版本 v{latestVersion} 已发布
-        <span className="ml-2 text-primary/70">当前 v{currentVersion}</span>
+        {t('versionBanner.newVersion', { version: latestVersion })}
+        <span className="ml-2 text-primary/70">{t('versionBanner.currentVersion', { version: currentVersion })}</span>
       </span>
       {releaseUrl ? (
         <a
@@ -70,7 +72,7 @@ export function VersionBanner() {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-primary/80"
         >
-          查看详情
+          {t('versionBanner.viewDetails')}
           <ExternalLink className="size-3" />
         </a>
       ) : null}
@@ -78,7 +80,7 @@ export function VersionBanner() {
         type="button"
         onClick={handleDismiss}
         className="ml-auto shrink-0 rounded p-0.5 hover:bg-primary/10 transition-colors"
-        aria-label="关闭版本更新提示"
+        aria-label={t('versionBanner.closeAriaLabel')}
       >
         <X className="size-3.5" />
       </button>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { HardDrive } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   Bar,
   XAxis,
@@ -29,6 +30,7 @@ function pctTextColor(pct: number): string {
 }
 
 export function StorageUsagePanel() {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const [data, setData] = useState<StorageUsageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,7 +51,7 @@ export function StorageUsagePanel() {
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setError(getErrorMessage(err, "存储用量数据加载失败"));
+          setError(getErrorMessage(err, t('storage.loadFailed')));
         }
       })
       .finally(() => {
@@ -65,10 +67,10 @@ export function StorageUsagePanel() {
     return (
       <Card className="glass-panel border-border/70">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">存储用量</CardTitle>
+          <CardTitle className="text-base">{t('storage.title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <LoadingState title="加载存储用量..." rows={2} />
+          <LoadingState title={t('storage.loadingTitle')} rows={2} />
         </CardContent>
       </Card>
     );
@@ -78,11 +80,11 @@ export function StorageUsagePanel() {
     return (
       <Card className="glass-panel border-border/70">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">存储用量</CardTitle>
+          <CardTitle className="text-base">{t('storage.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-4 text-sm text-warning">
-            {error ?? "暂无数据"}
+            {error ?? t('common.noData')}
           </p>
         </CardContent>
       </Card>
@@ -96,14 +98,14 @@ export function StorageUsagePanel() {
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <HardDrive className="size-4 text-primary" />
-          存储用量
+          {t('storage.title')}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Mount points as progress bars */}
         {mountPoints.length > 0 && (
           <div className="space-y-3">
-            <p className="text-xs font-medium text-muted-foreground">挂载点用量</p>
+            <p className="text-xs font-medium text-muted-foreground">{t('storage.mountPointUsage')}</p>
             {mountPoints.map((mp) => (
               <div key={mp.path} className="space-y-1">
                 <div className="flex items-center justify-between text-sm">
@@ -126,8 +128,8 @@ export function StorageUsagePanel() {
         {/* Per-node storage bar chart */}
         {perNode.length > 0 && (
           <div>
-            <p className="mb-2 text-xs font-medium text-muted-foreground">各节点备份占用</p>
-            <div role="img" aria-label="各节点存储用量条形图">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">{t('storage.perNodeUsage')}</p>
+            <div role="img" aria-label={t('storage.perNodeChartAriaLabel')}>
               <ResponsiveContainer width="100%" height={Math.max(120, perNode.length * 28 + 40)}>
                 <BarChart
                   data={perNode}
@@ -157,10 +159,10 @@ export function StorageUsagePanel() {
                       fontSize: 11,
                       borderRadius: 6,
                     }}
-                    formatter={(value) => [`${Number(value).toFixed(1)} GB`, "占用"]}
+                    formatter={(value) => [`${Number(value).toFixed(1)} GB`, t('storage.used')]}
                     labelStyle={{ color: "hsl(var(--muted-foreground))" }}
                   />
-                  <Bar dataKey="usedGB" name="占用" fill="hsl(var(--chart-ingress))" radius={[0, 4, 4, 0]} maxBarSize={16} />
+                  <Bar dataKey="usedGB" name={t('storage.used')} fill="hsl(var(--chart-ingress))" radius={[0, 4, 4, 0]} maxBarSize={16} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -168,7 +170,7 @@ export function StorageUsagePanel() {
         )}
 
         {mountPoints.length === 0 && perNode.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-4">暂无存储用量数据</p>
+          <p className="text-sm text-muted-foreground text-center py-4">{t('common.noData')}</p>
         )}
       </CardContent>
     </Card>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/auth-context";
 import { request } from "@/lib/api/core";
 import { CheckCircle2, ChevronRight, ChevronLeft, Rocket } from "lucide-react";
@@ -24,32 +25,33 @@ interface OnboardingStep {
 }
 
 export function OnboardingTour() {
+  const { t } = useTranslation();
   const { token } = useAuth();
   const steps: OnboardingStep[] = [
     {
       id: "welcome",
-      title: "欢迎使用息壤",
-      description: "息壤是一个服务器运维备份管理平台，让我们快速了解使用流程。",
+      title: t('onboarding.steps.welcome.title'),
+      description: t('onboarding.steps.welcome.description'),
     },
     {
       id: "ssh-key",
-      title: "第 1 步：配置 SSH Key",
-      description: "先配置可用密钥，后续节点可直接复用，避免重复输入密码。",
+      title: t('onboarding.steps.sshKey.title'),
+      description: t('onboarding.steps.sshKey.description'),
     },
     {
       id: "node",
-      title: "第 2 步：添加节点",
-      description: "添加至少一个服务器节点并完成连接探测，确保可以正常通信。",
+      title: t('onboarding.steps.addNode.title'),
+      description: t('onboarding.steps.addNode.description'),
     },
     {
       id: "policy",
-      title: "第 3 步：创建策略",
-      description: "定义 Rsync 源/目标路径与执行周期，设置备份规则。",
+      title: t('onboarding.steps.createPolicy.title'),
+      description: t('onboarding.steps.createPolicy.description'),
     },
     {
       id: "task",
-      title: "第 4 步：创建任务",
-      description: "绑定节点与策略，尝试手动触发，验证整个流程是否正常。",
+      title: t('onboarding.steps.createTask.title'),
+      description: t('onboarding.steps.createTask.description'),
     },
   ];
 
@@ -184,7 +186,7 @@ export function OnboardingTour() {
             <div className="space-y-6">
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm font-medium">
-                  <span className="text-muted-foreground">引导进度</span>
+                  <span className="text-muted-foreground">{t('onboarding.tourProgress')}</span>
                   <span className={cn(progress === 100 ? "text-success" : "text-primary")}>
                     {progress}%
                   </span>
@@ -218,13 +220,13 @@ export function OnboardingTour() {
                             ? "border-primary/50 bg-primary/10 shadow-sm shadow-primary/10 hover:border-primary/70 hover:bg-primary/15"
                             : "border-border/40 bg-muted/20 opacity-70 hover:opacity-90 hover:border-border/60"
                       )}
-                      aria-label={`跳转到${step.title}`}
+                      aria-label={t('onboarding.jumpTo', { title: step.title })}
                     >
                       <span className={cn(
                         "text-xs font-semibold mb-2",
                         isCurrent ? "text-primary" : isCompleted ? "text-success" : "text-muted-foreground"
                       )}>
-                        步骤 {stepNumber}
+                        {t('onboarding.step', '步骤')} {stepNumber}
                       </span>
                       {isCompleted ? (
                         <CheckCircle2 className="size-5" />
@@ -247,15 +249,15 @@ export function OnboardingTour() {
                   <div className="p-3 bg-primary/10 rounded-full text-primary">
                     <CheckCircle2 className="size-6" />
                   </div>
-                  <h3 className="font-medium text-sm">简单 4 步</h3>
-                  <p className="text-xs text-muted-foreground">跟随指引快速熟悉核心概念</p>
+                  <h3 className="font-medium text-sm">{t('onboarding.simple4Steps', '简单 4 步')}</h3>
+                  <p className="text-xs text-muted-foreground">{t('onboarding.simple4StepsDesc', '跟随指引快速熟悉核心概念')}</p>
                 </div>
                 <div className="glass-panel p-4 flex flex-col items-center text-center space-y-2 border-border/40">
                   <div className="p-3 bg-success/10 rounded-full text-success">
                     <Rocket className="size-6" />
                   </div>
-                  <h3 className="font-medium text-sm">即刻保护</h3>
-                  <p className="text-xs text-muted-foreground">十分钟内完成首个备份任务</p>
+                  <h3 className="font-medium text-sm">{t('onboarding.instantProtect', '即刻保护')}</h3>
+                  <p className="text-xs text-muted-foreground">{t('onboarding.instantProtectDesc', '十分钟内完成首个备份任务')}</p>
                 </div>
               </div>
             </div>
@@ -267,10 +269,10 @@ export function OnboardingTour() {
             {!isWelcome && (
               <>
                 <Button variant="ghost" size="sm" onClick={handleFinish} className="text-muted-foreground hover:text-foreground">
-                  跳过引导
+                  {t('onboarding.skipTour', '跳过引导')}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={handleNeverShowAgain} className="text-muted-foreground/70 hover:text-muted-foreground text-xs">
-                  不再显示
+                  {t('onboarding.neverShow', '不再显示')}
                 </Button>
               </>
             )}
@@ -279,23 +281,23 @@ export function OnboardingTour() {
             {!isWelcome && (
               <Button variant="outline" onClick={handlePrevious}>
                 <ChevronLeft className="mr-2 size-4" />
-                上一步
+                {t('common.prev')}
               </Button>
             )}
 
             {isWelcome ? (
               <Button onClick={handleNext} className="w-full sm:w-auto px-8 gap-2">
-                开始引导
+                {t('onboarding.startTour', '开始引导')}
                 <ChevronRight className="size-4" />
               </Button>
             ) : isLastStep ? (
               <Button onClick={handleFinish} variant="default" className="bg-success hover:bg-success/90 text-success-foreground px-8 gap-2">
                 <CheckCircle2 className="size-4" />
-                完成
+                {t('common.finish')}
               </Button>
             ) : (
               <Button onClick={handleNext} className="px-6 gap-2">
-                下一步
+                {t('common.next')}
                 <ChevronRight className="size-4" />
               </Button>
             )}

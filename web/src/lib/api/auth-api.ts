@@ -1,4 +1,5 @@
 import type { LoginResponse } from "@/types/domain";
+import i18n from "@/i18n";
 import { ApiError, request } from "./core";
 
 export type CaptchaResponse = {
@@ -26,10 +27,10 @@ export function createAuthApi() {
         body
       });
       if (!result || typeof result !== "object") {
-        throw new ApiError(500, "登录响应格式异常", result);
+        throw new ApiError(500, i18n.t("login.errorLoginFormat"), result);
       }
       if (!("token" in result) && !("requires_2fa" in result)) {
-        throw new ApiError(500, "登录响应格式异常", result);
+        throw new ApiError(500, i18n.t("login.errorLoginFormat"), result);
       }
       return result;
     },

@@ -130,7 +130,7 @@ describe("PoliciesPage", () => {
 
     expect(screen.getAllByText("暂无匹配策略")).toHaveLength(2);
 
-    await user.click(screen.getAllByRole("button", { name: "重置" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "重置筛选" })[0]);
 
     expect(setGlobalSearchMock).toHaveBeenCalledWith("");
 

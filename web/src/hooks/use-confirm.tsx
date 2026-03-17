@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import i18n from "@/i18n";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -93,10 +94,10 @@ export function useConfirm() {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={() => handleClose(false, state.id)}>
-            {state.cancelText ?? "取消"}
+            {state.cancelText ?? i18n.t("common.cancel")}
           </AlertDialogCancel>
           <AlertDialogAction onClick={() => handleClose(true, state.id)}>
-            {state.confirmText ?? "确认"}
+            {state.confirmText ?? i18n.t("common.confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

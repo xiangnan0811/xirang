@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import i18n from "@/i18n";
 import { LogsSocketClient } from "@/lib/ws/logs-socket";
 import type { LogEvent } from "@/types/domain";
 
@@ -30,7 +31,7 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
       cursorRef.current = 0;
       setCursorLogId(0);
       setConnected(false);
-      setConnectionWarning("未登录，实时日志通道未建立。");
+      setConnectionWarning(i18n.t("logs.connectionWarning.notLoggedIn"));
       return;
     }
 
@@ -57,9 +58,9 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
       if (status) {
         setConnectionWarning(null);
       } else if (client.isGivingUp()) {
-        setConnectionWarning("日志通道断开，已达最大重试次数，请刷新页面重新连接。");
+        setConnectionWarning(i18n.t("logs.connectionWarning.maxRetries"));
       } else {
-        setConnectionWarning("日志通道断开，正在尝试自动重连...");
+        setConnectionWarning(i18n.t("logs.connectionWarning.reconnecting"));
       }
     });
 

@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
@@ -40,7 +41,7 @@ export function useIntegrationAlertOperations({
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
   const addIntegration = useCallback(async (input: NewIntegrationInput) => {
-    const result = await exec("新增通知通道", (t) => apiClient.createIntegration(t, input));
+    const result = await exec(i18n.t("notifications.actions.addIntegration"), (t) => apiClient.createIntegration(t, input));
     if (result) {
       if (result.ok) {
         setIntegrations((prev) => [result.data, ...prev]);
@@ -51,19 +52,19 @@ export function useIntegrationAlertOperations({
   }, [exec, setIntegrations]);
 
   const removeIntegration = useCallback(async (integrationID: string) => {
-    await exec("删除通知通道", (t) => apiClient.deleteIntegration(t, integrationID));
+    await exec(i18n.t("notifications.actions.removeIntegration"), (t) => apiClient.deleteIntegration(t, integrationID));
     setIntegrations((prev) => prev.filter((integration) => integration.id !== integrationID));
   }, [exec, setIntegrations]);
 
   const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }) => {
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
-      throw new Error(`通知方式不存在或已被删除，请刷新后重试。`);
+      throw new Error(i18n.t("notifications.actions.integrationNotFound"));
     }
     const merged: IntegrationChannel = { ...current, ...patch };
 
     if (!token) {
-      ensureDemoWriteAllowed("更新通知通道");
+      ensureDemoWriteAllowed(i18n.t("notifications.actions.updateIntegration"));
       setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? merged : item)));
       return;
     }
@@ -72,11 +73,11 @@ export function useIntegrationAlertOperations({
   }, [token, ensureDemoWriteAllowed, integrations, setIntegrations]);
 
   const testIntegration = useCallback(async (integrationID: string): Promise<IntegrationProbeResult> => {
-    const result = await exec("测试通知通道", (t) => apiClient.testIntegration(t, integrationID));
+    const result = await exec(i18n.t("notifications.actions.testIntegration"), (t) => apiClient.testIntegration(t, integrationID));
     if (result) {
-      return result.ok ? result.data : { ok: false, message: "测试失败", latencyMs: 0 };
+      return result.ok ? result.data : { ok: false, message: i18n.t("notifications.testFailed"), latencyMs: 0 };
     }
-    return { ok: true, message: "测试通知已发送", latencyMs: 0 };
+    return { ok: true, message: i18n.t("notifications.actions.testNoticeSent"), latencyMs: 0 };
   }, [exec]);
 
   const toggleIntegration = useCallback(async (integrationID: string) => {
@@ -94,7 +95,7 @@ export function useIntegrationAlertOperations({
         return;
       }
       if (!target.taskId) {
-        const message = "当前告警未绑定任务，无法重试。请先修复节点连接问题。";
+        const message = i18n.t("notifications.retryNoTask");
         setWarning(message);
         throw new Error(message);
       }
@@ -104,7 +105,7 @@ export function useIntegrationAlertOperations({
   );
 
   const acknowledgeAlert = useCallback(async (alertID: string) => {
-    const result = await exec("确认告警", (t) => apiClient.ackAlert(t, alertID));
+    const result = await exec(i18n.t("notifications.actions.ackAlert"), (t) => apiClient.ackAlert(t, alertID));
     if (result) {
       if (result.ok) {
         setAlerts((prev) => prev.map((alert) => (alert.id === alertID ? result.data : alert)));
@@ -121,7 +122,7 @@ export function useIntegrationAlertOperations({
   }, [exec, setAlerts]);
 
   const resolveAlert = useCallback(async (alertID: string) => {
-    const result = await exec("恢复告警", (t) => apiClient.resolveAlert(t, alertID));
+    const result = await exec(i18n.t("notifications.actions.resolveAlert"), (t) => apiClient.resolveAlert(t, alertID));
     if (result) {
       if (result.ok) {
         setAlerts((prev) => prev.map((alert) => (alert.id === alertID ? result.data : alert)));
@@ -142,7 +143,7 @@ export function useIntegrationAlertOperations({
       try {
         return await apiClient.getAlertDeliveries(token, alertID);
       } catch (error) {
-        setWarning(getErrorMessage(error, "获取告警投递记录失败"));
+        setWarning(getErrorMessage(error, i18n.t("notifications.deliveryLoadFailed")));
         return [];
       }
     }
@@ -156,7 +157,7 @@ export function useIntegrationAlertOperations({
       try {
         return await apiClient.getAlertDeliveryStats(token, { hours: normalizedHours });
       } catch (error) {
-        setWarning(getErrorMessage(error, "获取告警投递统计失败"));
+        setWarning(getErrorMessage(error, i18n.t("notifications.deliveryStatsLoadFailed")));
       }
     }
 
@@ -170,12 +171,12 @@ export function useIntegrationAlertOperations({
   }, [setWarning, token]);
 
   const retryAlertDelivery = useCallback(async (alertID: string, integrationID: string): Promise<AlertDeliveryRetryResult> => {
-    const result = await exec("重发通知", (t) => apiClient.retryAlertDelivery(t, alertID, integrationID));
+    const result = await exec(i18n.t("notifications.actions.retryDelivery"), (t) => apiClient.retryAlertDelivery(t, alertID, integrationID));
     if (result) {
       if (result.ok) return result.data;
       return {
         ok: false,
-        message: "重发失败",
+        message: i18n.t("notifications.resendFailed"),
         delivery: {
           id: "",
           alertId: alertID,
@@ -187,7 +188,7 @@ export function useIntegrationAlertOperations({
     }
     return {
       ok: true,
-      message: "通知重发已提交",
+      message: i18n.t("notifications.resendSubmitted"),
       delivery: {
         id: `delivery-${Date.now()}`,
         alertId: alertID,
@@ -199,12 +200,12 @@ export function useIntegrationAlertOperations({
   }, [exec]);
 
   const retryFailedAlertDeliveries = useCallback(async (alertID: string): Promise<AlertBulkRetryResult> => {
-    const result = await exec("批量重发通知", (t) => apiClient.retryFailedDeliveries(t, alertID));
+    const result = await exec(i18n.t("notifications.actions.retryFailedDeliveries"), (t) => apiClient.retryFailedDeliveries(t, alertID));
     if (result) {
       if (result.ok) return result.data;
       return {
         ok: false,
-        message: "批量重发失败",
+        message: i18n.t("notifications.batchResendFailed"),
         totalFailed: 0,
         successCount: 0,
         failedCount: 0,
@@ -213,7 +214,7 @@ export function useIntegrationAlertOperations({
     }
     return {
       ok: true,
-      message: "批量重发已提交",
+      message: i18n.t("notifications.batchResendSubmitted"),
       totalFailed: 0,
       successCount: 0,
       failedCount: 0,

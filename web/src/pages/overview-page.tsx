@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { TrendingUp, Clock, AlertTriangle, CheckCircle2, Maximize2 } from "lucide-react";
 import {
@@ -33,25 +34,9 @@ import { SelfBackupPanel } from "@/components/self-backup-panel";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
-import type { NodeStatus, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
+import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 
 const MATRIX_PREVIEW_LIMIT = 80;
-const TRAFFIC_WINDOW_LABELS: Record<OverviewTrafficWindow, string> = {
-  "1h": "近 1 小时",
-  "24h": "近 24 小时",
-  "7d": "近 7 天"
-};
-
-
-function getNodeStatusLabel(status: NodeStatus) {
-  if (status === "online") {
-    return "在线";
-  }
-  if (status === "warning") {
-    return "告警";
-  }
-  return "离线";
-}
 
 
 function parseDateValue(value?: string) {
@@ -64,6 +49,7 @@ function parseDateValue(value?: string) {
 }
 
 export function OverviewPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { token } = useAuth();
   const { overview, nodes, tasks, loading, refreshVersion, fetchOverviewTraffic, refreshNodes, refreshTasks } = useOutletContext<ConsoleOutletContext>();
@@ -104,7 +90,7 @@ export function OverviewPage() {
           return;
         }
         if (trafficRequestRef.current === requestId) {
-          setTrafficError(getErrorMessage(error, "概览流量趋势加载失败"));
+          setTrafficError(getErrorMessage(error, t("overview.trafficLoadFailed")));
           setTrafficData(null);
         }
       })
@@ -162,33 +148,33 @@ export function OverviewPage() {
         className="grid-cols-4 animate-slide-up [animation-delay:150ms]"
         items={[
           {
-            title: "节点健康率",
+            title: t("overview.healthRateTitle"),
             value: healthRate,
             unit: "%",
             icon: healthRate >= 90 ? (
               <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" />
             ) : undefined,
-            description: `${overview.healthyNodes}/${overview.totalNodes} 节点在线`,
+            description: t("overview.healthRateDesc", { healthy: overview.healthyNodes, total: overview.totalNodes }),
             tone: "success",
           },
           {
-            title: "任务成功率",
+            title: t("overview.taskSuccessRate"),
             value: overview.overallSuccessRate,
             unit: "%",
-            description: `过去 24h 失败 ${overview.failedTasks24h} 次`,
+            description: t("overview.taskSuccessRateDesc", { count: overview.failedTasks24h }),
             tone: "info",
           },
           {
-            title: "当前吞吐",
+            title: t("overview.currentThroughput"),
             value: overview.avgSyncMbps,
             unit: "Mbps",
-            description: `执行中任务 ${overview.runningTasks} 个`,
+            description: t("overview.currentThroughputDesc", { count: overview.runningTasks }),
             tone: "warning",
           },
           {
-            title: "策略覆盖",
+            title: t("overview.policyCoverage"),
             value: overview.activePolicies,
-            description: `已启用策略（共 ${tasks.length} 任务）`,
+            description: t("overview.policyCoverageDesc", { count: tasks.length }),
             tone: "primary",
           },
         ]}
@@ -199,15 +185,15 @@ export function OverviewPage() {
           <Card className="glass-panel border-border/70 flex-1 flex flex-col min-h-0">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-base">主机状态矩阵</CardTitle>
+                <CardTitle className="text-base">{t("overview.matrixTitle")}</CardTitle>
                 {nodes.length > 0 ? (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="size-7 text-muted-foreground hover:text-foreground"
                     onClick={() => setMatrixFullscreen(true)}
-                    aria-label="全屏查看状态矩阵"
-                    title="全屏查看"
+                    aria-label={t("overview.fullscreenAriaLabel")}
+                    title={t("overview.fullscreenTitle")}
                   >
                     <Maximize2 className="size-3.5" />
                   </Button>
@@ -218,20 +204,20 @@ export function OverviewPage() {
               {loading ? (
                 <LoadingState
                   className="mb-3"
-                  title="正在构建状态矩阵"
-                  description="正在汇聚节点实时探测与最新备份指标..."
+                  title={t("overview.matrixLoading")}
+                  description={t("overview.matrixLoadingDesc")}
                   rows={2}
                 />
               ) : null}
               {!loading && nodes.length === 0 ? (
                 <p className="rounded-xl border border-border/70 bg-background/60 px-3 py-4 text-sm text-muted-foreground">
-                  暂无可展示节点，请先在节点页完成接入。
+                  {t("overview.matrixEmpty")}
                 </p>
               ) : (
                 <div className="flex flex-col flex-1 min-h-0 h-full">
                   <div
                     role="group"
-                    aria-label={`主机状态矩阵预览，共显示 ${previewNodes.length} / ${nodes.length} 台`}
+                    aria-label={t("overview.matrixPreviewAriaLabel", { shown: previewNodes.length, total: nodes.length })}
                     className="flex flex-wrap gap-2 overflow-y-auto pb-4"
                   >
                     {previewNodes.map((node) => {
@@ -244,12 +230,12 @@ export function OverviewPage() {
                           type="button"
                           className={`relative size-3 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 group`}
                           onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
-                          aria-label={`${node.name}，状态${getNodeStatusLabel(node.status)}`}
+                          aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
                           {/* Tooltip on hover */}
                           <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
                             <span className="font-medium">{node.name}</span>
-                            <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || "未知"}</span>
+                            <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
                           </span>
                         </button>
                       );
@@ -258,15 +244,15 @@ export function OverviewPage() {
 
                   {hiddenNodeCount > 0 ? (
                     <p className="pb-3 text-[11px] text-muted-foreground">
-                      当前仅展示 {previewNodes.length} / {nodes.length} 台节点，点击右上角可全屏查看全部。
+                      {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
                     </p>
                   ) : null}
 
                   {nodes.length > 0 && (
                     <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>在线</span>
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive"></span>异常</span>
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>离线</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive"></span>{t("overview.legendWarning")}</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
                     </div>
                   )}
                 </div>
@@ -279,7 +265,7 @@ export function OverviewPage() {
           <Card className="glass-panel border-border/70 flex-1 flex flex-col min-h-0">
             <CardHeader className="pb-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="text-base">流量与活动趋势（{TRAFFIC_WINDOW_LABELS[trafficWindow]}）</CardTitle>
+                <CardTitle className="text-base">{t(`overview.trafficTitle`, { window: t(`overview.trafficWindow${trafficWindow}`) })}</CardTitle>
                 <div className="flex items-center gap-2">
                   {(["1h", "24h", "7d"] as OverviewTrafficWindow[]).map((window) => (
                     <Button
@@ -296,7 +282,7 @@ export function OverviewPage() {
             </CardHeader>
             <CardContent className="flex-1 flex flex-col min-h-0 pt-2">
               {trafficLoading ? (
-                <LoadingState className="py-6" rows={3} title="加载流量趋势..." />
+                <LoadingState className="py-6" rows={3} title={t("overview.trafficLoading")} />
               ) : trafficError ? (
                 <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-4 text-sm text-warning">
                   {trafficError}
@@ -307,8 +293,8 @@ export function OverviewPage() {
                     role="img"
                     aria-label={
                       chartMetrics.hasRealSamples
-                        ? `${TRAFFIC_WINDOW_LABELS[trafficWindow]}流量与活动趋势图，峰值平均总吞吐 ${chartMetrics.peakThroughput} Mbps，开始事件 ${chartMetrics.totalStartedCount} 次，失败事件 ${chartMetrics.totalFailedCount} 次`
-                        : `${TRAFFIC_WINDOW_LABELS[trafficWindow]}流量与活动趋势图，暂无真实样本`
+                        ? t("overview.trafficAriaLabel", { window: t(`overview.trafficWindow${trafficWindow}`), peak: chartMetrics.peakThroughput, started: chartMetrics.totalStartedCount, failed: chartMetrics.totalFailedCount })
+                        : t("overview.trafficAriaLabelEmpty", { window: t(`overview.trafficWindow${trafficWindow}`) })
                     }
                   >
                     <ResponsiveContainer width="100%" height={208}>
@@ -346,7 +332,7 @@ export function OverviewPage() {
                           labelStyle={{ color: "hsl(var(--muted-foreground))" }}
                         />
                         {visibleLayers.activity && (
-                          <Bar dataKey="activity" name="活动" maxBarSize={8} radius={[2, 2, 0, 0]}>
+                          <Bar dataKey="activity" name={t("overview.chartActivity")} maxBarSize={8} radius={[2, 2, 0, 0]}>
                             {chartMetrics.chartData.map((entry, index) => (
                               <Cell
                                 key={`activity-${index}`}
@@ -360,7 +346,7 @@ export function OverviewPage() {
                           <Area
                             type="monotone"
                             dataKey="throughput"
-                            name="吞吐 (Mbps)"
+                            name={t("overview.chartThroughput")}
                             stroke="hsl(var(--chart-ingress))"
                             strokeWidth={2}
                             fill="url(#throughputGrad)"
@@ -375,9 +361,9 @@ export function OverviewPage() {
                   {/* Legend — matching matrix style (border-t, inline dots) */}
                   <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">
                     {[
-                      { key: "throughput", label: "吞吐", dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
-                      { key: "activity", label: "活动", dotClass: "size-1.5 rounded-sm bg-[hsl(var(--chart-egress))]" },
-                      { key: "failures", label: "失败", dotClass: "size-1.5 rounded-full bg-destructive" },
+                      { key: "throughput", label: t("overview.legendThroughput"), dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
+                      { key: "activity", label: t("overview.legendActivity"), dotClass: "size-1.5 rounded-sm bg-[hsl(var(--chart-egress))]" },
+                      { key: "failures", label: t("overview.legendFailures"), dotClass: "size-1.5 rounded-full bg-destructive" },
                     ].map((item) => (
                       <button
                         key={item.key}
@@ -402,13 +388,13 @@ export function OverviewPage() {
         <section className="animate-slide-up [animation-delay:250ms]">
           <Card className="glass-panel border-border/70">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">节点资源概览（近 24h）</CardTitle>
+              <CardTitle className="text-base">{t("overview.nodeResources")}</CardTitle>
             </CardHeader>
             <CardContent>
               <NodeMetricsPanel nodes={nodes} token={token} />
               {nodes.filter(n => n.status === "online").length > 8 && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  仅展示前 8 个在线节点，完整资源数据请前往节点页查看。
+                  {t("overview.nodeResourcesHint")}
                 </p>
               )}
             </CardContent>
@@ -444,12 +430,12 @@ export function OverviewPage() {
       <Dialog open={matrixFullscreen} onOpenChange={setMatrixFullscreen}>
         <DialogContent size="lg" className="max-h-[90vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>主机状态矩阵（共 {nodes.length} 台）</DialogTitle>
-            <DialogDescription>展示所有节点的状态圆点，点击任一节点可跳转到节点页查看详情。</DialogDescription>
+            <DialogTitle>{t("overview.matrixFullTitle", { count: nodes.length })}</DialogTitle>
+            <DialogDescription>{t("overview.matrixFullDesc")}</DialogDescription>
             <DialogCloseButton />
           </DialogHeader>
           <div className="flex-1 overflow-y-auto px-6 pb-6">
-            <div role="group" aria-label={`主机状态矩阵全量，共 ${nodes.length} 台`} className="flex flex-wrap gap-2">
+            <div role="group" aria-label={t("overview.matrixFullAriaLabel", { count: nodes.length })} className="flex flex-wrap gap-2">
               {nodes.map((node) => {
                 let dotColor = "bg-muted-foreground/30";
                 if (node.status === "online") dotColor = "bg-success";
@@ -463,21 +449,21 @@ export function OverviewPage() {
                       setMatrixFullscreen(false);
                       navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`);
                     }}
-                    aria-label={`${node.name}，状态${getNodeStatusLabel(node.status)}`}
+                    aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                   >
                     <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
                       <span className="font-medium">{node.name}</span>
                       <span className="ml-2 text-muted-foreground">{node.ip}</span>
-                      <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || "未知"}</span>
+                      <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
                     </span>
                   </button>
                 );
               })}
             </div>
             <div className="mt-4 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />在线</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive" />异常</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />离线</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />{t("overview.legendOnline")}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive" />{t("overview.legendWarning")}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />{t("overview.legendOffline")}</span>
             </div>
           </div>
         </DialogContent>
@@ -489,27 +475,27 @@ export function OverviewPage() {
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Clock className="size-4 text-primary" />
-              最近同步任务
+              {t("overview.recentTasks")}
             </CardTitle>
             <Button variant="ghost" size="sm" className="h-auto p-0 text-xs px-2 py-1 text-muted-foreground hover:text-foreground" onClick={() => navigate("/app/tasks")}>
-              查看更多 &rarr;
+              {t("overview.viewMore")} &rarr;
             </Button>
           </CardHeader>
           <CardContent>
             {loading ? (
-              <LoadingState className="py-6" rows={3} title="加载近期任务..." />
+              <LoadingState className="py-6" rows={3} title={t("overview.recentTasksLoading")} />
             ) : tasks.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">暂无任务数据</p>
+              <p className="py-6 text-center text-sm text-muted-foreground">{t("overview.noTaskData")}</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-border/50 text-xs text-muted-foreground uppercase bg-muted/20">
                     <tr>
-                      <th className="px-4 py-2 font-medium">节点名称</th>
-                      <th className="px-4 py-2 font-medium">任务名称</th>
-                      <th className="px-4 py-2 font-medium">同步状态</th>
-                      <th className="px-4 py-2 font-medium">传输数据量</th>
-                      <th className="px-4 py-2 font-medium text-right">完成时间</th>
+                      <th className="px-4 py-2 font-medium">{t("overview.tableNodeName")}</th>
+                      <th className="px-4 py-2 font-medium">{t("overview.tableTaskName")}</th>
+                      <th className="px-4 py-2 font-medium">{t("overview.tableSyncStatus")}</th>
+                      <th className="px-4 py-2 font-medium">{t("overview.tableTransfer")}</th>
+                      <th className="px-4 py-2 font-medium text-right">{t("overview.tableCompletedAt")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30">
@@ -523,28 +509,28 @@ export function OverviewPage() {
 
                       let StatusIcon = Clock;
                       let statusColor = "text-muted-foreground";
-                      let statusLabel = "队列中";
+                      let statusLabel = t("overview.taskStatusQueued");
 
                       switch (task.status) {
                         case "success":
                           StatusIcon = CheckCircle2;
                           statusColor = "text-success";
-                          statusLabel = "成功";
+                          statusLabel = t("overview.taskStatusSuccess");
                           break;
                         case "failed":
                           StatusIcon = AlertTriangle;
                           statusColor = "text-destructive";
-                          statusLabel = "失败";
+                          statusLabel = t("overview.taskStatusFailed");
                           break;
                         case "running":
                           StatusIcon = TrendingUp;
                           statusColor = "text-info";
-                          statusLabel = "同步中";
+                          statusLabel = t("overview.taskStatusRunning");
                           break;
                         case "retrying":
                           StatusIcon = AlertTriangle;
                           statusColor = "text-warning";
-                          statusLabel = "重试中";
+                          statusLabel = t("overview.taskStatusRetrying");
                           break;
                       }
 

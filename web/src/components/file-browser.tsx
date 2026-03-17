@@ -8,6 +8,7 @@ import {
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { FilePreviewDialog } from "@/components/file-preview-dialog";
 import type { FileEntry, FileListResult, FileContentResult } from "@/lib/api/files-api";
 
@@ -21,12 +22,12 @@ type FileBrowserProps = {
   className?: string;
 };
 
-function parseBreadcrumbs(path: string, rootPath: string): Array<{ label: string; path: string }> {
+function parseBreadcrumbs(path: string, rootPath: string, rootLabel: string): Array<{ label: string; path: string }> {
   const root = rootPath || "/";
   const relative = path.startsWith(root) ? path.slice(root.length) : path;
   const segments = relative.split("/").filter(Boolean);
 
-  const crumbs = [{ label: root === "/" ? "根目录" : root.split("/").pop() || root, path: root }];
+  const crumbs = [{ label: root === "/" ? rootLabel : root.split("/").pop() || root, path: root }];
   let current = root.endsWith("/") ? root.slice(0, -1) : root;
   for (const seg of segments) {
     current = current ? `${current}/${seg}` : `/${seg}`;
@@ -50,6 +51,7 @@ function formatModTime(iso: string): string {
 }
 
 export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
+  const { t } = useTranslation();
   const [currentPath, setCurrentPath] = useState<string>(rootPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -80,7 +82,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
         })
         .catch((err: unknown) => {
           if (ctrl.signal.aborted) return;
-          setError(err instanceof Error ? err.message : "加载目录失败");
+          setError(err instanceof Error ? err.message : t('fileBrowser.loadDirFailed'));
           setLoading(false);
         });
     },
@@ -105,7 +107,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
     }
   };
 
-  const breadcrumbs = parseBreadcrumbs(currentPath, rootPath);
+  const breadcrumbs = parseBreadcrumbs(currentPath, rootPath, t('fileBrowser.rootDir'));
   const parentPath = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2].path : null;
 
   // 目录优先，文件其次，各自按名称排序
@@ -123,7 +125,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
             type="button"
             className="mr-1 flex items-center gap-1 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             onClick={() => handleNavigate(parentPath)}
-            aria-label="返回上级目录"
+            aria-label={t('fileBrowser.goUp')}
           >
             <ArrowLeft className="size-3.5" />
           </button>
@@ -148,7 +150,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
           type="button"
           className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
           onClick={() => loadDir(currentPath)}
-          aria-label="刷新"
+          aria-label={t('common.refresh')}
           disabled={loading}
         >
           <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -158,7 +160,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
       {/* 截断提示 */}
       {truncated && (
         <div className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
-          目录条目超过 500 条，仅展示前 500 项
+          {t('fileBrowser.truncatedHint')}
         </div>
       )}
 
@@ -172,7 +174,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
             className="ml-auto text-xs underline"
             onClick={() => loadDir(currentPath)}
           >
-            重试
+            {t('common.retry')}
           </button>
         </div>
       )}
@@ -187,20 +189,20 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
           )}
           {loading && entries.length === 0 ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              加载中...
+              {t('common.loading')}
             </div>
           ) : sorted.length === 0 ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              目录为空
+              {t('fileBrowser.emptyDir')}
             </div>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/40 text-xs text-muted-foreground">
-                  <th className="px-4 py-2 text-left font-medium">名称</th>
-                  <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">大小</th>
-                  <th className="hidden px-4 py-2 text-left font-medium md:table-cell">权限</th>
-                  <th className="hidden px-4 py-2 text-left font-medium lg:table-cell">修改时间</th>
+                  <th className="px-4 py-2 text-left font-medium">{t('fileBrowser.colName')}</th>
+                  <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">{t('fileBrowser.colSize')}</th>
+                  <th className="hidden px-4 py-2 text-left font-medium md:table-cell">{t('fileBrowser.colPermissions')}</th>
+                  <th className="hidden px-4 py-2 text-left font-medium lg:table-cell">{t('fileBrowser.colModTime')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/30">
@@ -214,7 +216,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
                       if (e.key === "Enter" || e.key === " ") handleEntryClick(entry);
                     }}
                     role="button"
-                    aria-label={`${entry.is_dir ? "进入目录" : "预览文件"} ${entry.name}`}
+                    aria-label={`${entry.is_dir ? t('fileBrowser.enterDir') : t('fileBrowser.previewFile')} ${entry.name}`}
                   >
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">

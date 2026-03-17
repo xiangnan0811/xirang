@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import { describeCron } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
@@ -45,7 +46,7 @@ export function usePolicyOperations({
   }, [token, markTasksMutated, setTasks]);
 
   const createPolicy = useCallback(async (input: NewPolicyInput) => {
-    const result = await exec("创建策略", (t) => apiClient.createPolicy(t, input));
+    const result = await exec(i18n.t("policies.actions.createPolicy"), (t) => apiClient.createPolicy(t, input));
     if (result) {
       if (result.ok) {
         setPolicies((prev) => [{
@@ -64,7 +65,7 @@ export function usePolicyOperations({
   }, [exec, policies, refreshTasks, setPolicies]);
 
   const updatePolicy = useCallback(async (policyID: number, input: NewPolicyInput) => {
-    const result = await exec("更新策略", (t) => apiClient.updatePolicy(t, policyID, input));
+    const result = await exec(i18n.t("policies.actions.updatePolicy"), (t) => apiClient.updatePolicy(t, policyID, input));
     if (result) {
       if (result.ok) {
         setPolicies((prev) => prev.map((policy) => (policy.id === policyID ? {
@@ -99,7 +100,7 @@ export function usePolicyOperations({
   }, [exec, refreshTasks, setPolicies]);
 
   const deletePolicy = useCallback(async (policyID: number) => {
-    await exec("删除策略", (t) => apiClient.deletePolicy(t, policyID));
+    await exec(i18n.t("policies.actions.deletePolicy"), (t) => apiClient.deletePolicy(t, policyID));
     const policyName = policies.find((policy) => policy.id === policyID)?.name;
     setPolicies((prev) => prev.filter((policy) => policy.id !== policyID));
     markTasksMutated();

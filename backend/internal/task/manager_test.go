@@ -90,7 +90,7 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {

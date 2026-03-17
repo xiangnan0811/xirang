@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -81,7 +82,7 @@ function isValidURL(value: string) {
 function validateDraft(type: IntegrationType, endpoint: string): string | null {
   const raw = endpoint.trim();
   if (!raw) {
-    return "保存失败：请填写通知地址。";
+    return "integration.errorEndpointRequired";
   }
 
   if (type === "email") {
@@ -90,17 +91,17 @@ function validateDraft(type: IntegrationType, endpoint: string): string | null {
       .map((item) => item.trim())
       .filter(Boolean);
     if (!emails.length) {
-      return "保存失败：请填写至少一个邮箱地址。";
+      return "integration.errorEmailRequired";
     }
     const mailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emails.every((item) => mailRegex.test(item))) {
-      return "保存失败：邮箱格式不正确，请使用逗号分隔多个邮箱。";
+      return "integration.errorEmailFormat";
     }
     return null;
   }
 
   if (!isValidURL(raw)) {
-    return "保存失败：该通道需要合法的 http/https 地址。";
+    return "integration.errorUrlRequired";
   }
   return null;
 }
@@ -118,19 +119,20 @@ export function IntegrationEditorDialog({
   integration,
   onSave,
 }: IntegrationEditorDialogProps) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<IntegrationEditorDraft, IntegrationChannel>(open, emptyDraft, integration, toDraft);
   const [saving, setSaving] = useState(false);
   const [pendingHint, setPendingHint] = useState<string | null>(null);
 
   const handleSave = async (skipHint: boolean) => {
     if (!draft.name.trim()) {
-      toast.error("保存失败：请填写通道名称。", { id: "integration-edit-name-required" });
+      toast.error(t('integration.errorNameRequired'), { id: "integration-edit-name-required" });
       return;
     }
 
     const validationError = validateDraft(draft.type, draft.endpoint);
     if (validationError) {
-      toast.error(validationError, { id: "integration-edit-endpoint-invalid" });
+      toast.error(t(validationError), { id: "integration-edit-endpoint-invalid" });
       return;
     }
 
@@ -149,7 +151,7 @@ export function IntegrationEditorDialog({
       if (error instanceof EndpointHintWarning) {
         setPendingHint(error.hint);
       } else {
-        toast.error(getErrorMessage(error, "保存失败，请稍后重试。"));
+        toast.error(getErrorMessage(error, t('integration.errorSaveFailed')));
       }
     } finally {
       setSaving(false);
@@ -157,26 +159,19 @@ export function IntegrationEditorDialog({
   };
 
   const TypeIcon = integrationIcon(draft.type);
-  const typeLabel =
-    draft.type === "email" ? "邮件" :
-    draft.type === "slack" ? "Slack" :
-    draft.type === "telegram" ? "Telegram" :
-    draft.type === "feishu" ? "飞书" :
-    draft.type === "dingtalk" ? "钉钉" :
-    draft.type === "wecom" ? "企业微信" :
-    "Webhook";
+  const typeLabel = t(`integration.typeLabels.${draft.type}`);
 
   return (
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
       icon={<TypeIcon className="size-5 text-primary" />}
-      title="编辑通知方式"
-      description="修改通知通道参数，保存后立即生效。"
+      title={t('integration.titleEdit')}
+      description={t('integration.descEdit')}
       saving={saving}
       onSubmit={() => handleSave(false)}
-      submitLabel={<><Save className="mr-1 size-4" />保存修改</>}
-      savingLabel={<><Save className="mr-1 size-4" />保存中...</>}
+      submitLabel={<><Save className="mr-1 size-4" />{t('integration.submitEdit')}</>}
+      savingLabel={<><Save className="mr-1 size-4" />{t('integration.savingLabel')}</>}
     >
       {pendingHint && (
         <div className="flex flex-col gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 dark:border-yellow-800 dark:bg-yellow-950">
@@ -190,14 +185,14 @@ export function IntegrationEditorDialog({
               variant="outline"
               onClick={() => setPendingHint(null)}
             >
-              重新检查
+              {t('integration.recheck')}
             </Button>
             <Button
               size="sm"
               onClick={() => handleSave(true)}
               disabled={saving}
             >
-              确认保存
+              {t('integration.confirmSave')}
             </Button>
           </div>
         </div>
@@ -205,12 +200,12 @@ export function IntegrationEditorDialog({
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <label htmlFor="int-edit-type" className="mb-1 block text-sm font-medium">通道类型</label>
+          <label htmlFor="int-edit-type" className="mb-1 block text-sm font-medium">{t('integration.channelType')}</label>
           <Input id="int-edit-type" value={typeLabel} disabled className="glass-panel" />
         </div>
         <div>
-          <label htmlFor="int-edit-name" className="mb-1 block text-sm font-medium">通道名称</label>
-          <Input id="int-edit-name" placeholder="例如：值班 Slack"
+          <label htmlFor="int-edit-name" className="mb-1 block text-sm font-medium">{t('integration.channelName')}</label>
+          <Input id="int-edit-name" placeholder={t('integration.namePlaceholder')}
             value={draft.name}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, name: event.target.value }))
@@ -220,7 +215,7 @@ export function IntegrationEditorDialog({
       </div>
 
       <div>
-        <label htmlFor="int-edit-endpoint" className="mb-1 block text-sm font-medium">Endpoint / 地址</label>
+        <label htmlFor="int-edit-endpoint" className="mb-1 block text-sm font-medium">{t('integration.endpointAddress')}</label>
         <Input id="int-edit-endpoint" value={draft.endpoint}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, endpoint: event.target.value }))
@@ -230,9 +225,9 @@ export function IntegrationEditorDialog({
 
       {draft.type !== "email" && (
         <div>
-          <label htmlFor="int-edit-secret" className="mb-1 block text-sm font-medium">签名密钥（选填）</label>
+          <label htmlFor="int-edit-secret" className="mb-1 block text-sm font-medium">{t('integration.signingSecret')}</label>
           <Input id="int-edit-secret" type="password" autoComplete="off"
-            placeholder={draft.id ? "留空保持不变" : "用于验签的密钥"}
+            placeholder={draft.id ? t('integration.secretPlaceholderEdit') : t('integration.secretPlaceholder')}
             value={draft.secret}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, secret: event.target.value }))
@@ -243,7 +238,7 @@ export function IntegrationEditorDialog({
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <label htmlFor="int-edit-threshold" className="mb-1 block text-sm font-medium">告警阈值（失败次数）</label>
+          <label htmlFor="int-edit-threshold" className="mb-1 block text-sm font-medium">{t('integration.alertThreshold')}</label>
           <Input id="int-edit-threshold" type="number"
             min={1}
             max={10}
@@ -257,7 +252,7 @@ export function IntegrationEditorDialog({
           />
         </div>
         <div>
-          <label htmlFor="int-edit-cooldown" className="mb-1 block text-sm font-medium">冷却时间（分钟）</label>
+          <label htmlFor="int-edit-cooldown" className="mb-1 block text-sm font-medium">{t('integration.cooldownTime')}</label>
           <Input id="int-edit-cooldown" type="number"
             min={1}
             max={120}

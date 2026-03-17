@@ -88,6 +88,7 @@ type Manager struct {
 	locks           sync.Map
 	strategyLocks   sync.Map
 	nodeLocks       sync.Map // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
+	hookRunFunc     func(ctx context.Context, task model.Task, command string) error // 可测试注入
 	runningCancels  sync.Map
 	pendingRuns     sync.Map
 	restoreNodes    sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
@@ -130,6 +131,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		hub:                  hub,
 		scheduler:            scheduler,
 		semaphore:            make(chan struct{}, 8),
+		hookRunFunc:          nil, // 初始化后设置为默认 runSSHHook
 		logQueue:             make(chan queuedTaskLog, defaultLogQueueCapacity),
 		logBatchSize:         defaultLogBatchSize,
 		logFlushInterval:     defaultLogFlushInterval,
@@ -142,6 +144,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		taskRunRetentionDays: taskRunRetentionDays,
 		retentionDone:       make(chan struct{}),
 	}
+	m.hookRunFunc = m.runSSHHook
 	m.startLogWorker()
 	m.startSampleWorker()
 	m.startRetentionWorker()
@@ -856,7 +859,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		}
 		hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
 		m.emitLog(taskID, runIDPtr, "info", "执行 pre-hook: "+taskEntity.Policy.PreHook, taskEntity.Status)
-		hookErr := m.runSSHHook(hookCtx, taskEntity, taskEntity.Policy.PreHook)
+		hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PreHook)
 		hookCancel()
 		if hookErr != nil {
 			m.emitLog(taskID, runIDPtr, "error", "pre-hook 失败: "+hookErr.Error(), taskEntity.Status)
@@ -916,7 +919,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			}
 			hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
 			m.emitLog(taskID, runIDPtr, "info", "执行 post-hook: "+taskEntity.Policy.PostHook, taskEntity.Status)
-			hookErr := m.runSSHHook(hookCtx, taskEntity, taskEntity.Policy.PostHook)
+			hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PostHook)
 			hookCancel()
 			if hookErr != nil {
 				m.emitLog(taskID, runIDPtr, "warn", "post-hook 失败（不影响备份结果）: "+hookErr.Error(), taskEntity.Status)

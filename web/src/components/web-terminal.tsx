@@ -1,5 +1,6 @@
 import type { FC } from "react";
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -11,6 +12,7 @@ type WebTerminalProps = {
 };
 
 const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,7 +84,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
 
       ws.onclose = (event) => {
         const detail = event.reason ? ` (${event.code}: ${event.reason})` : ` (code: ${event.code})`;
-        terminal?.write(`\r\n\x1b[31m连接已断开${detail}\x1b[0m\r\n`);
+        terminal?.write(`\r\n\x1b[31m${t("terminal.disconnected")}${detail}\x1b[0m\r\n`);
         // 正常关闭(1000)或服务端主动关闭(1001)时自动关闭弹窗（如用户输入 exit）
         // 异常关闭保留弹窗以便用户查看错误信息
         if (active && (event.code === 1000 || event.code === 1001)) {
@@ -91,7 +93,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
       };
 
       ws.onerror = () => {
-        terminal?.write("\r\n\x1b[31mWebSocket 错误，连接失败\x1b[0m\r\n");
+        terminal?.write(`\r\n\x1b[31m${t("terminal.wsError")}\x1b[0m\r\n`);
       };
 
       // 键盘输入 → WebSocket

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   AreaChart,
   Area,
@@ -29,11 +30,7 @@ const MAX_VISIBLE_NODES = 8;
 
 type MetricKey = "cpu" | "mem" | "disk";
 
-const METRICS: { key: MetricKey; label: string }[] = [
-  { key: "cpu", label: "CPU (%)" },
-  { key: "mem", label: "内存 (%)" },
-  { key: "disk", label: "磁盘 (%)" },
-];
+const METRICS_KEYS: MetricKey[] = ["cpu", "mem", "disk"];
 
 type ChartPoint = {
   time: string;
@@ -46,6 +43,7 @@ type Props = {
 };
 
 export function NodeMetricsPanel({ nodes, token }: Props) {
+  const { t } = useTranslation();
   const onlineNodes = useMemo(
     () => nodes.filter((n) => n.status === "online").slice(0, MAX_VISIBLE_NODES),
     [nodes]
@@ -166,7 +164,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
     return (
       <div className="flex items-center justify-center py-10">
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-sm text-muted-foreground">加载节点指标...</span>
+        <span className="ml-2 text-sm text-muted-foreground">{t("nodes.metricsLoading")}</span>
       </div>
     );
   }
@@ -174,7 +172,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
   if (!hasData) {
     return (
       <p className="py-6 text-center text-sm text-muted-foreground">
-        暂无资源采样数据，请确认 Prober 已启动并成功采集。
+        {t("nodes.metricsEmpty")}
       </p>
     );
   }
@@ -194,7 +192,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
               style={{ opacity: active ? 1 : 0.35 }}
               onClick={() => toggleNode(node.id)}
               aria-pressed={active}
-              title={`${active ? "隐藏" : "显示"} ${node.name}`}
+              title={t("nodes.metricToggleTitle", { action: active ? t("nodes.metricHide") : t("nodes.metricShow"), name: node.name })}
             >
               <span
                 className="size-2.5 rounded-full shrink-0 transition-transform"
@@ -211,11 +209,11 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
 
       {/* 三张指标小图 */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
-        {METRICS.map(({ key, label }) => (
+        {METRICS_KEYS.map((key) => (
           <MetricChart
             key={key}
             metricKey={key}
-            label={label}
+            label={t(`nodes.metricLabel_${key}`)}
             data={chartDataByMetric[key]}
             nodes={onlineNodes}
             enabledNodes={enabledNodes}

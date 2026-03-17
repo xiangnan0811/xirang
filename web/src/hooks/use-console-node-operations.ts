@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import i18n from "@/i18n";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
@@ -54,7 +55,7 @@ export function useNodeOperations({
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
   const createSSHKey = useCallback(async (input: NewSSHKeyInput): Promise<string> => {
-    const result = await exec("创建 SSH Key", (t) => apiClient.createSSHKey(t, input));
+    const result = await exec(i18n.t("nodes.actions.createSSHKey"), (t) => apiClient.createSSHKey(t, input));
     if (result) {
       if (result.ok) {
         markInventoryMutated();
@@ -70,7 +71,7 @@ export function useNodeOperations({
   }, [exec, markInventoryMutated, setSSHKeys]);
 
   const updateSSHKey = useCallback(async (keyId: string, input: NewSSHKeyInput) => {
-    const result = await exec("更新 SSH Key", (t) => apiClient.updateSSHKey(t, keyId, input));
+    const result = await exec(i18n.t("nodes.actions.updateSSHKey"), (t) => apiClient.updateSSHKey(t, keyId, input));
     if (result) {
       if (result.ok) {
         markInventoryMutated();
@@ -108,22 +109,22 @@ export function useNodeOperations({
       } catch (error) {
         if (error instanceof ApiError) {
           if (demoModeEnabled) {
-            setWarning(typeof error.detail === "string" ? error.detail : "删除 SSH Key 失败");
+            setWarning(typeof error.detail === "string" ? error.detail : i18n.t("nodes.actions.deleteSSHKeyFailed"));
           } else {
             const detail = typeof error.detail === "string" ? error.detail : error.message;
-            const message = `删除 SSH Key 失败：${detail}`;
+            const message = i18n.t("nodes.actions.deleteSSHKeyFailedDetail", { detail });
             setWarning(message);
             throw new Error(message);
           }
         } else if (!demoModeEnabled) {
-          handleWriteApiError("删除 SSH Key", error);
+          handleWriteApiError(i18n.t("nodes.actions.deleteSSHKey"), error);
         }
         if (!demoModeEnabled) {
           return false;
         }
       }
     } else {
-      ensureDemoWriteAllowed("删除 SSH Key");
+      ensureDemoWriteAllowed(i18n.t("nodes.actions.deleteSSHKey"));
     }
 
     markInventoryMutated();
@@ -145,7 +146,7 @@ export function useNodeOperations({
 
     const finalInput: NewNodeInput = { ...input, keyId };
 
-    const result = await exec("创建节点", (t) => apiClient.createNode(t, finalInput));
+    const result = await exec(i18n.t("nodes.actions.createNode"), (t) => apiClient.createNode(t, finalInput));
     if (result) {
       if (result.ok) {
         markInventoryMutated();
@@ -173,7 +174,7 @@ export function useNodeOperations({
 
     const finalInput: NewNodeInput = { ...input, keyId };
 
-    const result = await exec("更新节点", (t) => apiClient.updateNode(t, nodeID, finalInput));
+    const result = await exec(i18n.t("nodes.actions.updateNode"), (t) => apiClient.updateNode(t, nodeID, finalInput));
     if (result) {
       if (result.ok) {
         markInventoryMutated();
@@ -204,7 +205,7 @@ export function useNodeOperations({
   }, [createSSHKey, exec, markInventoryMutated, setNodes]);
 
   const deleteNode = useCallback(async (nodeID: number) => {
-    await exec("删除节点", (t) => apiClient.deleteNode(t, nodeID));
+    await exec(i18n.t("nodes.actions.deleteNode"), (t) => apiClient.deleteNode(t, nodeID));
     markInventoryMutated();
     markTasksMutated();
     setNodes((prev) => prev.filter((node) => node.id !== nodeID));
@@ -218,7 +219,7 @@ export function useNodeOperations({
       return { deleted: 0, notFoundIds: [] };
     }
 
-    const result = await exec("批量删除节点", (t) => apiClient.deleteNodes(t, normalized));
+    const result = await exec(i18n.t("nodes.actions.deleteNodes"), (t) => apiClient.deleteNodes(t, normalized));
     if (result) {
       if (result.ok) {
         const deletedSet = new Set(normalized.filter((id) => !result.data.notFoundIds.includes(id)));
@@ -242,7 +243,7 @@ export function useNodeOperations({
   }, [exec, markInventoryMutated, markTasksMutated, setAlerts, setNodes, setTasks]);
 
   const testNodeConnection = useCallback(async (nodeID: number): Promise<{ ok: boolean; message: string }> => {
-    const result = await exec("节点连通性探测", (t) => apiClient.testNodeConnection(t, nodeID));
+    const result = await exec(i18n.t("nodes.actions.testConnection"), (t) => apiClient.testNodeConnection(t, nodeID));
     if (result) {
       if (result.ok) {
         const r = result.data;
@@ -275,7 +276,7 @@ export function useNodeOperations({
         );
         return { ok: r.ok, message: r.message };
       }
-      return { ok: false, message: "探测请求失败" };
+      return { ok: false, message: i18n.t("nodes.probeFailed") };
     }
 
     // Demo 模式模拟
@@ -294,9 +295,9 @@ export function useNodeOperations({
 
     const targetPolicy = policies.find((policy) => policy.enabled) ?? policies[0];
 
-    const result = await exec("触发节点手动备份", (t) =>
+    const result = await exec(i18n.t("nodes.actions.triggerBackup"), (t) =>
       apiClient.createTask(t, {
-        name: `${node.name} 手动备份`,
+        name: i18n.t("nodes.manualBackupName", { name: node.name }),
         nodeId: nodeID,
         policyId: targetPolicy?.id ?? null,
         executorType: "rsync",
@@ -318,7 +319,7 @@ export function useNodeOperations({
     setNodes((prev) =>
       prev.map((item) =>
         item.id === nodeID
-          ? { ...item, status: "online", lastSeenAt: "刚刚" }
+          ? { ...item, status: "online", lastSeenAt: i18n.t("common.justNow") }
           : item
       )
     );

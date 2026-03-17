@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Loader2,
   Plus,
@@ -32,6 +33,7 @@ export function IntegrationManager({
   onOpenCreate,
   onOpenEdit,
 }: IntegrationManagerProps) {
+  const { t } = useTranslation();
   const { confirm, dialog } = useConfirm();
   const [testingIntegrationMap, setTestingIntegrationMap] = useState<Record<string, number>>({});
   const [updatingIntegrationMap, setUpdatingIntegrationMap] = useState<Record<string, number>>({});
@@ -54,15 +56,15 @@ export function IntegrationManager({
 
   const handleDelete = async (integration: IntegrationChannel) => {
     const ok = await confirm({
-      title: "确认删除",
-      description: `确认删除通知方式 ${integration.name} 吗？`,
+      title: t("notifications.deleteIntegration"),
+      description: t("notifications.deleteIntegrationDesc", { name: integration.name }),
     });
     if (!ok) return;
 
     beginOp(integration.id, "update");
     try {
       await removeIntegration(integration.id);
-      toast.success(`已删除通知方式：${integration.name}`);
+      toast.success(t("notifications.deletedIntegration", { name: integration.name }));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -76,11 +78,11 @@ export function IntegrationManager({
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2 font-medium">
-              通知与集成设置
+              {t("notifications.integrationSettingsTitle")}
             </div>
             <Button size="sm" onClick={onOpenCreate}>
               <Plus className="mr-1 size-3.5" />
-              新增通知方式
+              {t("notifications.addIntegration")}
             </Button>
           </div>
           {integrations.length ? (
@@ -106,14 +108,14 @@ export function IntegrationManager({
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <Switch
                         checked={integration.enabled}
-                        aria-label={`${integration.enabled ? "停用" : "启用"}通知方式 ${integration.name}`}
+                        aria-label={t("notifications.toggleEnabled", { action: integration.enabled ? t("common.disable") : t("common.enable"), name: integration.name })}
                         disabled={busy}
                         onCheckedChange={() =>
                           void (async () => {
                             beginOp(integration.id, "update");
                             try {
                               await toggleIntegration(integration.id);
-                              toast.success(`通知方式 ${integration.name} 已${integration.enabled ? "停用" : "启用"}。`);
+                              toast.success(t("notifications.toggledSuccess", { name: integration.name, action: integration.enabled ? t("common.disabled") : t("common.enabled") }));
                             } catch (error) {
                               toast.error(getErrorMessage(error));
                             } finally {
@@ -130,14 +132,14 @@ export function IntegrationManager({
                           beginOp(integration.id, "test");
                           void testIntegration(integration.id)
                             .then((result) =>
-                              toast.success(`${integration.name}：${result.message}（${result.latencyMs}ms）`)
+                              toast.success(t("notifications.testResultSuccess", { name: integration.name, message: result.message, latency: result.latencyMs }))
                             )
                             .catch((error) => toast.error(getErrorMessage(error)))
                             .finally(() => endOp(integration.id, "test"));
                         }}
                       >
                         {isTesting && <Loader2 className="mr-1 size-4 animate-spin" />}
-                        测试发送
+                        {t("notifications.testSend")}
                       </Button>
                       <Button
                         variant="outline"
@@ -146,12 +148,12 @@ export function IntegrationManager({
                         onClick={() => onOpenEdit(integration)}
                       >
                         <Wrench className="mr-1 size-4" />
-                        编辑
+                        {t("common.edit")}
                       </Button>
                       <Button
                         variant="danger"
                         size="icon"
-                        aria-label={`删除通知方式 ${integration.name}`}
+                        aria-label={t("notifications.deleteIntegrationAriaLabel", { name: integration.name })}
                         disabled={busy}
                         onClick={() => void handleDelete(integration)}
                       >
@@ -161,15 +163,15 @@ export function IntegrationManager({
                   </div>
 
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                    <p className="break-all">Endpoint：{integration.endpoint}</p>
-                    <p>告警阈值：连续失败 {integration.failThreshold} 次</p>
-                    <p>冷却时间：{integration.cooldownMinutes} 分钟</p>
+                    <p className="break-all">{t("notifications.endpointLabel", { endpoint: integration.endpoint })}</p>
+                    <p>{t("notifications.failThresholdLabel", { count: integration.failThreshold })}</p>
+                    <p>{t("notifications.cooldownLabel", { minutes: integration.cooldownMinutes })}</p>
                   </div>
                 </div>
               );
             })
           ) : (
-            <EmptyState title="尚未配置任何通知方式" description="请点击「新增通知方式」手动添加" />
+            <EmptyState title={t("notifications.noIntegrations")} description={t("notifications.noIntegrationsDesc")} />
           )}
         </CardContent>
       </Card>

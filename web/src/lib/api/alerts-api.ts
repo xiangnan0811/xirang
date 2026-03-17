@@ -5,6 +5,7 @@ import type {
   AlertDeliveryStats,
   AlertRecord
 } from "@/types/domain";
+import i18n from "@/i18n";
 import { formatTime, parseNumericId, request, type Envelope, unwrapData } from "./core";
 
 type AlertResponse = {
@@ -69,7 +70,7 @@ function mapAlert(row: AlertResponse): AlertRecord {
     nodeId: row.node_id,
     taskId: row.task_id ?? null,
     taskRunId: row.task_run_id ?? null,
-    policyName: row.policy_name ?? "节点探测",
+    policyName: row.policy_name ?? i18n.t("notifications.nodeProbe"),
     severity: row.severity,
     status: row.status,
     errorCode: row.error_code,
@@ -181,7 +182,7 @@ export function createAlertsApi() {
       const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
-        message: data?.message ?? "重发完成",
+        message: data?.message ?? i18n.t("common.resendComplete"),
         delivery: mapAlertDelivery(data.delivery)
       };
     },
@@ -216,7 +217,7 @@ export function createAlertsApi() {
       const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
-        message: data?.message ?? "批量重发完成",
+        message: data?.message ?? i18n.t("common.batchResendComplete"),
         totalFailed: Number(data?.total_failed ?? 0),
         successCount: Number(data?.success_count ?? 0),
         failedCount: Number(data?.failed_count ?? 0),

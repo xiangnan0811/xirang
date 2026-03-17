@@ -1,42 +1,50 @@
+import i18n from "@/i18n";
+
+function getWeekdayName(d: string): string {
+  return i18n.t(`cron.weekdayNames.${d}`, { defaultValue: d });
+}
+
+function getLocaleString(date: Date): string {
+  const lng = i18n.language ?? "zh";
+  const locale = lng.startsWith("zh") ? "zh-CN" : "en-US";
+  return date.toLocaleString(locale, { hour12: false });
+}
+
 export function cronToNatural(cron: string) {
-  if (!cron) return "未配置";
+  if (!cron) return i18n.t("cron.notConfigured");
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) {
-    return `按表达式 ${cron} 执行`;
+    return i18n.t("cron.byCronExpression", { cron });
   }
   const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
   if (minute.startsWith("*/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-    return `每隔 ${minute.replace("*/", "")} 分钟执行`;
+    return i18n.t("cron.everyNMinutes", { n: minute.replace("*/", "") });
   }
   if (hour.startsWith("*/") && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
     const hours = hour.replace("*/", "");
     return minute === "0"
-      ? `每隔 ${hours} 小时整点执行`
-      : `每隔 ${hours} 小时在 ${minute} 分执行`;
+      ? i18n.t("cron.everyNHoursOnTheHour", { n: hours })
+      : i18n.t("cron.everyNHoursAtMinute", { n: hours, minute });
   }
   if (dayOfWeek !== "*") {
-    const weekdayMap: Record<string, string> = {
-      "0": "周日", "1": "周一", "2": "周二", "3": "周三",
-      "4": "周四", "5": "周五", "6": "周六", "7": "周日"
-    };
-    const days = dayOfWeek.split(",").map(d => weekdayMap[d] || d).join("、");
+    const days = dayOfWeek.split(",").map(d => getWeekdayName(d)).join(i18n.t("cron.weekdaySeparator"));
     if (hour === "*" && minute.startsWith("*/")) {
-      return `每周 ${days} 每 ${minute.replace("*/", "")} 分钟执行一次`;
+      return i18n.t("cron.weeklyDaysEveryNMinutes", { days, n: minute.replace("*/", "") });
     }
-    return `每周 ${days} ${hour.padStart(2, "0")}:${minute.padStart(2, "0")} 执行`;
+    return i18n.t("cron.weeklyDaysAtTime", { days, time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` });
   }
   if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-    if (hour === "*" && minute === "*") return "每分钟执行";
-    return `每天 ${hour.padStart(2, "0")}:${minute.padStart(2, "0")} 执行`;
+    if (hour === "*" && minute === "*") return i18n.t("cron.everyMinute");
+    return i18n.t("cron.dailyAtTime", { time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` });
   }
-  return `按表达式 ${cron} 执行`;
+  return i18n.t("cron.byCronExpression", { cron });
 }
 
 export function nextRunPreview(cron: string) {
-  if (!cron) return "未配置定时规则";
+  if (!cron) return i18n.t("cron.notConfiguredCron");
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) {
-    return "无法预估下次执行时间";
+    return i18n.t("cron.cannotEstimate");
   }
   const now = new Date();
   const minute = parts[0];
@@ -47,7 +55,7 @@ export function nextRunPreview(cron: string) {
     const interval = Number(minute.replace("*/", ""));
     if (Number.isFinite(interval) && interval > 0) {
       const next = new Date(now.getTime() + interval * 60 * 1000);
-      return `预计下次：${next.toLocaleString("zh-CN", { hour12: false })}`;
+      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
     }
   }
   if (hour.startsWith("*/")) {
@@ -63,7 +71,7 @@ export function nextRunPreview(cron: string) {
       while (next <= now) {
         next.setHours(next.getHours() + interval);
       }
-      return `预计下次：${next.toLocaleString("zh-CN", { hour12: false })}`;
+      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
     }
   }
   const minuteValue = Number(minute);
@@ -75,7 +83,7 @@ export function nextRunPreview(cron: string) {
       if (next <= now) {
         next.setDate(next.getDate() + 1);
       }
-      return `预计下次：${next.toLocaleString("zh-CN", { hour12: false })}`;
+      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
     }
     const targetWeekday = Number(weekday);
     if (Number.isFinite(targetWeekday)) {
@@ -85,11 +93,9 @@ export function nextRunPreview(cron: string) {
         dayOffset += 7;
       }
       next.setDate(next.getDate() + dayOffset);
-      const weekdayMap: Record<string, string> = {
-        "0": "周日", "1": "周一", "2": "周二", "3": "周三", "4": "周四", "5": "周五", "6": "周六", "7": "周日",
-      };
-      return `预计下次：${next.toLocaleString("zh-CN", { hour12: false })}（${weekdayMap[weekday] ?? `周${weekday}`}）`;
+      const weekdayName = getWeekdayName(weekday);
+      return i18n.t("cron.estimatedNextWithWeekday", { time: getLocaleString(next), weekday: weekdayName });
     }
   }
-  return "无法预估下次执行时间";
+  return i18n.t("cron.cannotEstimate");
 }
