@@ -688,6 +688,9 @@ const en = {
     cancelAriaLabel: "Cancel task",
     deleteAriaLabel: "Delete task",
     trigger: "Trigger",
+    taskIdLabel: "Task ID: {{id}}",
+    nodeLabel: "Node: {{name}}",
+    errorLabel: "Error: {{error}}",
   },
 
   // ── task run history ──

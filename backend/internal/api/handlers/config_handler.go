@@ -130,6 +130,10 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 // conflict 参数控制冲突策略：skip（默认）跳过已存在项，overwrite 覆盖。
 func (h *ConfigHandler) Import(c *gin.Context) {
 	conflict := c.DefaultQuery("conflict", "skip")
+	if conflict != "skip" && conflict != "overwrite" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "conflict 参数仅支持 skip 或 overwrite"})
+		return
+	}
 
 	var payload struct {
 		Data struct {
@@ -222,6 +226,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if basePath, ok := nodeData["base_path"].(string); ok {
 				existing.BasePath = basePath
 			}
+			if err := validateNodeHostPort(existing.Host, existing.Port); err != nil {
+				continue
+			}
 			h.db.Save(&existing)
 			importedNodes++
 		} else {
@@ -253,6 +260,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			}
 			if privateKey, ok := nodeData["private_key"].(string); ok {
 				newNode.PrivateKey = privateKey
+			}
+			if err := validateNodeHostPort(newNode.Host, newNode.Port); err != nil {
+				continue
 			}
 			if err := h.db.Create(&newNode).Error; err == nil {
 				importedNodes++

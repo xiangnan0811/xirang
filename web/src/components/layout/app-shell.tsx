@@ -9,6 +9,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { OnboardingTour } from "@/components/onboarding-tour";
+import { SetupWizard } from "@/components/setup-wizard";
 import { NotificationBell } from "@/components/notification-bell";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
 import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
@@ -328,6 +329,7 @@ export function AppShell() {
       />
 
       <OnboardingTour />
+      <SetupWizard />
 
       {token ? (
         <>

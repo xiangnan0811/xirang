@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,11 +98,26 @@ func (m *Manager) enforceRetentionForPolicy(policy model.Policy) {
 	}
 }
 
+// dangerousRoots 禁止执行保留清理的系统根目录
+var dangerousRoots = []string{
+	"/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc",
+	"/sys", "/lib", "/lib64", "/run", "/var", "/home", "/root", "/tmp",
+}
+
 func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cutoff time.Time) {
 	log := logger.Module("task")
 	targetPath := strings.TrimSpace(policy.TargetPath)
 	if targetPath == "" {
 		return
+	}
+
+	// 安全检查：拒绝危险的系统根目录
+	cleanedTarget := filepath.Clean(targetPath)
+	for _, dangerous := range dangerousRoots {
+		if cleanedTarget == dangerous {
+			log.Warn().Str("path", targetPath).Msg("跳过危险的备份目标路径（系统根目录），不执行保留清理")
+			return
+		}
 	}
 
 	entries, err := os.ReadDir(targetPath)
@@ -234,21 +250,11 @@ func shellEscape(s string) string {
 
 // extractResticPassword 从 ExecutorConfig JSON 中提取 repository_password 字段
 func extractResticPassword(configJSON string) string {
-	// 简单解析，避免引入额外依赖
-	import_start := strings.Index(configJSON, `"repository_password"`)
-	if import_start < 0 {
+	var cfg struct {
+		RepositoryPassword string `json:"repository_password"`
+	}
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return ""
 	}
-	rest := configJSON[import_start+len(`"repository_password"`):]
-	// 跳过空格和冒号
-	rest = strings.TrimLeft(rest, " \t\n\r:")
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	rest = rest[1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	return cfg.RepositoryPassword
 }

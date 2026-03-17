@@ -688,6 +688,9 @@ const zh = {
     cancelAriaLabel: "取消任务",
     deleteAriaLabel: "删除任务",
     trigger: "触发",
+    taskIdLabel: "任务 ID：{{id}}",
+    nodeLabel: "执行节点：{{name}}",
+    errorLabel: "失败信息：{{error}}",
   },
 
   // ── task run history ──

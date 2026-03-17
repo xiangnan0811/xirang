@@ -32,11 +32,28 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		return
 	}
 
-	// 校验目标节点存在
+	// 校验目标节点存在且未归档
 	var target model.Node
 	if err := h.db.First(&target, req.TargetNodeID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "目标节点不存在"})
 		return
+	}
+	if target.Archived {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "目标节点已归档"})
+		return
+	}
+
+	// 校验 operator 对目标节点的 ownership
+	role, _ := c.Get("role")
+	if role == "operator" {
+		userIDRaw, _ := c.Get("userID")
+		userID, _ := userIDRaw.(uint)
+		var count int64
+		h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count)
+		if count == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权迁移到该目标节点"})
+			return
+		}
 	}
 
 	migratedPolicies := 0

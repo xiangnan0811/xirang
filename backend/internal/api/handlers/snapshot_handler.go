@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
@@ -9,6 +11,30 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// dangerousRestorePaths 禁止恢复到的系统目录
+var dangerousRestorePaths = []string{
+	"/bin", "/sbin", "/usr", "/lib", "/lib64",
+	"/boot", "/dev", "/proc", "/sys", "/run",
+	"/etc", "/var/run",
+}
+
+// validateRestoreTargetPath 校验恢复目标路径安全性
+func validateRestoreTargetPath(targetPath string) bool {
+	cleaned := filepath.Clean(targetPath)
+	if !filepath.IsAbs(cleaned) {
+		return false
+	}
+	if cleaned == "/" {
+		return false
+	}
+	for _, prefix := range dangerousRestorePaths {
+		if cleaned == prefix || strings.HasPrefix(cleaned, prefix+"/") {
+			return false
+		}
+	}
+	return true
+}
 
 // SnapshotHandler 处理 restic 快照浏览和恢复
 type SnapshotHandler struct {
@@ -51,6 +77,10 @@ func (h *SnapshotHandler) ListFiles(c *gin.Context) {
 		return
 	}
 	snapshotID := c.Param("sid")
+	if !snapshotIDPattern.MatchString(snapshotID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "快照 ID 格式无效"})
+		return
+	}
 	path := c.DefaultQuery("path", "/")
 
 	var task model.Task
@@ -84,10 +114,19 @@ func (h *SnapshotHandler) Restore(c *gin.Context) {
 		return
 	}
 	snapshotID := c.Param("sid")
+	if !snapshotIDPattern.MatchString(snapshotID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "快照 ID 格式无效"})
+		return
+	}
 
 	var req restoreRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		return
+	}
+
+	if !validateRestoreTargetPath(req.TargetPath) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "恢复目标路径不安全，不允许恢复到系统目录"})
 		return
 	}
 

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { History, Loader2, Pencil, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ export const TasksGrid = React.memo(function TasksGrid({
   onEdit,
   onViewHistory,
 }: TasksViewProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   return (
@@ -48,14 +50,14 @@ export const TasksGrid = React.memo(function TasksGrid({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="font-medium">{task.name || task.policyName}</p>
-                <p className="text-xs text-muted-foreground">任务 ID：{task.id}</p>
+                <p className="text-xs text-muted-foreground">{t('tasks.taskIdLabel', { id: task.id })}</p>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {!task.cronSpec && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">手动</Badge>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{t('tasks.typeManual')}</Badge>
                 )}
                 {task.cronSpec && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">定时</Badge>
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{t('tasks.typeCron')}</Badge>
                 )}
                 <Badge variant={status.variant}>{status.label}</Badge>
                 {task.verifyStatus && task.verifyStatus !== "none" && (
@@ -63,24 +65,24 @@ export const TasksGrid = React.memo(function TasksGrid({
                     variant={task.verifyStatus === "passed" ? "success" : "warning"}
                     className="text-[10px] px-1.5 py-0"
                   >
-                    {task.verifyStatus === "passed" ? "校验通过" : task.verifyStatus === "warning" ? "校验异常" : "校验失败"}
+                    {task.verifyStatus === "passed" ? t('tasks.verifyPassed') : task.verifyStatus === "warning" ? t('tasks.verifyWarning') : t('tasks.verifyFailed')}
                   </Badge>
                 )}
               </div>
             </div>
 
             <div className="space-y-0.5 text-sm text-muted-foreground">
-              <p>执行节点：{task.nodeName}</p>
-              <p>开始时间：{task.startedAt}</p>
-              {task.nextRunAt ? <p>下次调度：{task.nextRunAt}</p> : null}
+              <p>{t('tasks.nodeLabel', { name: task.nodeName })}</p>
+              <p>{t('tasks.startedAtLabel', { time: task.startedAt })}</p>
+              {task.nextRunAt ? <p>{t('tasks.nextRunAtLabel', { time: task.nextRunAt })}</p> : null}
               {task.lastError ? (
-                <p className="break-all text-destructive">失败信息：{task.lastError}</p>
+                <p className="break-all text-destructive">{t('tasks.errorLabel', { error: task.lastError })}</p>
               ) : null}
             </div>
 
             <div className="space-y-1">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>进度</span>
+                <span>{t('tasks.columnProgress')}</span>
                 <span>{task.progress}%</span>
               </div>
               <div className="h-2 rounded-full bg-muted">
@@ -108,7 +110,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label="重试任务"
+                  aria-label={t('tasks.retryAriaLabel')}
                   disabled={task.status !== "failed" || isPendingAny}
                   onClick={() => void handleRetry(task.id)}
                 >
@@ -118,7 +120,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label={`查看任务 #${task.id} 日志`}
+                  aria-label={t('tasks.viewLogsAriaLabel', { id: task.id })}
                   onClick={() => navigate(`/app/logs?task=${task.id}`)}
                 >
                   <Terminal className="size-4" />
@@ -127,7 +129,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label={`查看任务 #${task.id} 执行历史`}
+                  aria-label={t('tasks.viewHistoryAriaLabel', { id: task.id })}
                   onClick={() => onViewHistory(task)}
                 >
                   <History className="size-4" />
@@ -136,7 +138,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label="编辑任务"
+                  aria-label={t('tasks.editAriaLabel')}
                   disabled={isPendingAny}
                   onClick={() => onEdit(task)}
                 >
@@ -146,7 +148,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label="取消任务"
+                  aria-label={t('tasks.cancelAriaLabel')}
                   disabled={!canCancel(task.status) || isPendingAny}
                   onClick={() => void handleCancel(task.id)}
                 >
@@ -156,7 +158,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   variant="ghost"
                   size="icon"
                   className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="删除任务"
+                  aria-label={t('tasks.deleteAriaLabel')}
                   disabled={isPendingAny}
                   onClick={() => void handleDelete(task.id)}
                 >
@@ -169,7 +171,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                 onClick={() => void handleTrigger(task.id)}
               >
                 {isPendingTrigger ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}
-                触发
+                {t('tasks.trigger')}
               </Button>
             </div>
           </div>
@@ -179,11 +181,11 @@ export const TasksGrid = React.memo(function TasksGrid({
       {!loading && !filteredTasks.length ? (
         <FilteredEmptyState
           className="md:col-span-2 2xl:col-span-3"
-          title="当前筛选条件下没有任务"
-          description="可重置筛选条件，或直接新建一个任务。"
+          title={t('tasks.emptyTitle')}
+          description={t('tasks.emptyDesc')}
           onReset={resetFilters}
           onCreate={() => setCreateDialogOpen(true)}
-          createLabel="新建任务"
+          createLabel={t('tasks.emptyCreateLabel')}
           createIcon={Plus}
         />
       ) : null}
