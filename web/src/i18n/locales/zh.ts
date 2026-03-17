@@ -46,6 +46,8 @@ const zh = {
     nextPage: "下一页",
     pageInfo: "第 {{page}} 页 · 共 {{total}} 条",
     resetFilter: "重置筛选",
+    defaultTitle: "没有匹配的结果",
+    defaultDescription: "尝试调整筛选条件。",
     filterSummary: "当前筛选 {{filtered}} / {{total}} {{unit}}",
     unit: "项",
     noData: "暂无数据",
@@ -1011,6 +1013,19 @@ const zh = {
     errorForbidden: "当前账号无权访问审计日志（仅管理员可读）。",
     errorExportNotLoggedIn: "请先登录后导出审计日志。",
     errorExportForbidden: "当前账号无权导出审计日志（仅管理员可读）。",
+    colTime: "时间",
+    colUser: "用户",
+    colRole: "角色",
+    colMethod: "方法",
+    colPath: "路径",
+    colStatusCode: "状态码",
+    colClientIP: "客户端 IP",
+    readOps: "读操作",
+    writeOps: "写操作",
+    errorStatus: "错误状态",
+    total: "总计",
+    allMethods: "全部方法",
+    query: "查询",
   },
 
   // ── users page ──
@@ -1025,6 +1040,39 @@ const zh = {
       operator: "操作员",
       viewer: "查看者",
     },
+    accountSecurity: "账号安全",
+    currentLogin: "当前登录：{{username}}",
+    currentPassword: "当前密码",
+    newPassword: "新密码",
+    newPasswordPlaceholder: "请输入新密码",
+    confirmPassword: "确认新密码",
+    changePassword: "修改密码",
+    changePasswordFailed: "修改密码失败：{{error}}",
+    userManagement: "用户管理",
+    newUsername: "用户名",
+    initialPassword: "初始密码",
+    createUser: "创建用户",
+    passwordKeepEmpty: "留空则不修改密码",
+    loadFailed: "加载用户列表失败：{{error}}",
+    loadingDesc: "正在加载用户数据...",
+    errorNotLoggedIn: "请先登录。",
+    errorPasswordRequired: "请输入当前密码和新密码。",
+    errorPasswordMismatch: "两次输入的新密码不一致。",
+    errorPasswordTooShort: "密码长度不能少于 6 个字符。",
+    errorUsernamePasswordRequired: "用户名和密码不能为空。",
+    passwordChanged: "密码修改成功。",
+    createSuccess: "用户已创建。",
+    createFailed: "创建用户失败：{{error}}",
+    updateSuccess: "用户信息已更新。",
+    updateFailed: "更新用户失败：{{error}}",
+    confirmDeleteTitle: "确认删除",
+    confirmDeleteDesc: "确认删除用户 {{username}} 吗？此操作不可逆。",
+    deleteSuccess: "用户已删除。",
+    deleteFailed: "删除用户失败：{{error}}",
+    emptyTitle: "暂无用户数据",
+    emptyDesc: "当前没有可管理的用户。",
+    insufficientPermission: "权限不足",
+    insufficientPermissionDesc: "当前账号无权管理用户。",
   },
 
   // ── SSH keys page ──
@@ -1037,6 +1085,37 @@ const zh = {
     lastUsed: "最后使用：{{time}}",
     errorNameRequired: "保存失败：名称、用户名不能为空。",
     errorPrivateKeyRequired: "保存失败：新建 SSH Key 时私钥不能为空。",
+    addKeyDesc: "添加新的 SSH 密钥，用于连接远程服务器节点。",
+    editKeyTitle: "编辑 SSH Key",
+    editKeyDesc: "修改 SSH 密钥信息。",
+    keyName: "密钥名称",
+    defaultUsername: "默认用户名",
+    keyTypeLabel: "密钥类型",
+    keyType: "密钥类型",
+    keyTypeAuto: "自动检测",
+    keyTypeHint: "通常无需手动选择，系统会自动识别密钥类型。",
+    privateKeyLabel: "私钥内容",
+    privateKeyLabelEdit: "私钥内容（留空则不修改）",
+    privateKeyPlaceholder: "粘贴 SSH 私钥内容...",
+    privateKeyPlaceholderEdit: "留空则保持原有密钥不变",
+    uploadKeyFile: "上传密钥文件",
+    fileReadFailed: "文件读取失败",
+    fileTooLarge: "文件过大（超过 100KB）",
+    saveKey: "保存密钥",
+    updateKey: "更新密钥",
+    keyCreated: "SSH Key 已创建。",
+    keyUpdated: "SSH Key 已更新。",
+    keyDeleted: "SSH Key 已删除。",
+    confirmDeleteDesc: "确认删除 SSH Key「{{name}}」？如果有节点正在使用此密钥，删除将失败。",
+    deleteFailedInUse: "删除失败：该密钥正在被节点使用。",
+    fingerprint: "指纹",
+    createdAt: "创建时间",
+    inUse: "使用中",
+    unused: "未使用",
+    inUseNodes: "使用中节点",
+    boundNodes: "绑定节点",
+    securityWarning: "安全提示：请妥善保管私钥，避免在不安全的环境中暴露。",
+    inUseWarning: "该密钥正在被节点使用，删除前请先解绑。",
   },
 
   // ── reports page ──
@@ -1061,6 +1140,19 @@ const zh = {
     deleteFailed: "删除失败",
     generatedSuccess: "报告已生成",
     generateFailed: "生成失败",
+    pageTitle: "SLA 报告",
+    pageDesc: "查看和管理 SLA 报告配置，自动生成备份健康报告。",
+    historyReports: "历史报告",
+    noReportsHint: "暂无历史报告，可手动生成或等待定时任务执行。",
+    colNode: "节点",
+    colTask: "任务",
+    colFailCount: "失败次数",
+    colLastError: "最近错误",
+    successRuns: "成功执行",
+    topFailures: "失败排行",
+    noFailures: "暂无失败记录",
+    avgDuration: "平均耗时",
+    scopeTagValue: "标签：{{tag}}",
   },
 
   // ── report config dialog ──
@@ -1192,6 +1284,24 @@ const zh = {
       "0": "周日", "1": "周一", "2": "周二", "3": "周三",
       "4": "周四", "5": "周五", "6": "周六", "7": "周日",
     },
+    executionFrequency: "执行频率",
+    daily: "每天",
+    weekly: "每周",
+    monthly: "每月",
+    custom: "自定义",
+    customHint: "输入自定义 Cron 表达式",
+    parseResult: "解析结果",
+    at: "在",
+    byHour: "时",
+    byMinute: "分",
+    every: "每",
+    everyMonth: "每月",
+    exec: "执行",
+    execute: "执行",
+    dailyAt: "每天 {{time}} 执行",
+    dayAt: "每月 {{day}} 日",
+    hourAtMinute: "{{hour}} 时 {{minute}} 分",
+    minuteExec: "第 {{minute}} 分钟执行",
   },
 
   // ── snapshot browser / diff ──
@@ -1213,6 +1323,10 @@ const zh = {
     changed: "变更",
     noDifference: "两个快照之间没有差异",
     needTwoSnapshots: "至少需要 2 个快照才能进行比较。",
+    backToList: "返回快照列表",
+    snapshotLabel: "快照 {{id}}",
+    restoreCount: "恢复 {{count}} 项",
+    restoreSuccess: "恢复成功",
   },
 
   // ── backup health panel ──
@@ -1227,6 +1341,11 @@ const zh = {
     trendAriaLabel: "近 7 天备份成功率趋势图",
     totalRuns: "总次数",
     successRatePercent: "成功率 %",
+    title: "备份健康",
+    trend7d: "近 7 天备份趋势",
+    problemsTitle: "问题节点与策略",
+    allHealthy: "所有节点备份状态健康",
+    consecutiveFailures: "连续失败 {{count}} 次",
   },
 
   // ── storage usage panel ──
@@ -1246,22 +1365,56 @@ const zh = {
   selfBackup: {
     backupFailed: "备份失败",
     listLoadFailed: "备份列表加载失败",
+    title: "系统自备份",
+    desc: "备份息壤自身的数据库和配置文件。",
+    backupNow: "立即备份",
+    backupSuccess: "备份成功",
+    loadingList: "加载备份列表...",
+    noRecords: "暂无备份记录",
+    colFilename: "文件名",
+    colSize: "大小",
+    colCreatedAt: "创建时间",
+    colSha256: "SHA256",
   },
 
   // ── docker volumes panel ──
   dockerVolumes: {
     loadFailed: "获取 Docker 卷失败",
     useAsSource: "使用此路径作为备份源",
+    colName: "名称",
+    colDriver: "驱动",
+    colMountpoint: "挂载点",
+    noVolumes: "未检测到 Docker 数据卷",
+    scanning: "扫描中...",
+    usePath: "使用此路径",
+    usePathAriaLabel: "使用路径 {{path}} 作为备份源",
   },
 
   // ── version banner ──
   versionBanner: {
     closeAriaLabel: "关闭版本更新提示",
+    currentVersion: "当前版本：{{version}}",
+    newVersion: "新版本可用：{{version}}",
+    viewDetails: "查看详情",
   },
 
   // ── file browser ──
   fileBrowser: {
     loadFailed: "加载文件列表失败",
+    colName: "名称",
+    colSize: "大小",
+    colPermissions: "权限",
+    colModTime: "修改时间",
+    rootDir: "根目录",
+    goUp: "返回上级",
+    enterDir: "进入目录",
+    previewFile: "预览文件",
+    emptyDir: "空目录",
+    emptyContent: "文件内容为空",
+    loadDirFailed: "加载目录失败",
+    loadFileFailed: "加载文件失败",
+    fileTruncated: "文件已截断",
+    truncatedHint: "文件过大，仅显示前 {{size}} 内容。",
   },
 
   // ── onboarding tour ──
@@ -1340,10 +1493,19 @@ const zh = {
       policySchedule: "策略调度",
       policyScheduleDesc: "Cron 自动执行任务",
     },
+    configProgress: "配置进度",
+    jumpToStep: "跳转到第 {{step}} 步",
+    skipGuide: "跳过引导",
+    startSetup: "开始配置",
+    completeHint1: "所有基础配置已完成",
+    completeHint2: "现在可以前往概览页查看系统状态，或继续探索更多高级功能。",
   },
 
   // ── NAS mount wizard ──
   nasMountWizard: {
+    title: "外部存储挂载向导",
+    description: "引导你将 NAS/USB 等外部存储挂载到服务器，用作备份目标。",
+    selectProtocolHint: "请选择存储协议类型",
     stepLabels: ["选择协议", "填写参数", "生成命令", "验证挂载"],
     stepsAriaLabel: "向导步骤",
     protocols: {
@@ -1351,6 +1513,34 @@ const zh = {
       smb: { title: "SMB/CIFS", desc: "Windows 共享协议，兼容群晖/威联通等 NAS" },
       usb: { title: "USB/本地", desc: "USB 外置硬盘或本地挂载设备" },
     },
+    nfs: {
+      serverAddress: "NFS 服务器地址",
+      exportPath: "导出路径",
+    },
+    smb: {
+      serverAddress: "SMB 服务器地址",
+      shareName: "共享名称",
+      username: "用户名",
+      password: "密码",
+    },
+    usb: {
+      devicePath: "设备路径",
+      fsType: "文件系统类型",
+    },
+    localMountPoint: "本地挂载点",
+    mountOptions: "挂载选项",
+    mountCommand: "挂载命令",
+    copyCommand: "复制命令",
+    fstabEntry: "fstab 条目",
+    fstabHint: "将此行添加到 /etc/fstab 以实现开机自动挂载。",
+    copyEntry: "复制条目",
+    filesystem: "文件系统",
+    totalSpace: "总空间",
+    freeSpace: "可用空间",
+    mountSuccess: "挂载验证成功",
+    notMountPointWarning: "该路径不是挂载点，可能未正确挂载。",
+    verifyMountPoint: "验证挂载点",
+    verifyMountPointHint: "点击验证挂载点是否可用。",
     commandHint: "请在目标服务器上执行以上挂载命令，然后点击\"下一步\"验证挂载是否成功。",
     verifyLabels: {
       pathExists: "路径存在",
@@ -1392,6 +1582,7 @@ const zh = {
   // ── error boundary ──
   errorBoundary: {
     unknownError: "发生了未知错误",
+    renderError: "页面渲染出错",
   },
 
   // ── filtered empty state ──
@@ -1408,6 +1599,16 @@ const zh = {
   restore: {
     confirmTitle: "确认恢复",
     confirmDesc: "将执行备份恢复操作，目标路径上的文件可能被覆盖。",
+    title: "备份恢复",
+    description: "从备份中恢复数据到指定路径。",
+    sourcePathLabel: "备份源路径",
+    backupTargetLabel: "备份目标（已备份的路径）",
+    restoreTargetLabel: "恢复目标路径",
+    restoreTargetPlaceholder: "输入恢复目标路径",
+    restoreTargetHint: "数据将被恢复到此路径，请确保目标路径可写。",
+    submit: "确认恢复",
+    saving: "恢复中...",
+    failed: "恢复失败",
   },
 
   // ── expiry countdown badge ──
@@ -1441,6 +1642,73 @@ const zh = {
     cards: "卡片",
     list: "列表",
   },
+
+  // ── storage (overview panels) ──
+  storage: {
+    title: "备份存储用量",
+    loadFailed: "存储用量数据加载失败",
+    loadingTitle: "加载存储用量...",
+    mountPointUsage: "挂载点用量",
+    perNodeUsage: "各节点备份用量",
+    perNodeChartAriaLabel: "各节点备份存储用量柱状图",
+    used: "已用",
+    guideTitle: "外部存储引导",
+    guideDesc: "配置 NAS、USB 或网络存储作为备份目标。",
+    configureExternal: "配置外部存储",
+  },
+
+  // ── config export/import ──
+  configExport: {
+    title: "配置导入 / 导出",
+    desc: "导出或导入系统配置（节点、密钥、策略等）。",
+    exportConfig: "导出配置",
+    importConfig: "导入配置",
+    exportSuccess: "配置已导出",
+    exportFailed: "导出失败",
+    importSuccess: "导入成功：导入 {{imported}} 项，跳过 {{skipped}} 项",
+    importFailed: "导入失败",
+  },
+
+  // ── batch result dialog ──
+  batch: {
+    resultTitle: "批量执行结果",
+    batchId: "批次 ID：{{id}}",
+    running: "运行中",
+    done: "已完成",
+    total: "总数",
+    successCount: "成功",
+    failedCount: "失败",
+    loadingLogs: "加载日志中...",
+    logLoadFailed: "日志加载失败",
+    noLogOutput: "暂无日志输出",
+    fetchStatusFailed: "获取状态失败",
+    autoCleanHint: "执行结果将在一段时间后自动清理。",
+  },
+
+  // ── bandwidth schedule display ──
+  bandwidth: {
+    scheduleTitle: "带宽调度规则",
+    addRule: "添加规则",
+    noRules: "暂未添加带宽规则",
+    rulesHint: "设置不同时段的带宽限制，未覆盖时段不限速。",
+    to: "至",
+  },
+
+  // ── web terminal ──
+  terminal: {
+    disconnected: "连接已断开",
+    wsError: "WebSocket 连接错误",
+  },
+
+  // ── tree component ──
+  tree: {
+    collapse: "收起",
+    expand: "展开",
+    select: "选择",
+    treeViewLabel: "树形视图",
+  },
+
+
 } as const;
 
 export default zh;

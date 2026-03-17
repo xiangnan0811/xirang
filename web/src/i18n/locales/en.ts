@@ -46,6 +46,8 @@ const en = {
     nextPage: "Next page",
     pageInfo: "Page {{page}} · {{total}} total",
     resetFilter: "Reset filters",
+    defaultTitle: "No matching results",
+    defaultDescription: "Try adjusting your filters.",
     filterSummary: "Filtered {{filtered}} / {{total}} {{unit}}",
     unit: "items",
     noData: "No data",
@@ -1011,6 +1013,19 @@ const en = {
     errorForbidden: "No permission to access audit logs (admin only).",
     errorExportNotLoggedIn: "Please log in to export audit logs.",
     errorExportForbidden: "No permission to export audit logs (admin only).",
+    colTime: "Time",
+    colUser: "User",
+    colRole: "Role",
+    colMethod: "Method",
+    colPath: "Path",
+    colStatusCode: "Status Code",
+    colClientIP: "Client IP",
+    readOps: "Read Ops",
+    writeOps: "Write Ops",
+    errorStatus: "Error Status",
+    total: "Total",
+    allMethods: "All Methods",
+    query: "Query",
   },
 
   // ── users page ──
@@ -1025,6 +1040,39 @@ const en = {
       operator: "Operator",
       viewer: "Viewer",
     },
+    accountSecurity: "Account Security",
+    currentLogin: "Currently logged in: {{username}}",
+    currentPassword: "Current Password",
+    newPassword: "New Password",
+    newPasswordPlaceholder: "Enter new password",
+    confirmPassword: "Confirm New Password",
+    changePassword: "Change Password",
+    changePasswordFailed: "Failed to change password: {{error}}",
+    userManagement: "User Management",
+    newUsername: "Username",
+    initialPassword: "Initial Password",
+    createUser: "Create User",
+    passwordKeepEmpty: "Leave blank to keep current password",
+    loadFailed: "Failed to load user list: {{error}}",
+    loadingDesc: "Loading user data...",
+    errorNotLoggedIn: "Please log in first.",
+    errorPasswordRequired: "Please enter current and new password.",
+    errorPasswordMismatch: "New passwords do not match.",
+    errorPasswordTooShort: "Password must be at least 6 characters.",
+    errorUsernamePasswordRequired: "Username and password are required.",
+    passwordChanged: "Password changed successfully.",
+    createSuccess: "User created.",
+    createFailed: "Failed to create user: {{error}}",
+    updateSuccess: "User updated.",
+    updateFailed: "Failed to update user: {{error}}",
+    confirmDeleteTitle: "Confirm Delete",
+    confirmDeleteDesc: "Delete user {{username}}? This cannot be undone.",
+    deleteSuccess: "User deleted.",
+    deleteFailed: "Failed to delete user: {{error}}",
+    emptyTitle: "No users",
+    emptyDesc: "No user data available.",
+    insufficientPermission: "Insufficient Permissions",
+    insufficientPermissionDesc: "Your account does not have permission to manage users.",
   },
 
   // ── SSH keys page ──
@@ -1037,6 +1085,37 @@ const en = {
     lastUsed: "Last used: {{time}}",
     errorNameRequired: "Save failed: name and username are required.",
     errorPrivateKeyRequired: "Save failed: private key is required for new SSH keys.",
+    addKeyDesc: "Add a new SSH key for connecting to remote server nodes.",
+    editKeyTitle: "Edit SSH Key",
+    editKeyDesc: "Modify SSH key information.",
+    keyName: "Key Name",
+    defaultUsername: "Default Username",
+    keyTypeLabel: "Key Type",
+    keyType: "Key Type",
+    keyTypeAuto: "Auto Detect",
+    keyTypeHint: "Usually no manual selection needed. The system will auto-detect the key type.",
+    privateKeyLabel: "Private Key",
+    privateKeyLabelEdit: "Private Key (leave blank to keep current)",
+    privateKeyPlaceholder: "Paste SSH private key content...",
+    privateKeyPlaceholderEdit: "Leave blank to keep current key",
+    uploadKeyFile: "Upload Key File",
+    fileReadFailed: "Failed to read file",
+    fileTooLarge: "File too large (exceeds 100KB)",
+    saveKey: "Save Key",
+    updateKey: "Update Key",
+    keyCreated: "SSH Key created.",
+    keyUpdated: "SSH Key updated.",
+    keyDeleted: "SSH Key deleted.",
+    confirmDeleteDesc: "Delete SSH Key \"{{name}}\"? If any node is using this key, deletion will fail.",
+    deleteFailedInUse: "Delete failed: this key is in use by nodes.",
+    fingerprint: "Fingerprint",
+    createdAt: "Created At",
+    inUse: "In Use",
+    unused: "Unused",
+    inUseNodes: "Nodes In Use",
+    boundNodes: "Bound Nodes",
+    securityWarning: "Security notice: keep your private key safe and avoid exposing it in insecure environments.",
+    inUseWarning: "This key is in use by nodes. Please unbind before deleting.",
   },
 
   // ── reports page ──
@@ -1061,6 +1140,19 @@ const en = {
     deleteFailed: "Delete failed",
     generatedSuccess: "Report generated",
     generateFailed: "Generation failed",
+    pageTitle: "SLA Reports",
+    pageDesc: "View and manage SLA report configurations. Auto-generate backup health reports.",
+    historyReports: "Report History",
+    noReportsHint: "No reports yet. Generate manually or wait for scheduled execution.",
+    colNode: "Node",
+    colTask: "Task",
+    colFailCount: "Failures",
+    colLastError: "Last Error",
+    successRuns: "Successful Runs",
+    topFailures: "Top Failures",
+    noFailures: "No failures recorded",
+    avgDuration: "Avg Duration",
+    scopeTagValue: "Tag: {{tag}}",
   },
 
   // ── report config dialog ──
@@ -1192,6 +1284,24 @@ const en = {
       "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
       "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun",
     },
+    executionFrequency: "Execution Frequency",
+    daily: "Daily",
+    weekly: "Weekly",
+    monthly: "Monthly",
+    custom: "Custom",
+    customHint: "Enter a custom Cron expression",
+    parseResult: "Parse Result",
+    at: "at",
+    byHour: "hour",
+    byMinute: "minute",
+    every: "Every",
+    everyMonth: "Monthly",
+    exec: "execute",
+    execute: "execute",
+    dailyAt: "Daily at {{time}}",
+    dayAt: "Day {{day}} of month",
+    hourAtMinute: "{{hour}}:{{minute}}",
+    minuteExec: "At minute {{minute}}",
   },
 
   // ── snapshot browser / diff ──
@@ -1213,6 +1323,10 @@ const en = {
     changed: "Changed",
     noDifference: "No differences between the two snapshots",
     needTwoSnapshots: "At least 2 snapshots are required for comparison.",
+    backToList: "Back to snapshot list",
+    snapshotLabel: "Snapshot {{id}}",
+    restoreCount: "Restore {{count}} items",
+    restoreSuccess: "Restore successful",
   },
 
   // ── backup health panel ──
@@ -1227,6 +1341,11 @@ const en = {
     trendAriaLabel: "7-day backup success rate trend",
     totalRuns: "Total runs",
     successRatePercent: "Success rate %",
+    title: "Backup Health",
+    trend7d: "7-Day Backup Trend",
+    problemsTitle: "Problem Nodes & Policies",
+    allHealthy: "All nodes are healthy",
+    consecutiveFailures: "{{count}} consecutive failures",
   },
 
   // ── storage usage panel ──
@@ -1246,22 +1365,56 @@ const en = {
   selfBackup: {
     backupFailed: "Backup failed",
     listLoadFailed: "Failed to load backup list",
+    title: "Self Backup",
+    desc: "Back up Xirang's own database and configuration files.",
+    backupNow: "Backup Now",
+    backupSuccess: "Backup successful",
+    loadingList: "Loading backup list...",
+    noRecords: "No backup records",
+    colFilename: "Filename",
+    colSize: "Size",
+    colCreatedAt: "Created At",
+    colSha256: "SHA256",
   },
 
   // ── docker volumes panel ──
   dockerVolumes: {
     loadFailed: "Failed to load Docker volumes",
     useAsSource: "Use this path as backup source",
+    colName: "Name",
+    colDriver: "Driver",
+    colMountpoint: "Mount Point",
+    noVolumes: "No Docker volumes detected",
+    scanning: "Scanning...",
+    usePath: "Use Path",
+    usePathAriaLabel: "Use path {{path}} as backup source",
   },
 
   // ── version banner ──
   versionBanner: {
     closeAriaLabel: "Close version update notice",
+    currentVersion: "Current version: {{version}}",
+    newVersion: "New version available: {{version}}",
+    viewDetails: "View Details",
   },
 
   // ── file browser ──
   fileBrowser: {
     loadFailed: "Failed to load file list",
+    colName: "Name",
+    colSize: "Size",
+    colPermissions: "Permissions",
+    colModTime: "Modified",
+    rootDir: "Root",
+    goUp: "Go Up",
+    enterDir: "Enter Directory",
+    previewFile: "Preview File",
+    emptyDir: "Empty directory",
+    emptyContent: "File is empty",
+    loadDirFailed: "Failed to load directory",
+    loadFileFailed: "Failed to load file",
+    fileTruncated: "File truncated",
+    truncatedHint: "File too large. Showing first {{size}} only.",
   },
 
   // ── onboarding tour ──
@@ -1340,10 +1493,19 @@ const en = {
       policySchedule: "Policy Scheduling",
       policyScheduleDesc: "Automated cron task execution",
     },
+    configProgress: "Configuration Progress",
+    jumpToStep: "Jump to {{step}}",
+    skipGuide: "Skip Guide",
+    startSetup: "Start Setup",
+    completeHint1: "All basic configuration is complete.",
+    completeHint2: "Head to the overview to check system status, or explore advanced features.",
   },
 
   // ── NAS mount wizard ──
   nasMountWizard: {
+    title: "External Storage Mount Wizard",
+    description: "Guide you through mounting NAS/USB storage on your server as a backup target.",
+    selectProtocolHint: "Select a storage protocol",
     stepLabels: ["Select Protocol", "Enter Parameters", "Generate Command", "Verify Mount"],
     stepsAriaLabel: "Wizard steps",
     protocols: {
@@ -1351,6 +1513,34 @@ const en = {
       smb: { title: "SMB/CIFS", desc: "Windows sharing protocol, compatible with Synology/QNAP NAS" },
       usb: { title: "USB/Local", desc: "USB external drive or locally mounted device" },
     },
+    nfs: {
+      serverAddress: "NFS Server Address",
+      exportPath: "Export Path",
+    },
+    smb: {
+      serverAddress: "SMB Server Address",
+      shareName: "Share Name",
+      username: "Username",
+      password: "Password",
+    },
+    usb: {
+      devicePath: "Device Path",
+      fsType: "Filesystem Type",
+    },
+    localMountPoint: "Local Mount Point",
+    mountOptions: "Mount Options",
+    mountCommand: "Mount Command",
+    copyCommand: "Copy Command",
+    fstabEntry: "fstab Entry",
+    fstabHint: "Add this line to /etc/fstab for automatic mounting on boot.",
+    copyEntry: "Copy Entry",
+    filesystem: "Filesystem",
+    totalSpace: "Total Space",
+    freeSpace: "Free Space",
+    mountSuccess: "Mount verified successfully",
+    notMountPointWarning: "This path is not a mount point. It may not be mounted correctly.",
+    verifyMountPoint: "Verify Mount Point",
+    verifyMountPointHint: "Click to verify the mount point is available.",
     commandHint: "Run the mount command above on the target server, then click 'Next' to verify.",
     verifyLabels: {
       pathExists: "Path exists",
@@ -1392,6 +1582,7 @@ const en = {
   // ── error boundary ──
   errorBoundary: {
     unknownError: "An unknown error occurred",
+    renderError: "Page render error",
   },
 
   // ── filtered empty state ──
@@ -1408,6 +1599,16 @@ const en = {
   restore: {
     confirmTitle: "Confirm Restore",
     confirmDesc: "This will execute a backup restore. Files at the target path may be overwritten.",
+    title: "Restore Backup",
+    description: "Restore backup data to the specified target path.",
+    sourcePathLabel: "Source Path",
+    backupTargetLabel: "Backup Target",
+    restoreTargetLabel: "Restore Target Path",
+    restoreTargetPlaceholder: "e.g. /tmp/restore",
+    restoreTargetHint: "Files at this path may be overwritten. Choose carefully.",
+    submit: "Start Restore",
+    saving: "Restoring...",
+    failed: "Restore failed",
   },
 
   // ── expiry countdown badge ──
@@ -1441,6 +1642,73 @@ const en = {
     cards: "Cards",
     list: "List",
   },
+
+  // ── storage (overview panels) ──
+  storage: {
+    title: "Backup Storage Usage",
+    loadFailed: "Failed to load storage usage",
+    loadingTitle: "Loading storage usage...",
+    mountPointUsage: "Mount Point Usage",
+    perNodeUsage: "Per-Node Backup Usage",
+    perNodeChartAriaLabel: "Per-node backup storage usage bar chart",
+    used: "Used",
+    guideTitle: "External Storage Guide",
+    guideDesc: "Configure NAS, USB, or network storage as a backup target.",
+    configureExternal: "Configure External Storage",
+  },
+
+  // ── config export/import ──
+  configExport: {
+    title: "Config Import / Export",
+    desc: "Export or import system configuration (nodes, keys, policies, etc.).",
+    exportConfig: "Export Config",
+    importConfig: "Import Config",
+    exportSuccess: "Configuration exported",
+    exportFailed: "Export failed",
+    importSuccess: "Imported {{imported}} items, skipped {{skipped}}",
+    importFailed: "Import failed",
+  },
+
+  // ── batch result dialog ──
+  batch: {
+    resultTitle: "Batch Execution Results",
+    batchId: "Batch ID: {{id}}",
+    running: "Running",
+    done: "Done",
+    total: "Total",
+    successCount: "Succeeded",
+    failedCount: "Failed",
+    loadingLogs: "Loading logs...",
+    logLoadFailed: "Failed to load logs",
+    noLogOutput: "No log output",
+    fetchStatusFailed: "Failed to fetch status",
+    autoCleanHint: "Results will be cleaned up automatically after a while.",
+  },
+
+  // ── bandwidth schedule display ──
+  bandwidth: {
+    scheduleTitle: "Bandwidth Schedule Rules",
+    addRule: "Add Rule",
+    noRules: "No bandwidth rules configured",
+    rulesHint: "Set bandwidth limits for different time periods. Uncovered periods are unlimited.",
+    to: "to",
+  },
+
+  // ── web terminal ──
+  terminal: {
+    disconnected: "Disconnected",
+    wsError: "WebSocket connection error",
+  },
+
+  // ── tree component ──
+  tree: {
+    collapse: "Collapse",
+    expand: "Expand",
+    select: "Select",
+    treeViewLabel: "Tree View",
+  },
+
+
 } as const;
 
 export default en;
