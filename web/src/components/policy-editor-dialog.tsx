@@ -6,6 +6,7 @@ import { AppTextarea } from "@/components/ui/app-textarea";
 import { Switch } from "@/components/ui/switch";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
+import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context";
 import type { HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
@@ -29,6 +30,7 @@ const emptyDraft: PolicyDraft = {
   hookTimeoutSeconds: 300,
   maxRetries: 2,
   retryBaseSeconds: 30,
+  bandwidthSchedule: "",
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -56,6 +58,7 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     hookTimeoutSeconds: policy.hookTimeoutSeconds ?? 300,
     maxRetries: policy.maxRetries ?? 2,
     retryBaseSeconds: policy.retryBaseSeconds ?? 30,
+    bandwidthSchedule: policy.bandwidthSchedule ?? "",
   };
 }
 
@@ -412,6 +415,13 @@ export function PolicyEditorDialog({
                 }).join(" → ")}
               </p>
             )}
+
+            <BandwidthScheduleEditor
+              value={draft.bandwidthSchedule ?? ""}
+              onChange={(val) =>
+                setDraft((prev) => ({ ...prev, bandwidthSchedule: val }))
+              }
+            />
           </div>
         )}
       </div>

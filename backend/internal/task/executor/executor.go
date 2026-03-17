@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"xirang/backend/internal/bandwidth"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -185,6 +186,11 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	}
 	defer cleanup()
 
+	// 带宽限制：优先使用调度规则，其次使用静态限制
+	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
+		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bwLimit*1000/8))
+	}
+
 	// 使用 `--` 终止参数解析，防止路径内容被解释为 rsync 选项。
 	args = append(args, "--", source, task.RsyncTarget)
 	cmd := exec.CommandContext(ctx, e.binary, args...)
@@ -314,7 +320,12 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 
 	// 构造在远程节点上执行的 rsync 命令
 	// 注意：source 和 target 都是节点本地路径
-	rsyncCmd := fmt.Sprintf("rsync -avz --info=progress2 -- %s %s",
+	bwPart := ""
+	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
+		bwPart = fmt.Sprintf(" --bwlimit %dk", bwLimit*1000/8)
+	}
+	rsyncCmd := fmt.Sprintf("rsync -avz --info=progress2%s -- %s %s",
+		bwPart,
 		shellEscape(task.RsyncSource),
 		shellEscape(task.RsyncTarget))
 
@@ -456,6 +467,21 @@ func parseThroughputMbps(valueField string, unitField string) (float64, bool) {
 	}
 	bytesPerSecond := value * multiplier
 	return bytesPerSecond * 8 / 1_000_000, true
+}
+
+// resolveBwLimit 解析任务关联策略的带宽限制（Mbps）。
+// 优先使用 BandwidthSchedule 时间段规则，其次使用 BwLimit 静态限制。
+// 返回 0 表示不限速。
+func resolveBwLimit(task model.Task) int {
+	if task.Policy == nil {
+		return 0
+	}
+	if task.Policy.BandwidthSchedule != "" {
+		if limit := bandwidth.ResolveLimit(task.Policy.BandwidthSchedule, time.Now()); limit > 0 {
+			return limit
+		}
+	}
+	return task.Policy.BwLimit
 }
 
 func EnsureLocalTargetReady(target string) error {

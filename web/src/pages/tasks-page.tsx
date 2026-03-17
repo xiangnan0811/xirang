@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Terminal, RotateCcw, Play, FolderSearch } from "lucide-react";
+import { Plus, Terminal, RotateCcw, Play, FolderSearch, GitCompareArrows } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
+import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { TaskEditorDialog } from "@/components/task-create-dialog";
@@ -107,6 +108,7 @@ export function TasksPage() {
   const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
@@ -456,14 +458,24 @@ export function TasksPage() {
             </DialogDescription>
             <div className="ml-auto mr-8 flex gap-2 shrink-0">
               {historyTask?.executorType === "restic" && (
-                <Button
-                  size="sm"
-                  variant={showSnapshots ? "default" : "outline"}
-                  onClick={() => setShowSnapshots((v) => !v)}
-                >
-                  <FolderSearch className="mr-1 size-3.5" />
-                  浏览快照
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant={showSnapshots ? "default" : "outline"}
+                    onClick={() => { setShowSnapshots((v) => !v); setShowDiff(false); }}
+                  >
+                    <FolderSearch className="mr-1 size-3.5" />
+                    浏览快照
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={showDiff ? "default" : "outline"}
+                    onClick={() => { setShowDiff((v) => !v); setShowSnapshots(false); }}
+                  >
+                    <GitCompareArrows className="mr-1 size-3.5" />
+                    比较快照
+                  </Button>
+                </>
               )}
               {historyTask?.executorType === "rsync" && (
                 <Button
@@ -481,6 +493,8 @@ export function TasksPage() {
           <DialogBody>
             {historyTask && authToken && showSnapshots ? (
               <SnapshotBrowser taskId={historyTask.id} token={authToken} />
+            ) : historyTask && authToken && showDiff ? (
+              <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
             ) : historyTask && authToken && (
               selectedRun ? (
                 <TaskRunDetail

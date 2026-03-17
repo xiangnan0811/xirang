@@ -92,9 +92,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	reportHandler := handlers.NewReportHandler(dep.DB)
 	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
+	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
 	configHandler := handlers.NewConfigHandler(dep.DB)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
+	storageGuideHandler := handlers.NewStorageGuideHandler()
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
@@ -205,6 +207,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListSnapshots)
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
 	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), snapshotHandler.Restore)
+	secured.GET("/tasks/:id/snapshots/diff", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotDiffHandler.Diff)
 
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
@@ -212,6 +215,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
+	secured.POST("/system/verify-mount", middleware.RequireRole("admin"), storageGuideHandler.VerifyMount)
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 

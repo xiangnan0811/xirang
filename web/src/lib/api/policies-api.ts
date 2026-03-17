@@ -17,6 +17,7 @@ type PolicyResponse = {
   hook_timeout_seconds?: number;
   max_retries?: number;
   retry_base_seconds?: number;
+  bandwidth_schedule?: string;
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
@@ -38,6 +39,7 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     hookTimeoutSeconds: row.hook_timeout_seconds ?? undefined,
     maxRetries: row.max_retries ?? undefined,
     retryBaseSeconds: row.retry_base_seconds ?? undefined,
+    bandwidthSchedule: row.bandwidth_schedule ?? undefined,
   };
 }
 
@@ -67,6 +69,7 @@ export function createPoliciesApi() {
           hook_timeout_seconds: input.hookTimeoutSeconds ?? undefined,
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
+          bandwidth_schedule: input.bandwidthSchedule ?? undefined,
         }
       });
       return mapPolicy(unwrapData(payload));
@@ -90,6 +93,7 @@ export function createPoliciesApi() {
           hook_timeout_seconds: input.hookTimeoutSeconds ?? undefined,
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
+          bandwidth_schedule: input.bandwidthSchedule ?? undefined,
         }
       });
       return mapPolicy(unwrapData(payload));

@@ -84,6 +84,7 @@ type Policy struct {
 	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
 	MaxRetries         int       `gorm:"not null;default:2" json:"max_retries"`
 	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
+	BandwidthSchedule  string    `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
 	Nodes              []Node    `gorm:"many2many:policy_nodes" json:"-"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`

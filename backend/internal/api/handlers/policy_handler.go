@@ -40,6 +40,7 @@ type policyRequest struct {
 	HookTimeoutSeconds *int   `json:"hook_timeout_seconds"`
 	MaxRetries         *int   `json:"max_retries"`
 	RetryBaseSeconds   *int   `json:"retry_base_seconds"`
+	BandwidthSchedule  string `json:"bandwidth_schedule"`
 	NodeIDs            []uint `json:"node_ids"`
 }
 
@@ -142,8 +143,9 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		VerifyEnabled:    verifyEnabled,
 		VerifySampleRate: verifySampleRate,
 		IsTemplate:       isTemplate,
-		PreHook:          strings.TrimSpace(req.PreHook),
-		PostHook:         strings.TrimSpace(req.PostHook),
+		PreHook:           strings.TrimSpace(req.PreHook),
+		PostHook:          strings.TrimSpace(req.PostHook),
+		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
 	}
 	if req.HookTimeoutSeconds != nil {
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
@@ -272,6 +274,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 	p.PreHook = strings.TrimSpace(req.PreHook)
 	p.PostHook = strings.TrimSpace(req.PostHook)
+	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
 	if req.HookTimeoutSeconds != nil {
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
 	}
@@ -399,6 +402,7 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"hook_timeout_seconds": p.HookTimeoutSeconds,
 		"max_retries":          p.MaxRetries,
 		"retry_base_seconds":   p.RetryBaseSeconds,
+		"bandwidth_schedule":   p.BandwidthSchedule,
 		"node_ids":             nodeIDs,
 		"created_at":           p.CreatedAt,
 		"updated_at":           p.UpdatedAt,
@@ -475,7 +479,8 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		TargetPath:       tmpl.TargetPath,
 		CronSpec:         tmpl.CronSpec,
 		ExcludeRules:     tmpl.ExcludeRules,
-		BwLimit:          tmpl.BwLimit,
+		BwLimit:           tmpl.BwLimit,
+		BandwidthSchedule: tmpl.BandwidthSchedule,
 		RetentionDays:    tmpl.RetentionDays,
 		MaxConcurrent:    tmpl.MaxConcurrent,
 		Enabled:          false,

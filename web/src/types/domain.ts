@@ -108,6 +108,7 @@ export interface PolicyRecord {
   hookTimeoutSeconds?: number;
   maxRetries?: number;
   retryBaseSeconds?: number;
+  bandwidthSchedule?: string;
 }
 
 export interface NewPolicyInput {
@@ -125,6 +126,7 @@ export interface NewPolicyInput {
   hookTimeoutSeconds?: number;
   maxRetries?: number;
   retryBaseSeconds?: number;
+  bandwidthSchedule?: string;
 }
 
 export interface TaskRecord {

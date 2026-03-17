@@ -28,6 +28,7 @@ import { NodeMetricsPanel } from "@/components/node-metrics-panel";
 import { BackupHealthPanel } from "@/components/backup-health-panel";
 import { StorageUsagePanel } from "@/components/storage-usage-panel";
 import { ConfigExportImport } from "@/components/config-export-import";
+import { StorageGuideCard } from "@/components/storage-guide-card";
 import { SelfBackupPanel } from "@/components/self-backup-panel";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
@@ -428,6 +429,11 @@ export function OverviewPage() {
       {/* 系统配置导入导出（仅管理员可见） */}
       <section className="animate-slide-up [animation-delay:700ms]">
         <ConfigExportImport />
+      </section>
+
+      {/* 外部存储挂载引导（仅管理员可见） */}
+      <section className="animate-slide-up [animation-delay:750ms]">
+        <StorageGuideCard />
       </section>
 
       {/* 数据库备份（仅管理员可见） */}
