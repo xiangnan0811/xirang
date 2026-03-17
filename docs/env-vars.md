@@ -97,8 +97,9 @@
 | `RETENTION_CHECK_INTERVAL` | duration | `6h` | 否 | 备份保留策略检查间隔（最小 1m），定期清理过期备份并检查存储空间 |
 | `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警 |
 | `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警 |
+| `INTEGRITY_CHECK_MULTIPLIER` | int | `4` | 否 | 完整性检查频率倍数——每隔多少个保留清理周期运行一次 `restic check` / `rclone check`（默认 4，即 `RETENTION_CHECK_INTERVAL=6h` 时每 24h 一次） |
 
-**读取位置**：`config/config.go:64-76`，`RETENTION_CHECK_INTERVAL` → `config/config.go:146`，`BACKUP_STORAGE_*` → `config/config.go:152-164`
+**读取位置**：`config/config.go:64-76`，`RETENTION_CHECK_INTERVAL` → `config/config.go:146`，`BACKUP_STORAGE_*` → `config/config.go:152-164`，`INTEGRITY_CHECK_MULTIPLIER` → `task/retention.go`
 
 ## 9. 邮件通知
 
@@ -154,6 +155,15 @@
 |------|-----------|----------------|--------------------------|
 | `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | `true` | `false` | `true` |
 | `SSH_STRICT_HOST_KEY_CHECKING` | `true` | `false` | `true` |
+
+## 13. 版本检查与系统备份
+
+| 变量 | 类型 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `VERSION_CHECK_URL` | string | — | 否 | 版本检查地址（如 Gitea/GitHub releases API），未设置时版本检查接口返回"未配置" |
+| `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 数据库备份文件存放目录 |
+
+**读取位置**：`VERSION_CHECK_URL` → `api/handlers/version_handler.go:37`，`DB_BACKUP_DIR` → `api/handlers/system_handler.go:39`
 
 ## 已废弃变量
 

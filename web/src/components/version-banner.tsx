@@ -1,0 +1,87 @@
+import { useEffect, useState } from "react";
+import { X, ExternalLink } from "lucide-react";
+import { useAuth } from "@/context/auth-context";
+import { apiClient } from "@/lib/api/client";
+
+const DISMISSED_VERSION_KEY = "xirang.dismissed-version";
+
+export function VersionBanner() {
+  const { token, role } = useAuth();
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [latestVersion, setLatestVersion] = useState("");
+  const [releaseUrl, setReleaseUrl] = useState("");
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!token || role !== "admin") return;
+
+    const controller = new AbortController();
+
+    void apiClient.checkVersion(token, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
+      setCurrentVersion(result.current_version);
+      setLatestVersion(result.latest_version);
+      setReleaseUrl(result.release_url);
+
+      if (result.update_available) {
+        try {
+          const dismissedVersion = localStorage.getItem(DISMISSED_VERSION_KEY);
+          if (dismissedVersion === result.latest_version) {
+            setDismissed(true);
+          } else {
+            setUpdateAvailable(true);
+          }
+        } catch {
+          setUpdateAvailable(true);
+        }
+      }
+    }).catch(() => {
+      // 版本检查失败时静默忽略，不影响用户使用
+    });
+
+    return () => controller.abort();
+  }, [token, role]);
+
+  if (!updateAvailable || dismissed) return null;
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(DISMISSED_VERSION_KEY, latestVersion);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <div
+      role="status"
+      className="bg-primary/10 text-primary text-xs py-1.5 px-4 flex items-center justify-center gap-3"
+    >
+      <span>
+        新版本 v{latestVersion} 已发布
+        <span className="ml-2 text-primary/70">当前 v{currentVersion}</span>
+      </span>
+      {releaseUrl ? (
+        <a
+          href={releaseUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-primary/80"
+        >
+          查看详情
+          <ExternalLink className="size-3" />
+        </a>
+      ) : null}
+      <button
+        type="button"
+        onClick={handleDismiss}
+        className="ml-auto shrink-0 rounded p-0.5 hover:bg-primary/10 transition-colors"
+        aria-label="关闭版本更新提示"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}

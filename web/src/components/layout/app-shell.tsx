@@ -10,6 +10,7 @@ import { OnboardingTour } from "@/components/onboarding-tour";
 import { NotificationBell } from "@/components/notification-bell";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
 import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
+import { VersionBanner } from "@/components/version-banner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,6 +124,7 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen app-shell-bg overflow-x-hidden">
+      <VersionBanner />
       <a
         href="#main-content"
         className="sr-only absolute left-3 top-3 z-[70] rounded-md border border-border/80 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm focus:not-sr-only"

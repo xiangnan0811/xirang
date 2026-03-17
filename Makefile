@@ -1,5 +1,12 @@
 .PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X xirang/backend/internal/version.Version=$(VERSION) \
+           -X xirang/backend/internal/version.BuildTime=$(BUILD_TIME) \
+           -X xirang/backend/internal/version.GitCommit=$(GIT_COMMIT)
+
 backend-run:
 	cd backend && go run ./cmd/server
 
@@ -7,7 +14,7 @@ backend-test:
 	cd backend && go test ./...
 
 backend-build:
-	cd backend && go build ./...
+	cd backend && go build -ldflags "$(LDFLAGS)" -o xirang-server ./cmd/server
 
 install-web:
 	cd web && npm install

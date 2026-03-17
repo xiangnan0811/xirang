@@ -88,10 +88,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	fileHandler := handlers.NewFileHandler(dep.DB)
+	dockerHandler := handlers.NewDockerHandler(dep.DB)
 	reportHandler := handlers.NewReportHandler(dep.DB)
 	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	configHandler := handlers.NewConfigHandler(dep.DB)
+	versionHandler := handlers.NewVersionHandler()
+	systemHandler := handlers.NewSystemHandler(dep.DB)
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
@@ -99,6 +102,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
+	v1.GET("/version", versionHandler.Info)
 
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
@@ -129,6 +133,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Metrics)
 	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.ListNodeFiles)
 	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.GetNodeFileContent)
+	secured.GET("/nodes/:id/docker-volumes", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), dockerHandler.ListVolumes)
 	secured.GET("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.ListOwners)
 	secured.POST("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.AddOwner)
 	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
@@ -203,6 +208,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
+
+	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
+	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
+	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 

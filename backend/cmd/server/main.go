@@ -19,12 +19,18 @@ import (
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
+	"xirang/backend/internal/version"
 	"xirang/backend/internal/ws"
 )
 
 func main() {
 	logger.Init(os.Getenv("LOG_LEVEL"))
 	log := logger.Module("main")
+	log.Info().
+		Str("version", version.Version).
+		Str("commit", version.GitCommit).
+		Str("built", version.BuildTime).
+		Msg("Xirang 启动")
 
 	cfg, err := config.Load()
 	if err != nil {

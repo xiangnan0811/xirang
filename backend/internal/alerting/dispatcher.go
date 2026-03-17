@@ -158,6 +158,22 @@ func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeNa
 	return raiseAndDispatch(db, &alert)
 }
 
+func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+	errorCode := fmt.Sprintf("XR-INTG-%d", policyID)
+	alert := model.Alert{
+		NodeID:      nodeID,
+		NodeName:    nodeName,
+		PolicyName:  policyName,
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   errorCode,
+		Message:     message,
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
 func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",

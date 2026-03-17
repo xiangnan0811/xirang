@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,17 +31,30 @@ func (m *Manager) runRetentionWorker(ctx context.Context) {
 		interval = 6 * time.Hour
 	}
 
+	integrityMultiplier := 4
+	if raw := util.GetEnvOrDefault("INTEGRITY_CHECK_MULTIPLIER", ""); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			integrityMultiplier = v
+		}
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var tickCount int
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			tickCount++
 			m.enforceRetention()
 			m.checkLocalStorageSpace()
 			m.checkNodeExpiry()
+			// 完整性检查频率低于保留清理（默认每 4 个周期运行一次，即默认间隔 6h 时每 24h 一次）
+			if tickCount%integrityMultiplier == 0 {
+				m.checkIntegrity()
+			}
 		}
 	}
 }
