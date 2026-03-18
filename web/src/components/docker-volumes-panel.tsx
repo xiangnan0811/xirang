@@ -75,17 +75,17 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
   return (
     <div className="space-y-2">
       {warning && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">{warning}</p>
+        <p className="text-xs text-warning">{warning}</p>
       )}
       <div className="rounded-md border border-border/60">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border/40 text-left text-xs text-muted-foreground">
-              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colName')}</th>
-              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colDriver')}</th>
-              <th className="px-3 py-2 font-medium">{t('dockerVolumes.colMountpoint')}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{t('dockerVolumes.colName')}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{t('dockerVolumes.colDriver')}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{t('dockerVolumes.colMountpoint')}</th>
               {onSelectPath && (
-                <th className="px-3 py-2 font-medium text-right">{t('common.actions')}</th>
+                <th scope="col" className="px-3 py-2 font-medium text-right">{t('common.actions')}</th>
               )}
             </tr>
           </thead>

@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "@/components/ui/toast";
 import { ReportConfigDialog } from "@/components/report-config-dialog";
 
@@ -88,12 +89,12 @@ function ReportRow({ report }: { report: Report }) {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/40 text-left">
-                    <th className="pb-1.5 pr-4">{t("reports.colNode")}</th>
-                    <th className="pb-1.5 pr-4">{t("reports.colTask")}</th>
-                    <th className="pb-1.5 pr-4">
+                    <th scope="col" className="pb-1.5 pr-4">{t("reports.colNode")}</th>
+                    <th scope="col" className="pb-1.5 pr-4">{t("reports.colTask")}</th>
+                    <th scope="col" className="pb-1.5 pr-4">
                       {t("reports.colFailCount")}
                     </th>
-                    <th className="pb-1.5">{t("reports.colLastError")}</th>
+                    <th scope="col" className="pb-1.5">{t("reports.colLastError")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -338,7 +339,9 @@ export function ReportsPage() {
         </div>
       </div>
 
-      {!loading && configs.length === 0 ? (
+      {loading ? (
+        <LoadingState title={t("reports.loading")} rows={3} />
+      ) : configs.length === 0 ? (
         <EmptyState
           icon={BarChart3}
           title={t("reports.emptyTitle")}

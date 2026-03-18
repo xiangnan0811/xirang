@@ -1073,6 +1073,8 @@ const en = {
     emptyDesc: "No user data available.",
     insufficientPermission: "Insufficient Permissions",
     insufficientPermissionDesc: "Your account does not have permission to manage users.",
+    passwordForUser: "Password for {{username}}",
+    roleForUser: "Role for {{username}}",
   },
 
   // ── SSH keys page ──
@@ -1153,6 +1155,7 @@ const en = {
     noFailures: "No failures recorded",
     avgDuration: "Avg Duration",
     scopeTagValue: "Tag: {{tag}}",
+    loading: "Loading report configurations…",
   },
 
   // ── report config dialog ──

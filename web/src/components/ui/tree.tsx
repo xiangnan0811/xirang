@@ -63,8 +63,8 @@ function TreeItem({
 
   const defaultIcon = hasChildren
     ? isExpanded
-      ? <FolderOpen className="size-4 shrink-0 text-amber-500" />
-      : <Folder className="size-4 shrink-0 text-amber-500" />
+      ? <FolderOpen className="size-4 shrink-0 text-warning" />
+      : <Folder className="size-4 shrink-0 text-warning" />
     : <File className="size-4 shrink-0 text-muted-foreground" />;
 
   return (

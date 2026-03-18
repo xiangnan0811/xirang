@@ -234,7 +234,7 @@ export function AppShell() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 text-green-600 hover:text-green-700 dark:text-green-500 dark:hover:text-green-400"
+                    className="size-8 text-success hover:text-success/80"
                     onClick={() => setTotpDisableOpen(true)}
                     title={t('appShell.disableTotp')}
                     aria-label={t('appShell.disableTotp')}

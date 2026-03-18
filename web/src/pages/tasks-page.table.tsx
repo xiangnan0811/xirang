@@ -31,14 +31,14 @@ export const TasksTable = React.memo(function TasksTable({
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
           <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2.5">{t('tasks.columnTask')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnNode')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnStatus')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnType')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnProgress')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnSchedule')}</th>
-            <th className="px-3 py-2.5">{t('tasks.columnError')}</th>
-            <th className="px-3 py-2.5 text-right">{t('tasks.columnActions')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnTask')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnNode')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnStatus')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnType')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnProgress')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnSchedule')}</th>
+            <th scope="col" className="px-3 py-2.5">{t('tasks.columnError')}</th>
+            <th scope="col" className="px-3 py-2.5 text-right">{t('tasks.columnActions')}</th>
           </tr>
         </thead>
         <tbody>

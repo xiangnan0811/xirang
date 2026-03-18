@@ -217,7 +217,7 @@ export function PoliciesPage() {
           ) : null}
 
           {/* 小屏卡片，大屏表格 */}
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 md:hidden">
+          <div className="grid gap-3 sm:grid-cols-2 md:hidden">
             {filteredPolicies.map((policy) => (
               <div
                 key={policy.id}
@@ -312,7 +312,7 @@ export function PoliciesPage() {
             <table className="min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th className="w-10 px-3 py-2.5">
+                  <th scope="col" className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"
                       className="size-3.5 accent-primary"
@@ -327,13 +327,13 @@ export function PoliciesPage() {
                       aria-label={t('policies.selectAllAriaLabel')}
                     />
                   </th>
-                  <th className="px-3 py-2.5">{t('policies.columnName')}</th>
-                  <th className="px-3 py-2.5">{t('policies.columnCron')}</th>
-                  <th className="px-3 py-2.5">{t('policies.columnSource')}</th>
-                  <th className="px-3 py-2.5">{t('policies.columnTarget')}</th>
-                  <th className="px-3 py-2.5">{t('policies.columnNodes')}</th>
-                  <th className="px-3 py-2.5">{t('policies.columnStatus')}</th>
-                  <th className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnName')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnCron')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnSource')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnTarget')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnNodes')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnStatus')}</th>
+                  <th scope="col" className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
                 </tr>
               </thead>
               <tbody>

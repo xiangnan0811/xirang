@@ -80,10 +80,10 @@ export function SelfBackupPanel() {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-border/50 text-muted-foreground">
                 <tr>
-                  <th className="pb-1.5 pr-4 font-medium">{t('selfBackup.colFilename')}</th>
-                  <th className="pb-1.5 pr-4 font-medium">{t('selfBackup.colSize')}</th>
-                  <th className="pb-1.5 pr-4 font-medium">{t('selfBackup.colCreatedAt')}</th>
-                  <th className="pb-1.5 font-medium">{t('selfBackup.colSha256')}</th>
+                  <th scope="col" className="pb-1.5 pr-4 font-medium">{t('selfBackup.colFilename')}</th>
+                  <th scope="col" className="pb-1.5 pr-4 font-medium">{t('selfBackup.colSize')}</th>
+                  <th scope="col" className="pb-1.5 pr-4 font-medium">{t('selfBackup.colCreatedAt')}</th>
+                  <th scope="col" className="pb-1.5 font-medium">{t('selfBackup.colSha256')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/30">

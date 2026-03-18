@@ -54,6 +54,9 @@ export function UsersPage() {
   const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>(
     {},
   );
+  const [deletingUserMap, setDeletingUserMap] = useState<Record<number, boolean>>(
+    {},
+  );
 
   const loadUsers = useCallback(async () => {
     if (!token || !isAdmin) {
@@ -199,7 +202,7 @@ export function UsersPage() {
       return;
     }
 
-    setSavingUserMap((prev) => ({ ...prev, [target.id]: true }));
+    setDeletingUserMap((prev) => ({ ...prev, [target.id]: true }));
     try {
       await apiClient.deleteUser(token, target.id);
       setUsers((prev) => prev.filter((item) => item.id !== target.id));
@@ -209,7 +212,7 @@ export function UsersPage() {
         t("users.deleteFailed", { error: getErrorMessage(error) }),
       );
     } finally {
-      setSavingUserMap((prev) => ({ ...prev, [target.id]: false }));
+      setDeletingUserMap((prev) => ({ ...prev, [target.id]: false }));
     }
   };
 
@@ -329,7 +332,7 @@ export function UsersPage() {
                           <p className="text-xs text-muted-foreground">
                             ID: {item.id} · {roleLabel(item.role)}
                             {item.totpEnabled ? (
-                              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
                                 <Shield className="size-2.5" />
                                 2FA
                               </span>
@@ -337,6 +340,7 @@ export function UsersPage() {
                           </p>
                         </div>
                         <Select
+                          aria-label={t("users.roleForUser", { username: item.username })}
                           value={roleDrafts[item.id] ?? item.role}
                           onChange={(event) =>
                             setRoleDrafts((prev) => ({
@@ -352,6 +356,7 @@ export function UsersPage() {
                         />
                         <Input
                           type="password"
+                          aria-label={t("users.passwordForUser", { username: item.username })}
                           value={passwordDrafts[item.id] ?? ""}
                           onChange={(event) =>
                             setPasswordDrafts((prev) => ({
@@ -374,7 +379,7 @@ export function UsersPage() {
                             size="sm"
                             variant="destructive"
                             disabled={isSelf}
-                            loading={Boolean(savingUserMap[item.id])}
+                            loading={Boolean(deletingUserMap[item.id])}
                             onClick={() => void handleDeleteUser(item)}
                           >
                             {t("common.delete")}

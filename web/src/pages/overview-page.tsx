@@ -223,7 +223,7 @@ export function OverviewPage() {
                     {previewNodes.map((node) => {
                       let dotColor = "bg-muted-foreground/30";
                       if (node.status === "online") dotColor = "bg-success";
-                      if (node.status === "warning") dotColor = "bg-destructive";
+                      if (node.status === "warning") dotColor = "bg-warning";
                       return (
                         <button
                           key={node.id}
@@ -251,7 +251,7 @@ export function OverviewPage() {
                   {nodes.length > 0 && (
                     <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive"></span>{t("overview.legendWarning")}</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
                     </div>
                   )}
@@ -439,7 +439,7 @@ export function OverviewPage() {
               {nodes.map((node) => {
                 let dotColor = "bg-muted-foreground/30";
                 if (node.status === "online") dotColor = "bg-success";
-                if (node.status === "warning") dotColor = "bg-destructive";
+                if (node.status === "warning") dotColor = "bg-warning";
                 return (
                   <button
                     key={node.id}
@@ -462,7 +462,7 @@ export function OverviewPage() {
             </div>
             <div className="mt-4 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border/40">
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />{t("overview.legendOnline")}</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-destructive" />{t("overview.legendWarning")}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning" />{t("overview.legendWarning")}</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />{t("overview.legendOffline")}</span>
             </div>
           </div>
@@ -491,11 +491,11 @@ export function OverviewPage() {
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-border/50 text-xs text-muted-foreground uppercase bg-muted/20">
                     <tr>
-                      <th className="px-4 py-2 font-medium">{t("overview.tableNodeName")}</th>
-                      <th className="px-4 py-2 font-medium">{t("overview.tableTaskName")}</th>
-                      <th className="px-4 py-2 font-medium">{t("overview.tableSyncStatus")}</th>
-                      <th className="px-4 py-2 font-medium">{t("overview.tableTransfer")}</th>
-                      <th className="px-4 py-2 font-medium text-right">{t("overview.tableCompletedAt")}</th>
+                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableNodeName")}</th>
+                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableTaskName")}</th>
+                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableSyncStatus")}</th>
+                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableTransfer")}</th>
+                      <th scope="col" className="px-4 py-2 font-medium text-right">{t("overview.tableCompletedAt")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30">

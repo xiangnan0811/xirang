@@ -307,13 +307,13 @@ export function AuditPage() {
             <table className="min-w-[1080px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2.5">{t("audit.colTime")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colUser")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colRole")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colMethod")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colPath")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colStatusCode")}</th>
-                  <th className="px-3 py-2.5">{t("audit.colClientIP")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colTime")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colUser")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colRole")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colMethod")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colPath")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colStatusCode")}</th>
+                  <th scope="col" className="px-3 py-2.5">{t("audit.colClientIP")}</th>
                 </tr>
               </thead>
               <tbody>

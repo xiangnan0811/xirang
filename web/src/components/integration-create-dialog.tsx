@@ -288,8 +288,8 @@ export function IntegrationCreateDialog({
       </div>
 
       {pendingHint && (
-        <div className="flex flex-col gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 dark:border-yellow-800 dark:bg-yellow-950">
-          <div className="flex items-start gap-2 text-sm text-yellow-800 dark:text-yellow-200">
+        <div className="flex flex-col gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+          <div className="flex items-start gap-2 text-sm text-warning">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <span>{pendingHint}</span>
           </div>

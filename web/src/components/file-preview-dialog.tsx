@@ -78,7 +78,7 @@ export function FilePreviewDialog({
           {!loading && !error && (
             <>
               {truncated && (
-                <div className="border-b border-border/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="border-b border-border/40 bg-warning/10 px-4 py-2 text-xs text-warning">
                   {t('fileBrowser.fileTruncated', { size: formatBytes(size) })}
                 </div>
               )}

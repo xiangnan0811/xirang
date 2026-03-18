@@ -39,7 +39,7 @@ export const NodesTable = React.memo(function NodesTable({
       <table className="min-w-[1280px] text-left text-sm">
         <thead>
           <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2.5">
+            <th scope="col" className="px-3 py-2.5">
               <input
                 type="checkbox"
                 aria-label={t("nodes.selectAllVisible")}
@@ -50,14 +50,14 @@ export const NodesTable = React.memo(function NodesTable({
                 }
               />
             </th>
-            <th className="px-3 py-2.5">{t("nodes.colNode")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colAddress")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colAuth")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colStatus")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colDiskProbe")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
-            <th className="px-3 py-2.5">{t("nodes.colTags")}</th>
-            <th className="px-3 py-2.5 text-right">{t("nodes.colActions")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colNode")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colAddress")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colAuth")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colStatus")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colDiskProbe")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colTags")}</th>
+            <th scope="col" className="px-3 py-2.5 text-right">{t("nodes.colActions")}</th>
           </tr>
         </thead>
         <tbody>

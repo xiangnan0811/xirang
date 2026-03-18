@@ -220,7 +220,7 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
               {totpEnabled ? (
                 <Button
                   variant="outline"
-                  className="col-span-2 h-10 text-green-600 border-green-600/40 hover:text-green-700 hover:border-green-600/60 dark:text-green-500 dark:hover:text-green-400"
+                  className="col-span-2 h-10 text-success border-success/40 hover:text-success/80 hover:border-success/60"
                   onClick={() => {
                     onTotpDisable();
                     setDrawerOpen(false);

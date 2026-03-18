@@ -30,9 +30,9 @@ type BatchResultDialogProps = {
 };
 
 const statusIcon: Record<string, React.ReactNode> = {
-  success: <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />,
+  success: <CheckCircle2 className="size-4 shrink-0 text-success" />,
   failed: <XCircle className="size-4 shrink-0 text-destructive" />,
-  running: <Loader2 className="size-4 shrink-0 animate-spin text-amber-500" />,
+  running: <Loader2 className="size-4 shrink-0 animate-spin text-warning" />,
   pending: <Circle className="size-4 shrink-0 text-muted-foreground" />,
 };
 

@@ -101,9 +101,9 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
       {diff && (
         <div className="space-y-2">
           <div className="flex gap-3 text-xs">
-            <span className="text-green-600">+{diff.stats.added} {t('snapshots.added')}</span>
-            <span className="text-red-600">-{diff.stats.removed} {t('snapshots.removed')}</span>
-            <span className="text-yellow-600">~{diff.stats.changed} {t('snapshots.changed')}</span>
+            <span className="text-success">+{diff.stats.added} {t('snapshots.added')}</span>
+            <span className="text-destructive">-{diff.stats.removed} {t('snapshots.removed')}</span>
+            <span className="text-warning">~{diff.stats.changed} {t('snapshots.changed')}</span>
           </div>
 
           <div className="rounded-md border border-border/60 divide-y divide-border/30 max-h-64 overflow-y-auto">
@@ -112,9 +112,9 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
             )}
             {diff.changes.map((change) => (
               <div key={change.path} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                {change.type === "added" && <FilePlus className="size-3.5 text-green-600 shrink-0" />}
-                {change.type === "removed" && <FileMinus className="size-3.5 text-red-600 shrink-0" />}
-                {change.type === "changed" && <File className="size-3.5 text-yellow-600 shrink-0" />}
+                {change.type === "added" && <FilePlus className="size-3.5 text-success shrink-0" />}
+                {change.type === "removed" && <FileMinus className="size-3.5 text-destructive shrink-0" />}
+                {change.type === "changed" && <File className="size-3.5 text-warning shrink-0" />}
                 <span className="truncate">{change.path}</span>
                 {change.size_before != null && change.size_after != null && (
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">

@@ -24,7 +24,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
-import { cn } from "@/lib/utils";
+import { toast } from "@/components/ui/toast";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { LogEvent, TaskStatus } from "@/types/domain";
 
 const selectedNodeStorageKey = "xirang.logs.selected-node";
@@ -180,6 +181,11 @@ export function LogsPage() {
         }
         setHistoryLogs(rows);
         setHistoryCursor(minLogId(rows));
+      })
+      .catch((err) => {
+        if (requestId === historyRequestIdRef.current) {
+          toast.error(getErrorMessage(err));
+        }
       })
       .finally(() => {
         if (requestId === historyRequestIdRef.current) {

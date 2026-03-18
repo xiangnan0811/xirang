@@ -159,7 +159,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
 
       {/* 截断提示 */}
       {truncated && (
-        <div className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+        <div className="mb-2 rounded border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
           {t('fileBrowser.truncatedHint')}
         </div>
       )}
@@ -199,10 +199,10 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/40 text-xs text-muted-foreground">
-                  <th className="px-4 py-2 text-left font-medium">{t('fileBrowser.colName')}</th>
-                  <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">{t('fileBrowser.colSize')}</th>
-                  <th className="hidden px-4 py-2 text-left font-medium md:table-cell">{t('fileBrowser.colPermissions')}</th>
-                  <th className="hidden px-4 py-2 text-left font-medium lg:table-cell">{t('fileBrowser.colModTime')}</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium">{t('fileBrowser.colName')}</th>
+                  <th scope="col" className="hidden px-4 py-2 text-right font-medium sm:table-cell">{t('fileBrowser.colSize')}</th>
+                  <th scope="col" className="hidden px-4 py-2 text-left font-medium md:table-cell">{t('fileBrowser.colPermissions')}</th>
+                  <th scope="col" className="hidden px-4 py-2 text-left font-medium lg:table-cell">{t('fileBrowser.colModTime')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/30">
@@ -221,7 +221,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">
                         {entry.is_dir ? (
-                          <FolderOpen className="size-4 shrink-0 text-amber-500" />
+                          <FolderOpen className="size-4 shrink-0 text-warning" />
                         ) : (
                           <File className="size-4 shrink-0 text-muted-foreground" />
                         )}

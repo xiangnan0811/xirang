@@ -1073,6 +1073,8 @@ const zh = {
     emptyDesc: "当前没有可管理的用户。",
     insufficientPermission: "权限不足",
     insufficientPermissionDesc: "当前账号无权管理用户。",
+    passwordForUser: "{{username}} 的密码",
+    roleForUser: "{{username}} 的角色",
   },
 
   // ── SSH keys page ──
@@ -1153,6 +1155,7 @@ const zh = {
     noFailures: "暂无失败记录",
     avgDuration: "平均耗时",
     scopeTagValue: "标签：{{tag}}",
+    loading: "正在加载报告配置…",
   },
 
   // ── report config dialog ──
