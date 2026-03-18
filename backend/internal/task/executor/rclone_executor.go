@@ -200,10 +200,10 @@ func parseRcloneProgressLine(line string) (ProgressSample, bool) {
 }
 
 func buildRcloneSyncCmd(bin, source, dest string, cfg RcloneConfig, isRestore bool) string {
-	args := []string{bin, "sync", shellEscape(source), shellEscape(dest),
+	args := []string{bin, "sync", ShellEscape(source), ShellEscape(dest),
 		"--stats", "1s", "--stats-one-line", "-v"}
 	if cfg.BandwidthLimit != "" {
-		args = append(args, "--bwlimit", shellEscape(cfg.BandwidthLimit))
+		args = append(args, "--bwlimit", ShellEscape(cfg.BandwidthLimit))
 	}
 	if cfg.Transfers > 0 {
 		args = append(args, "--transfers", strconv.Itoa(cfg.Transfers))

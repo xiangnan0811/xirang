@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -20,7 +22,13 @@ func NewBackupHealthHandler(db *gorm.DB) *BackupHealthHandler {
 
 func (h *BackupHealthHandler) Get(c *gin.Context) {
 	now := time.Now()
-	staleThreshold := now.Add(-48 * time.Hour)
+	staleHours := 48
+	if v := os.Getenv("BACKUP_STALE_THRESHOLD_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			staleHours = n
+		}
+	}
+	staleThreshold := now.Add(-time.Duration(staleHours) * time.Hour)
 
 	// 1. 备份过期节点：从未备份或最后备份超过 48 小时
 	type staleNode struct {
@@ -34,59 +42,85 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		Where("last_backup_at IS NULL OR last_backup_at < ?", staleThreshold).
 		Find(&staleNodes)
 
-	// 2. 降级策略：最近 3 次 task_run 全部失败的策略
+	// 2. 降级策略：最近 3 次 task_run 全部失败的策略（单次查询替代 N+1）
 	type degradedPolicy struct {
 		ID   uint   `json:"id"`
 		Name string `json:"name"`
 	}
-	var policies []model.Policy
-	h.db.Where("enabled = ?", true).Find(&policies)
+	type policyRunInfo struct {
+		PolicyID   uint   `gorm:"column:policy_id"`
+		PolicyName string `gorm:"column:policy_name"`
+		Status     string `gorm:"column:status"`
+	}
+	var runInfos []policyRunInfo
+	if err := h.db.Raw(`
+		SELECT t.policy_id AS policy_id, p.name AS policy_name, tr.status AS status
+		FROM task_runs tr
+		JOIN tasks t ON t.id = tr.task_id
+		JOIN policies p ON p.id = t.policy_id
+		WHERE p.enabled = 1
+		ORDER BY t.policy_id, tr.created_at DESC
+	`).Scan(&runInfos).Error; err != nil {
+		runInfos = nil
+	}
 
 	var degradedPolicies []degradedPolicy
-	for _, p := range policies {
-		var recentRuns []model.TaskRun
-		h.db.Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-			Where("tasks.policy_id = ?", p.ID).
-			Order("task_runs.created_at DESC").
-			Limit(3).
-			Find(&recentRuns)
-
-		if len(recentRuns) < 3 {
+	policyRuns := make(map[uint][]string)
+	policyNames := make(map[uint]string)
+	for _, ri := range runInfos {
+		if len(policyRuns[ri.PolicyID]) < 3 {
+			policyRuns[ri.PolicyID] = append(policyRuns[ri.PolicyID], ri.Status)
+			policyNames[ri.PolicyID] = ri.PolicyName
+		}
+	}
+	for pid, statuses := range policyRuns {
+		if len(statuses) < 3 {
 			continue
 		}
 		allFailed := true
-		for _, r := range recentRuns {
-			if r.Status != "failed" {
+		for _, s := range statuses {
+			if s != "failed" {
 				allFailed = false
 				break
 			}
 		}
 		if allFailed {
-			degradedPolicies = append(degradedPolicies, degradedPolicy{ID: p.ID, Name: p.Name})
+			degradedPolicies = append(degradedPolicies, degradedPolicy{ID: pid, Name: policyNames[pid]})
 		}
 	}
 
-	// 3. 7 天趋势：按日期分组统计 task_run 总数和成功数
+	// 3. 7 天趋势：按日期分组统计（SQL 聚合替代全量加载）
 	type trendPoint struct {
 		Date    string `json:"date"`
 		Total   int    `json:"total"`
 		Success int    `json:"success"`
 	}
 	sevenDaysAgo := now.AddDate(0, 0, -7)
-	var runs []model.TaskRun
-	h.db.Where("created_at >= ?", sevenDaysAgo).Find(&runs)
+	type trendRow struct {
+		Day    string `gorm:"column:day"`
+		Status string `gorm:"column:status"`
+		Cnt    int    `gorm:"column:cnt"`
+	}
+	var trendRows []trendRow
+	if err := h.db.Raw(`
+		SELECT DATE(created_at) AS day, status, COUNT(*) AS cnt
+		FROM task_runs
+		WHERE created_at >= ?
+		GROUP BY DATE(created_at), status
+	`, sevenDaysAgo).Scan(&trendRows).Error; err != nil {
+		trendRows = nil
+	}
 
 	trendMap := make(map[string]*trendPoint)
 	for i := 0; i < 7; i++ {
 		d := now.AddDate(0, 0, -i).Format("2006-01-02")
 		trendMap[d] = &trendPoint{Date: d}
 	}
-	for _, r := range runs {
-		d := r.CreatedAt.Format("2006-01-02")
-		if tp, ok := trendMap[d]; ok {
-			tp.Total++
+	for _, r := range trendRows {
+		if tp, ok := trendMap[r.Day]; ok {
+			tp.Total += r.Cnt
 			if r.Status == "success" {
-				tp.Success++
+				tp.Success += r.Cnt
 			}
 		}
 	}

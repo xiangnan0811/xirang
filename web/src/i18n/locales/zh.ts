@@ -1542,6 +1542,7 @@ const zh = {
     verifyMountPoint: "验证挂载点",
     verifyMountPointHint: "点击验证挂载点是否可用。",
     commandHint: "请在目标服务器上执行以上挂载命令，然后点击\"下一步\"验证挂载是否成功。",
+    smbSecurityHint: "安全提示：挂载命令中的 <YOUR_PASSWORD> 需替换为实际密码。fstab 条目使用 credentials 文件（/etc/samba/.smbcredentials）存储凭据，避免明文密码写入 fstab。",
     verifyLabels: {
       pathExists: "路径存在",
       mountPoint: "挂载点",

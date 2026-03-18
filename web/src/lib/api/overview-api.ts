@@ -1,4 +1,5 @@
 import type { BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
+import { getLocale } from "@/lib/utils";
 import { request, type Envelope, unwrapData } from "./core";
 
 type OverviewSummaryResponse = {
@@ -31,9 +32,9 @@ type OverviewTrafficSeriesResponse = {
 function formatOverviewTrafficLabel(timestampMs: number, timestamp: string, window: OverviewTrafficWindow): string {
   const date = Number.isFinite(timestampMs) && timestampMs > 0 ? new Date(timestampMs) : new Date(timestamp);
   if (window === "7d") {
-    return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+    return date.toLocaleString(getLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
   }
-  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return date.toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function mapOverviewSummary(payload?: OverviewSummaryResponse | null): OverviewSummary {
@@ -67,10 +68,21 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapBackupHealth(raw: any): BackupHealthData {
+type BackupHealthRaw = {
+  stale_nodes?: { id: number; name: string; last_backup_at: string | null }[];
+  degraded_policies?: { id: number; name: string; consecutive_failures?: number; last_failed_at?: string }[];
+  trend?: { date: string; total: number; success: number }[];
+  summary?: { total_nodes: number; total_policies: number; healthy_nodes: number };
+};
+
+type StorageUsageRaw = {
+  mount_points?: { path: string; used_gb: number; total_gb: number; pct: number }[];
+  per_node?: { node_id: number; node_name: string; path: string; used_gb: number }[];
+};
+
+function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthData {
   const staleNodes = Array.isArray(raw?.stale_nodes)
-    ? raw.stale_nodes.map((n: any) => {
+    ? raw.stale_nodes.map((n) => {
         const lastBackup = n.last_backup_at ? new Date(n.last_backup_at).getTime() : null;
         const hoursSince = lastBackup ? (Date.now() - lastBackup) / 3600000 : Infinity;
         return {
@@ -83,16 +95,16 @@ function mapBackupHealth(raw: any): BackupHealthData {
     : [];
 
   const degradedPolicies = Array.isArray(raw?.degraded_policies)
-    ? raw.degraded_policies.map((p: any) => ({
+    ? raw.degraded_policies.map((p) => ({
         policyId: Number(p.id || 0),
         policyName: String(p.name || ""),
-        consecutiveFailures: Number(p.consecutive_failures || 3),
+        consecutiveFailures: Number(p.consecutive_failures ?? 0),
         lastFailedAt: String(p.last_failed_at || ""),
       }))
     : [];
 
   const healthTrend = Array.isArray(raw?.trend)
-    ? raw.trend.map((t: any) => ({
+    ? raw.trend.map((t) => ({
         date: String(t.date || ""),
         total: Number(t.total || 0),
         success: Number(t.success || 0),
@@ -120,11 +132,10 @@ function mapBackupHealth(raw: any): BackupHealthData {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapStorageUsage(raw: any): StorageUsageData {
+function mapStorageUsage(raw: StorageUsageRaw | null | undefined): StorageUsageData {
   return {
     mountPoints: Array.isArray(raw?.mount_points)
-      ? raw.mount_points.map((m: any) => ({
+      ? raw.mount_points.map((m) => ({
           path: String(m.path || ""),
           usedGB: Number(m.used_gb || 0),
           totalGB: Number(m.total_gb || 0),
@@ -132,7 +143,7 @@ function mapStorageUsage(raw: any): StorageUsageData {
         }))
       : [],
     perNode: Array.isArray(raw?.per_node)
-      ? raw.per_node.map((n: any) => ({
+      ? raw.per_node.map((n) => ({
           nodeId: Number(n.node_id || 0),
           nodeName: String(n.node_name || ""),
           path: String(n.path || ""),
@@ -160,12 +171,12 @@ export function createOverviewApi() {
     },
 
     async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {
-      const payload = await request<Envelope<unknown>>("/overview/backup-health", { token, signal: options?.signal });
+      const payload = await request<Envelope<BackupHealthRaw>>("/overview/backup-health", { token, signal: options?.signal });
       return mapBackupHealth(unwrapData(payload));
     },
 
     async getStorageUsage(token: string, options?: { signal?: AbortSignal }): Promise<StorageUsageData> {
-      const payload = await request<Envelope<unknown>>("/overview/storage-usage", { token, signal: options?.signal });
+      const payload = await request<Envelope<StorageUsageRaw>>("/overview/storage-usage", { token, signal: options?.signal });
       return mapStorageUsage(unwrapData(payload));
     },
 

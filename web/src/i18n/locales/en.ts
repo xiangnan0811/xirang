@@ -1542,6 +1542,7 @@ const en = {
     verifyMountPoint: "Verify Mount Point",
     verifyMountPointHint: "Click to verify the mount point is available.",
     commandHint: "Run the mount command above on the target server, then click 'Next' to verify.",
+    smbSecurityHint: "Security: Replace <YOUR_PASSWORD> with your actual password in the mount command. The fstab entry uses a credentials file (/etc/samba/.smbcredentials) to avoid storing plaintext passwords.",
     verifyLabels: {
       pathExists: "Path exists",
       mountPoint: "Mount point",

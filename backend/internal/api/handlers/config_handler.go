@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,13 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可导出敏感数据"})
 			return
 		}
+		// H3: 审计日志 — 记录敏感数据导出
+		userID, _ := c.Get("user_id")
+		username, _ := c.Get("username")
+		logger.Module("audit").Warn().
+			Interface("user_id", userID).
+			Interface("username", username).
+			Msg("管理员导出了包含敏感数据的配置")
 	}
 
 	var nodes []model.Node
@@ -143,14 +151,16 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		} `json:"data"`
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20) // 10MB
+
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的导入数据"})
 		return
 	}
 
-	importedNodes := 0
-	importedKeys := 0
-	importedPolicies := 0
+	var importedNodes, importedKeys, importedPolicies int
+
+	importErr := h.db.Transaction(func(tx *gorm.DB) error {
 
 	// 导入 SSH 密钥
 	for _, keyData := range payload.Data.SSHKeys {
@@ -159,7 +169,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.SSHKey
-		err := h.db.Where("name = ?", name).First(&existing).Error
+		err := tx.Where("name = ?", name).First(&existing).Error
 		if err == nil {
 			if conflict != "overwrite" {
 				continue
@@ -174,7 +184,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
 				existing.PrivateKey = privateKey
 			}
-			h.db.Save(&existing)
+			tx.Save(&existing)
 			importedKeys++
 		} else {
 			newKey := model.SSHKey{Name: name}
@@ -190,7 +200,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if fingerprint, ok := keyData["fingerprint"].(string); ok {
 				newKey.Fingerprint = fingerprint
 			}
-			if err := h.db.Create(&newKey).Error; err == nil {
+			if err := tx.Create(&newKey).Error; err == nil {
 				importedKeys++
 			}
 		}
@@ -203,7 +213,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.Node
-		err := h.db.Where("name = ?", name).First(&existing).Error
+		err := tx.Where("name = ?", name).First(&existing).Error
 		if err == nil {
 			if conflict != "overwrite" {
 				continue
@@ -229,7 +239,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if err := validateNodeHostPort(existing.Host, existing.Port); err != nil {
 				continue
 			}
-			h.db.Save(&existing)
+			tx.Save(&existing)
 			importedNodes++
 		} else {
 			newNode := model.Node{
@@ -261,10 +271,16 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if privateKey, ok := nodeData["private_key"].(string); ok {
 				newNode.PrivateKey = privateKey
 			}
+			if newNode.Username == "" {
+				continue
+			}
+			if newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key" {
+				continue
+			}
 			if err := validateNodeHostPort(newNode.Host, newNode.Port); err != nil {
 				continue
 			}
-			if err := h.db.Create(&newNode).Error; err == nil {
+			if err := tx.Create(&newNode).Error; err == nil {
 				importedNodes++
 			}
 		}
@@ -277,7 +293,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.Policy
-		err := h.db.Where("name = ?", name).First(&existing).Error
+		err := tx.Where("name = ?", name).First(&existing).Error
 		if err == nil {
 			if conflict != "overwrite" {
 				continue
@@ -300,7 +316,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if ret, ok := policyData["retention_days"].(float64); ok {
 				existing.RetentionDays = int(ret)
 			}
-			h.db.Save(&existing)
+			tx.Save(&existing)
 			importedPolicies++
 		} else {
 			newPolicy := model.Policy{
@@ -336,10 +352,17 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if isTmpl, ok := policyData["is_template"].(bool); ok {
 				newPolicy.IsTemplate = isTmpl
 			}
-			if err := h.db.Create(&newPolicy).Error; err == nil {
+			if err := tx.Create(&newPolicy).Error; err == nil {
 				importedPolicies++
 			}
 		}
+	}
+
+	return nil
+	})
+	if importErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "导入失败"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

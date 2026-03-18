@@ -105,6 +105,27 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 非 admin 不允许设置 hook 命令
+	if req.PreHook != "" || req.PostHook != "" {
+		role, _ := c.Get("role")
+		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可配置 hook 命令"})
+			return
+		}
+	}
+	if req.PreHook != "" {
+		if err := validateHookCommand(req.PreHook); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if req.PostHook != "" {
+		if err := validateHookCommand(req.PostHook); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	if req.MaxConcurrent == 0 {
 		req.MaxConcurrent = 1
 	}
@@ -234,6 +255,27 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if err := validateCronSpec(req.CronSpec); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 非 admin 不允许设置 hook 命令
+	if req.PreHook != "" || req.PostHook != "" {
+		role, _ := c.Get("role")
+		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可配置 hook 命令"})
+			return
+		}
+	}
+	if req.PreHook != "" {
+		if err := validateHookCommand(req.PreHook); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if req.PostHook != "" {
+		if err := validateHookCommand(req.PostHook); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	if req.MaxConcurrent == 0 {
@@ -374,6 +416,24 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// validateHookCommand 校验 hook 命令的安全性。
+func validateHookCommand(cmd string) error {
+	if len(cmd) > 2048 {
+		return fmt.Errorf("hook 命令长度不能超过 2048 个字符")
+	}
+	dangerousPatterns := []string{
+		"curl ", "wget ", "nc ", "ncat ", "python", "perl ", "ruby ",
+		"base64 ", "/dev/tcp", "mkfifo", "telnet ",
+	}
+	lower := strings.ToLower(cmd)
+	for _, p := range dangerousPatterns {
+		if strings.Contains(lower, p) {
+			return fmt.Errorf("hook 命令包含不允许的模式: %s", strings.TrimSpace(p))
+		}
+	}
+	return nil
 }
 
 // buildPolicyResponse 构建策略响应，避免序列化 Node 中的敏感字段（Password/PrivateKey）。

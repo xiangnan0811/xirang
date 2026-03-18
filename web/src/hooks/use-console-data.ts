@@ -11,7 +11,7 @@ import {
   mockSSHKeys,
   mockTasks,
 } from "@/data/mock";
-import { getErrorMessage } from "@/lib/utils";
+import { getErrorMessage, getLocale } from "@/lib/utils";
 import { useIntegrationAlertOperations } from "@/hooks/use-console-integration-alert-operations";
 import { useNodeOperations } from "@/hooks/use-console-node-operations";
 import { usePolicyOperations } from "@/hooks/use-console-policy-operations";
@@ -118,7 +118,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const [loading, setLoading] = useState<boolean>(true);
   const [warning, setWarning] = useState<string | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
-  const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date().toLocaleTimeString("zh-CN"));
+  const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date().toLocaleTimeString(getLocale()));
   const [refreshVersion, setRefreshVersion] = useState(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
@@ -174,14 +174,14 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         setOverviewSummary(mockOverviewSummary);
         setWarning(null);
         setLoading(false);
-        setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
+        setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
         return;
       }
       setOverviewSummary(null);
       setAlerts([]);
       setWarning(i18n.t("console.notLoggedIn"));
       setLoading(false);
-      setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
+      setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
       return;
     }
 
@@ -222,7 +222,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     }
 
     setLoading(false);
-    setLastSyncedAt(new Date().toLocaleTimeString("zh-CN"));
+    setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
   }, [token, demoModeEnabled]);
 
   const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {

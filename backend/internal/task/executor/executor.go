@@ -326,8 +326,8 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 	}
 	rsyncCmd := fmt.Sprintf("rsync -avz --info=progress2%s -- %s %s",
 		bwPart,
-		shellEscape(task.RsyncSource),
-		shellEscape(task.RsyncTarget))
+		ShellEscape(task.RsyncSource),
+		ShellEscape(task.RsyncTarget))
 
 	logf("info", fmt.Sprintf("在远程节点执行: %s", rsyncCmd))
 
@@ -401,8 +401,8 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 	}
 }
 
-// shellEscape 对 shell 参数进行转义，防止命令注入。
-func shellEscape(s string) string {
+// ShellEscape 对 shell 参数进行转义，防止命令注入（导出供其他包使用）。
+func ShellEscape(s string) string {
 	// 使用单引号包裹，并转义内部的单引号
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
@@ -638,7 +638,7 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 	defer client.Close()
 
 	// 检查目标路径是否存在，不存在则创建
-	quoted := shellEscape(targetPath)
+	quoted := ShellEscape(targetPath)
 	checkCmd := fmt.Sprintf("test -d %s || mkdir -p %s", quoted, quoted)
 	session, err := client.NewSession()
 	if err != nil {

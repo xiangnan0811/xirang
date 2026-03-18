@@ -41,7 +41,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [nodeId, token]);
+  }, [nodeId, token, t]);
 
   if (loading) {
     return (

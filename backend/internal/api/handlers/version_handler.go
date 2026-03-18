@@ -3,7 +3,9 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -41,16 +43,21 @@ func (h *VersionHandler) Check(c *gin.Context) {
 		return
 	}
 
+	if err := validateCheckURL(checkURL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "版本检查地址配置不合法"})
+		return
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(checkURL)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("请求版本检查地址失败: %v", err)})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "请求版本检查地址失败"})
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("版本检查地址返回状态码 %d", resp.StatusCode)})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "版本检查地址返回异常"})
 		return
 	}
 
@@ -63,6 +70,12 @@ func (h *VersionHandler) Check(c *gin.Context) {
 		return
 	}
 
+	// 校验 release URL 必须以 https:// 开头
+	releaseURL := ""
+	if strings.HasPrefix(release.HTMLURL, "https://") {
+		releaseURL = release.HTMLURL
+	}
+
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	currentVersion := strings.TrimPrefix(version.Version, "v")
 	updateAvailable := compareSemver(currentVersion, latestVersion) < 0
@@ -71,12 +84,32 @@ func (h *VersionHandler) Check(c *gin.Context) {
 		"update_available": updateAvailable,
 		"current_version":  version.Version,
 		"latest_version":   latestVersion,
-		"release_url":      release.HTMLURL,
+		"release_url":      releaseURL,
 	})
 }
 
+// validateCheckURL 校验版本检查 URL 的安全性（禁止私有地址和非 HTTPS）。
+func validateCheckURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("无效的 URL")
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("仅允许 HTTPS 协议")
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("不允许访问内部网络地址")
+		}
+	}
+	return nil
+}
+
 // compareSemver 简单的语义版本比较，返回 -1/0/1。
-// 非合法 semver 时按字符串比较回退。
+// 仅处理 major.minor.patch 数字格式，不支持 pre-release/metadata 后缀。
+// 非合法 semver 时按字符串比较回退（Atoi 失败默认为 0）。
 func compareSemver(a, b string) int {
 	partsA := strings.SplitN(a, ".", 3)
 	partsB := strings.SplitN(b, ".", 3)

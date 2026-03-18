@@ -77,8 +77,8 @@ func (m *Manager) checkLocalStorageSpace() {
 			log.Warn().Str("path", path).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
 			_ = alerting.RaiseStorageSpaceAlert(m.db, path, freeGB, totalGB, usagePct)
 		} else {
-			// 如果之前有告警，现在恢复了，解除告警
-			_ = alerting.ResolveAlertsByErrorCode(m.db, "XR-STORAGE-LOW", "存储空间恢复正常")
+			// 如果之前有告警，现在恢复了，按路径解除告警
+			_ = alerting.ResolveAlertsByErrorCode(m.db, "XR-STORAGE-LOW:"+path, "存储空间恢复正常")
 		}
 	}
 }

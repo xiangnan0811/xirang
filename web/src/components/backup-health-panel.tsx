@@ -50,7 +50,7 @@ export function BackupHealthPanel() {
       });
 
     return () => controller.abort();
-  }, [token]);
+  }, [token, t]);
 
   if (loading) {
     return (

@@ -81,7 +81,11 @@ func (h *SnapshotHandler) ListFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "快照 ID 格式无效"})
 		return
 	}
-	path := c.DefaultQuery("path", "/")
+	path := filepath.Clean(c.DefaultQuery("path", "/"))
+	if !strings.HasPrefix(path, "/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path 必须以 / 开头"})
+		return
+	}
 
 	var task model.Task
 	if err := h.db.Preload("Node").Preload("Node.SSHKey").First(&task, taskID).Error; err != nil {

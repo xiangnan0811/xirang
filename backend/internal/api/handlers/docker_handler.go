@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 
 	sshClient, err := dialSSHForDocker(c.Request.Context(), node, h.db)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("SSH 连接失败: %v", err)})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "SSH 连接失败"})
 		return
 	}
 	defer sshClient.Close()
@@ -149,8 +150,13 @@ func listDockerVolumes(client *ssh.Client) ([]DockerVolume, string, error) {
 	return volumes, "", nil
 }
 
+var safeDockerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`)
+
 // inspectVolumeMountpoint 通过 docker volume inspect 获取卷的挂载点。
 func inspectVolumeMountpoint(client *ssh.Client, volumeName string) string {
+	if !safeDockerName.MatchString(volumeName) {
+		return ""
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		return ""
@@ -158,7 +164,7 @@ func inspectVolumeMountpoint(client *ssh.Client, volumeName string) string {
 	defer session.Close()
 
 	// 使用 Go template 格式直接输出 Mountpoint
-	output, err := session.Output(fmt.Sprintf("docker volume inspect %s --format '{{.Mountpoint}}'", volumeName))
+	output, err := session.Output(fmt.Sprintf("docker volume inspect '%s' --format '{{.Mountpoint}}'", volumeName))
 	if err != nil {
 		return ""
 	}

@@ -58,7 +58,7 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 
 	// 安全校验：禁止系统关键路径
 	for _, forbidden := range forbiddenPaths {
-		if mountPath == forbidden {
+		if mountPath == forbidden || strings.HasPrefix(mountPath, forbidden+"/") {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("不允许验证系统路径: %s", mountPath)})
 			return
 		}
@@ -88,10 +88,10 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	}
 
 	// 3. 检查是否可写（创建并删除临时文件）
-	tmpFile := filepath.Join(mountPath, ".xirang_write_test")
-	if f, err := os.Create(tmpFile); err == nil {
+	if f, err := os.CreateTemp(mountPath, ".xirang_write_test_*"); err == nil {
+		tmpName := f.Name()
 		f.Close()
-		os.Remove(tmpFile)
+		os.Remove(tmpName)
 		result.Writable = true
 	}
 

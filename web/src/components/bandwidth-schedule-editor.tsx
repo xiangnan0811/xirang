@@ -67,7 +67,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
       )}
 
       {rules.map((rule, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div key={`rule-${rule.start}-${rule.end}-${i}`} className="flex items-center gap-2">
           <Input
             type="time"
             className="w-28 text-xs"

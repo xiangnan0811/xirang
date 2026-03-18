@@ -47,7 +47,7 @@ function generateMountCommand(protocol: Protocol, nfs: NfsFields, smb: SmbFields
     case "nfs":
       return `sudo mount -t nfs ${nfs.server}:${nfs.exportPath} ${nfs.mountPoint} -o ${nfs.options}`;
     case "smb":
-      return `sudo mount -t cifs //${smb.server}/${smb.shareName} ${smb.mountPoint} -o username=${smb.username},password=${smb.password},${smb.options}`;
+      return `sudo mount -t cifs //${smb.server}/${smb.shareName} ${smb.mountPoint} -o username=${smb.username},password=<YOUR_PASSWORD>,${smb.options}`;
     case "usb":
       return `sudo mount${usb.fsType ? ` -t ${usb.fsType}` : ""} ${usb.devicePath} ${usb.mountPoint}`;
   }
@@ -58,7 +58,7 @@ function generateFstabEntry(protocol: Protocol, nfs: NfsFields, smb: SmbFields, 
     case "nfs":
       return `${nfs.server}:${nfs.exportPath}  ${nfs.mountPoint}  nfs  ${nfs.options}  0  0`;
     case "smb":
-      return `//${smb.server}/${smb.shareName}  ${smb.mountPoint}  cifs  username=${smb.username},password=${smb.password},${smb.options}  0  0`;
+      return `//${smb.server}/${smb.shareName}  ${smb.mountPoint}  cifs  credentials=/etc/samba/.smbcredentials,${smb.options}  0  0`;
     case "usb":
       return `${usb.devicePath}  ${usb.mountPoint}  ${usb.fsType || "auto"}  defaults  0  0`;
   }
@@ -337,6 +337,14 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
                   {t("nasMountWizard.commandHint")}
                 </p>
               </div>
+
+              {protocol === "smb" && (
+                <div className="rounded-lg border border-warning/30 bg-warning/5 p-3">
+                  <p className="text-xs text-warning">
+                    {t("nasMountWizard.smbSecurityHint")}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

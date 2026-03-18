@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -132,7 +131,7 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 			}
 			if nr, ok := nodeNameMap[entry.Name()]; ok {
 				dirPath := filepath.Join(tp, entry.Name())
-				sizeGB := dirSizeGB(dirPath)
+				sizeGB := dirSizeGB(ctx, dirPath)
 				perNode = append(perNode, perNodeUsage{
 					NodeID:   nr.NodeID,
 					NodeName: nr.NodeName,
@@ -149,14 +148,26 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 	})
 }
 
-func dirSizeGB(path string) float64 {
+func dirSizeGB(ctx context.Context, path string) float64 {
 	var totalSize int64
-	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+	var fileCount int
+	_ = filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !info.IsDir() {
-			totalSize += info.Size()
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !d.IsDir() {
+			if info, infoErr := d.Info(); infoErr == nil {
+				totalSize += info.Size()
+			}
+		}
+		fileCount++
+		if fileCount%1000 == 0 {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 		}
 		return nil
 	})
@@ -171,6 +182,3 @@ func round2(v float64) float64 {
 func respondStorageError(c *gin.Context, msg string) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
 }
-
-// placeholder to suppress unused import warning
-var _ = fmt.Sprintf

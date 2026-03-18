@@ -280,5 +280,5 @@ func buildDiffEnvPrefix(password string) string {
 	if password == "" {
 		return "RESTIC_PASSWORD=''"
 	}
-	return "RESTIC_PASSWORD='" + strings.ReplaceAll(password, "'", "'\\''") + "'"
+	return "RESTIC_PASSWORD=" + executor.ShellEscape(password)
 }

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
-import { getErrorMessage } from "@/lib/utils";
+import { formatBytes, getErrorMessage, getLocale } from "@/lib/utils";
 import type { ResticSnapshot } from "@/lib/api/snapshots-api";
 import type { SnapshotDiff } from "@/lib/api/snapshot-diff-api";
 import { toast } from "sonner";
@@ -12,13 +12,6 @@ import { toast } from "sonner";
 interface SnapshotDiffViewerProps {
   taskId: number;
   token: string;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
@@ -31,12 +24,14 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
   const [diff, setDiff] = useState<SnapshotDiff | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     setSnapshotsLoading(true);
     apiClient
       .listSnapshots(token, taskId)
-      .then(setSnapshots)
-      .catch((err) => toast.error(getErrorMessage(err, t('snapshots.loadFailed'))))
-      .finally(() => setSnapshotsLoading(false));
+      .then((data) => { if (!controller.signal.aborted) setSnapshots(data); })
+      .catch((err) => { if (!controller.signal.aborted) toast.error(getErrorMessage(err, t('snapshots.loadFailed'))); })
+      .finally(() => { if (!controller.signal.aborted) setSnapshotsLoading(false); });
+    return () => controller.abort();
   }, [token, taskId]);
 
   const handleCompare = async () => {
@@ -77,7 +72,7 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
             <option value="">{t('snapshots.selectSnapshot')}</option>
             {snapshots.map((s) => (
               <option key={s.id} value={s.short_id}>
-                {s.short_id} — {new Date(s.time).toLocaleString("zh-CN")}
+                {s.short_id} — {new Date(s.time).toLocaleString(getLocale())}
               </option>
             ))}
           </select>
@@ -92,7 +87,7 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
             <option value="">{t('snapshots.selectSnapshot')}</option>
             {snapshots.map((s) => (
               <option key={s.id} value={s.short_id}>
-                {s.short_id} — {new Date(s.time).toLocaleString("zh-CN")}
+                {s.short_id} — {new Date(s.time).toLocaleString(getLocale())}
               </option>
             ))}
           </select>

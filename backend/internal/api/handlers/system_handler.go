@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,11 +69,36 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 		return
 	}
 
+	// 清理旧备份
+	maxBackups := 20
+	if envMax := os.Getenv("DB_BACKUP_MAX_COUNT"); envMax != "" {
+		if n, err := strconv.Atoi(envMax); err == nil && n > 0 {
+			maxBackups = n
+		}
+	}
+	if cleanEntries, err := os.ReadDir(backupDir); err == nil {
+		var dbFiles []os.DirEntry
+		for _, e := range cleanEntries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
+				dbFiles = append(dbFiles, e)
+			}
+		}
+		if len(dbFiles) > maxBackups {
+			sort.Slice(dbFiles, func(i, j int) bool {
+				return dbFiles[i].Name() < dbFiles[j].Name()
+			})
+			for _, f := range dbFiles[:len(dbFiles)-maxBackups] {
+				os.Remove(filepath.Join(backupDir, f.Name()))
+				os.Remove(filepath.Join(backupDir, f.Name()+".sha256"))
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"path":   backupPath,
-			"size":   size,
-			"sha256": checksum,
+			"filename": backupFilename,
+			"size":     size,
+			"sha256":   checksum,
 		},
 	})
 }

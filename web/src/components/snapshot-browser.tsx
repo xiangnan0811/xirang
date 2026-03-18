@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
-import { getErrorMessage } from "@/lib/utils";
+import { formatBytes, getErrorMessage, getLocale } from "@/lib/utils";
 import type { ResticSnapshot, ResticEntry } from "@/lib/api/snapshots-api";
 import { toast } from "sonner";
 
@@ -27,13 +27,15 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
   const [restoreTarget, setRestoreTarget] = useState("/tmp/xirang-restore");
 
   useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     apiClient
       .listSnapshots(token, taskId)
-      .then(setSnapshots)
-      .catch((err) => setError(getErrorMessage(err, t('snapshots.loadFailed'))))
-      .finally(() => setLoading(false));
+      .then((data) => { if (!controller.signal.aborted) setSnapshots(data); })
+      .catch((err) => { if (!controller.signal.aborted) setError(getErrorMessage(err, t('snapshots.loadFailed'))); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
   }, [token, taskId]);
 
   const browseSnapshot = (snapshot: ResticSnapshot, path = "/") => {
@@ -103,7 +105,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
             {t('snapshots.backToList')}
           </Button>
           <span className="text-xs text-muted-foreground">
-            {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: new Date(selectedSnapshot.time).toLocaleString("zh-CN") })}
+            {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: new Date(selectedSnapshot.time).toLocaleString(getLocale()) })}
           </span>
         </div>
 
@@ -172,7 +174,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
                 )}
                 {entry.type !== "dir" && entry.size > 0 && (
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {formatSize(entry.size)}
+                    {formatBytes(entry.size)}
                   </span>
                 )}
               </label>
@@ -220,7 +222,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{snap.short_id}</div>
                 <div className="text-xs text-muted-foreground">
-                  {new Date(snap.time).toLocaleString("zh-CN")}
+                  {new Date(snap.time).toLocaleString(getLocale())}
                   {snap.hostname && ` · ${snap.hostname}`}
                 </div>
               </div>
@@ -237,9 +239,3 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}

@@ -64,7 +64,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	}
 
 	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
-	repoArg := shellEscape(repo)
+	repoArg := ShellEscape(repo)
 
 	// 初始化仓库（若不存在）
 	checkCmd := fmt.Sprintf("%s %s snapshots -r %s --json 2>&1", envPrefix, bin, repoArg)
@@ -84,7 +84,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	// 构造 backup 命令
 	excludeArgs := buildResticExcludeArgs(cfg.ExcludePatterns)
 	backupCmd := fmt.Sprintf("%s %s backup -r %s %s %s --json 2>&1",
-		envPrefix, bin, repoArg, shellEscape(source), excludeArgs)
+		envPrefix, bin, repoArg, ShellEscape(source), excludeArgs)
 
 	logf("info", fmt.Sprintf("开始 restic 备份: %s → %s", source, repo))
 
@@ -122,10 +122,10 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 
 	bin := e.resticBinary()
 	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
-	repoArg := shellEscape(repo)
+	repoArg := ShellEscape(repo)
 
 	restoreCmd := fmt.Sprintf("%s %s restore latest -r %s --target %s --json 2>&1",
-		envPrefix, bin, repoArg, shellEscape(targetPath))
+		envPrefix, bin, repoArg, ShellEscape(targetPath))
 
 	logf("info", fmt.Sprintf("开始 restic 恢复: %s → %s", repo, targetPath))
 	exitCode, runErr := e.streamSSHCommand(ctx, client, restoreCmd, logf, progressf)
@@ -276,7 +276,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	defer client.Close()
 
 	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
-	cmd := fmt.Sprintf("%s %s snapshots -r %s --json", envPrefix, e.resticBinary(), shellEscape(repo))
+	cmd := fmt.Sprintf("%s %s snapshots -r %s --json", envPrefix, e.resticBinary(), ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("获取快照列表失败: %w, 输出: %s", err, output)
@@ -308,7 +308,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 	if path != "" {
 		lsPath = path
 	}
-	cmd := fmt.Sprintf("%s %s ls %s %s -r %s --json", envPrefix, e.resticBinary(), shellEscape(snapshotID), shellEscape(lsPath), shellEscape(repo))
+	cmd := fmt.Sprintf("%s %s ls %s %s -r %s --json", envPrefix, e.resticBinary(), ShellEscape(snapshotID), ShellEscape(lsPath), ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("获取文件列表失败: %w, 输出: %s", err, output)
@@ -349,9 +349,9 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
 	includeArgs := ""
 	for _, inc := range includes {
-		includeArgs += " --include " + shellEscape(inc)
+		includeArgs += " --include " + ShellEscape(inc)
 	}
-	cmd := fmt.Sprintf("%s %s restore %s -r %s --target %s%s", envPrefix, e.resticBinary(), shellEscape(snapshotID), shellEscape(repo), shellEscape(targetPath), includeArgs)
+	cmd := fmt.Sprintf("%s %s restore %s -r %s --target %s%s", envPrefix, e.resticBinary(), ShellEscape(snapshotID), ShellEscape(repo), ShellEscape(targetPath), includeArgs)
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		return fmt.Errorf("恢复失败: %w, 输出: %s", err, output)
@@ -374,7 +374,7 @@ func buildResticEnvPrefix(password string) string {
 	if password == "" {
 		return "RESTIC_PASSWORD=''"
 	}
-	return "RESTIC_PASSWORD=" + shellEscape(password)
+	return "RESTIC_PASSWORD=" + ShellEscape(password)
 }
 
 func buildResticExcludeArgs(patterns []string) string {
@@ -385,7 +385,7 @@ func buildResticExcludeArgs(patterns []string) string {
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
 		if p != "" {
-			parts = append(parts, "--exclude "+shellEscape(p))
+			parts = append(parts, "--exclude "+ShellEscape(p))
 		}
 	}
 	return strings.Join(parts, " ")

@@ -6,17 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
 import type { BackupEntry } from "@/lib/api/system-api";
-import { getErrorMessage } from "@/lib/utils";
+import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
 import { toast } from "sonner";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
 
 export function SelfBackupPanel() {
   const { t } = useTranslation();
@@ -42,7 +34,7 @@ export function SelfBackupPanel() {
         setLoadingList(false);
       }
     }
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => {
     if (!token || role !== "admin") return;

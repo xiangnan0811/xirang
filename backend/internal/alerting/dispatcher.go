@@ -199,7 +199,7 @@ func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, tota
 		PolicyName:  "",
 		Severity:    severity,
 		Status:      "open",
-		ErrorCode:   "XR-STORAGE-LOW",
+		ErrorCode:   "XR-STORAGE-LOW:" + targetPath,
 		Message:     fmt.Sprintf("本地备份存储空间不足: %s (剩余 %.1fGB / 共 %.1fGB, 使用率 %.1f%%)", targetPath, freeGB, totalGB, usagePct),
 		Retryable:   false,
 		TriggeredAt: time.Now(),

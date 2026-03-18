@@ -36,30 +36,52 @@ func (m *Manager) checkNodeExpiry() {
 				}
 			}
 			logger.Module("task").Info().Uint("node_id", node.ID).Str("node_name", node.Name).Msg("节点已过期，自动归档")
-			if err := alerting.RaiseNodeExpiryWarning(m.db, node, fmt.Sprintf("节点 %s 已过期并自动归档", node.Name)); err != nil {
-				logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+			expiryCode := fmt.Sprintf("XR-NODE-EXPIRY-%d", node.ID)
+			var alertCount int64
+			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
+			if alertCount == 0 {
+				if err := alerting.RaiseNodeExpiryWarning(m.db, node, fmt.Sprintf("节点 %s 已过期并自动归档", node.Name)); err != nil {
+					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+				}
 			}
 		} else if remaining <= 24*time.Hour {
 			// 1 天内到期：告警 + 紧急备份
-			msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，已触发紧急备份", node.Name, remaining.Hours())
-			if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
-				logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+			expiryCode := fmt.Sprintf("XR-NODE-EXPIRY-%d", node.ID)
+			var alertCount int64
+			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
+			if alertCount == 0 {
+				msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，已触发紧急备份", node.Name, remaining.Hours())
+				if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
+					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+				}
 			}
-			// 触发紧急备份
+			// 触发紧急备份（限制并发数）
 			var tasks []model.Task
 			if err := m.db.Where("node_id = ? AND source = ? AND executor_type IN ?",
 				node.ID, "policy", []string{"rsync", "restic", "rclone"}).Find(&tasks).Error; err == nil {
+				maxEmergency := 5
+				triggered := 0
 				for _, t := range tasks {
+					if triggered >= maxEmergency {
+						break
+					}
 					if _, err := m.TriggerManual(t.ID); err != nil {
 						logger.Module("task").Warn().Uint("task_id", t.ID).Err(err).Msg("紧急备份触发失败")
+					} else {
+						triggered++
 					}
 				}
 			}
 		} else if remaining <= 3*24*time.Hour {
-			// 3 天内到期：仅告警
-			msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，请及时处理", node.Name, remaining.Hours())
-			if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
-				logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+			// 3 天内到期：仅告警（检查是否已有未解除告警）
+			expiryCode := fmt.Sprintf("XR-NODE-EXPIRY-%d", node.ID)
+			var alertCount int64
+			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
+			if alertCount == 0 {
+				msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，请及时处理", node.Name, remaining.Hours())
+				if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
+					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
+				}
 			}
 		}
 	}

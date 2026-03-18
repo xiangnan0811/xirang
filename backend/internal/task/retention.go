@@ -243,9 +243,9 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 	}
 }
 
-// shellEscape 对 shell 参数进行安全转义
+// shellEscape delegates to executor.ShellEscape for consistency.
 func shellEscape(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+	return executor.ShellEscape(s)
 }
 
 // extractResticPassword 从 ExecutorConfig JSON 中提取 repository_password 字段

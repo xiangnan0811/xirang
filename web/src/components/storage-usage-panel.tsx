@@ -61,7 +61,7 @@ export function StorageUsagePanel() {
       });
 
     return () => controller.abort();
-  }, [token]);
+  }, [token, t]);
 
   if (loading) {
     return (
