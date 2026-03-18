@@ -3,6 +3,7 @@ import {
   ClipboardList,
   FileSearch,
   FileText,
+  HardDrive,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -44,6 +45,12 @@ export const navItems: NavItem[] = [
     path: "/app/policies",
     icon: ListChecks,
     mobileTab: true
+  },
+  {
+    titleKey: "nav.backups",
+    path: "/app/backups",
+    icon: HardDrive,
+    mobileTab: false
   },
   {
     titleKey: "nav.tasks",

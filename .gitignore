@@ -8,6 +8,7 @@ backend/server
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal
+backend/backups/
 
 # Env
 .env

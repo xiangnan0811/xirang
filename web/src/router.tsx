@@ -13,6 +13,9 @@ const NodesPage = lazy(() =>
 const SSHKeysPage = lazy(() =>
   import("@/pages/ssh-keys-page").then((m) => ({ default: m.SSHKeysPage }))
 );
+const BackupsPage = lazy(() =>
+  import("@/pages/backups-page").then((m) => ({ default: m.BackupsPage }))
+);
 const PoliciesPage = lazy(() =>
   import("@/pages/policies-page").then((m) => ({ default: m.PoliciesPage }))
 );
@@ -85,6 +88,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "policies",
         element: <LazyPage><PoliciesPage /></LazyPage>
+      },
+      {
+        path: "backups",
+        element: <LazyPage><BackupsPage /></LazyPage>
       },
       {
         path: "logs",

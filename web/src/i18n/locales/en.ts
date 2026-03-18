@@ -90,6 +90,7 @@ const en = {
     alertCenter: "Alert Center",
     audit: "Audit",
     reports: "Reports",
+    backups: "Backups",
     settings: "Settings",
   },
 
@@ -1330,6 +1331,11 @@ const en = {
     snapshotLabel: "Snapshot {{id}}",
     restoreCount: "Restore {{count}} items",
     restoreSuccess: "Restore successful",
+  },
+
+  // ── backups page ──
+  backups: {
+    title: "Backup Management",
   },
 
   // ── backup health panel ──

@@ -26,11 +26,6 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
-import { BackupHealthPanel } from "@/components/backup-health-panel";
-import { StorageUsagePanel } from "@/components/storage-usage-panel";
-import { ConfigExportImport } from "@/components/config-export-import";
-import { StorageGuideCard } from "@/components/storage-guide-card";
-import { SelfBackupPanel } from "@/components/self-backup-panel";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
@@ -401,31 +396,6 @@ export function OverviewPage() {
           </Card>
         </section>
       )}
-
-      {/* 备份健康概览 */}
-      <section className="animate-slide-up [animation-delay:500ms]">
-        <BackupHealthPanel />
-      </section>
-
-      {/* 存储用量概览 */}
-      <section className="animate-slide-up [animation-delay:600ms]">
-        <StorageUsagePanel />
-      </section>
-
-      {/* 系统配置导入导出（仅管理员可见） */}
-      <section className="animate-slide-up [animation-delay:700ms]">
-        <ConfigExportImport />
-      </section>
-
-      {/* 外部存储挂载引导（仅管理员可见） */}
-      <section className="animate-slide-up [animation-delay:750ms]">
-        <StorageGuideCard />
-      </section>
-
-      {/* 数据库备份（仅管理员可见） */}
-      <section className="animate-slide-up [animation-delay:800ms]">
-        <SelfBackupPanel />
-      </section>
 
       <Dialog open={matrixFullscreen} onOpenChange={setMatrixFullscreen}>
         <DialogContent size="lg" className="max-h-[90vh] flex flex-col">

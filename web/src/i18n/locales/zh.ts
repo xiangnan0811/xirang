@@ -90,6 +90,7 @@ const zh = {
     alertCenter: "告警中心",
     audit: "审计",
     reports: "报告",
+    backups: "备份",
     settings: "设置",
   },
 
@@ -1330,6 +1331,11 @@ const zh = {
     snapshotLabel: "快照 {{id}}",
     restoreCount: "恢复 {{count}} 项",
     restoreSuccess: "恢复成功",
+  },
+
+  // ── backups page ──
+  backups: {
+    title: "备份管理",
   },
 
   // ── backup health panel ──
