@@ -46,10 +46,12 @@ describe("SettingsPage", () => {
     vi.clearAllMocks();
   });
 
-  it("renders 4 tabs for admin", () => {
+  it("renders 6 tabs for admin", () => {
     renderWithRouter(<SettingsPage />);
     expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "settings.tabs.account" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "settings.tabs.users" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "settings.tabs.channels" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "settings.tabs.system" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "settings.tabs.maintenance" })).toBeDefined();
   });

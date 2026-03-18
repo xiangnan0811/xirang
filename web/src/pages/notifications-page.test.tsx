@@ -8,11 +8,9 @@ import { NotificationsPage } from "./notifications-page";
 const {
   toastSuccessMock,
   toastErrorMock,
-  confirmMock,
 } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
-  confirmMock: vi.fn().mockResolvedValue(true),
 }));
 
 const contextRef: { current: ConsoleOutletContext } = {
@@ -44,21 +42,6 @@ vi.mock("react-router-dom", async () => {
     useSearchParams: () => [searchParams, vi.fn()] as const,
   };
 });
-
-vi.mock("@/components/integration-create-dialog", () => ({
-  IntegrationCreateDialog: () => null,
-}));
-
-vi.mock("@/components/integration-editor-dialog", () => ({
-  IntegrationEditorDialog: () => null,
-}));
-
-vi.mock("@/hooks/use-confirm", () => ({
-  useConfirm: () => ({
-    confirm: confirmMock,
-    dialog: null,
-  }),
-}));
 
 vi.mock("@/components/ui/toast", () => ({
   toast: {
@@ -200,7 +183,6 @@ describe("NotificationsPage", () => {
     window.localStorage.clear();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
-    confirmMock.mockClear();
     createContext();
   });
 
@@ -307,89 +289,7 @@ describe("NotificationsPage", () => {
     });
   });
 
-  it("删除通知方式确认后调用 removeIntegration 并提示成功", async () => {
-    const user = userEvent.setup();
-    const ctx = createContext();
-
-    render(<NotificationsPage />);
-    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "删除通知方式 运维邮箱" }));
-
-    await waitFor(() => {
-      expect(ctx.removeIntegration).toHaveBeenCalledWith("int-1");
-    });
-    expect(toastSuccessMock).toHaveBeenCalledWith("已删除通知方式：运维邮箱");
-  });
-
-  it("删除通知方式取消后不调用 removeIntegration", async () => {
-    const user = userEvent.setup();
-    const ctx = createContext();
-    confirmMock.mockResolvedValueOnce(false);
-
-    render(<NotificationsPage />);
-    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "删除通知方式 运维邮箱" }));
-
-    await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledTimes(1);
-    });
-    expect(ctx.removeIntegration).not.toHaveBeenCalled();
-  });
-
-  it("测试发送失败时提示错误", async () => {
-    const user = userEvent.setup();
-    const ctx = createContext({
-      testIntegration: vi.fn().mockRejectedValue(new Error("测试发送失败")),
-    });
-
-    render(<NotificationsPage />);
-    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "测试发送" }));
-
-    await waitFor(() => {
-      expect(ctx.testIntegration).toHaveBeenCalledWith("int-1");
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith("测试发送失败");
-  });
-
-  it("通知方式开关可触发启停操作并提示结果", async () => {
-    const user = userEvent.setup();
-    const ctx = createContext();
-
-    render(<NotificationsPage />);
-    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("switch", { name: "停用通知方式 运维邮箱" })
-    );
-
-    await waitFor(() => {
-      expect(ctx.toggleIntegration).toHaveBeenCalledWith("int-1");
-    });
-    expect(toastSuccessMock).toHaveBeenCalledWith("通知方式 运维邮箱 已停用。");
-  });
-
-  it("通知方式开关失败时提示错误", async () => {
-    const user = userEvent.setup();
-    const ctx = createContext({
-      toggleIntegration: vi.fn().mockRejectedValue(new Error("启停失败")),
-    });
-
-    render(<NotificationsPage />);
-    expect(await screen.findByText("当前筛选 2 / 2 条告警")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("switch", { name: "停用通知方式 运维邮箱" })
-    );
-
-    await waitFor(() => {
-      expect(ctx.toggleIntegration).toHaveBeenCalledWith("int-1");
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith("启停失败");
-  });
+  // 注意：通知方式（IntegrationManager）相关测试已移至 settings-page.channels 中
 
   it("重置筛选时会同时清空全局搜索并恢复告警列表", async () => {
     const user = userEvent.setup();

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, Search, ShieldCheck, ShieldOff } from "lucide-react";
+import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ScrollToTop } from "@/components/scroll-to-top";
@@ -11,8 +11,7 @@ import { LanguageSwitcher } from "@/components/language-switcher";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { SetupWizard } from "@/components/setup-wizard";
 import { NotificationBell } from "@/components/notification-bell";
-import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
-import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
+import { UserDropdown } from "@/components/user-dropdown";
 import { VersionBanner } from "@/components/version-banner";
 
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +51,7 @@ function isTypingTarget(target: EventTarget | null) {
 export function AppShell() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { username, role, token, logout, totpEnabled, setTotpEnabled } = useAuth();
+  const { username, role, token, logout } = useAuth();
   const consoleData = useConsoleData(token);
 
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -60,8 +59,6 @@ export function AppShell() {
   const globalSearchValueRef = useRef(consoleData.globalSearch);
   const setGlobalSearchRef = useRef(consoleData.setGlobalSearch);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [totpSetupOpen, setTotpSetupOpen] = useState(false);
-  const [totpDisableOpen, setTotpDisableOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>("xirang.sidebar.collapsed", false);
   const hasWarning = Boolean(consoleData.warning);
 
@@ -228,34 +225,8 @@ export function AppShell() {
               </div>
               <LanguageSwitcher className="size-8" />
 
-              <div className="hidden md:flex items-center pl-1 gap-2">
-                <span className="text-xs text-muted-foreground">{username ?? t('common.unknown')}</span>
-                {totpEnabled ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-success hover:text-success/80"
-                    onClick={() => setTotpDisableOpen(true)}
-                    title={t('appShell.disableTotp')}
-                    aria-label={t('appShell.disableTotp')}
-                  >
-                    <ShieldCheck className="size-4" />
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:text-foreground"
-                    onClick={() => setTotpSetupOpen(true)}
-                    title={t('appShell.enableTotp')}
-                    aria-label={t('appShell.enableTotp')}
-                  >
-                    <ShieldOff className="size-4" />
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleLogout}>
-                  {t('appShell.logout')}
-                </Button>
+              <div className="hidden md:flex items-center pl-1">
+                <UserDropdown />
               </div>
             </div>
           </div>
@@ -321,32 +292,12 @@ export function AppShell() {
       <MobileNavigation
         username={username}
         role={role}
-        totpEnabled={totpEnabled}
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
-        onTotpSetup={() => setTotpSetupOpen(true)}
-        onTotpDisable={() => setTotpDisableOpen(true)}
       />
 
       <OnboardingTour />
       <SetupWizard />
-
-      {token ? (
-        <>
-          <TOTPSetupDialog
-            open={totpSetupOpen}
-            onOpenChange={setTotpSetupOpen}
-            token={token}
-            onSuccess={() => setTotpEnabled(true)}
-          />
-          <TOTPDisableDialog
-            open={totpDisableOpen}
-            onOpenChange={setTotpDisableOpen}
-            token={token}
-            onSuccess={() => setTotpEnabled(false)}
-          />
-        </>
-      ) : null}
     </div>
   );
 }

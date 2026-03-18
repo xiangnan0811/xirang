@@ -30,9 +30,6 @@ const TasksPage = lazy(() =>
 const AuditPage = lazy(() =>
   import("@/pages/audit-page").then((m) => ({ default: m.AuditPage }))
 );
-const UsersPage = lazy(() =>
-  import("@/pages/users-page").then((m) => ({ default: m.UsersPage }))
-);
 const ReportsPage = lazy(() =>
   import("@/pages/reports-page").then((m) => ({ default: m.ReportsPage }))
 );
@@ -111,7 +108,7 @@ export const AppRouter = createBrowserRouter([
       },
       {
         path: "users",
-        element: <LazyPage><UsersPage /></LazyPage>
+        element: <Navigate to="../settings?tab=users" replace />
       },
       {
         path: "reports",

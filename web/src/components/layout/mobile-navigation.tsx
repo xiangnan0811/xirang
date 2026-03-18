@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LogOut, Menu, RefreshCw, Settings, ShieldCheck, ShieldOff, X } from "lucide-react";
+import { LogOut, Menu, RefreshCw, Settings, X } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
@@ -12,14 +12,11 @@ import type { UserRecord } from "@/types/domain";
 type MobileNavigationProps = {
   username: string | null;
   role: UserRecord["role"] | null;
-  totpEnabled: boolean;
   onLogout: () => void;
   onRefresh: () => void;
-  onTotpSetup: () => void;
-  onTotpDisable: () => void;
 };
 
-export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefresh, onTotpSetup, onTotpDisable }: MobileNavigationProps) {
+export function MobileNavigation({ username, role, onLogout, onRefresh }: MobileNavigationProps) {
   const { t } = useTranslation();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -217,51 +214,29 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
               {t("nav.settings")}
             </Link>
 
-            <div className="mt-6 grid grid-cols-2 gap-2">
-              <Button variant="outline" className="h-10" onClick={onRefresh}>
+            <div className="mt-6">
+              <Button variant="outline" className="h-10 w-full" onClick={onRefresh}>
                 <RefreshCw className="mr-1 size-4" />
                 {t('appShell.refreshData')}
               </Button>
-              <Button
-                variant="destructive"
-                className="h-10"
-                onClick={() => {
-                  onLogout();
-                  setDrawerOpen(false);
-                }}
-              >
-                <LogOut className="mr-1 size-4" />
-                {t('appShell.logoutShort')}
-              </Button>
-              {totpEnabled ? (
-                <Button
-                  variant="outline"
-                  className="col-span-2 h-10 text-success border-success/40 hover:text-success/80 hover:border-success/60"
-                  onClick={() => {
-                    onTotpDisable();
-                    setDrawerOpen(false);
-                  }}
-                >
-                  <ShieldCheck className="mr-1 size-4" />
-                  {t('appShell.totpEnabledClickDisable')}
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  className="col-span-2 h-10"
-                  onClick={() => {
-                    onTotpSetup();
-                    setDrawerOpen(false);
-                  }}
-                >
-                  <ShieldOff className="mr-1 size-4" />
-                  {t('appShell.enableTotp')}
-                </Button>
-              )}
             </div>
 
             <div className="mt-auto flex items-center justify-between border-t border-border/80 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-              <p className="text-xs text-muted-foreground">{t('appShell.currentUser', { name: username ?? t('common.unknown') })}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">{t('appShell.currentUser', { name: username ?? t('common.unknown') })}</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    onLogout();
+                    setDrawerOpen(false);
+                  }}
+                >
+                  <LogOut className="mr-1 size-3" />
+                  {t('appShell.logoutShort')}
+                </Button>
+              </div>
               <div className="flex items-center gap-1">
                 <DisplayPreferencesToggle />
                 <ThemeToggle />

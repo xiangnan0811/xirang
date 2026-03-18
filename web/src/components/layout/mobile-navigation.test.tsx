@@ -13,7 +13,7 @@ function renderWithProviders() {
         initialEntries={["/app/overview"]}
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
-        <MobileNavigation username="alice" role="admin" totpEnabled={false} onLogout={vi.fn()} onRefresh={vi.fn()} onTotpSetup={vi.fn()} onTotpDisable={vi.fn()} />
+        <MobileNavigation username="alice" role="admin" onLogout={vi.fn()} onRefresh={vi.fn()} />
       </MemoryRouter>
     </ThemeProvider>
   );

@@ -8,7 +8,6 @@ import {
   ListChecks,
   Monitor,
   Server,
-  Users,
   type LucideIcon
 } from "lucide-react";
 import type { UserRecord } from "@/types/domain";
@@ -59,7 +58,7 @@ export const navItems: NavItem[] = [
     mobileTab: true
   },
   {
-    titleKey: "nav.notifications",
+    titleKey: "nav.alertCenter",
     path: "/app/notifications",
     icon: Bell,
     mobileTab: true
@@ -69,13 +68,6 @@ export const navItems: NavItem[] = [
     path: "/app/audit",
     icon: FileSearch,
     mobileTab: false
-  },
-  {
-    titleKey: "nav.users",
-    path: "/app/users",
-    icon: Users,
-    mobileTab: false,
-    adminOnly: true
   },
   {
     titleKey: "nav.reports",

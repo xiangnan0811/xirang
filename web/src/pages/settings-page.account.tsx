@@ -1,13 +1,18 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ShieldCheck, ShieldOff } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
+import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
+import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
 import { cn } from "@/lib/utils";
 
 export function AccountTab() {
   const { t } = useTranslation();
-  const { token, username, role } = useAuth();
+  const { token, username, role, totpEnabled, setTotpEnabled } = useAuth();
+  const [totpSetupOpen, setTotpSetupOpen] = useState(false);
+  const [totpDisableOpen, setTotpDisableOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -100,10 +105,56 @@ export function AccountTab() {
       </div>
 
       {/* 2FA section */}
-      <div className="rounded-lg border p-4 space-y-2">
+      <div className="rounded-lg border p-4 space-y-3">
         <h3 className="text-sm font-medium">{t("settings.account.twoFactor")}</h3>
-        <p className="text-sm text-muted-foreground">{t("settings.account.twoFactorDesc")}</p>
+        <div className="flex items-center gap-3">
+          {totpEnabled ? (
+            <>
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-success/15 px-2.5 py-1 text-sm font-medium text-success">
+                <ShieldCheck className="size-4" />
+                {t("settings.account.twoFactorEnabled")}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setTotpDisableOpen(true)}
+              >
+                {t("settings.account.disableTwoFactor")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-sm text-muted-foreground">
+                <ShieldOff className="size-4" />
+                {t("settings.account.twoFactorDisabled")}
+              </span>
+              <Button
+                size="sm"
+                onClick={() => setTotpSetupOpen(true)}
+              >
+                {t("settings.account.enableTwoFactor")}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
+
+      {token ? (
+        <>
+          <TOTPSetupDialog
+            open={totpSetupOpen}
+            onOpenChange={setTotpSetupOpen}
+            token={token}
+            onSuccess={() => setTotpEnabled(true)}
+          />
+          <TOTPDisableDialog
+            open={totpDisableOpen}
+            onOpenChange={setTotpDisableOpen}
+            token={token}
+            onSuccess={() => setTotpEnabled(false)}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
