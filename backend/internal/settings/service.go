@@ -169,9 +169,11 @@ func (s *Service) GetEffective(key string) string {
 
 // resolveValue 按 DB → env → default 优先级解析值（无缓存）
 func (s *Service) resolveValue(key string) string {
-	var dbSetting model.SystemSetting
-	if err := s.db.Where("key = ?", key).First(&dbSetting).Error; err == nil {
-		return dbSetting.Value
+	// 使用 Limit(1).Find 代替 First，避免 GORM 对空结果打 "record not found" 错误日志
+	var dbSettings []model.SystemSetting
+	s.db.Where("key = ?", key).Limit(1).Find(&dbSettings)
+	if len(dbSettings) > 0 {
+		return dbSettings[0].Value
 	}
 
 	if def, ok := registryMap[key]; ok {
