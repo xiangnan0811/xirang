@@ -103,6 +103,18 @@ func validateCheckURL(rawURL string) error {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return fmt.Errorf("不允许访问内部网络地址")
 		}
+	} else {
+		// DNS 解析域名，检查所有解析结果防止 DNS rebinding
+		addrs, err := net.LookupHost(host)
+		if err != nil {
+			return fmt.Errorf("无法解析主机名")
+		}
+		for _, addr := range addrs {
+			resolved := net.ParseIP(addr)
+			if resolved != nil && (resolved.IsLoopback() || resolved.IsPrivate() || resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast()) {
+				return fmt.Errorf("不允许访问内部网络地址")
+			}
+		}
 	}
 	return nil
 }

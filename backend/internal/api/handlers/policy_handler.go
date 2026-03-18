@@ -169,6 +169,10 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
 	}
 	if req.HookTimeoutSeconds != nil {
+		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hook 超时时间必须在 0-3600 秒之间"})
+			return
+		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
 	}
 	if req.MaxRetries != nil {
@@ -318,6 +322,10 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	p.PostHook = strings.TrimSpace(req.PostHook)
 	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
 	if req.HookTimeoutSeconds != nil {
+		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hook 超时时间必须在 0-3600 秒之间"})
+			return
+		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
 	}
 	if req.MaxRetries != nil {
@@ -418,19 +426,31 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-// validateHookCommand 校验 hook 命令的安全性。
+// validateHookCommand 校验 hook 命令的安全性（白名单：禁止 shell 元字符 + 危险程序名）。
 func validateHookCommand(cmd string) error {
 	if len(cmd) > 2048 {
 		return fmt.Errorf("hook 命令长度不能超过 2048 个字符")
 	}
-	dangerousPatterns := []string{
-		"curl ", "wget ", "nc ", "ncat ", "python", "perl ", "ruby ",
-		"base64 ", "/dev/tcp", "mkfifo", "telnet ",
+	// 禁止 shell 元字符，防止命令注入
+	for _, ch := range []string{";", "|", "&", "`", "$", "(", ")", "{", "}", "<", ">", "!", "\\", "\n", "\r"} {
+		if strings.Contains(cmd, ch) {
+			return fmt.Errorf("hook 命令包含不允许的字符: %s", ch)
+		}
 	}
-	lower := strings.ToLower(cmd)
-	for _, p := range dangerousPatterns {
-		if strings.Contains(lower, p) {
-			return fmt.Errorf("hook 命令包含不允许的模式: %s", strings.TrimSpace(p))
+	// 按命令名（basename）阻止已知危险程序
+	blocked := map[string]bool{
+		"curl": true, "wget": true, "nc": true, "ncat": true,
+		"python": true, "python3": true, "perl": true, "ruby": true,
+		"bash": true, "sh": true, "zsh": true, "php": true, "node": true,
+		"ssh": true, "scp": true, "telnet": true, "base64": true,
+	}
+	for _, part := range strings.Fields(strings.ToLower(cmd)) {
+		base := part
+		if idx := strings.LastIndex(part, "/"); idx >= 0 {
+			base = part[idx+1:]
+		}
+		if blocked[base] {
+			return fmt.Errorf("hook 命令包含不允许的程序: %s", base)
 		}
 	}
 	return nil

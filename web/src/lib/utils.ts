@@ -15,7 +15,8 @@ export function formatBytes(bytes: number): string {
 }
 
 export function getLocale(): string {
-  return i18n.language === "en" ? "en-US" : "zh-CN";
+  const localeMap: Record<string, string> = { en: "en-US", zh: "zh-CN" };
+  return localeMap[i18n.language] ?? "en-US";
 }
 
 export function getErrorMessage(error: unknown, fallback = i18n.t("common.operationFailed")): string {

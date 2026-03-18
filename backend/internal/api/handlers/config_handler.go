@@ -184,8 +184,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
 				existing.PrivateKey = privateKey
 			}
-			tx.Save(&existing)
-			importedKeys++
+			if err := tx.Save(&existing).Error; err == nil {
+				importedKeys++
+			}
 		} else {
 			newKey := model.SSHKey{Name: name}
 			if username, ok := keyData["username"].(string); ok {
@@ -239,8 +240,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if err := validateNodeHostPort(existing.Host, existing.Port); err != nil {
 				continue
 			}
-			tx.Save(&existing)
-			importedNodes++
+			if err := tx.Save(&existing).Error; err == nil {
+				importedNodes++
+			}
 		} else {
 			newNode := model.Node{
 				Name:   name,
@@ -308,6 +310,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				existing.TargetPath = tgt
 			}
 			if cron, ok := policyData["cron_spec"].(string); ok {
+				if err := validateCronSpec(cron); err != nil {
+					continue
+				}
 				existing.CronSpec = cron
 			}
 			if excl, ok := policyData["exclude_rules"].(string); ok {
@@ -316,8 +321,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if ret, ok := policyData["retention_days"].(float64); ok {
 				existing.RetentionDays = int(ret)
 			}
-			tx.Save(&existing)
-			importedPolicies++
+			if err := tx.Save(&existing).Error; err == nil {
+				importedPolicies++
+			}
 		} else {
 			newPolicy := model.Policy{
 				Name:          name,
@@ -335,6 +341,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				newPolicy.TargetPath = tgt
 			}
 			if cron, ok := policyData["cron_spec"].(string); ok {
+				if err := validateCronSpec(cron); err != nil {
+					continue
+				}
 				newPolicy.CronSpec = cron
 			}
 			if excl, ok := policyData["exclude_rules"].(string); ok {

@@ -178,7 +178,3 @@ func round2(v float64) float64 {
 	return float64(int(v*100)) / 100
 }
 
-// respondStorageError 用于内部错误响应（避免引用不存在的包级函数）。
-func respondStorageError(c *gin.Context, msg string) {
-	c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
-}

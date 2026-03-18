@@ -15,7 +15,7 @@ import {
   type Report,
   type ReportConfig,
 } from "@/lib/api/reports-api";
-import { getErrorMessage } from "@/lib/utils";
+import { getErrorMessage, getLocale } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -26,7 +26,7 @@ import { ReportConfigDialog } from "@/components/report-config-dialog";
 const reportsApi = createReportsApi();
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("zh-CN");
+  return new Date(iso).toLocaleDateString(getLocale());
 }
 
 function SuccessRateBadge({ rate }: { rate: number }) {
