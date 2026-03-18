@@ -382,7 +382,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		}
 	}
 
-	// 导入系统设置
+	// 导入系统设置（使用事务 handle 确保原子性）
 	if h.settingsSvc != nil {
 		for _, sd := range payload.Data.SystemSettings {
 			key, _ := sd["key"].(string)
@@ -390,7 +390,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if key == "" {
 				continue
 			}
-			if err := h.settingsSvc.Update(key, value); err == nil {
+			if err := h.settingsSvc.UpdateWithTx(tx, key, value); err == nil {
 				importedSettings++
 			}
 		}

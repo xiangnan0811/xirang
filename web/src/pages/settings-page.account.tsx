@@ -59,25 +59,31 @@ export function AccountTab() {
         <h3 className="text-sm font-medium">{t("settings.account.changePassword")}</h3>
         <div className="space-y-3 max-w-sm">
           <input
+            id="current-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.currentPassword")}
+            aria-label={t("settings.account.currentPassword")}
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
             autoComplete="current-password"
           />
           <input
+            id="new-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.newPassword")}
+            aria-label={t("settings.account.newPassword")}
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             autoComplete="new-password"
           />
           <input
+            id="confirm-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.confirmPassword")}
+            aria-label={t("settings.account.confirmPassword")}
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             autoComplete="new-password"

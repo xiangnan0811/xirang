@@ -133,6 +133,8 @@ export function SystemTab() {
                 <div className="flex items-center gap-2 shrink-0">
                   {def.type === "bool" ? (
                     <select
+                      id={def.key}
+                      aria-label={def.description}
                       className="h-8 rounded-md border border-input bg-background px-2 text-sm w-24"
                       value={editValues[def.key] || ""}
                       onChange={(e) => setEditValues((prev) => ({ ...prev, [def.key]: e.target.value }))}
@@ -142,6 +144,8 @@ export function SystemTab() {
                     </select>
                   ) : (
                     <input
+                      id={def.key}
+                      aria-label={def.description}
                       className="h-8 w-28 rounded-md border border-input bg-background px-2 text-sm"
                       value={editValues[def.key] || ""}
                       onChange={(e) => setEditValues((prev) => ({ ...prev, [def.key]: e.target.value }))}

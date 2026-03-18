@@ -96,7 +96,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
 	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService)
-	settingsHandler := handlers.NewSettingsHandler(dep.SettingsService)
+	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
 	storageGuideHandler := handlers.NewStorageGuideHandler()

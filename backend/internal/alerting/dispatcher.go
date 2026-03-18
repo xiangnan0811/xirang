@@ -22,12 +22,25 @@ import (
 	"gorm.io/gorm"
 )
 
-// settingsSvc 模块级设置服务引用，由 InitSettings 注入
-var settingsSvc *settings.Service
+// settingsSvc 模块级设置服务引用，由 InitSettings 注入（sync.Once 保证并发安全）
+var (
+	settingsSvc     *settings.Service
+	settingsInitMu  sync.Mutex
+)
 
-// InitSettings 注入设置服务（在 main 中调用）
+// InitSettings 注入设置服务（在 main 中调用，sync.Mutex 保证写入可见性）
 func InitSettings(svc *settings.Service) {
+	settingsInitMu.Lock()
 	settingsSvc = svc
+	settingsInitMu.Unlock()
+}
+
+// getSettingsSvc 安全读取设置服务引用
+func getSettingsSvc() *settings.Service {
+	settingsInitMu.Lock()
+	svc := settingsSvc
+	settingsInitMu.Unlock()
+	return svc
 }
 
 var httpClient = &http.Client{Timeout: 8 * time.Second}
@@ -324,8 +337,8 @@ func inDedupWindow(db *gorm.DB, alert model.Alert, now time.Time) (bool, error) 
 }
 
 func readAlertDedupWindow() time.Duration {
-	if settingsSvc != nil {
-		raw := settingsSvc.GetEffective("alert.dedup_window")
+	if svc := getSettingsSvc(); svc != nil {
+		raw := svc.GetEffective("alert.dedup_window")
 		if raw != "" {
 			value, err := time.ParseDuration(raw)
 			if err == nil && value > 0 {
