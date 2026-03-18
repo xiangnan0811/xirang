@@ -16,10 +16,19 @@ import (
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/util"
 
 	"gorm.io/gorm"
 )
+
+// settingsSvc 模块级设置服务引用，由 InitSettings 注入
+var settingsSvc *settings.Service
+
+// InitSettings 注入设置服务（在 main 中调用）
+func InitSettings(svc *settings.Service) {
+	settingsSvc = svc
+}
 
 var httpClient = &http.Client{Timeout: 8 * time.Second}
 
@@ -315,6 +324,15 @@ func inDedupWindow(db *gorm.DB, alert model.Alert, now time.Time) (bool, error) 
 }
 
 func readAlertDedupWindow() time.Duration {
+	if settingsSvc != nil {
+		raw := settingsSvc.GetEffective("alert.dedup_window")
+		if raw != "" {
+			value, err := time.ParseDuration(raw)
+			if err == nil && value > 0 {
+				return value
+			}
+		}
+	}
 	raw := strings.TrimSpace(os.Getenv("ALERT_DEDUP_WINDOW"))
 	if raw == "" {
 		return 10 * time.Minute

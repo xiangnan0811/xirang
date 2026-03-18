@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -58,8 +59,8 @@ type Service struct {
 	failureLocker *LoginFailureLocker
 }
 
-func NewService(db *gorm.DB, jwt *JWTManager, cfg LoginSecurityConfig) *Service {
-	locker := NewLoginFailureLocker(db, cfg.FailLockThreshold, cfg.FailLockDuration)
+func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg LoginSecurityConfig) *Service {
+	locker := NewLoginFailureLocker(db, settingsSvc, cfg.FailLockThreshold, cfg.FailLockDuration)
 	locker.StartCleanup(context.Background(), 5*time.Minute)
 	return &Service{
 		db:            db,

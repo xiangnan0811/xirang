@@ -111,7 +111,7 @@ func TestEnforceRsyncRetention(t *testing.T) {
 	// Preload Node 以避免 enforceRsyncRetention 内部访问空 Node
 	db.Preload("Node").First(&task, task.ID)
 
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
 
 	// 3. 调用 enforceRsyncRetention，cutoff 设为 7 天前
 	cutoff := time.Now().AddDate(0, 0, -7)

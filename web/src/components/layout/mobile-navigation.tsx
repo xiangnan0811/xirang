@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LogOut, Menu, RefreshCw, ShieldCheck, ShieldOff, X } from "lucide-react";
+import { LogOut, Menu, RefreshCw, Settings, ShieldCheck, ShieldOff, X } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
@@ -200,6 +200,22 @@ export function MobileNavigation({ username, role, totpEnabled, onLogout, onRefr
                 );
               })}
             </div>
+
+            {/* 设置入口 */}
+            <Link
+              to="/app/settings"
+              onClick={() => setDrawerOpen(false)}
+              aria-current={location.pathname === "/app/settings" ? "page" : undefined}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all duration-200 mt-2",
+                location.pathname === "/app/settings"
+                  ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
+                  : "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
+              )}
+            >
+              <Settings className="size-4" />
+              {t("nav.settings")}
+            </Link>
 
             <div className="mt-6 grid grid-cols-2 gap-2">
               <Button variant="outline" className="h-10" onClick={onRefresh}>

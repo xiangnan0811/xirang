@@ -6,6 +6,7 @@ import (
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -13,11 +14,12 @@ import (
 
 // ConfigHandler 处理配置导出/导入
 type ConfigHandler struct {
-	db *gorm.DB
+	db          *gorm.DB
+	settingsSvc *settings.Service
 }
 
-func NewConfigHandler(db *gorm.DB) *ConfigHandler {
-	return &ConfigHandler{db: db}
+func NewConfigHandler(db *gorm.DB, settingsSvc *settings.Service) *ConfigHandler {
+	return &ConfigHandler{db: db, settingsSvc: settingsSvc}
 }
 
 // Export 导出节点、密钥、策略、任务配置为 JSON。
@@ -122,14 +124,26 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		})
 	}
 
+	// 导出系统设置（仅 DB 覆盖值）
+	var dbSettings []model.SystemSetting
+	h.db.Find(&dbSettings)
+	exportSettings := make([]gin.H, 0, len(dbSettings))
+	for _, s := range dbSettings {
+		exportSettings = append(exportSettings, gin.H{
+			"key":   s.Key,
+			"value": s.Value,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"version":     "1.0",
 		"exported_at": time.Now().Format(time.RFC3339),
 		"data": gin.H{
-			"nodes":    exportNodes,
-			"ssh_keys": exportKeys,
-			"policies": exportPolicies,
-			"tasks":    exportTasks,
+			"nodes":           exportNodes,
+			"ssh_keys":        exportKeys,
+			"policies":        exportPolicies,
+			"tasks":           exportTasks,
+			"system_settings": exportSettings,
 		},
 	})
 }
@@ -145,9 +159,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 
 	var payload struct {
 		Data struct {
-			Nodes    []map[string]interface{} `json:"nodes"`
-			SSHKeys  []map[string]interface{} `json:"ssh_keys"`
-			Policies []map[string]interface{} `json:"policies"`
+			Nodes          []map[string]interface{} `json:"nodes"`
+			SSHKeys        []map[string]interface{} `json:"ssh_keys"`
+			Policies       []map[string]interface{} `json:"policies"`
+			SystemSettings []map[string]interface{} `json:"system_settings"`
 		} `json:"data"`
 	}
 
@@ -158,7 +173,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return
 	}
 
-	var importedNodes, importedKeys, importedPolicies int
+	var importedNodes, importedKeys, importedPolicies, importedSettings int
 
 	importErr := h.db.Transaction(func(tx *gorm.DB) error {
 
@@ -367,6 +382,20 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		}
 	}
 
+	// 导入系统设置
+	if h.settingsSvc != nil {
+		for _, sd := range payload.Data.SystemSettings {
+			key, _ := sd["key"].(string)
+			value, _ := sd["value"].(string)
+			if key == "" {
+				continue
+			}
+			if err := h.settingsSvc.Update(key, value); err == nil {
+				importedSettings++
+			}
+		}
+	}
+
 	return nil
 	})
 	if importErr != nil {
@@ -376,9 +405,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"nodes":    importedNodes,
-			"ssh_keys": importedKeys,
-			"policies": importedPolicies,
+			"nodes":           importedNodes,
+			"ssh_keys":        importedKeys,
+			"policies":        importedPolicies,
+			"system_settings": importedSettings,
 		},
 	})
 }

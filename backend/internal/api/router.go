@@ -9,6 +9,7 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/util"
 	"xirang/backend/internal/ws"
@@ -29,6 +30,7 @@ type Dependencies struct {
 	LoginRateWindow           time.Duration
 	LoginCaptchaEnabled       bool
 	LoginSecondCaptchaEnabled bool
+	SettingsService           *settings.Service
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -72,7 +74,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	captchaStore := handlers.NewCaptchaStore()
 	captchaHandler := handlers.NewCaptchaHandler(captchaStore)
-	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled).WithDB(dep.DB).WithCaptchaStore(captchaStore)
+	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.SettingsService, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled).WithDB(dep.DB).WithCaptchaStore(captchaStore)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)
@@ -93,7 +95,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
-	configHandler := handlers.NewConfigHandler(dep.DB)
+	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService)
+	settingsHandler := handlers.NewSettingsHandler(dep.SettingsService)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
 	storageGuideHandler := handlers.NewStorageGuideHandler()
@@ -102,8 +105,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
-	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
-	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
+	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
+	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
 	v1.GET("/version", versionHandler.Info)
 
 	secured := v1.Group("")
@@ -208,6 +211,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
 	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), snapshotHandler.Restore)
 	secured.GET("/tasks/:id/snapshots/diff", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotDiffHandler.Diff)
+
+	secured.GET("/settings", middleware.RequireRole("admin"), settingsHandler.GetAll)
+	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
+	secured.DELETE("/settings/:key", middleware.RequireRole("admin"), settingsHandler.Delete)
 
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)

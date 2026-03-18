@@ -26,12 +26,6 @@ func (m *Manager) startRetentionWorker() {
 func (m *Manager) runRetentionWorker(ctx context.Context) {
 	defer close(m.retentionDone)
 
-	intervalRaw := util.GetEnvOrDefault("RETENTION_CHECK_INTERVAL", "6h")
-	interval, err := time.ParseDuration(intervalRaw)
-	if err != nil || interval < 1*time.Minute {
-		interval = 6 * time.Hour
-	}
-
 	integrityMultiplier := 4
 	if raw := util.GetEnvOrDefault("INTEGRITY_CHECK_MULTIPLIER", ""); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
@@ -39,15 +33,21 @@ func (m *Manager) runRetentionWorker(ctx context.Context) {
 		}
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	var tickCount int
 	for {
+		// 每次循环动态读取间隔配置
+		interval := 6 * time.Hour
+		if m.settingsSvc != nil {
+			raw := m.settingsSvc.GetEffective("retention.check_interval")
+			if parsed, err := time.ParseDuration(raw); err == nil && parsed >= 1*time.Minute {
+				interval = parsed
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(interval):
 			tickCount++
 			m.enforceRetention()
 			m.checkLocalStorageSpace()

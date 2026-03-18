@@ -10,6 +10,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -20,16 +21,18 @@ import (
 type AuthHandler struct {
 	authService          *auth.Service
 	jwtManager           *auth.JWTManager
+	settingsSvc          *settings.Service
 	db                   *gorm.DB
 	captchaEnabled       bool
 	secondCaptchaEnabled bool
 	captchaStore         *CaptchaStore
 }
 
-func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, captchaEnabled bool, secondCaptchaEnabled bool) *AuthHandler {
+func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, settingsSvc *settings.Service, captchaEnabled bool, secondCaptchaEnabled bool) *AuthHandler {
 	return &AuthHandler{
 		authService:          authService,
 		jwtManager:           jwtManager,
+		settingsSvc:          settingsSvc,
 		captchaEnabled:       captchaEnabled,
 		secondCaptchaEnabled: secondCaptchaEnabled,
 	}
@@ -67,7 +70,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
-	if h.captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
+
+	// 动态读取验证码启用状态
+	captchaEnabled := h.captchaEnabled
+	if h.settingsSvc != nil {
+		captchaEnabled = strings.ToLower(h.settingsSvc.GetEffective("login.captcha_enabled")) == "true"
+	}
+
+	if captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码不能为空"})
 		return
 	}
@@ -75,7 +85,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "二次验证码不能为空"})
 		return
 	}
-	if h.captchaEnabled && h.captchaStore != nil {
+	if captchaEnabled && h.captchaStore != nil {
 		answerRaw := strings.TrimSpace(req.CaptchaAnswer)
 		id := strings.TrimSpace(req.CaptchaID)
 		if id == "" || answerRaw == "" {

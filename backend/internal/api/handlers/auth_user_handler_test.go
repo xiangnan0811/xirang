@@ -68,12 +68,12 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 	operatorUser := seedAuthUser(t, db, "operator", "operator", operatorPassword)
 
 	jwtManager := auth.NewJWTManager("test-secret", time.Hour)
-	service := auth.NewService(db, jwtManager, auth.LoginSecurityConfig{
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
 		FailLockThreshold: 5,
 		FailLockDuration:  time.Minute,
 	})
 
-	authHandler := NewAuthHandler(service, jwtManager, false, false)
+	authHandler := NewAuthHandler(service, jwtManager, nil, false, false)
 	userHandler := NewUserHandler(service)
 
 	router := gin.New()

@@ -16,6 +16,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
 	"xirang/backend/internal/task/verifier"
@@ -120,10 +121,12 @@ type Manager struct {
 	retentionCancel  context.CancelFunc
 	retentionDone    chan struct{}
 
+	settingsSvc *settings.Service
+
 	shuttingDown atomic.Bool
 }
 
-func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
+func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
 	m := &Manager{
 		db:                   db,
 		stateMachine:         NewStateMachine(),
@@ -143,6 +146,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		sampleRetentionDays:  sampleRetentionDays,
 		taskRunRetentionDays: taskRunRetentionDays,
 		retentionDone:       make(chan struct{}),
+		settingsSvc:          settingsSvc,
 	}
 	m.hookRunFunc = m.runSSHHook
 	m.startLogWorker()

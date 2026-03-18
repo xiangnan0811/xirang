@@ -26,7 +26,7 @@ func createPolicyForHookTest(t *testing.T, db *gorm.DB, policy model.Policy) mod
 func TestPreHookSuccess(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入成功的 hook 函数
 	var hookCalls int32
@@ -94,7 +94,7 @@ func TestPreHookSuccess(t *testing.T) {
 func TestPreHookFailure(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入失败的 hook 函数
 	m.hookRunFunc = func(_ context.Context, _ model.Task, command string) error {
@@ -163,7 +163,7 @@ func TestPreHookFailure(t *testing.T) {
 func TestPreHookTimeout(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入阻塞的 hook 函数（会被 context 超时取消）
 	m.hookRunFunc = func(ctx context.Context, _ model.Task, command string) error {
@@ -236,7 +236,7 @@ func TestPreHookTimeout(t *testing.T) {
 func TestPostHookFailureDoesNotAffectTaskStatus(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入 post-hook 失败的函数
 	var hookCalls int32
@@ -303,7 +303,7 @@ func TestPostHookFailureDoesNotAffectTaskStatus(t *testing.T) {
 func TestEmptyHookIsNoOp(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入 hook 函数——不应被调用
 	var hookCalls int32
@@ -364,7 +364,7 @@ func TestEmptyHookIsNoOp(t *testing.T) {
 func TestNoPolicySkipsHooks(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入 hook 函数——无策略时不应被调用
 	var hookCalls int32
@@ -397,7 +397,7 @@ func TestNoPolicySkipsHooks(t *testing.T) {
 func TestPreHookDefaultTimeout(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 注入成功 hook（验证 HookTimeoutSeconds=0 时使用默认 5 分钟超时，
 	// 此处只验证 hook 被调用且正常通过）
@@ -452,7 +452,7 @@ func TestPreHookDefaultTimeout(t *testing.T) {
 func TestBothPreAndPostHooksExecuted(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	// 记录 hook 调用顺序
 	var hookCommands []string

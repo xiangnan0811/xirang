@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/api"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/bootstrap"
@@ -16,6 +17,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -66,8 +68,11 @@ func main() {
 	cronScheduler.Start()
 	defer cronScheduler.Stop()
 
+	settingsSvc := settings.NewService(db)
+	alerting.InitSettings(settingsSvc)
+
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
-	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
+	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
@@ -79,7 +84,7 @@ func main() {
 	reportScheduler.Start()
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
-	authService := auth.NewService(db, jwtManager, auth.LoginSecurityConfig{
+	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
 		FailLockThreshold: cfg.LoginFailLockThreshold,
 		FailLockDuration:  cfg.LoginFailLockDuration,
 	})
@@ -91,6 +96,7 @@ func main() {
 		JWTManager:                jwtManager,
 		TaskManager:               taskManager,
 		Hub:                       hub,
+		SettingsService:           settingsSvc,
 		AllowedOrigins:            cfg.AllowedOrigins,
 		LoginRateLimit:            cfg.LoginRateLimit,
 		LoginRateWindow:           cfg.LoginRateWindow,

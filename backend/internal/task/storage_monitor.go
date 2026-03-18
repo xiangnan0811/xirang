@@ -15,16 +15,30 @@ import (
 func (m *Manager) checkLocalStorageSpace() {
 	log := logger.Module("task")
 
-	minFreeRaw := util.GetEnvOrDefault("BACKUP_STORAGE_MIN_FREE_GB", "10")
-	minFreeGB, err := strconv.Atoi(minFreeRaw)
-	if err != nil || minFreeGB < 0 {
-		minFreeGB = 10
+	minFreeGB := 10
+	if m.settingsSvc != nil {
+		if v, err := strconv.Atoi(m.settingsSvc.GetEffective("storage.min_free_gb")); err == nil && v >= 0 {
+			minFreeGB = v
+		}
+	} else {
+		if raw := util.GetEnvOrDefault("BACKUP_STORAGE_MIN_FREE_GB", "10"); raw != "" {
+			if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+				minFreeGB = v
+			}
+		}
 	}
 
-	maxUsageRaw := util.GetEnvOrDefault("BACKUP_STORAGE_MAX_USAGE_PCT", "90")
-	maxUsagePct, err := strconv.Atoi(maxUsageRaw)
-	if err != nil || maxUsagePct < 0 || maxUsagePct > 100 {
-		maxUsagePct = 90
+	maxUsagePct := 90
+	if m.settingsSvc != nil {
+		if v, err := strconv.Atoi(m.settingsSvc.GetEffective("storage.max_usage_pct")); err == nil && v >= 0 && v <= 100 {
+			maxUsagePct = v
+		}
+	} else {
+		if raw := util.GetEnvOrDefault("BACKUP_STORAGE_MAX_USAGE_PCT", "90"); raw != "" {
+			if v, err := strconv.Atoi(raw); err == nil && v >= 0 && v <= 100 {
+				maxUsagePct = v
+			}
+		}
 	}
 
 	// 收集所有 rsync 类型策略的本地目标路径

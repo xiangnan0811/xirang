@@ -142,7 +142,7 @@ func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 func TestRunTaskKeepsLockEntries(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -164,7 +164,7 @@ func TestRunTaskKeepsLockEntries(t *testing.T) {
 func TestTriggerManualRejectsConcurrentDuplicate(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -226,7 +226,7 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 		{ObservedAt: now.Add(20 * time.Second), ThroughputMbps: 120},
 		{ObservedAt: now.Add(65 * time.Second), ThroughputMbps: 80},
 	}}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
@@ -261,7 +261,7 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 func TestTriggerCreatesTaskRun(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -294,7 +294,7 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 func TestRunTaskDualWriteSuccess(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -331,7 +331,7 @@ func TestRunTaskDualWriteSuccess(t *testing.T) {
 func TestRunTaskDualWriteFailed(t *testing.T) {
 	db := openManagerTestDB(t)
 	failExec := &failingExecutor{err: fmt.Errorf("模拟执行失败")}
-	m := NewManager(db, stubExecutorFactory{executor: failExec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: failExec}, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -358,7 +358,7 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -392,7 +392,7 @@ func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 
 func TestCleanupExpiredTaskRuns(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, 8, 1) // 1 天保留
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 1) // 1 天保留
 
 	taskEntity := seedTaskForManagerTest(t, db)
 
@@ -472,7 +472,7 @@ func TestCleanupExpiredTaskRuns(t *testing.T) {
 
 func TestEmitLogWritesTaskRunID(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := uint(42)
@@ -507,7 +507,7 @@ func (e *failingExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFun
 func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -565,7 +565,7 @@ func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
 func TestRestoreNodeMutexBlocksNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -602,7 +602,7 @@ func TestRestoreNodeMutexBlocksNormalTask(t *testing.T) {
 func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -632,7 +632,7 @@ func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
 func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 

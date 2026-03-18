@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,24 @@ export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggle
       </nav>
 
       <Separator className="my-3" />
+
+      {/* 设置入口 */}
+      <div className={cn("shrink-0 mb-2", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
+        <Link
+          to="/app/settings"
+          title={t("nav.settings")}
+          aria-label={t("nav.settings")}
+          aria-current={location.pathname === "/app/settings" ? "page" : undefined}
+          className={cn(
+            navItemBaseClass,
+            isCollapsed ? "justify-center px-2" : "",
+            location.pathname === "/app/settings" ? navItemActiveClass : navItemIdleClass
+          )}
+        >
+          <Settings className={cn("shrink-0", isCollapsed ? "size-5" : "size-4")} />
+          <span className={cn("hidden", isCollapsed ? "" : "md:inline text-[13px] font-medium")}>{t("nav.settings")}</span>
+        </Link>
+      </div>
 
       <div className={cn("shrink-0", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
         <Button

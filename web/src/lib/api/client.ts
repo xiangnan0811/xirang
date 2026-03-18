@@ -17,6 +17,7 @@ import { createConfigApi } from "./config-api";
 import { createSystemApi } from "./system-api";
 import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
+import { createSettingsApi } from "./settings-api";
 import { createSnapshotDiffApi } from "./snapshot-diff-api";
 
 export { ApiError } from "./core";
@@ -41,5 +42,6 @@ export const apiClient = {
   ...createSystemApi(),
   ...createDockerApi(),
   ...createStorageGuideApi(),
+  ...createSettingsApi(),
   ...createSnapshotDiffApi(),
 };

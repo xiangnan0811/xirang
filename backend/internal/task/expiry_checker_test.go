@@ -44,7 +44,7 @@ func TestCheckNodeExpiry_ExpiredNode(t *testing.T) {
 
 	db := openExpiryTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	expiry := time.Now().Add(-2 * time.Hour)
 	node := createExpiryNode(t, db, "node-expired", &expiry, false)
@@ -66,7 +66,7 @@ func TestCheckNodeExpiry_OneDayWarning(t *testing.T) {
 
 	db := openExpiryTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	expiry := time.Now().Add(12 * time.Hour)
 	node := createExpiryNode(t, db, "node-1day", &expiry, false)
@@ -118,7 +118,7 @@ func TestCheckNodeExpiry_ThreeDayWarning(t *testing.T) {
 
 	db := openExpiryTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	expiry := time.Now().Add(2 * 24 * time.Hour)
 	node := createExpiryNode(t, db, "node-3day", &expiry, false)
@@ -142,7 +142,7 @@ func TestCheckNodeExpiry_FarFuture(t *testing.T) {
 
 	db := openExpiryTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	expiry := time.Now().Add(30 * 24 * time.Hour)
 	node := createExpiryNode(t, db, "node-far", &expiry, false)
@@ -175,7 +175,7 @@ func TestCheckNodeExpiry_AlreadyArchived(t *testing.T) {
 
 	db := openExpiryTestDB(t)
 	exec := &successExecutor{}
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
 
 	expiry := time.Now().Add(-2 * time.Hour)
 	_ = createExpiryNode(t, db, "node-already-archived", &expiry, true)

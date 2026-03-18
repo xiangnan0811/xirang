@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import i18n from "@/i18n";
+import { getRefreshIntervalMs } from "@/hooks/use-user-preferences";
 import { apiClient } from "@/lib/api/client";
 import {
   buildMockOverviewTrafficSeries,
@@ -294,9 +295,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   useEffect(() => {
     if (!token) return;
+    const ms = getRefreshIntervalMs();
+    if (ms <= 0) return; // 自动刷新已禁用
     const interval = setInterval(() => {
       void loadData();
-    }, 60_000); // 每 60 秒自动刷新
+    }, ms);
     return () => clearInterval(interval);
   }, [token, loadData]);
 

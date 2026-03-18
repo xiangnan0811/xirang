@@ -2,10 +2,12 @@ package auth
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -15,9 +17,10 @@ type LoginFailureLocker struct {
 	db           *gorm.DB
 	threshold    int
 	lockDuration time.Duration
+	settingsSvc  *settings.Service
 }
 
-func NewLoginFailureLocker(db *gorm.DB, threshold int, lockDuration time.Duration) *LoginFailureLocker {
+func NewLoginFailureLocker(db *gorm.DB, settingsSvc *settings.Service, threshold int, lockDuration time.Duration) *LoginFailureLocker {
 	if threshold <= 0 {
 		threshold = 5
 	}
@@ -28,7 +31,28 @@ func NewLoginFailureLocker(db *gorm.DB, threshold int, lockDuration time.Duratio
 		db:           db,
 		threshold:    threshold,
 		lockDuration: lockDuration,
+		settingsSvc:  settingsSvc,
 	}
+}
+
+// getThreshold 动态读取登录失败锁定阈值
+func (l *LoginFailureLocker) getThreshold() int {
+	if l.settingsSvc != nil {
+		if v, err := strconv.Atoi(l.settingsSvc.GetEffective("login.fail_lock_threshold")); err == nil && v > 0 {
+			return v
+		}
+	}
+	return l.threshold
+}
+
+// getLockDuration 动态读取登录锁定持续时间
+func (l *LoginFailureLocker) getLockDuration() time.Duration {
+	if l.settingsSvc != nil {
+		if d, err := time.ParseDuration(l.settingsSvc.GetEffective("login.fail_lock_duration")); err == nil && d > 0 {
+			return d
+		}
+	}
+	return l.lockDuration
 }
 
 func (l *LoginFailureLocker) IsLocked(username, ip string, now time.Time) (time.Time, bool) {
@@ -50,6 +74,8 @@ func (l *LoginFailureLocker) IsLocked(username, ip string, now time.Time) (time.
 
 func (l *LoginFailureLocker) RegisterFailure(username, ip string, now time.Time) {
 	u, i := normalize(username, ip)
+	threshold := l.getThreshold()
+	lockDuration := l.getLockDuration()
 
 	var rec model.LoginFailure
 	err := l.db.Where("username = ? AND client_ip = ?", u, i).First(&rec).Error
@@ -61,8 +87,8 @@ func (l *LoginFailureLocker) RegisterFailure(username, ip string, now time.Time)
 			FailCount: 1,
 			UpdatedAt: now,
 		}
-		if rec.FailCount >= l.threshold {
-			locked := now.Add(l.lockDuration)
+		if rec.FailCount >= threshold {
+			locked := now.Add(lockDuration)
 			rec.LockedUntil = &locked
 			rec.FailCount = 0
 		}
@@ -82,8 +108,8 @@ func (l *LoginFailureLocker) RegisterFailure(username, ip string, now time.Time)
 
 	rec.FailCount++
 	rec.UpdatedAt = now
-	if rec.FailCount >= l.threshold {
-		locked := now.Add(l.lockDuration)
+	if rec.FailCount >= threshold {
+		locked := now.Add(lockDuration)
 		rec.LockedUntil = &locked
 		rec.FailCount = 0
 	}

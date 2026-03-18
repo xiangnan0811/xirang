@@ -27,7 +27,7 @@ func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 		t.Fatalf("创建用户失败: %v", err)
 	}
 
-	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 2,
 		FailLockDuration:  time.Minute,
 	})
@@ -66,7 +66,7 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	user := model.User{Username: "locktest", PasswordHash: passwordHash, Role: "admin"}
 	db.Create(&user)
 
-	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 2,
 		FailLockDuration:  2 * time.Second, // 需大于 bcrypt 执行耗时
 	})
@@ -101,7 +101,7 @@ func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
 	user := model.User{Username: "chgpwd", PasswordHash: passwordHash, Role: "admin"}
 	db.Create(&user)
 
-	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 10,
 		FailLockDuration:  time.Minute,
 	})
@@ -127,7 +127,7 @@ func TestCreateUserRejectsDuplicate(t *testing.T) {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
-	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 10,
 		FailLockDuration:  time.Minute,
 	})
@@ -152,7 +152,7 @@ func TestCreateUserRejectsInvalidRole(t *testing.T) {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
-	service := NewService(db, NewJWTManager("test-secret", time.Hour), LoginSecurityConfig{
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 10,
 		FailLockDuration:  time.Minute,
 	})
