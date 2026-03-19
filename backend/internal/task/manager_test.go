@@ -139,7 +139,7 @@ func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	return taskEntity
 }
 
-func TestRunTaskKeepsLockEntries(t *testing.T) {
+func TestRunTaskCleansUpLockEntries(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
@@ -152,9 +152,11 @@ func TestRunTaskKeepsLockEntries(t *testing.T) {
 		t.Fatalf("期望执行器调用 1 次，实际: %d", exec.Calls())
 	}
 
-	if _, ok := m.locks.Load(taskEntity.ID); !ok {
-		t.Fatalf("期望任务锁条目保留，实际已删除")
+	// 任务执行完毕后，taskID 级别的锁应被清理以防止 sync.Map 无限增长
+	if _, ok := m.locks.Load(taskEntity.ID); ok {
+		t.Fatalf("期望任务锁条目已清理，实际仍保留")
 	}
+	// strategyLocks 和 nodeLocks 按 nodeID/policyID 存储，数量有上界，无需清理
 	strategyKey := buildStrategyKey(taskEntity.NodeID, taskEntity.PolicyID)
 	if _, ok := m.strategyLocks.Load(strategyKey); !ok {
 		t.Fatalf("期望策略锁条目保留，实际已删除")
