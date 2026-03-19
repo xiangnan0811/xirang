@@ -58,8 +58,8 @@ func (l *LoginFailureLocker) getLockDuration() time.Duration {
 func (l *LoginFailureLocker) IsLocked(username, ip string, now time.Time) (time.Time, bool) {
 	u, i := normalize(username, ip)
 	var rec model.LoginFailure
-	err := l.db.Where("username = ? AND client_ip = ?", u, i).First(&rec).Error
-	if err != nil {
+	result := l.db.Where("username = ? AND client_ip = ?", u, i).Take(&rec)
+	if result.Error != nil {
 		return time.Time{}, false
 	}
 	if rec.LockedUntil != nil && rec.LockedUntil.After(now) {
@@ -78,8 +78,8 @@ func (l *LoginFailureLocker) RegisterFailure(username, ip string, now time.Time)
 	lockDuration := l.getLockDuration()
 
 	var rec model.LoginFailure
-	err := l.db.Where("username = ? AND client_ip = ?", u, i).First(&rec).Error
-	if err != nil {
+	result := l.db.Where("username = ? AND client_ip = ?", u, i).Take(&rec)
+	if result.Error != nil {
 		// 首次失败，创建记录
 		rec = model.LoginFailure{
 			Username:  u,
