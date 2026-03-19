@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/util"
 
@@ -136,6 +137,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	hydrateTaskDefaultsFromPolicy(h.db, &req)
 	inferTaskExecutor(&req, "")
 	trimTaskRequest(&req)
+	ensureNodeTargetPrefix(h.db, &req)
 
 	if err := validateTaskRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -226,6 +228,8 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	if req.ExecutorType == "" {
 		req.ExecutorType = taskEntity.ExecutorType
 	}
+
+	ensureNodeTargetPrefix(h.db, &req)
 
 	if err := validateTaskRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -463,9 +467,39 @@ func hydrateTaskDefaultsFromPolicy(db *gorm.DB, req *taskRequest) {
 	}
 	if strings.TrimSpace(req.RsyncTarget) == "" {
 		req.RsyncTarget = policy.TargetPath
+		if req.NodeID != 0 {
+			var node model.Node
+			if err := db.First(&node, req.NodeID).Error; err == nil && node.Name != "" {
+				req.RsyncTarget = policyPkg.NodeTargetPath(policy.TargetPath, node.Name)
+			}
+		}
 	}
 	if strings.TrimSpace(req.CronSpec) == "" {
 		req.CronSpec = policy.CronSpec
+	}
+}
+
+// ensureNodeTargetPrefix 确保关联策略的任务 RsyncTarget 包含节点子目录。
+// 当 RsyncTarget 与策略的 TargetPath 完全相同（即缺少节点前缀）时自动补全。
+func ensureNodeTargetPrefix(db *gorm.DB, req *taskRequest) {
+	if req.PolicyID == nil || req.NodeID == 0 {
+		return
+	}
+	if strings.TrimSpace(req.RsyncTarget) == "" {
+		return
+	}
+	if util.IsRemotePathSpec(req.RsyncTarget) {
+		return
+	}
+	var p model.Policy
+	if err := db.First(&p, *req.PolicyID).Error; err != nil {
+		return
+	}
+	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(p.TargetPath, "/") {
+		var node model.Node
+		if err := db.First(&node, req.NodeID).Error; err == nil && node.Name != "" {
+			req.RsyncTarget = policyPkg.NodeTargetPath(p.TargetPath, node.Name)
+		}
 	}
 }
 
