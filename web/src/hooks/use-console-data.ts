@@ -2,17 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import i18n from "@/i18n";
 import { getRefreshIntervalMs } from "@/hooks/use-user-preferences";
 import { apiClient } from "@/lib/api/client";
-import {
-  buildMockOverviewTrafficSeries,
-  mockAlerts,
-  mockIntegrations,
-  mockNodes,
-  mockOverviewSummary,
-  mockPolicies,
-  mockSSHKeys,
-  mockTasks,
-} from "@/data/mock";
 import { getErrorMessage, getLocale } from "@/lib/utils";
+
+// mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
+const loadMocks = () => import("@/data/mock");
 import { useIntegrationAlertOperations } from "@/hooks/use-console-integration-alert-operations";
 import { useNodeOperations } from "@/hooks/use-console-node-operations";
 import { usePolicyOperations } from "@/hooks/use-console-policy-operations";
@@ -166,13 +159,14 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
     if (!token) {
       if (demoModeEnabled) {
-        setNodes(mockNodes);
-        setPolicies(mockPolicies);
-        setTasks(mockTasks);
-        setAlerts(mockAlerts);
-        setIntegrations(mockIntegrations);
-        setSSHKeys(mockSSHKeys);
-        setOverviewSummary(mockOverviewSummary);
+        const mocks = await loadMocks();
+        setNodes(mocks.mockNodes);
+        setPolicies(mocks.mockPolicies);
+        setTasks(mocks.mockTasks);
+        setAlerts(mocks.mockAlerts);
+        setIntegrations(mocks.mockIntegrations);
+        setSSHKeys(mocks.mockSSHKeys);
+        setOverviewSummary(mocks.mockOverviewSummary);
         setWarning(null);
         setLoading(false);
         setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
@@ -308,7 +302,8 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const fetchOverviewTraffic = useCallback(async (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }): Promise<OverviewTrafficSeries> => {
     if (!token) {
       if (demoModeEnabled) {
-        return buildMockOverviewTrafficSeries(window);
+        const mocks = await loadMocks();
+        return mocks.buildMockOverviewTrafficSeries(window);
       }
       return {
         window,

@@ -12,13 +12,6 @@ import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogCloseButton,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -26,75 +19,19 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { SearchInput } from "@/components/ui/search-input";
 import { toast } from "@/components/ui/toast";
 import { cn, getErrorMessage } from "@/lib/utils";
-import type { LogEvent, TaskStatus } from "@/types/domain";
-
-const selectedNodeStorageKey = "xirang.logs.selected-node";
-const selectedTaskStorageKey = "xirang.logs.selected-task";
-const keywordStorageKey = "xirang.logs.keyword";
-
-const splitByErrorCodeRegex = /(XR-[A-Z]+-\d+)/g;
-const singleErrorCodeRegex = /^XR-[A-Z]+-\d+$/;
-
-function isTerminalTaskStatus(status?: TaskStatus) {
-  return status === "success" || status === "failed" || status === "canceled";
-}
-
-function isActiveTaskStatus(status?: TaskStatus) {
-  return status === "running" || status === "retrying";
-}
-
-function highlightErrorCode(message: string) {
-  const parts = message.split(splitByErrorCodeRegex);
-  return parts.map((part, idx) =>
-    singleErrorCodeRegex.test(part) ? (
-      <span
-        key={`${part}-${idx}`}
-        className="rounded border border-destructive/35 bg-destructive/20 px-1 text-destructive"
-      >
-        {part}
-      </span>
-    ) : (
-      <span key={`${part}-${idx}`}>{part}</span>
-    ),
-  );
-}
-
-function getLevelClass(level: "info" | "warn" | "error") {
-  if (level === "error") {
-    return "text-destructive";
-  }
-  if (level === "warn") {
-    return "text-warning";
-  }
-  return "text-success";
-}
-
-function parseToMillis(log: LogEvent) {
-  if (Number.isFinite(log.timestampMs)) return log.timestampMs as number;
-  const timestamp = log.timestamp;
-  const parsed = Date.parse(timestamp);
-  if (Number.isNaN(parsed)) {
-    return 0;
-  }
-  return parsed;
-}
-
-function formatLogTime(ts: string) {
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return ts;
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-function minLogId(logs: LogEvent[]) {
-  let min = Number.MAX_SAFE_INTEGER;
-  for (const log of logs) {
-    if (log.logId && log.logId < min) {
-      min = log.logId;
-    }
-  }
-  return min === Number.MAX_SAFE_INTEGER ? null : min;
-}
+import type { LogEvent } from "@/types/domain";
+import {
+  selectedNodeStorageKey,
+  selectedTaskStorageKey,
+  keywordStorageKey,
+  isTerminalTaskStatus,
+  isActiveTaskStatus,
+  parseToMillis,
+  formatLogTime,
+  minLogId,
+} from "./logs-page.utils";
+import { LogEntry } from "./logs-page.log-entry";
+import { LogsFullscreenDialog } from "./logs-page.fullscreen-dialog";
 
 export function LogsPage() {
   const { t } = useTranslation();
@@ -596,35 +533,11 @@ export function LogsPage() {
                 {filteredLogs.length > 0 ? (
                   <div className="px-1">
                     {filteredLogs.map((log) => (
-                      <div
+                      <LogEntry
                         key={log.logId ? `line-${log.logId}` : log.id}
-                        className="terminal-group-row mb-0.5 flex flex-col gap-1.5 border-b py-1.5 transition-colors hover:bg-white/10 md:flex-row md:items-start"
-                      >
-                        <div className="flex shrink-0 items-center gap-3 md:w-[260px]">
-                          <span className="terminal-time text-[11px] opacity-60 md:text-[12px]">
-                            {formatLogTime(log.timestamp)}
-                          </span>
-                          <span
-                            className={cn(
-                              "w-12 text-[11px] font-medium md:text-[12px]",
-                              getLevelClass(log.level),
-                            )}
-                          >
-                            {log.level.toUpperCase()}
-                          </span>
-                        </div>
-                        <div className="flex-1 break-all leading-relaxed">
-                          <span className="terminal-node-chip mr-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] md:text-[11px]">
-                            {log.nodeName ?? t("logs.system")}
-                            {log.taskId ? (
-                              <span className="ml-1 opacity-70">
-                                | #{log.taskId}
-                              </span>
-                            ) : null}
-                          </span>
-                          <span>{highlightErrorCode(log.message)}</span>
-                        </div>
-                      </div>
+                        log={log}
+                        hoverClass="hover:bg-white/10"
+                      />
                     ))}
                   </div>
                 ) : (
@@ -672,76 +585,11 @@ export function LogsPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={fullScreen} onOpenChange={setFullScreen}>
-        <DialogContent
-          size="lg"
-          className="flex max-h-[90vh] flex-col md:max-w-[calc(100vw-64px)]"
-        >
-          <DialogHeader>
-            <DialogTitle>
-              {t("logs.fullscreenTitle", { count: filteredLogs.length })}
-            </DialogTitle>
-            <DialogCloseButton />
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-6 pb-6">
-            <div
-              className="terminal-surface thin-scrollbar h-[calc(90vh-140px)] overflow-auto rounded-xl p-3 font-mono text-[12px] md:text-[13px]"
-              role="log"
-              aria-live="polite"
-              aria-relevant="additions text"
-              aria-label={t("logs.fullscreenTerminalAriaLabel", {
-                count: filteredLogs.length,
-              })}
-            >
-              {filteredLogs.length > 0 ? (
-                <div className="px-1">
-                  {filteredLogs.map((log) => (
-                    <div
-                      key={
-                        log.logId ? `fs-${log.logId}` : `fs-${log.id}`
-                      }
-                      className="terminal-group-row mb-0.5 flex flex-col gap-1.5 border-b py-1.5 transition-colors hover:bg-white/5 md:flex-row md:items-start"
-                    >
-                      <div className="flex shrink-0 items-center gap-3 md:w-[260px]">
-                        <span className="terminal-time text-[11px] opacity-60 md:text-[12px]">
-                          {formatLogTime(log.timestamp)}
-                        </span>
-                        <span
-                          className={cn(
-                            "w-12 text-[11px] font-medium md:text-[12px]",
-                            getLevelClass(log.level),
-                          )}
-                        >
-                          {log.level.toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="flex-1 break-all leading-relaxed">
-                        <span className="terminal-node-chip mr-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] md:text-[11px]">
-                          {log.nodeName ?? t("logs.system")}
-                          {log.taskId ? (
-                            <span className="ml-1 opacity-70">
-                              | #{log.taskId}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span>{highlightErrorCode(log.message)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="px-2 py-10">
-                  <EmptyState
-                    className="terminal-empty"
-                    title={t("logs.emptyTitle")}
-                    description={t("logs.emptyDesc")}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <LogsFullscreenDialog
+        open={fullScreen}
+        onOpenChange={setFullScreen}
+        filteredLogs={filteredLogs}
+      />
     </div>
   );
 }

@@ -1,28 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Terminal, RotateCcw, Play, FolderSearch, GitCompareArrows, CheckSquare } from "lucide-react";
+import { Plus, Terminal, Play } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { BatchCommandDialog } from "@/components/batch-command-dialog";
-import { SnapshotBrowser } from "@/components/snapshot-browser";
-import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
-import { BatchResultDialog } from "@/components/batch-result-dialog";
-import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
-import { TaskEditorDialog } from "@/components/task-create-dialog";
-import { TaskRunDetail } from "@/components/task-run-detail";
-import { TaskRunHistory } from "@/components/task-run-history";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
-import {
-  Dialog,
-  DialogBody,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
 import { SearchInput } from "@/components/ui/search-input";
@@ -40,6 +23,8 @@ import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
 import { normalizeStatusFilter } from "@/pages/tasks-page.utils";
+import { TasksPageDialogs } from "@/pages/tasks-page.dialogs";
+import { TasksSelectionBar } from "@/pages/tasks-page.selection-bar";
 
 const keywordStorageKey = "xirang.tasks.keyword";
 const statusStorageKey = "xirang.tasks.status";
@@ -492,198 +477,50 @@ export function TasksPage() {
         </CardContent>
       </Card>
 
-      <TaskEditorDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        nodes={nodes}
-        policies={policies}
-        tasks={tasks}
-        onSave={handleCreateTask}
-      />
-
-      <TaskEditorDialog
-        open={editDialogOpen}
-        onOpenChange={(open) => {
-          setEditDialogOpen(open);
-          if (!open) setEditingTask(null);
-        }}
-        nodes={nodes}
-        policies={policies}
-        tasks={tasks}
-        onSave={handleUpdateTask}
+      <TasksPageDialogs
+        createDialogOpen={createDialogOpen}
+        setCreateDialogOpen={setCreateDialogOpen}
+        editDialogOpen={editDialogOpen}
+        setEditDialogOpen={setEditDialogOpen}
         editingTask={editingTask}
+        setEditingTask={setEditingTask}
+        historyTask={historyTask}
+        setHistoryTask={setHistoryTask}
+        selectedRun={selectedRun}
+        setSelectedRun={setSelectedRun}
+        showSnapshots={showSnapshots}
+        setShowSnapshots={setShowSnapshots}
+        showDiff={showDiff}
+        setShowDiff={setShowDiff}
+        batchDialogOpen={batchDialogOpen}
+        setBatchDialogOpen={setBatchDialogOpen}
+        batchDefaultNodeIds={batchDefaultNodeIds}
+        setBatchDefaultNodeIds={setBatchDefaultNodeIds}
+        batchResultId={batchResultId}
+        setBatchResultId={setBatchResultId}
+        batchRetain={batchRetain}
+        setBatchRetain={setBatchRetain}
+        restoreDialogOpen={restoreDialogOpen}
+        setRestoreDialogOpen={setRestoreDialogOpen}
+        nodes={nodes}
+        policies={policies}
+        tasks={tasks}
+        authToken={authToken}
+        handleCreateTask={handleCreateTask}
+        handleUpdateTask={handleUpdateTask}
       />
 
-      <Dialog
-        open={!!historyTask}
-        onOpenChange={(open) => {
-          if (!open) {
-            setHistoryTask(null);
-            setSelectedRun(null);
-            setShowSnapshots(false);
-          }
-        }}
-      >
-        <DialogContent size="lg">
-          <DialogHeader>
-            <DialogTitle>
-              {t("tasks.executionHistory", { name: historyTask?.name || historyTask?.policyName })}
-            </DialogTitle>
-            <DialogDescription>
-              {t("tasks.executionRecord", { id: historyTask?.id })}
-            </DialogDescription>
-            <div className="ml-auto mr-8 flex gap-2 shrink-0">
-              {historyTask?.executorType === "restic" && (
-                <>
-                  <Button
-                    size="sm"
-                    variant={showSnapshots ? "default" : "outline"}
-                    onClick={() => { setShowSnapshots((v) => !v); setShowDiff(false); }}
-                  >
-                    <FolderSearch className="mr-1 size-3.5" />
-                    {t("tasks.browseSnapshots")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={showDiff ? "default" : "outline"}
-                    onClick={() => { setShowDiff((v) => !v); setShowSnapshots(false); }}
-                  >
-                    <GitCompareArrows className="mr-1 size-3.5" />
-                    {t("tasks.compareSnapshots")}
-                  </Button>
-                </>
-              )}
-              {historyTask?.executorType === "rsync" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setRestoreDialogOpen(true)}
-                >
-                  <RotateCcw className="mr-1 size-3.5" />
-                  {t("tasks.restoreFromBackup")}
-                </Button>
-              )}
-            </div>
-            <DialogCloseButton />
-          </DialogHeader>
-          <DialogBody>
-            {historyTask && authToken && showSnapshots ? (
-              <SnapshotBrowser taskId={historyTask.id} token={authToken} />
-            ) : historyTask && authToken && showDiff ? (
-              <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
-            ) : historyTask && authToken && (
-              selectedRun ? (
-                <TaskRunDetail
-                  run={selectedRun}
-                  token={authToken}
-                  onBack={() => setSelectedRun(null)}
-                />
-              ) : (
-                <TaskRunHistory
-                  taskId={historyTask.id}
-                  token={authToken}
-                  onSelectRun={setSelectedRun}
-                />
-              )
-            )}
-          </DialogBody>
-        </DialogContent>
-      </Dialog>
-
-      {authToken && (
-        <>
-          <BatchCommandDialog
-            open={batchDialogOpen}
-            onOpenChange={(open) => {
-              setBatchDialogOpen(open);
-              if (!open) setBatchDefaultNodeIds(undefined);
-            }}
-            nodes={nodes}
-            token={authToken}
-            defaultNodeIds={batchDefaultNodeIds}
-            onSuccess={(result) => {
-              setBatchResultId(result.batchId);
-              setBatchRetain(result.retain);
-            }}
-          />
-          <BatchResultDialog
-            open={batchResultId !== null}
-            onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
-            batchId={batchResultId}
-            retain={batchRetain}
-            token={authToken}
-          />
-        </>
-      )}
-
-      {authToken && historyTask && (
-        <RestoreConfirmDialog
-          open={restoreDialogOpen}
-          onOpenChange={setRestoreDialogOpen}
-          taskId={historyTask.id}
-          taskName={historyTask.name ?? historyTask.policyName ?? ""}
-          rsyncSource={historyTask.rsyncSource}
-          rsyncTarget={historyTask.rsyncTarget}
-          token={authToken}
-          onSuccess={(runId) => {
-            setRestoreDialogOpen(false);
-            toast.success(t("tasks.restoreSuccess", { runId }));
-          }}
-        />
-      )}
-
-      {selectedTaskIds.length > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur-sm">
-          <div className="mx-auto flex max-w-5xl items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              <CheckSquare className="mr-1 inline size-4" />
-              {t("tasks.selectedCount", { count: selectedTaskIds.length })}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={async () => {
-                  const ok = await confirm({
-                    title: t("tasks.batchTriggerTitle"),
-                    description: t("tasks.batchTriggerConfirmDesc", { count: selectedTaskIds.length }),
-                  });
-                  if (!ok) return;
-                  try {
-                    const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
-                    setSelectedTaskIds([]);
-                    toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
-                    void refreshTasks();
-                  } catch (err) {
-                    toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
-                  }
-                }}
-              >
-                <Play className="mr-1 size-3.5" />
-                {t("tasks.triggerCount", { count: selectedTaskIds.length })}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const nodeIds = [...new Set(
-                    tasks
-                      .filter((t) => selectedTaskSet.has(t.id))
-                      .map((t) => t.nodeId)
-                  )];
-                  setBatchDefaultNodeIds(nodeIds);
-                  setBatchDialogOpen(true);
-                }}
-              >
-                <Terminal className="mr-1 size-3.5" />
-                {t("tasks.batchExecuteCount", { count: selectedTaskIds.length })}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelectedTaskIds([])}>
-                {t("tasks.clearSelection")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <TasksSelectionBar
+        selectedTaskIds={selectedTaskIds}
+        setSelectedTaskIds={setSelectedTaskIds}
+        selectedTaskSet={selectedTaskSet}
+        tasks={tasks}
+        authToken={authToken}
+        confirm={confirm}
+        setBatchDefaultNodeIds={setBatchDefaultNodeIds}
+        setBatchDialogOpen={setBatchDialogOpen}
+        refreshTasks={refreshTasks}
+      />
 
       {dialog}
     </div>
