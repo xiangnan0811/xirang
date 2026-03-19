@@ -38,6 +38,19 @@ func applySQLitePragmas(db *gorm.DB) error {
 	return nil
 }
 
+func configureSQLitePool(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	// SQLite 同一时刻只允许一个写入者，多连接会导致 "database is locked"。
+	// 单连接保证所有 PRAGMA 生效且写入串行化。
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	return nil
+}
+
 func Open(cfg config.Config) (*gorm.DB, error) {
 	switch cfg.DBType {
 	case "sqlite":
@@ -48,7 +61,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		if err := applySQLitePragmas(db); err != nil {
 			return nil, err
 		}
-		if err := configurePool(db); err != nil {
+		if err := configureSQLitePool(db); err != nil {
 			return nil, fmt.Errorf("配置连接池失败: %w", err)
 		}
 		return db, nil
