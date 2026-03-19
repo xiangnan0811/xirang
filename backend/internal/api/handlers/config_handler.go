@@ -184,8 +184,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.SSHKey
-		err := tx.Where("name = ?", name).First(&existing).Error
-		if err == nil {
+		found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+		if found {
 			if conflict != "overwrite" {
 				continue
 			}
@@ -229,8 +229,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.Node
-		err := tx.Where("name = ?", name).First(&existing).Error
-		if err == nil {
+		found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+		if found {
 			if conflict != "overwrite" {
 				continue
 			}
@@ -310,8 +310,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		var existing model.Policy
-		err := tx.Where("name = ?", name).First(&existing).Error
-		if err == nil {
+		found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+		if found {
 			if conflict != "overwrite" {
 				continue
 			}

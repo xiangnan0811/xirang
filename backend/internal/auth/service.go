@@ -84,14 +84,15 @@ func (s *Service) Login(username, password, clientIP string) (*LoginResult, erro
 	}
 
 	var user model.User
-	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			// 执行一次等价的 bcrypt 比对以消除时序差异，防止通过响应时间枚举有效用户名
-			_ = CheckPassword(dummyPasswordHash, password)
-			s.failureLocker.RegisterFailure(username, clientIP, now)
-			return nil, errInvalidCredentials
-		}
-		return nil, err
+	result := s.db.Where("username = ?", username).Limit(1).Find(&user)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		// 执行一次等价的 bcrypt 比对以消除时序差异，防止通过响应时间枚举有效用户名
+		_ = CheckPassword(dummyPasswordHash, password)
+		s.failureLocker.RegisterFailure(username, clientIP, now)
+		return nil, errInvalidCredentials
 	}
 	if err := CheckPassword(user.PasswordHash, password); err != nil {
 		s.failureLocker.RegisterFailure(username, clientIP, now)
@@ -136,10 +137,12 @@ func (s *Service) CreateUser(username, password, role string) (*model.User, erro
 	}
 
 	var existing model.User
-	if err := s.db.Where("username = ?", normalizedUsername).First(&existing).Error; err == nil {
-		return nil, fmt.Errorf("用户名 %s 已存在", normalizedUsername)
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+	result := s.db.Where("username = ?", normalizedUsername).Limit(1).Find(&existing)
+	if result.Error != nil {
 		return nil, fmt.Errorf("操作失败，请稍候重试")
+	}
+	if result.RowsAffected > 0 {
+		return nil, fmt.Errorf("用户名 %s 已存在", normalizedUsername)
 	}
 
 	hash, err := HashPassword(password)
