@@ -203,7 +203,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	if req.MigrateData {
 		migrateCtx, migrateCancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 		defer migrateCancel()
-		dataMigration = migrateLocalBackupData(migrateCtx, policies, sourceNode.Name, targetNode.Name)
+		dataMigration = migrateLocalBackupData(migrateCtx, allTasks, targetNode.Name)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -216,37 +216,51 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	})
 }
 
-// migrateLocalBackupData 对每个策略，将本地备份目录从旧节点名目录复制到新节点名目录。
-// 仅处理本地路径的 rsync 备份；restic/rclone 等远程仓库跳过。
-func migrateLocalBackupData(ctx context.Context, policies []model.Policy, sourceNodeName, targetNodeName string) []DataMigrateItem {
+// migrateLocalBackupData 基于任务的实际 rsync_target 路径复制本地备份数据。
+// 使用任务记录的真实路径而非从策略推导，确保准确找到备份目录。
+func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeName string) []DataMigrateItem {
 	var results []DataMigrateItem
 
-	// 去重：同一个 TargetPath 只复制一次
+	// 去重：同一个源→目标只复制一次
 	processed := make(map[string]struct{})
 
-	for _, p := range policies {
-		targetPath := p.TargetPath
-		if targetPath == "" {
+	for _, t := range tasks {
+		policyID := uint(0)
+		policyName := t.Name
+		if t.PolicyID != nil {
+			policyID = *t.PolicyID
+		}
+		if t.Policy != nil {
+			policyName = t.Policy.Name
+		}
+
+		oldDir := t.RsyncTarget
+		if oldDir == "" {
 			continue
 		}
 
-		// 远程路径跳过（rsync://, user@host:path, s3:bucket 等）
-		if util.IsRemotePathSpec(targetPath) {
+		// 远程路径跳过
+		if util.IsRemotePathSpec(oldDir) {
 			results = append(results, DataMigrateItem{
-				PolicyID: p.ID, PolicyName: p.Name,
+				PolicyID: policyID, PolicyName: policyName,
 				Status: "skipped", Message: "备份目标为远程路径，跳过本地数据迁移",
 			})
 			continue
 		}
 
-		oldDir := policy.NodeTargetPath(targetPath, sourceNodeName)
-		newDir := policy.NodeTargetPath(targetPath, targetNodeName)
+		// 构造新目标路径
+		var newDir string
+		if t.Policy != nil && t.Policy.TargetPath != "" {
+			newDir = policy.NodeTargetPath(t.Policy.TargetPath, targetNodeName)
+		} else {
+			continue
+		}
 
 		// 去重
 		key := oldDir + " -> " + newDir
 		if _, done := processed[key]; done {
 			results = append(results, DataMigrateItem{
-				PolicyID: p.ID, PolicyName: p.Name,
+				PolicyID: policyID, PolicyName: policyName,
 				Status: "skipped", Message: "已与其他策略合并迁移",
 			})
 			continue
@@ -257,28 +271,27 @@ func migrateLocalBackupData(ctx context.Context, policies []model.Policy, source
 		info, err := os.Stat(oldDir)
 		if err != nil || !info.IsDir() {
 			results = append(results, DataMigrateItem{
-				PolicyID: p.ID, PolicyName: p.Name,
+				PolicyID: policyID, PolicyName: policyName,
 				Status: "skipped", Message: fmt.Sprintf("源备份目录不存在: %s", oldDir),
 			})
 			continue
 		}
 
 		// 使用 rsync -a 复制目录内容（增量、保留属性）
-		policyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		// 确保 oldDir 以 / 结尾（rsync 语义：复制目录内容而非目录本身）
-		cmd := exec.CommandContext(policyCtx, "rsync", "-a", oldDir+"/", newDir+"/")
+		taskCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		cmd := exec.CommandContext(taskCtx, "rsync", "-a", oldDir+"/", newDir+"/")
 		output, copyErr := cmd.CombinedOutput()
 		cancel()
 
 		if copyErr != nil {
-			log.Printf("rsync copy failed [policy=%d]: %s — %s", p.ID, copyErr.Error(), string(output))
+			log.Printf("rsync copy failed [task=%d]: %s — %s", t.ID, copyErr.Error(), string(output))
 			results = append(results, DataMigrateItem{
-				PolicyID: p.ID, PolicyName: p.Name,
+				PolicyID: policyID, PolicyName: policyName,
 				Status: "error", Message: fmt.Sprintf("复制失败: %s", copyErr.Error()),
 			})
 		} else {
 			results = append(results, DataMigrateItem{
-				PolicyID: p.ID, PolicyName: p.Name,
+				PolicyID: policyID, PolicyName: policyName,
 				Status: "copied", Message: fmt.Sprintf("%s → %s", oldDir, newDir),
 			})
 		}

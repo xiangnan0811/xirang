@@ -12,7 +12,6 @@ import (
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/policy"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/util"
@@ -296,15 +295,15 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 		})
 	}
 
-	// === 检查 6: 本地备份数据可迁移性 ===
+	// === 检查 6: 本地备份数据可迁移性（基于任务的实际 rsync_target 路径） ===
 	var totalDataSizeMB int64
 	dataMigratableCount := 0
 	checkedDataPaths := make(map[string]struct{})
-	for _, p := range policies {
-		if p.TargetPath == "" || util.IsRemotePathSpec(p.TargetPath) {
+	for _, t := range tasks {
+		oldDir := t.RsyncTarget
+		if oldDir == "" || util.IsRemotePathSpec(oldDir) {
 			continue
 		}
-		oldDir := policy.NodeTargetPath(p.TargetPath, sourceNode.Name)
 		if _, done := checkedDataPaths[oldDir]; done {
 			continue
 		}
