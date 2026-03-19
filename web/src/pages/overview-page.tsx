@@ -328,7 +328,7 @@ export function OverviewPage() {
                           labelStyle={{ color: "hsl(var(--muted-foreground))" }}
                         />
                         {visibleLayers.activity && (
-                          <Bar dataKey="activity" name={t("overview.chartActivity")} maxBarSize={8} radius={[2, 2, 0, 0]}>
+                          <Bar dataKey="activity" name={t("overview.chartActivity")} maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false}>
                             {chartMetrics.chartData.map((entry, index) => (
                               <Cell
                                 key={`activity-${index}`}
@@ -348,6 +348,7 @@ export function OverviewPage() {
                             fill="url(#throughputGrad)"
                             dot={false}
                             activeDot={{ r: 3 }}
+                            isAnimationActive={false}
                           />
                         )}
                       </ComposedChart>

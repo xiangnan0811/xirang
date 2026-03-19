@@ -163,7 +163,7 @@ export function StorageUsagePanel() {
                     formatter={(value) => [`${Number(value).toFixed(1)} GB`, t('storage.used')]}
                     labelStyle={{ color: "hsl(var(--muted-foreground))" }}
                   />
-                  <Bar dataKey="usedGB" name={t('storage.used')} fill="hsl(var(--chart-ingress))" radius={[0, 4, 4, 0]} maxBarSize={16} />
+                  <Bar dataKey="usedGB" name={t('storage.used')} fill="hsl(var(--chart-ingress))" radius={[0, 4, 4, 0]} maxBarSize={16} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

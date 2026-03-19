@@ -25,6 +25,7 @@ export function BackupHealthPanel() {
   const [data, setData] = useState<BackupHealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const gradientId = useId();
 
   useEffect(() => {
     if (!token) return;
@@ -87,7 +88,6 @@ export function BackupHealthPanel() {
     );
   }
 
-  const gradientId = useId();
   const { summary, staleNodes, degradedPolicies, healthTrend } = data;
 
   const problems = [
@@ -173,7 +173,7 @@ export function BackupHealthPanel() {
                     }}
                     labelStyle={{ color: "hsl(var(--muted-foreground))", fontWeight: 600, marginBottom: 4 }}
                   />
-                  <Bar dataKey="total" name={t('backupHealth.totalRuns')} fill="hsl(var(--chart-egress))" opacity={0.3} maxBarSize={32} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" name={t('backupHealth.totalRuns')} fill="hsl(var(--chart-egress))" opacity={0.3} maxBarSize={32} radius={[4, 4, 0, 0]} isAnimationActive={false} />
                   <Area
                     type="monotone"
                     dataKey="rate"
@@ -183,6 +183,7 @@ export function BackupHealthPanel() {
                     fill={`url(#${gradientId})`}
                     dot={{ fill: "hsl(var(--chart-ingress))", r: 4, strokeWidth: 0, opacity: 0.8 }}
                     activeDot={{ r: 6, strokeWidth: 0 }}
+                    isAnimationActive={false}
                   />
                   <defs>
                     <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
