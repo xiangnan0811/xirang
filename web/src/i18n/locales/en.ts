@@ -407,6 +407,7 @@ const en = {
     migrateSelectTargetDesc: "Select the target node to migrate policies and tasks from {{name}}",
     migrateTargetLabel: "Target Node",
     migrateTargetPlaceholder: "Select target node",
+    migrateStep: "Step",
     migrateStepNext: "Next",
     migrateStepPrev: "Back",
     migrateStepConfirm: "Confirm Migration",

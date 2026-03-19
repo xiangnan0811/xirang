@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // NodeMigrateRequest 节点迁移请求
@@ -122,6 +123,11 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	migratedTasks := 0
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
+		// 锁定源节点行，防止并发迁移冲突
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&model.Node{}, sourceID).Error; err != nil {
+			return fmt.Errorf("锁定源节点失败: %w", err)
+		}
+
 		// a. 迁移 PolicyNode 关联
 		for _, pid := range policyIDs {
 			var exists int64
@@ -175,13 +181,19 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		return
 	}
 
-	// 事务成功后，更新内存中的 cron 调度
+	// 事务成功后，更新内存中的 cron 调度（同步更新内存对象以匹配事务写入值）
 	if h.trigger != nil {
-		for _, t := range allTasks {
-			h.trigger.RemoveSchedule(t.ID)
-			if !req.PausePolicies && t.CronSpec != "" {
-				t.NodeID = req.TargetNodeID
-				_ = h.trigger.SyncSchedule(t)
+		for i := range allTasks {
+			h.trigger.RemoveSchedule(allTasks[i].ID)
+			if !req.PausePolicies && allTasks[i].CronSpec != "" {
+				allTasks[i].NodeID = req.TargetNodeID
+				if sourceNode.Name != "" && targetNode.Name != "" {
+					allTasks[i].Name = replaceLastOccurrence(allTasks[i].Name, sourceNode.Name, targetNode.Name)
+				}
+				if allTasks[i].Policy != nil && allTasks[i].Policy.TargetPath != "" {
+					allTasks[i].RsyncTarget = policy.NodeTargetPath(allTasks[i].Policy.TargetPath, targetNode.Name)
+				}
+				_ = h.trigger.SyncSchedule(allTasks[i])
 			}
 		}
 	}
@@ -189,7 +201,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	// 数据迁移：复制本地备份目录
 	var dataMigration []DataMigrateItem
 	if req.MigrateData {
-		migrateCtx, migrateCancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+		migrateCtx, migrateCancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 		defer migrateCancel()
 		dataMigration = migrateLocalBackupData(migrateCtx, policies, sourceNode.Name, targetNode.Name)
 	}
@@ -252,16 +264,17 @@ func migrateLocalBackupData(ctx context.Context, policies []model.Policy, source
 		}
 
 		// 使用 rsync -a 复制目录内容（增量、保留属性）
-		policyCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		policyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		// 确保 oldDir 以 / 结尾（rsync 语义：复制目录内容而非目录本身）
 		cmd := exec.CommandContext(policyCtx, "rsync", "-a", oldDir+"/", newDir+"/")
 		output, copyErr := cmd.CombinedOutput()
 		cancel()
 
 		if copyErr != nil {
+			log.Printf("rsync copy failed [policy=%d]: %s — %s", p.ID, copyErr.Error(), string(output))
 			results = append(results, DataMigrateItem{
 				PolicyID: p.ID, PolicyName: p.Name,
-				Status: "error", Message: fmt.Sprintf("复制失败: %s — %s", copyErr.Error(), truncateOutput(string(output), 200)),
+				Status: "error", Message: fmt.Sprintf("复制失败: %s", copyErr.Error()),
 			})
 		} else {
 			results = append(results, DataMigrateItem{

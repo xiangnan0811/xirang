@@ -407,6 +407,7 @@ const zh = {
     migrateSelectTargetDesc: "选择要将 {{name}} 的策略和任务迁移到的目标节点",
     migrateTargetLabel: "目标节点",
     migrateTargetPlaceholder: "请选择目标节点",
+    migrateStep: "步骤",
     migrateStepNext: "下一步",
     migrateStepPrev: "上一步",
     migrateStepConfirm: "确认迁移",

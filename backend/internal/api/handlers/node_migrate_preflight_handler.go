@@ -202,7 +202,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 			})
 		}
 	} else if len(toolSet) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
 		client, dialErr := executor.DialSSHForNode(ctx, targetNode)
 		if dialErr != nil {
@@ -315,7 +315,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 			continue
 		}
 		dataMigratableCount++
-		totalDataSizeMB += estimateDirSizeMB(oldDir)
+		totalDataSizeMB += estimateDirSizeMB(c.Request.Context(), oldDir)
 	}
 	if dataMigratableCount > 0 {
 		resp.DataMigratable = true
@@ -336,8 +336,8 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 }
 
 // estimateDirSizeMB 使用 du -sm 估算目录大小（MB），5 秒超时，失败返回 0。
-func estimateDirSizeMB(path string) int64 {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func estimateDirSizeMB(ctx context.Context, path string) int64 {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "du", "-sm", path).Output()
 	if err != nil {

@@ -151,9 +151,13 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
         <div className="flex items-center justify-center gap-1 px-6 pb-2 text-xs text-muted-foreground">
           {([1, 2, 3, 4] as Step[]).map((s) => (
             <div key={s} className="flex items-center gap-1">
-              <span className={`flex size-6 items-center justify-center rounded-full text-xs font-medium ${
-                s === step ? "bg-primary text-primary-foreground" : s < step ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
-              }`}>
+              <span
+                role="presentation"
+                aria-label={`${t("nodes.migrateStep")} ${s}`}
+                className={`flex size-6 items-center justify-center rounded-full text-xs font-medium ${
+                  s === step ? "bg-primary text-primary-foreground" : s < step ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                }`}
+              >
                 {s}
               </span>
               {s < 4 && <span className="mx-0.5 text-muted-foreground/40">—</span>}
@@ -255,7 +259,7 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
 
               <div className="space-y-2">
                 <label htmlFor="migrate-opt-data" className="flex items-center gap-2 text-sm">
-                  <input id="migrate-opt-data" type="checkbox" checked={migrateData} onChange={(e) => setMigrateData(e.target.checked)} className="rounded" />
+                  <input id="migrate-opt-data" type="checkbox" checked={migrateData} disabled={!preflight.dataMigratable} onChange={(e) => setMigrateData(e.target.checked)} className="rounded" />
                   {t("nodes.migrateOptData")}
                   {preflight.dataMigratable && preflight.dataSizeMb > 0 && (
                     <span className="text-xs text-muted-foreground">

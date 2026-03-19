@@ -153,6 +153,10 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		req.Status = "offline"
 	}
 	// BasePath 不设置默认值 "/"，避免文件浏览器白名单开放整台机器
+	if err := validateNodeName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -253,6 +257,10 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 	if req.BasePath == "" {
 		req.BasePath = node.BasePath
+	}
+	if err := validateNodeName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if req.SSHKeyID == nil {
 		req.SSHKeyID = node.SSHKeyID
@@ -715,6 +723,14 @@ func (h *NodeHandler) Metrics(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": samples})
+}
+
+// validateNodeName 校验节点名称，防止路径遍历攻击。
+func validateNodeName(name string) error {
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("节点名称不能包含 /、\\、.. 或空字符")
+	}
+	return nil
 }
 
 func validateNodeHostPort(host string, port int) error {

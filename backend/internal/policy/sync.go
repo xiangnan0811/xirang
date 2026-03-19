@@ -13,7 +13,11 @@ import (
 
 // NodeTargetPath appends the node name as a subdirectory to the policy target path,
 // ensuring backups from different nodes don't overwrite each other.
+// 防御性校验：拒绝包含路径分隔符或遍历字符的节点名。
 func NodeTargetPath(basePath string, nodeName string) string {
+	if strings.ContainsAny(nodeName, "/\\") || strings.Contains(nodeName, "..") || nodeName == "" {
+		return filepath.Join(strings.TrimRight(basePath, "/"), "_invalid_node_")
+	}
 	return filepath.Join(strings.TrimRight(basePath, "/"), nodeName)
 }
 
