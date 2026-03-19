@@ -136,7 +136,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                 <>
                   {qrUrl && (
                     <div className="flex justify-center">
-                      <div className="rounded-lg border border-border bg-white p-3">
+                      <div className="rounded-xl border border-border/50 bg-white p-4 shadow-sm backdrop-blur-sm">
                         <QRCodeSVG value={qrUrl} size={176} />
                       </div>
                     </div>

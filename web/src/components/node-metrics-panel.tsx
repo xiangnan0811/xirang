@@ -253,7 +253,7 @@ function MetricChart({
   );
 
   return (
-    <div className="rounded-lg border border-border/60 bg-card/50 p-3">
+    <div className="glass-panel p-4">
       <p className="mb-2 text-xs font-medium text-muted-foreground">{label}</p>
       <ResponsiveContainer width="100%" height={160}>
         <AreaChart data={data} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>

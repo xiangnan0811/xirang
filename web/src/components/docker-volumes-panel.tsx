@@ -93,7 +93,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
             {volumes.map((vol) => (
               <tr
                 key={vol.name}
-                className="border-b border-border/20 last:border-b-0 hover:bg-muted/30 transition-colors"
+                className="border-b border-border/20 last:border-b-0 hover:bg-muted/40 transition-colors"
               >
                 <td className="px-3 py-2 font-mono text-xs">{vol.name}</td>
                 <td className="px-3 py-2 text-muted-foreground">{vol.driver}</td>

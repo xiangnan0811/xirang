@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
+import { Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
@@ -174,12 +175,8 @@ export function IntegrationEditorDialog({
       savingLabel={<><Save className="mr-1 size-4" />{t('integration.savingLabel')}</>}
     >
       {pendingHint && (
-        <div className="flex flex-col gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
-          <div className="flex items-start gap-2 text-sm text-warning">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <span>{pendingHint}</span>
-          </div>
-          <div className="flex justify-end gap-2">
+        <InlineAlert tone="warning" title={pendingHint} className="mb-4">
+          <div className="flex justify-end gap-2 mt-2">
             <Button
               size="sm"
               variant="outline"
@@ -195,7 +192,7 @@ export function IntegrationEditorDialog({
               {t('integration.confirmSave')}
             </Button>
           </div>
-        </div>
+        </InlineAlert>
       )}
 
       <div className="grid gap-3 md:grid-cols-2">

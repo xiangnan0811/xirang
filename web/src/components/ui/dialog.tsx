@@ -16,7 +16,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-fade-in",
+      "fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-fade-in",
       className
     )}
     {...props}
@@ -38,10 +38,10 @@ const DialogContent = React.forwardRef<
         ref={ref}
         className={cn(
           // 移动端：底部抽屉，从底部滑入
-          "relative w-full max-h-[92vh] rounded-t-2xl border-t border-border/60 bg-background/90 backdrop-blur-xl shadow-mobile-sheet will-change-transform",
+          "relative w-full max-h-[92vh] rounded-t-2xl border-t border-border/60 max-md:bg-background/90 max-md:backdrop-blur-xl md:border md:border-border/60 md:bg-background/50 md:backdrop-blur-md shadow-mobile-sheet will-change-transform",
           "data-[state=open]:animate-slide-up data-[state=closed]:animate-none",
           // 桌面端：居中弹窗，缩放淡入
-          "md:max-h-[85vh] md:glass-panel md:shadow-panel md:data-[state=open]:animate-animate-in",
+          "md:max-h-[85vh] md:rounded-xl md:shadow-panel md:data-[state=open]:animate-animate-in",
           size === "sm" && "md:max-w-[480px]",
           size === "md" && "md:max-w-[560px]",
           size === "lg" && "md:max-w-[640px]",

@@ -7,19 +7,20 @@ export function BackupsPage() {
   const { t } = useTranslation();
 
   return (
-    <div className="animate-fade-in space-y-5">
-      <h1 className="text-xl font-semibold">{t("backups.title")}</h1>
+    <div className="animate-fade-in flex flex-col space-y-5 min-h-0">
+      <h1 className="text-xl font-semibold shrink-0">{t("backups.title")}</h1>
 
-      <section>
+      <section className="shrink-0 flex flex-col min-h-0">
         <BackupHealthPanel />
       </section>
 
-      <section>
-        <StorageUsagePanel />
-      </section>
-
-      <section>
-        <StorageGuideCard />
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-5 shrink-0 items-start">
+        <div className="xl:col-span-2">
+          <StorageUsagePanel />
+        </div>
+        <div className="xl:col-span-1">
+          <StorageGuideCard />
+        </div>
       </section>
     </div>
   );

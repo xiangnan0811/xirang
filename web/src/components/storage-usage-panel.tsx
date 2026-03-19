@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -83,9 +84,9 @@ export function StorageUsagePanel() {
           <CardTitle className="text-base">{t('storage.title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-4 text-sm text-warning">
-            {error ?? t('common.noData')}
-          </p>
+          <InlineAlert tone="warning">
+            {error ?? t("common.noData")}
+          </InlineAlert>
         </CardContent>
       </Card>
     );

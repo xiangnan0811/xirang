@@ -43,7 +43,7 @@ export const NodesTable = React.memo(function NodesTable({
               <input
                 type="checkbox"
                 aria-label={t("nodes.selectAllVisible")}
-                className="size-4"
+                className="size-4 accent-primary rounded-sm"
                 checked={allVisibleSelected}
                 onChange={(event) =>
                   toggleSelectAllVisible(event.target.checked)
@@ -89,12 +89,12 @@ export const NodesTable = React.memo(function NodesTable({
                 : t("common.keyUnbound");
 
               return (
-                <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
+                <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"
                       aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
-                      className="size-4"
+                      className="size-4 accent-primary rounded-sm"
                       checked={selectedNodeSet.has(node.id)}
                       onChange={(event) =>
                         toggleNodeSelection(node.id, event.target.checked)

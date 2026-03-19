@@ -145,7 +145,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
             {files.map((entry) => (
               <label
                 key={entry.path}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/30 cursor-pointer"
+                className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/40 cursor-pointer"
               >
                 <input
                   type="checkbox"
@@ -215,7 +215,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
             <button
               key={snap.id}
               type="button"
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/30 text-left"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/40 text-left"
               onClick={() => browseSnapshot(snap)}
             >
               <Folder className="size-4 text-primary shrink-0" />

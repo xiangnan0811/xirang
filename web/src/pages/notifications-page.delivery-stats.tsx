@@ -63,7 +63,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
     : t("common.loading");
 
   return (
-    <Card className="border-border/75">
+    <Card className="glass-panel border-border/70">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <button

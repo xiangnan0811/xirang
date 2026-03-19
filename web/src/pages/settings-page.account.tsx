@@ -51,7 +51,8 @@ export function AccountTab() {
       <h2 className="text-lg font-semibold">{t("settings.account.title")}</h2>
 
       {/* 会话信息 */}
-      <div className="rounded-lg border p-4 space-y-2">
+      <div className="glass-panel relative overflow-hidden p-5 space-y-2">
+        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium">{t("settings.account.sessionInfo")}</h3>
         <div className="flex gap-4 text-sm text-muted-foreground">
           <span>{t("settings.account.username")}: <strong className="text-foreground">{username}</strong></span>
@@ -60,7 +61,8 @@ export function AccountTab() {
       </div>
 
       {/* 修改密码 */}
-      <div className="rounded-lg border p-4 space-y-4">
+      <div className="glass-panel relative overflow-hidden p-5 space-y-4">
+        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium">{t("settings.account.changePassword")}</h3>
         <div className="space-y-3 max-w-sm">
           <input
@@ -105,7 +107,8 @@ export function AccountTab() {
       </div>
 
       {/* 2FA section */}
-      <div className="rounded-lg border p-4 space-y-3">
+      <div className="glass-panel relative overflow-hidden p-5 space-y-3">
+        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium">{t("settings.account.twoFactor")}</h3>
         <div className="flex items-center gap-3">
           {totpEnabled ? (

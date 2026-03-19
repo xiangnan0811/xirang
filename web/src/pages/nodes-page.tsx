@@ -588,7 +588,7 @@ export function NodesPage() {
         ]}
       />
 
-      <Card className="overflow-hidden border-border/75">
+      <Card className="overflow-hidden glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
           <div className="flex flex-wrap items-center gap-2">

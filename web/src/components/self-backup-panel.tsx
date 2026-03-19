@@ -59,8 +59,9 @@ export function SelfBackupPanel() {
   };
 
   return (
-    <Card className="glass-panel border-border/70">
-      <CardHeader className="pb-3">
+    <Card className="glass-panel border-border/70 relative overflow-hidden group">
+      <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
+      <CardHeader className="pb-3 z-10 relative">
         <CardTitle className="text-base">{t('selfBackup.title')}</CardTitle>
       </CardHeader>
       <CardContent>

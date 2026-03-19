@@ -178,7 +178,7 @@ export function PoliciesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -315,7 +315,7 @@ export function PoliciesPage() {
                   <th scope="col" className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"
-                      className="size-3.5 accent-primary"
+                      className="size-4 accent-primary rounded-sm"
                       checked={filteredPolicies.length > 0 && filteredPolicies.every((p) => selectedPolicyIds.includes(p.id))}
                       onChange={(e) => {
                         if (e.target.checked) {
@@ -339,11 +339,11 @@ export function PoliciesPage() {
               <tbody>
                 {filteredPolicies.length ? (
                   filteredPolicies.map((policy) => (
-                    <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
+                    <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
                       <td className="px-3 py-2.5">
                         <input
                           type="checkbox"
-                          className="size-3.5 accent-primary"
+                          className="size-4 accent-primary rounded-sm"
                           checked={selectedPolicyIds.includes(policy.id)}
                           onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
                           aria-label={t('policies.selectAriaLabel', { name: policy.name })}

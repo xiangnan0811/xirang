@@ -165,7 +165,8 @@ export function UsersTab() {
         {t("users.userManagement")}
       </h2>
 
-      <div className="rounded-lg border p-4 space-y-4">
+      <div className="glass-panel relative overflow-hidden p-5 space-y-4">
+        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium flex items-center gap-2">
           <UserPlus className="size-4" />
           {t("users.createUser")}

@@ -289,7 +289,7 @@ export function TasksPage() {
         ]}
       />
 
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -583,7 +583,7 @@ export function TasksPage() {
                               setSelectedTaskIds((prev) => prev.filter((id) => id !== task.id));
                             }
                           }}
-                          className="size-4"
+                          className="size-4 accent-primary rounded-sm"
                         />
                         <span className="text-sm flex-1">
                           {task.name || task.policyName || t("tasks.taskFallbackName", { id: task.id })}

@@ -148,7 +148,7 @@ export function AlertCenter({
   };
 
   return (
-    <Card className="border-border/75">
+    <Card className="glass-panel border-border/70">
       <CardContent className="space-y-4 pt-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-2 font-medium">
@@ -205,13 +205,15 @@ export function AlertCenter({
               const status = alertStatusMeta(alert.status);
               const isDeliveryOpen = deliveryOpenAlertId === alert.id;
               const deliveryPanelId = `alert-delivery-panel-${alert.id}`;
+              const toneClass = alert.severity === "critical" ? "bg-destructive" : alert.severity === "warning" ? "bg-warning" : "bg-info";
               return (
-                <div key={alert.id} ref={alert.id === initialAlertId ? highlightRef : undefined} className="rounded-xl border border-border/75 bg-background/65 p-3 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                <div key={alert.id} ref={alert.id === initialAlertId ? highlightRef : undefined} className="glass-panel overflow-hidden relative group p-4 transition-colors hover:bg-muted/10">
+                  <div className={`absolute top-0 left-0 w-1 h-full ${toneClass} opacity-60 group-hover:opacity-100 transition-opacity`} />
+                  <div className="flex flex-wrap items-center justify-between gap-2 pl-2">
                     <div className="flex items-center gap-2">
                       <StatusPulse tone={severityToTone(alert.severity)} />
-                      <p className="font-medium">
-                        {alert.nodeName} · {alert.taskId ? `${t("notifications.taskLabel", { id: alert.taskId })}${alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}` : t("notifications.nodeProbe")}
+                      <p className="font-medium text-foreground/90">
+                        {alert.nodeName} <span className="text-muted-foreground mx-1">·</span> {alert.taskId ? `${t("notifications.taskLabel", { id: alert.taskId })}${alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}` : t("notifications.nodeProbe")}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">

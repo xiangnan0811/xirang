@@ -180,7 +180,7 @@ export function AuditPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -320,7 +320,7 @@ export function AuditPage() {
                 {rows.map((row) => (
                   <tr
                     key={row.id}
-                    className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35"
+                    className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40"
                   >
                     <td className="px-3 py-2.5">{row.createdAt}</td>
                     <td className="px-3 py-2.5">{row.username || "-"}</td>

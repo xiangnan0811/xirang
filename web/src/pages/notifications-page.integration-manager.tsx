@@ -74,7 +74,7 @@ export function IntegrationManager({
 
   return (
     <>
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2 font-medium">
@@ -93,15 +93,16 @@ export function IntegrationManager({
               const busy = isUpdating || isTesting;
 
               return (
-                <div key={integration.id} className="interactive-surface p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-md border border-primary/20 bg-primary/10 p-1.5 text-primary">
-                        <Icon className="size-4" />
+                <div key={integration.id} className="glass-panel overflow-hidden relative group p-3 transition-colors hover:bg-muted/10">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-60 group-hover:opacity-100 transition-opacity" />
+                  <div className="flex flex-wrap items-center justify-between gap-2 pl-2">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center justify-center rounded-lg p-2.5 bg-primary/10 text-primary">
+                        <Icon className="size-5" />
                       </span>
                       <div>
-                        <p className="font-medium">{integration.name}</p>
-                        <p className="text-xs text-muted-foreground uppercase">{integration.type}</p>
+                        <p className="font-medium text-foreground/90">{integration.name}</p>
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mt-0.5">{integration.type}</p>
                       </div>
                     </div>
 

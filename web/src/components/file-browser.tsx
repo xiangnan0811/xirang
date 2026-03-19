@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FilePreviewDialog } from "@/components/file-preview-dialog";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import type { FileEntry, FileListResult, FileContentResult } from "@/lib/api/files-api";
 
 type FileBrowserProps = {
@@ -159,9 +160,9 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
 
       {/* 截断提示 */}
       {truncated && (
-        <div className="mb-2 rounded border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
+        <InlineAlert tone="warning" className="mb-2">
           {t('fileBrowser.truncatedHint')}
-        </div>
+        </InlineAlert>
       )}
 
       {/* 错误提示 */}
@@ -209,7 +210,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
                 {sorted.map((entry) => (
                   <tr
                     key={entry.path}
-                    className="group cursor-pointer transition-colors hover:bg-muted/30"
+                    className="group cursor-pointer transition-colors hover:bg-muted/40"
                     onClick={() => handleEntryClick(entry)}
                     tabIndex={0}
                     onKeyDown={(e) => {

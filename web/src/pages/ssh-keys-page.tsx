@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getErrorMessage } from "@/lib/utils";
@@ -130,7 +131,7 @@ export function SSHKeysPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -151,9 +152,9 @@ export function SSHKeysPage() {
               </Badge>
             </div>
           </div>
-          <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
+          <InlineAlert tone="warning" className="shadow-sm">
             {t("sshKeys.securityWarning")}
-          </div>
+          </InlineAlert>
 
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {sshKeys.map((key) => {

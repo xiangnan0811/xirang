@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import {
   Download,
   Maximize2,
-  TriangleAlert,
 } from "lucide-react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/auth-context";
@@ -23,6 +22,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { SearchInput } from "@/components/ui/search-input";
 import { toast } from "@/components/ui/toast";
 import { cn, getErrorMessage } from "@/lib/utils";
@@ -424,7 +424,7 @@ export function LogsPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="border-border/75">
+      <Card className="glass-panel border-border/70">
         <CardContent className="space-y-4 pt-6">
           <FilterPanel
             sticky={false}
@@ -561,16 +561,15 @@ export function LogsPage() {
           />
 
           {connectionWarning ? (
-            <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <InlineAlert tone="warning">
               {connectionWarning}
-            </p>
+            </InlineAlert>
           ) : null}
 
           {focusedTask?.errorCode ? (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              <TriangleAlert className="mr-1 inline size-4" />
+            <InlineAlert tone="critical">
               {t("logs.errorCodeLabel", { code: focusedTask.errorCode })}
-            </div>
+            </InlineAlert>
           ) : null}
 
           <div className="space-y-3">
@@ -599,7 +598,7 @@ export function LogsPage() {
                     {filteredLogs.map((log) => (
                       <div
                         key={log.logId ? `line-${log.logId}` : log.id}
-                        className="terminal-group-row mb-0.5 flex flex-col gap-1.5 border-b py-1.5 transition-colors hover:bg-white/5 md:flex-row md:items-start"
+                        className="terminal-group-row mb-0.5 flex flex-col gap-1.5 border-b py-1.5 transition-colors hover:bg-white/10 md:flex-row md:items-start"
                       >
                         <div className="flex shrink-0 items-center gap-3 md:w-[260px]">
                           <span className="terminal-time text-[11px] opacity-60 md:text-[12px]">

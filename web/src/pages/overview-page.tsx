@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
@@ -279,9 +280,9 @@ export function OverviewPage() {
               {trafficLoading ? (
                 <LoadingState className="py-6" rows={3} title={t("overview.trafficLoading")} />
               ) : trafficError ? (
-                <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-4 text-sm text-warning">
+                <InlineAlert tone="warning" className="mb-2">
                   {trafficError}
-                </p>
+                </InlineAlert>
               ) : (
                 <>
                   <div
@@ -505,7 +506,7 @@ export function OverviewPage() {
                       }
 
                       return (
-                        <tr key={task.id} className="hover:bg-muted/10 transition-colors">
+                        <tr key={task.id} className="hover:bg-muted/40 transition-colors">
                           <td className="px-4 py-2.5 font-medium">{task.nodeName}</td>
                           <td className="px-4 py-2.5 text-muted-foreground">{task.name || task.policyName}</td>
                           <td className="px-4 py-2.5">

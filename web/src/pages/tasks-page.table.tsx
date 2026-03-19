@@ -51,7 +51,7 @@ export const TasksTable = React.memo(function TasksTable({
               const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
               const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
               return (
-                <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-accent/35">
+                <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
                   <td className="px-3 py-2.5">
                     <p className="font-medium">{task.name || task.policyName}</p>
                     <p className="text-xs text-muted-foreground">ID #{task.id}</p>

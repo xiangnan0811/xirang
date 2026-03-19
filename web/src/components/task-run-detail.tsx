@@ -87,7 +87,7 @@ export function TaskRunDetail({ run, token, onBack }: Props) {
         <span className="text-sm font-medium">{t('taskRunDetail.recordTitle', { id: run.id })}</span>
       </div>
 
-      <div className="rounded-lg border border-border/60 bg-card/50 p-4 space-y-3">
+      <div className="glass-panel p-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1.5 text-sm">
             {getTriggerIcon(run.triggerType)}
@@ -148,7 +148,7 @@ export function TaskRunDetail({ run, token, onBack }: Props) {
         ) : logs.length === 0 ? (
           <div className="py-4 text-center text-sm text-muted-foreground">{t('taskRunDetail.noLogs')}</div>
         ) : (
-          <div className="max-h-80 overflow-y-auto rounded border border-border/60 bg-card/30 p-2 thin-scrollbar">
+          <div className="max-h-80 overflow-y-auto rounded-lg border border-border/60 bg-card/30 p-3 thin-scrollbar">
             {logs.map((log) => (
               <div key={log.id} className="flex gap-2 py-0.5 text-xs font-mono">
                 <span className="shrink-0 text-muted-foreground/60">{log.timestamp}</span>

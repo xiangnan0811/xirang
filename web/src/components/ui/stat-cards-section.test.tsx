@@ -28,7 +28,7 @@ describe("StatCardsSection", () => {
 
     const successCard = screen.getByText("在线节点").closest(".glass-panel");
     expect(successCard).not.toBeNull();
-    expect(successCard).toHaveClass("border-success/30");
+    expect(successCard).toHaveAttribute("data-tone", "success");
 
     expect(screen.getByText("失败任务")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
@@ -44,7 +44,7 @@ describe("StatCardsSection", () => {
 
     const infoCard = screen.getByText("失败任务").closest(".glass-panel");
     expect(infoCard).not.toBeNull();
-    expect(infoCard).toHaveClass("border-info/30");
+    expect(infoCard).toHaveAttribute("data-tone", "info");
   });
 
   it("渲染 unit 后缀标注", () => {
@@ -89,6 +89,6 @@ describe("StatCardsSection", () => {
     expect(screen.getByText("近 5 分钟平均值")).toBeInTheDocument();
 
     const card = screen.getByText("当前吞吐").closest(".glass-panel");
-    expect(card).toHaveClass("border-primary/30");
+    expect(card).toHaveAttribute("data-tone", "primary");
   });
 });
