@@ -259,7 +259,7 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
 
               <div className="space-y-2">
                 <label htmlFor="migrate-opt-data" className="flex items-center gap-2 text-sm">
-                  <input id="migrate-opt-data" type="checkbox" checked={migrateData} disabled={!preflight.dataMigratable} onChange={(e) => setMigrateData(e.target.checked)} className="rounded" />
+                  <input id="migrate-opt-data" type="checkbox" checked={migrateData} onChange={(e) => setMigrateData(e.target.checked)} className="rounded" />
                   {t("nodes.migrateOptData")}
                   {preflight.dataMigratable && preflight.dataSizeMb > 0 && (
                     <span className="text-xs text-muted-foreground">
