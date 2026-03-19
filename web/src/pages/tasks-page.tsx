@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Terminal, RotateCcw, Play, FolderSearch, GitCompareArrows } from "lucide-react";
+import { Plus, Terminal, RotateCcw, Play, FolderSearch, GitCompareArrows, CheckSquare } from "lucide-react";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
@@ -112,10 +112,10 @@ export function TasksPage() {
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchDefaultNodeIds, setBatchDefaultNodeIds] = useState<number[] | undefined>(undefined);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
-  const [batchTriggerDialogOpen, setBatchTriggerDialogOpen] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
 
   const filteredTasks = useMemo(() => {
@@ -141,6 +141,37 @@ export function TasksPage() {
       })
       .sort((first, second) => second.id - first.id);
   }, [deferredKeyword, nodeFilter, statusFilter, tasks]);
+
+  const selectedTaskSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
+  const allVisibleSelected = filteredTasks.length > 0
+    && filteredTasks.every((t) => selectedTaskSet.has(t.id));
+
+  const toggleTaskSelection = useCallback((id: number, checked: boolean) => {
+    setSelectedTaskIds((prev) =>
+      checked ? [...prev, id] : prev.filter((x) => x !== id)
+    );
+  }, []);
+
+  const toggleSelectAllVisible = useCallback((checked: boolean) => {
+    setSelectedTaskIds((prev) => {
+      if (checked) {
+        const ids = new Set(prev);
+        for (const t of filteredTasks) ids.add(t.id);
+        return Array.from(ids);
+      }
+      const visibleIds = new Set(filteredTasks.map((t) => t.id));
+      return prev.filter((id) => !visibleIds.has(id));
+    });
+  }, [filteredTasks]);
+
+  // 任务列表变化时清理已删除任务的选中状态
+  useEffect(() => {
+    const taskIds = new Set(tasks.map((t) => t.id));
+    setSelectedTaskIds((prev) => {
+      const next = prev.filter((id) => taskIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [tasks]);
 
   const taskStats = useMemo(() => {
     let pending = 0;
@@ -297,20 +328,55 @@ export function TasksPage() {
                 <Plus className="mr-1 size-3.5" />
                 {t("tasks.addTask")}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setBatchDialogOpen(true)}>
-                <Terminal className="mr-1 size-3.5" />
-                {t("tasks.batchExecute")}
-              </Button>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => {
-                  setSelectedTaskIds([]);
-                  setBatchTriggerDialogOpen(true);
+                  if (selectedTaskIds.length === 0) {
+                    setBatchDialogOpen(true);
+                    return;
+                  }
+                  const nodeIds = [...new Set(
+                    tasks
+                      .filter((t) => selectedTaskSet.has(t.id))
+                      .map((t) => t.nodeId)
+                  )];
+                  setBatchDialogOpen(true);
+                  setBatchDefaultNodeIds(nodeIds);
+                }}
+              >
+                <Terminal className="mr-1 size-3.5" />
+                {selectedTaskIds.length > 0
+                  ? t("tasks.batchExecuteCount", { count: selectedTaskIds.length })
+                  : t("tasks.batchExecute")}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  if (selectedTaskIds.length === 0) {
+                    toast.error(t("tasks.selectAtLeastOne"));
+                    return;
+                  }
+                  const ok = await confirm({
+                    title: t("tasks.batchTriggerTitle"),
+                    description: t("tasks.batchTriggerConfirmDesc", { count: selectedTaskIds.length }),
+                  });
+                  if (!ok) return;
+                  try {
+                    const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
+                    setSelectedTaskIds([]);
+                    toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
+                    void refreshTasks();
+                  } catch (err) {
+                    toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
+                  }
                 }}
               >
                 <Play className="mr-1 size-3.5" />
-                {t("tasks.batchTrigger")}
+                {selectedTaskIds.length > 0
+                  ? t("tasks.triggerCount", { count: selectedTaskIds.length })
+                  : t("tasks.batchTrigger")}
               </Button>
             </div>
             <div className="flex items-center gap-2">
@@ -399,6 +465,10 @@ export function TasksPage() {
               handleTrigger={handleTrigger}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              selectedTaskSet={selectedTaskSet}
+              allVisibleSelected={allVisibleSelected}
+              toggleTaskSelection={toggleTaskSelection}
+              toggleSelectAllVisible={toggleSelectAllVisible}
             />
           ) : (
             <TasksTable
@@ -413,6 +483,10 @@ export function TasksPage() {
               handleTrigger={handleTrigger}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              selectedTaskSet={selectedTaskSet}
+              allVisibleSelected={allVisibleSelected}
+              toggleTaskSelection={toggleTaskSelection}
+              toggleSelectAllVisible={toggleSelectAllVisible}
             />
           )}
         </CardContent>
@@ -520,9 +594,13 @@ export function TasksPage() {
         <>
           <BatchCommandDialog
             open={batchDialogOpen}
-            onOpenChange={setBatchDialogOpen}
+            onOpenChange={(open) => {
+              setBatchDialogOpen(open);
+              if (!open) setBatchDefaultNodeIds(undefined);
+            }}
             nodes={nodes}
             token={authToken}
+            defaultNodeIds={batchDefaultNodeIds}
             onSuccess={(result) => {
               setBatchResultId(result.batchId);
               setBatchRetain(result.retain);
@@ -554,91 +632,57 @@ export function TasksPage() {
         />
       )}
 
-      {authToken && (
-        <Dialog open={batchTriggerDialogOpen} onOpenChange={setBatchTriggerDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("tasks.batchTriggerTitle")}</DialogTitle>
-              <DialogDescription>{t("tasks.batchTriggerDesc")}</DialogDescription>
-              <DialogCloseButton />
-            </DialogHeader>
-            <DialogBody>
-              <div className="space-y-3">
-                <div className="max-h-64 overflow-y-auto space-y-2 rounded-md border border-border p-3">
-                  {filteredTasks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t("tasks.noTriggerable")}</p>
-                  ) : (
-                    filteredTasks.map((task) => (
-                      <label
-                        key={task.id}
-                        className="flex items-center gap-2 cursor-pointer hover:bg-accent/50 rounded p-2 transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedTaskIds.includes(task.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedTaskIds((prev) => [...prev, task.id]);
-                            } else {
-                              setSelectedTaskIds((prev) => prev.filter((id) => id !== task.id));
-                            }
-                          }}
-                          className="size-4 accent-primary rounded-sm"
-                        />
-                        <span className="text-sm flex-1">
-                          {task.name || task.policyName || t("tasks.taskFallbackName", { id: task.id })}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {task.executorType === "rsync" ? t("tasks.executorSync") : task.executorType === "restic" ? "restic" : task.executorType === "rclone" ? "rclone" : t("tasks.executorCommand")}
-                        </span>
-                      </label>
-                    ))
-                  )}
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">{t("tasks.selectedCount", { count: selectedTaskIds.length })}</span>
-                  {selectedTaskIds.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setSelectedTaskIds([])}
-                    >
-                      {t("tasks.clearSelection")}
-                    </Button>
-                  )}
-                </div>
-                <div className="flex gap-2 justify-end pt-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setBatchTriggerDialogOpen(false);
-                      setSelectedTaskIds([]);
-                    }}
-                  >
-                    {t("common.cancel")}
-                  </Button>
-                  <Button
-                    disabled={selectedTaskIds.length === 0}
-                    onClick={async () => {
-                      try {
-                        const result = await apiClient.batchTriggerTasks(authToken, selectedTaskIds);
-                        setBatchTriggerDialogOpen(false);
-                        setSelectedTaskIds([]);
-                        toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
-                        void refreshTasks();
-                      } catch (err) {
-                        toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
-                      }
-                    }}
-                  >
-                    <Play className="mr-1 size-3.5" />
-                    {t("tasks.triggerCount", { count: selectedTaskIds.length })}
-                  </Button>
-                </div>
-              </div>
-            </DialogBody>
-          </DialogContent>
-        </Dialog>
+      {selectedTaskIds.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              <CheckSquare className="mr-1 inline size-4" />
+              {t("tasks.selectedCount", { count: selectedTaskIds.length })}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: t("tasks.batchTriggerTitle"),
+                    description: t("tasks.batchTriggerConfirmDesc", { count: selectedTaskIds.length }),
+                  });
+                  if (!ok) return;
+                  try {
+                    const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
+                    setSelectedTaskIds([]);
+                    toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
+                    void refreshTasks();
+                  } catch (err) {
+                    toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
+                  }
+                }}
+              >
+                <Play className="mr-1 size-3.5" />
+                {t("tasks.triggerCount", { count: selectedTaskIds.length })}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const nodeIds = [...new Set(
+                    tasks
+                      .filter((t) => selectedTaskSet.has(t.id))
+                      .map((t) => t.nodeId)
+                  )];
+                  setBatchDefaultNodeIds(nodeIds);
+                  setBatchDialogOpen(true);
+                }}
+              >
+                <Terminal className="mr-1 size-3.5" />
+                {t("tasks.batchExecuteCount", { count: selectedTaskIds.length })}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedTaskIds([])}>
+                {t("tasks.clearSelection")}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {dialog}

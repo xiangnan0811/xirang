@@ -717,6 +717,11 @@ const zh = {
     trigger: "触发",
     taskIdLabel: "任务 ID：{{id}}",
     nodeLabel: "执行节点：{{name}}",
+    selectAllVisible: "全选",
+    selectTaskAriaLabel: "选择任务 {{name}}",
+    selectAtLeastOne: "请先选择至少一个任务",
+    batchTriggerConfirmDesc: "确认批量触发 {{count}} 个选中的任务？",
+    batchExecuteCount: "批量执行 ({{count}})",
     errorLabel: "失败信息：{{error}}",
   },
 

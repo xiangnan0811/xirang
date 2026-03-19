@@ -38,4 +38,8 @@ export type TasksViewProps = {
   handleTrigger: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
   onViewHistory: (task: TaskRecord) => void;
+  selectedTaskSet: Set<number>;
+  allVisibleSelected: boolean;
+  toggleTaskSelection: (id: number, checked: boolean) => void;
+  toggleSelectAllVisible: (checked: boolean) => void;
 };

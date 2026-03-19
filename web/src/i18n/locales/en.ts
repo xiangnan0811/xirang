@@ -718,6 +718,11 @@ const en = {
     taskIdLabel: "Task ID: {{id}}",
     nodeLabel: "Node: {{name}}",
     errorLabel: "Error: {{error}}",
+    selectAllVisible: "Select all",
+    selectTaskAriaLabel: "Select task {{name}}",
+    selectAtLeastOne: "Please select at least one task first",
+    batchTriggerConfirmDesc: "Confirm batch trigger {{count}} selected tasks?",
+    batchExecuteCount: "Batch Execute ({{count}})",
   },
 
   // ── task run history ──

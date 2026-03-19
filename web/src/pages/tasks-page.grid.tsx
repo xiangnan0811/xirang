@@ -23,6 +23,8 @@ export const TasksGrid = React.memo(function TasksGrid({
   handleTrigger,
   onEdit,
   onViewHistory,
+  selectedTaskSet,
+  toggleTaskSelection,
 }: TasksViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -44,13 +46,23 @@ export const TasksGrid = React.memo(function TasksGrid({
               "interactive-surface flex h-full flex-col gap-2 p-4",
               task.status === "failed" && "border-destructive/35 bg-destructive/10",
               task.status === "running" && "border-info/30 bg-info/5",
-              task.status === "warning" && "border-warning/35 bg-warning/10"
+              task.status === "warning" && "border-warning/35 bg-warning/10",
+              selectedTaskSet.has(task.id) && "ring-1 ring-primary/40"
             )}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="font-medium">{task.name || task.policyName}</p>
-                <p className="text-xs text-muted-foreground">{t('tasks.taskIdLabel', { id: task.id })}</p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-primary rounded-sm"
+                  checked={selectedTaskSet.has(task.id)}
+                  onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
+                  aria-label={t('tasks.selectTaskAriaLabel', { name: task.name || task.policyName })}
+                />
+                <div>
+                  <p className="font-medium">{task.name || task.policyName}</p>
+                  <p className="text-xs text-muted-foreground">{t('tasks.taskIdLabel', { id: task.id })}</p>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {!task.cronSpec && (

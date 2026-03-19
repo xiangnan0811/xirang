@@ -22,6 +22,10 @@ export const TasksTable = React.memo(function TasksTable({
   handleTrigger,
   onEdit,
   onViewHistory,
+  selectedTaskSet,
+  allVisibleSelected,
+  toggleTaskSelection,
+  toggleSelectAllVisible,
 }: TasksViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -31,6 +35,15 @@ export const TasksTable = React.memo(function TasksTable({
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
           <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <th scope="col" className="w-10 px-3 py-2.5">
+              <input
+                type="checkbox"
+                className="size-4 accent-primary rounded-sm"
+                checked={allVisibleSelected}
+                onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                aria-label={t('tasks.selectAllVisible')}
+              />
+            </th>
             <th scope="col" className="px-3 py-2.5">{t('tasks.columnTask')}</th>
             <th scope="col" className="px-3 py-2.5">{t('tasks.columnNode')}</th>
             <th scope="col" className="px-3 py-2.5">{t('tasks.columnStatus')}</th>
@@ -51,7 +64,16 @@ export const TasksTable = React.memo(function TasksTable({
               const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
               const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
               return (
-                <tr key={task.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
+                <tr key={task.id} className={cn("border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40", selectedTaskSet.has(task.id) && "bg-primary/5")}>
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary rounded-sm"
+                      checked={selectedTaskSet.has(task.id)}
+                      onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
+                      aria-label={t('tasks.selectTaskAriaLabel', { name: task.name || task.policyName })}
+                    />
+                  </td>
                   <td className="px-3 py-2.5">
                     <p className="font-medium">{task.name || task.policyName}</p>
                     <p className="text-xs text-muted-foreground">ID #{task.id}</p>
@@ -187,7 +209,7 @@ export const TasksTable = React.memo(function TasksTable({
             })
           ) : !loading ? (
             <tr>
-              <td colSpan={8} className="px-3 py-6">
+              <td colSpan={9} className="px-3 py-6">
                 <FilteredEmptyState
                   className="py-8"
                   title={t('tasks.emptyTitle')}
