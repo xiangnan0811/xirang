@@ -11,9 +11,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// nodeTargetPath appends the node name as a subdirectory to the policy target path,
+// NodeTargetPath appends the node name as a subdirectory to the policy target path,
 // ensuring backups from different nodes don't overwrite each other.
-func nodeTargetPath(basePath string, nodeName string) string {
+func NodeTargetPath(basePath string, nodeName string) string {
 	return filepath.Join(strings.TrimRight(basePath, "/"), nodeName)
 }
 
@@ -69,7 +69,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			// 更新现有任务
 			updates := map[string]interface{}{
 				"rsync_source": policy.SourcePath,
-				"rsync_target": nodeTargetPath(policy.TargetPath, node.Name),
+				"rsync_target": NodeTargetPath(policy.TargetPath, node.Name),
 				"cron_spec":    cronSpec,
 				"name":         fmt.Sprintf("%s-%s", policy.Name, node.Name),
 			}
@@ -92,7 +92,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 				NodeID:       nid,
 				PolicyID:     &policyID,
 				RsyncSource:  policy.SourcePath,
-				RsyncTarget:  nodeTargetPath(policy.TargetPath, node.Name),
+				RsyncTarget:  NodeTargetPath(policy.TargetPath, node.Name),
 				ExecutorType: "rsync",
 				CronSpec:     cronSpec,
 				Status:       "pending",

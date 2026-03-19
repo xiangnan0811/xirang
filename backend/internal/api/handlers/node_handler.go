@@ -19,9 +19,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// NodeTaskTrigger 用于紧急备份触发任务执行。
+// NodeTaskTrigger 用于紧急备份触发任务执行及节点迁移时的调度管理。
 type NodeTaskTrigger interface {
 	TriggerManual(taskID uint) (uint, error)
+	Cancel(taskID uint) error
+	RemoveSchedule(taskID uint)
+	SyncSchedule(task model.Task) error
 }
 
 type NodeHandler struct {

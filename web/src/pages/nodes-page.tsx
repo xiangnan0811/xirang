@@ -23,6 +23,7 @@ import {
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { NodeEditorDialog } from "@/components/node-editor-dialog";
+import { NodeMigrateWizard } from "@/components/node-migrate-wizard";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -138,8 +139,6 @@ export function NodesPage() {
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const [emergencyNodeId, setEmergencyNodeId] = useState<number | null>(null);
   const [migrateSourceNode, setMigrateSourceNode] = useState<NodeRecord | null>(null);
-  const [migrateTargetId, setMigrateTargetId] = useState<number | null>(null);
-  const [migratingNode, setMigratingNode] = useState(false);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
@@ -521,24 +520,6 @@ export function NodesPage() {
     }
   };
 
-  const handleMigrateNode = async () => {
-    if (!token || !migrateSourceNode || !migrateTargetId) return;
-    try {
-      setMigratingNode(true);
-      const result = await apiClient.migrateNode(token, migrateSourceNode.id, migrateTargetId);
-      toast.success(
-        t("nodes.migrateSuccess", { policies: result.migratedPolicies, tasks: result.migratedTasks })
-      );
-      setMigrateSourceNode(null);
-      setMigrateTargetId(null);
-      void refreshNodes();
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setMigratingNode(false);
-    }
-  };
-
   const handleDownloadTemplate = () => {
     const template = [
       "name,host,username,port,tags",
@@ -810,6 +791,7 @@ export function NodesPage() {
                       onEmergencyBackup={handleEmergencyBackup}
                       emergencyNodeId={emergencyNodeId}
                       onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+                      onMigrate={setMigrateSourceNode}
                       onOpenFileBrowser={setFileBrowserNode}
                       isAdmin={isAdmin}
                     />
@@ -844,6 +826,7 @@ export function NodesPage() {
               onEmergencyBackup={handleEmergencyBackup}
               emergencyNodeId={emergencyNodeId}
               onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              onMigrate={setMigrateSourceNode}
               onOpenFileBrowser={setFileBrowserNode}
               isAdmin={isAdmin}
             />
@@ -870,6 +853,7 @@ export function NodesPage() {
               onDeleteNode={onDeleteNode}
               handleTriggerBackup={handleTriggerBackup}
               onOpenTerminal={(node) => { setTerminalNode(node); setTerminalKey((k) => k + 1); }}
+              onMigrate={setMigrateSourceNode}
               onOpenFileBrowser={setFileBrowserNode}
               isAdmin={isAdmin}
             />
@@ -1001,65 +985,17 @@ export function NodesPage() {
         </>
       )}
 
-      {/* 迁移节点对话框 */}
-      <Dialog
-        open={migrateSourceNode !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setMigrateSourceNode(null);
-            setMigrateTargetId(null);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("nodes.migrateDialogTitle", { name: migrateSourceNode?.name })}</DialogTitle>
-            <DialogDescription>
-              {t("nodes.migrateDialogDesc")}
-            </DialogDescription>
-            <DialogCloseButton />
-          </DialogHeader>
-          <div className="space-y-3 px-6 pb-6">
-            <div>
-              <label htmlFor="migrate-target" className="mb-1 block text-sm font-medium">
-                {t("nodes.migrateTargetLabel")}
-              </label>
-              <AppSelect
-                id="migrate-target"
-                containerClassName="w-full"
-                value={migrateTargetId ? String(migrateTargetId) : ""}
-                onChange={(e) => setMigrateTargetId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">{t("nodes.migrateTargetPlaceholder")}</option>
-                {nodes
-                  .filter((n) => n.id !== migrateSourceNode?.id)
-                  .map((n) => (
-                    <option key={n.id} value={String(n.id)}>
-                      {n.name} ({n.host})
-                    </option>
-                  ))}
-              </AppSelect>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setMigrateSourceNode(null);
-                  setMigrateTargetId(null);
-                }}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                disabled={!migrateTargetId || migratingNode}
-                onClick={() => void handleMigrateNode()}
-              >
-                {migratingNode ? t("nodes.migrating") : t("nodes.confirmMigrate")}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* 迁移节点向导 */}
+      {token && migrateSourceNode !== null && (
+        <NodeMigrateWizard
+          open
+          onOpenChange={(open) => { if (!open) setMigrateSourceNode(null); }}
+          sourceNode={migrateSourceNode}
+          nodes={nodes}
+          token={token}
+          onSuccess={() => { setMigrateSourceNode(null); void refreshNodes(); }}
+        />
+      )}
 
       {dialog}
     </div>

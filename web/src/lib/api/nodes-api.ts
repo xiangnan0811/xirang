@@ -178,12 +178,88 @@ export function createNodesApi() {
       return unwrapData(payload);
     },
 
-    async migrateNode(token: string, sourceNodeId: number, targetNodeId: number): Promise<{ migratedPolicies: number; migratedTasks: number }> {
-      const payload = await request<Envelope<{ migratedPolicies: number; migratedTasks: number }>>(
+    async migrateNode(
+      token: string,
+      sourceNodeId: number,
+      targetNodeId: number,
+      options?: { archiveSource?: boolean; pausePolicies?: boolean; migrateData?: boolean },
+    ): Promise<MigrateNodeResult> {
+      const payload = await request<Envelope<MigrateNodeResult>>(
         `/nodes/${sourceNodeId}/migrate`,
+        {
+          token, method: "POST",
+          body: {
+            targetNodeId,
+            archiveSource: options?.archiveSource ?? false,
+            pausePolicies: options?.pausePolicies ?? false,
+            migrateData: options?.migrateData ?? false,
+          },
+        }
+      );
+      return unwrapData(payload);
+    },
+
+    async migrateNodePreflight(
+      token: string,
+      sourceNodeId: number,
+      targetNodeId: number,
+    ): Promise<MigratePreflightResult> {
+      const payload = await request<Envelope<MigratePreflightResult>>(
+        `/nodes/${sourceNodeId}/migrate/preflight`,
         { token, method: "POST", body: { targetNodeId } }
       );
       return unwrapData(payload);
     },
   };
+}
+
+// --- 迁移预检类型 ---
+
+export type PreflightCheckStatus = "pass" | "fail" | "warn" | "skip";
+
+export interface PreflightCheckItem {
+  name: string;
+  status: PreflightCheckStatus;
+  message: string;
+}
+
+export interface PreflightNodeInfo {
+  id: number;
+  name: string;
+  host: string;
+  status: string;
+  diskUsedGb: number;
+  diskTotalGb: number;
+}
+
+export interface PreflightPolicy {
+  id: number;
+  name: string;
+  sourcePath: string;
+  executorType: string;
+}
+
+export interface MigratePreflightResult {
+  sourceNode: PreflightNodeInfo;
+  targetNode: PreflightNodeInfo;
+  policies: PreflightPolicy[];
+  taskCount: number;
+  checks: PreflightCheckItem[];
+  canProceed: boolean;
+  dataMigratable: boolean;
+  dataSizeMb: number;
+}
+
+export interface DataMigrateItem {
+  policyId: number;
+  policyName: string;
+  status: "copied" | "skipped" | "error";
+  message: string;
+}
+
+export interface MigrateNodeResult {
+  migratedPolicies: number;
+  migratedTasks: number;
+  archivedSource: boolean;
+  dataMigration: DataMigrateItem[] | null;
 }

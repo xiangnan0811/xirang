@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ export const NodesTable = React.memo(function NodesTable({
   onDeleteNode,
   handleTriggerBackup,
   onOpenTerminal,
+  onMigrate,
   onOpenFileBrowser,
   isAdmin,
 }: NodesViewProps) {
@@ -216,6 +217,17 @@ export const NodesTable = React.memo(function NodesTable({
                       >
                         <Wrench className="size-4" />
                       </Button>
+                      {onMigrate && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("nodes.migrateShort")} title={t("nodes.migrateShort")}
+                          onClick={() => onMigrate(node)}
+                        >
+                          <ArrowRightLeft className="size-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
