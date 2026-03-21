@@ -39,6 +39,7 @@ docs/plans/
 
 # deploy
 deploy/certs/
+deploy-kit/
 
 # local build artifacts
 backend/.env.production

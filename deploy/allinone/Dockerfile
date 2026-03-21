@@ -42,7 +42,7 @@ RUN set -eux; \
 RUN groupadd -r -g 10000 xirang && useradd -r -u 10000 -g xirang -s /sbin/nologin xirang
 
 # 配置 nginx 以非 root 运行：PID 文件和临时目录
-RUN sed -i 's|/var/run/nginx.pid|/tmp/nginx.pid|g' /etc/nginx/nginx.conf && \
+RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tmp/nginx.pid|g' /etc/nginx/nginx.conf && \
     mkdir -p /tmp/client_temp /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp && \
     chown -R xirang:xirang /var/cache/nginx /var/log/nginx /etc/nginx/conf.d /tmp/*_temp && \
     chmod -R 755 /var/cache/nginx /var/log/nginx
@@ -50,16 +50,18 @@ RUN sed -i 's|/var/run/nginx.pid|/tmp/nginx.pid|g' /etc/nginx/nginx.conf && \
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/nginx/templates/default-http.conf.template /etc/xirang/nginx-http.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
 COPY deploy/allinone/xirang-backup.cron /etc/supercronic/xirang-backup
 
 RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh && \
-    mkdir -p /data /backup/db /etc/supercronic && \
-    chown -R xirang:xirang /data /backup /usr/share/nginx/html /etc/supercronic
+    mkdir -p /data /backup/db /etc/supercronic /etc/xirang && \
+    chown -R xirang:xirang /data /backup /usr/share/nginx/html /etc/supercronic /etc/xirang /etc/nginx/templates
 
-ENV BACKEND_UPSTREAM=http://127.0.0.1:8080
-ENV SERVER_ADDR=:8080
+# 后端监听 3000（容器内部），nginx 监听 8080/8443 对外提供服务
+ENV BACKEND_UPSTREAM=http://127.0.0.1:3000
+ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
 

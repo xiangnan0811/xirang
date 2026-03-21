@@ -3,31 +3,19 @@ services:
     image: ${IMAGE_REGISTRY:-docker.io}/${IMAGE_NAMESPACE:-xirang}/xirang:${IMAGE_TAG:-latest}
     container_name: xirang
     env_file:
-      - ./backend/.env.production
+      - .env
     volumes:
-      - xirang-data:/data
-      - xirang-backup:/backup
-      - ./deploy/certs:/etc/nginx/certs:ro
+      - ./data:/data           # SQLite 数据库及应用数据，务必备份此目录
+      - ./backups:/backup      # 自动备份目录（每日 02:00 备份，保留 30 天）
+      # HTTPS 模式：放入证书后取消注释（不挂载则自动使用 HTTP 模式）
+      # - ./certs:/etc/nginx/certs:ro
     ports:
-      - "80:8080"
-      - "443:8443"
+      - "${HTTP_PORT:-80}:8080"
+      - "${HTTPS_PORT:-443}:8443"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    tmpfs:
-      - /tmp:nosuid,size=64m
-      - /var/cache/nginx:nosuid,noexec,size=32m
-      - /var/log/nginx:nosuid,noexec,size=16m
-
-volumes:
-  xirang-data:
-  xirang-backup:
