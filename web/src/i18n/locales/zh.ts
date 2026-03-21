@@ -1453,42 +1453,6 @@ const zh = {
     truncatedHint: "文件过大，仅显示前 {{size}} 内容。",
   },
 
-  // ── onboarding tour ──
-  onboarding: {
-    steps: {
-      welcome: {
-        title: "欢迎使用息壤",
-        description: "息壤是一个服务器运维备份管理平台，让我们快速了解使用流程。",
-      },
-      sshKey: {
-        title: "第 1 步：配置 SSH Key",
-        description: "先配置可用密钥，后续节点可直接复用，避免重复输入密码。",
-      },
-      addNode: {
-        title: "第 2 步：添加节点",
-        description: "添加至少一个服务器节点并完成连接探测，确保可以正常通信。",
-      },
-      createPolicy: {
-        title: "第 3 步：创建策略",
-        description: "定义 Rsync 源/目标路径与执行周期，设置备份规则。",
-      },
-      createTask: {
-        title: "第 4 步：创建任务",
-        description: "绑定节点与策略，尝试手动触发，验证整个流程是否正常。",
-      },
-    },
-    tourProgress: "引导进度",
-    jumpTo: "跳转到{{title}}",
-    step: "步骤",
-    simple4Steps: "简单 4 步",
-    simple4StepsDesc: "跟随指引快速熟悉核心概念",
-    instantProtect: "即刻保护",
-    instantProtectDesc: "十分钟内完成首个备份任务",
-    skipTour: "跳过引导",
-    neverShow: "不再显示",
-    startTour: "开始引导",
-  },
-
   // ── setup wizard ──
   setupWizard: {
     steps: {

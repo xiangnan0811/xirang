@@ -46,10 +46,6 @@ vi.mock("@/components/display-preferences-toggle", () => ({
   DisplayPreferencesToggle: () => <div data-testid="display-toggle" />,
 }));
 
-vi.mock("@/components/onboarding-tour", () => ({
-  OnboardingTour: () => null,
-}));
-
 vi.mock("@/components/scroll-to-top", () => ({
   ScrollToTop: () => null,
 }));

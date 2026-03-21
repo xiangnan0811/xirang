@@ -8,7 +8,6 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { LanguageSwitcher } from "@/components/language-switcher";
-import { OnboardingTour } from "@/components/onboarding-tour";
 import { SetupWizard } from "@/components/setup-wizard";
 import { NotificationBell } from "@/components/notification-bell";
 import { UserDropdown } from "@/components/user-dropdown";
@@ -296,7 +295,6 @@ export function AppShell() {
         onRefresh={consoleData.refresh}
       />
 
-      <OnboardingTour />
       <SetupWizard />
     </div>
   );

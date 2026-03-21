@@ -1453,42 +1453,6 @@ const en = {
     truncatedHint: "File too large. Showing first {{size}} only.",
   },
 
-  // ── onboarding tour ──
-  onboarding: {
-    steps: {
-      welcome: {
-        title: "Welcome to Xirang",
-        description: "Xirang is a server backup management platform. Let's walk through the setup.",
-      },
-      sshKey: {
-        title: "Step 1: Configure SSH Key",
-        description: "Set up an SSH key first. Nodes can reuse it later without re-entering passwords.",
-      },
-      addNode: {
-        title: "Step 2: Add a Node",
-        description: "Add at least one server node and verify connectivity via probe.",
-      },
-      createPolicy: {
-        title: "Step 3: Create a Policy",
-        description: "Define rsync source/target paths and schedule. Set up your backup rules.",
-      },
-      createTask: {
-        title: "Step 4: Create a Task",
-        description: "Bind a node to a policy, trigger manually, and verify the workflow.",
-      },
-    },
-    tourProgress: "Tour Progress",
-    jumpTo: "Jump to {{title}}",
-    step: "Step",
-    simple4Steps: "4 Simple Steps",
-    simple4StepsDesc: "Follow the guide to learn the core concepts",
-    instantProtect: "Instant Protection",
-    instantProtectDesc: "Complete your first backup in 10 minutes",
-    skipTour: "Skip Tour",
-    neverShow: "Don't show again",
-    startTour: "Start Tour",
-  },
-
   // ── setup wizard ──
   setupWizard: {
     steps: {
