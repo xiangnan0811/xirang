@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 
-# 确保备份目录存在
+# 修复 bind mount 目录权限（宿主机目录可能是 root 所有）
+chown -R xirang:xirang /data /backup 2>/dev/null || true
 mkdir -p /backup/db
+chown xirang:xirang /backup/db 2>/dev/null || true
 
 # 自动检测 TLS 证书，选择 HTTP 或 HTTPS 模式
 if [ -f /etc/nginx/certs/fullchain.pem ] && [ -f /etc/nginx/certs/privkey.pem ]; then
@@ -12,11 +14,12 @@ else
   cp /etc/xirang/nginx-http.conf.template /etc/nginx/templates/default.conf.template
 fi
 
-# 启动 supercronic（非 root cron 替代）
-supercronic /etc/supercronic/xirang-backup &
+# 以 xirang 用户启动 supercronic
+su -s /bin/sh xirang -c 'supercronic /etc/supercronic/xirang-backup' &
 CRON_PID=$!
 
-/usr/local/bin/xirang &
+# 以 xirang 用户启动后端
+su -s /bin/sh xirang -c '/usr/local/bin/xirang' &
 XIRANG_PID=$!
 
 trap 'kill -TERM $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null' TERM INT

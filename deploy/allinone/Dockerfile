@@ -68,6 +68,5 @@ ENV SQLITE_PATH=/data/xirang.db
 VOLUME ["/data", "/backup"]
 EXPOSE 8080 8443
 
-USER xirang
-
+# 不设置 USER，由 entrypoint 在修复 bind mount 权限后切换用户
 ENTRYPOINT ["/entrypoint.sh"]
