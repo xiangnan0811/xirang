@@ -172,7 +172,7 @@ export function TaskEditorDialog({
       executorType: draft.executorType,
       command: draft.executorType === "command" ? draft.command.trim() || undefined : undefined,
       rsyncSource: draft.executorType !== "command" ? draft.rsyncSource.trim() || undefined : undefined,
-      rsyncTarget: draft.executorType !== "command" ? draft.rsyncTarget.trim() || undefined : undefined,
+      rsyncTarget: draft.executorType === "rclone" ? draft.rsyncTarget.trim() || undefined : undefined,
       executorConfig,
       // 有前置任务时忽略 cronSpec（后端也会校验）
       cronSpec: dependsOnTaskId ? undefined : draft.cronSpec.trim() || undefined,
@@ -329,8 +329,8 @@ export function TaskEditorDialog({
         </div>
       )}
 
-      {(draft.executorType === "rsync" || draft.executorType === "restic" || draft.executorType === "rclone") && (
-        <div className="grid gap-3 md:grid-cols-2">
+      {(draft.executorType === "rsync" || draft.executorType === "restic") && (
+        <>
           <div>
             <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
               {draft.executorType === "rsync" ? t('taskCreate.rsyncSourcePath') : t('taskCreate.sourcePath')}
@@ -344,21 +344,49 @@ export function TaskEditorDialog({
               }
             />
           </div>
+          {isEditing && draft.rsyncTarget ? (
+            <div className="glass-panel rounded-md px-3 py-2 text-sm">
+              <span className="font-medium text-muted-foreground">{t('taskCreate.autoTargetPath')}:</span>{' '}
+              <span className="font-mono text-xs">{draft.rsyncTarget}</span>
+            </div>
+          ) : (
+            <div className="glass-panel rounded-md px-3 py-2 text-sm text-muted-foreground">
+              <span className="font-medium">{t('taskCreate.autoTargetPath')}:</span>{' '}
+              {(() => {
+                const selectedNode = nodes.find((n) => String(n.id) === draft.nodeId);
+                if (selectedNode?.backupDir) {
+                  return <span className="font-mono text-xs">/backup/{selectedNode.backupDir}/</span>;
+                }
+                return <span className="text-xs">{t('taskCreate.selectNodeFirst')}</span>;
+              })()}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">{t('taskCreate.autoTargetHint')}</p>
+        </>
+      )}
+
+      {draft.executorType === "rclone" && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
+              {t('taskCreate.sourcePath')}
+            </label>
+            <Input
+              id="task-editor-rsync-source"
+              placeholder="/data/source"
+              value={draft.rsyncSource}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, rsyncSource: event.target.value }))
+              }
+            />
+          </div>
           <div>
             <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
-              {draft.executorType === "rsync" && t('taskCreate.rsyncTargetPath')}
-              {draft.executorType === "restic" && t('taskCreate.resticRepoPath')}
-              {draft.executorType === "rclone" && t('taskCreate.rcloneRemotePath')}
+              {t('taskCreate.rcloneRemotePath')}
             </label>
             <Input
               id="task-editor-rsync-target"
-              placeholder={
-                draft.executorType === "restic"
-                  ? "/backup/restic-repo"
-                  : draft.executorType === "rclone"
-                  ? "s3:my-bucket/backups"
-                  : "/backup/target"
-              }
+              placeholder="s3:my-bucket/backups"
               value={draft.rsyncTarget}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, rsyncTarget: event.target.value }))

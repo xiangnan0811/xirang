@@ -49,6 +49,7 @@ type Node struct {
 	Tags                string     `gorm:"size:512" json:"tags"`
 	Status              string     `gorm:"size:32;not null;default:offline" json:"status"`
 	BasePath            string     `gorm:"size:255" json:"base_path"`
+	BackupDir           string     `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
 	ConnectionLatency   int        `gorm:"not null;default:0" json:"connection_latency_ms"`
 	DiskUsedGB          int        `gorm:"not null;default:0" json:"disk_used_gb"`
 	DiskTotalGB         int        `gorm:"not null;default:0" json:"disk_total_gb"`

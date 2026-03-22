@@ -107,7 +107,6 @@ export function PoliciesPage() {
     if (
       !draft.name.trim() ||
       !draft.sourcePath.trim() ||
-      !draft.targetPath.trim() ||
       !draft.cron.trim()
     ) {
       toast.error(t('policies.saveError'));
@@ -117,7 +116,7 @@ export function PoliciesPage() {
     const input: NewPolicyInput = {
       name: draft.name.trim(),
       sourcePath: draft.sourcePath.trim(),
-      targetPath: draft.targetPath.trim(),
+      targetPath: (draft.targetPath || "/backup").trim(),
       cron: draft.cron.trim(),
       criticalThreshold: Math.max(1, Number(draft.criticalThreshold || 1)),
       enabled: draft.enabled,

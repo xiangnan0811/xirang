@@ -504,6 +504,12 @@ const en = {
     maintenanceStart: "Maintenance window start",
     maintenanceEnd: "Maintenance window end",
     maintenanceHint: "Backup tasks will be skipped during the maintenance window.",
+    backupDir: "Backup Directory ID",
+    backupDirPlaceholder: "e.g., prod-app-01",
+    backupDirHint: "Used to create a dedicated backup subdirectory for this node.",
+    backupDirPreview: "Backups will be stored at /backup/{{dir}}/",
+    backupDirChangeWarning: "Changing this will not migrate existing backup data automatically.",
+    backupDirNonAsciiWarning: "Node name contains non-ASCII characters. The auto-generated backup directory ID may not be intuitive\u2014please verify or modify.",
   },
 
   // ── policies page ──
@@ -598,6 +604,8 @@ const en = {
     retryBaseSeconds: "Retry Base Interval (seconds)",
     retryPreview: "Retry delay preview:",
     bandwidthSchedule: "Bandwidth Schedule",
+    backupStorageInfo: "Each node's data will be stored under /backup/{node backup dir}/",
+    perNodePathPreview: "Per-node backup paths",
   },
 
   // ── tasks page ──
@@ -805,6 +813,9 @@ const en = {
     rcloneConcurrentTransfers: "Concurrent transfers (optional)",
     errorNodeRequired: "Save failed: please select a target node.",
     errorNameRequired: "Save failed: please enter a task name.",
+    autoTargetPath: "Backup Target Path",
+    autoTargetHint: "Backup data will be automatically stored in this node's dedicated directory",
+    selectNodeFirst: "Please select a node first",
   },
 
   // ── logs page ──

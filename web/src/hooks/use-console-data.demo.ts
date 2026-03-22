@@ -86,7 +86,7 @@ export function buildDemoPolicy(input: NewPolicyInput, policies: PolicyRecord[])
     id: nextID,
     name: input.name,
     sourcePath: input.sourcePath,
-    targetPath: input.targetPath,
+    targetPath: input.targetPath || "/backup",
     cron: input.cron,
     naturalLanguage: describeCron(input.cron),
     enabled: input.enabled,

@@ -22,6 +22,7 @@ type NodeResponse = {
   maintenance_end?: string | null;
   expiry_date?: string | null;
   archived?: boolean;
+  backup_dir?: string;
 };
 
 type NodeBatchDeleteResponse = {
@@ -80,6 +81,7 @@ function mapNode(row: NodeResponse): NodeRecord {
     maintenanceEnd: row.maintenance_end ?? undefined,
     expiryDate: row.expiry_date ?? undefined,
     archived: row.archived ?? false,
+    backupDir: row.backup_dir || '',
   };
 }
 
@@ -107,6 +109,7 @@ export function createNodesApi() {
           key_type: input.inlineKeyType,
           tags: input.tags,
           base_path: input.basePath,
+          backup_dir: input.backupDir,
           maintenance_start: input.maintenanceStart ?? undefined,
           maintenance_end: input.maintenanceEnd ?? undefined,
           expiry_date: input.expiryDate ?? undefined,
@@ -132,6 +135,7 @@ export function createNodesApi() {
           key_type: input.inlineKeyType,
           tags: input.tags,
           base_path: input.basePath,
+          backup_dir: input.backupDir,
           maintenance_start: input.maintenanceStart ?? undefined,
           maintenance_end: input.maintenanceEnd ?? undefined,
           expiry_date: input.expiryDate ?? undefined,

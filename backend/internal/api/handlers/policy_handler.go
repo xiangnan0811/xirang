@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
 
@@ -25,7 +26,7 @@ type policyRequest struct {
 	Name               string `json:"name" binding:"required"`
 	Description        string `json:"description"`
 	SourcePath         string `json:"source_path" binding:"required"`
-	TargetPath         string `json:"target_path" binding:"required"`
+	TargetPath         string `json:"target_path"`
 	CronSpec           string `json:"cron_spec" binding:"required"`
 	ExcludeRules       string `json:"exclude_rules"`
 	BwLimit            int    `json:"bwlimit"`
@@ -95,8 +96,9 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	req.SourcePath = strings.TrimSpace(req.SourcePath)
 	req.TargetPath = strings.TrimSpace(req.TargetPath)
 	req.CronSpec = strings.TrimSpace(req.CronSpec)
+	req.TargetPath = config.BackupRoot
 
-	if req.Name == "" || req.SourcePath == "" || req.TargetPath == "" || req.CronSpec == "" {
+	if req.Name == "" || req.SourcePath == "" || req.CronSpec == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
@@ -242,6 +244,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	req.SourcePath = strings.TrimSpace(req.SourcePath)
 	req.TargetPath = strings.TrimSpace(req.TargetPath)
 	req.CronSpec = strings.TrimSpace(req.CronSpec)
+	oldTargetPath := p.TargetPath
 
 	if req.Name == "" {
 		req.Name = p.Name
@@ -252,6 +255,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.TargetPath == "" {
 		req.TargetPath = p.TargetPath
 	}
+	req.TargetPath = config.BackupRoot
 	if req.CronSpec == "" {
 		req.CronSpec = p.CronSpec
 	}
@@ -387,7 +391,11 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	h.db.Preload("Nodes").First(&p, p.ID)
-	c.JSON(http.StatusOK, gin.H{"data": buildPolicyResponse(p)})
+	resp := gin.H{"data": buildPolicyResponse(p)}
+	if oldTargetPath != "" && oldTargetPath != config.BackupRoot {
+		resp["warning"] = fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath)
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *PolicyHandler) Delete(c *gin.Context) {
@@ -556,7 +564,7 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		Name:             tmpl.Name + " (副本)",
 		Description:      tmpl.Description,
 		SourcePath:       tmpl.SourcePath,
-		TargetPath:       tmpl.TargetPath,
+		TargetPath:       config.BackupRoot,
 		CronSpec:         tmpl.CronSpec,
 		ExcludeRules:     tmpl.ExcludeRules,
 		BwLimit:           tmpl.BwLimit,

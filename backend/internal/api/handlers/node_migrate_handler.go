@@ -153,7 +153,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 			}
 
 			if t.Policy != nil && t.Policy.TargetPath != "" {
-				updates["rsync_target"] = policy.NodeTargetPath(t.Policy.TargetPath, targetNode.Name)
+				updates["rsync_target"] = policy.NodeTargetPath(t.Policy.TargetPath, targetNode.BackupDir)
 			}
 
 			if req.PausePolicies {
@@ -191,7 +191,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 					allTasks[i].Name = replaceLastOccurrence(allTasks[i].Name, sourceNode.Name, targetNode.Name)
 				}
 				if allTasks[i].Policy != nil && allTasks[i].Policy.TargetPath != "" {
-					allTasks[i].RsyncTarget = policy.NodeTargetPath(allTasks[i].Policy.TargetPath, targetNode.Name)
+					allTasks[i].RsyncTarget = policy.NodeTargetPath(allTasks[i].Policy.TargetPath, targetNode.BackupDir)
 				}
 				_ = h.trigger.SyncSchedule(allTasks[i])
 			}
@@ -203,7 +203,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	if req.MigrateData {
 		migrateCtx, migrateCancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 		defer migrateCancel()
-		dataMigration = migrateLocalBackupData(migrateCtx, allTasks, targetNode.Name)
+		dataMigration = migrateLocalBackupData(migrateCtx, allTasks, targetNode.BackupDir)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -218,7 +218,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 // migrateLocalBackupData 基于任务的实际 rsync_target 路径复制本地备份数据。
 // 使用任务记录的真实路径而非从策略推导，确保准确找到备份目录。
-func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeName string) []DataMigrateItem {
+func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeBackupDir string) []DataMigrateItem {
 	var results []DataMigrateItem
 
 	// 去重：同一个源→目标只复制一次
@@ -251,7 +251,7 @@ func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeN
 		// 构造新目标路径
 		var newDir string
 		if t.Policy != nil && t.Policy.TargetPath != "" {
-			newDir = policy.NodeTargetPath(t.Policy.TargetPath, targetNodeName)
+			newDir = policy.NodeTargetPath(t.Policy.TargetPath, targetNodeBackupDir)
 		} else {
 			continue
 		}

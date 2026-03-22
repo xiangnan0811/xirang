@@ -34,12 +34,13 @@ func TestNodeExecDisabled(t *testing.T) {
 	}
 
 	node := model.Node{
-		Name:     "node-exec-empty",
-		Host:     "127.0.0.1",
-		Port:     22,
-		Username: "root",
-		AuthType: "password",
-		Password: "secret",
+		Name:      "node-exec-empty",
+		Host:      "127.0.0.1",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "password",
+		Password:  "secret",
+		BackupDir: "node-exec-empty",
 	}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
@@ -91,8 +92,8 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	nodeA := model.Node{Name: "node-a", Host: "10.0.0.11", Port: 22, Username: "root", AuthType: "password", Password: "secret"}
-	nodeB := model.Node{Name: "node-b", Host: "10.0.0.12", Port: 22, Username: "root", AuthType: "password", Password: "secret"}
+	nodeA := model.Node{Name: "node-a", Host: "10.0.0.11", Port: 22, Username: "root", AuthType: "password", Password: "secret", BackupDir: "node-a"}
+	nodeB := model.Node{Name: "node-b", Host: "10.0.0.12", Port: 22, Username: "root", AuthType: "password", Password: "secret", BackupDir: "node-b"}
 	if err := db.Create(&nodeA).Error; err != nil {
 		t.Fatalf("创建节点 A 失败: %v", err)
 	}

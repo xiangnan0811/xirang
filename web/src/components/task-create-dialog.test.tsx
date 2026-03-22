@@ -34,6 +34,7 @@ function createNode(id: number, name: string): NodeRecord {
     diskTotalGb: 100,
     diskProbeAt: "2026-03-10 10:00:00",
     connectionLatencyMs: 12,
+    backupDir: name,
   };
 }
 
@@ -95,7 +96,8 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("关联策略（可选）")).toHaveValue("1");
     expect(screen.getByLabelText("Cron（可选）")).toHaveValue("0 0 * * *");
     expect(screen.getByLabelText("Rsync 源路径（可选）")).toHaveValue("/old/source");
-    expect(screen.getByLabelText("Rsync 目标路径（可选）")).toHaveValue("/old/target");
+    // 编辑模式下 rsync 目标路径显示为只读文本（非输入框）
+    expect(screen.getByText("/old/target")).toBeInTheDocument();
 
     await user.clear(screen.getByLabelText("任务名称"));
     await user.type(screen.getByLabelText("任务名称"), "  重命名任务  ");
@@ -105,8 +107,6 @@ describe("TaskEditorDialog", () => {
     await user.type(screen.getByLabelText("Cron（可选）"), "  0 */4 * * *  ");
     await user.clear(screen.getByLabelText("Rsync 源路径（可选）"));
     await user.type(screen.getByLabelText("Rsync 源路径（可选）"), "  /new/source  ");
-    await user.clear(screen.getByLabelText("Rsync 目标路径（可选）"));
-    await user.type(screen.getByLabelText("Rsync 目标路径（可选）"), " /new/target ");
 
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
@@ -117,7 +117,7 @@ describe("TaskEditorDialog", () => {
       dependsOnTaskId: null,
       executorType: "rsync",
       rsyncSource: "/new/source",
-      rsyncTarget: "/new/target",
+      rsyncTarget: undefined,
       cronSpec: "0 */4 * * *",
     });
     expect(toast.error).not.toHaveBeenCalled();
@@ -172,6 +172,6 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("关联策略（可选）")).toHaveValue("");
     expect(screen.getByLabelText("Cron（可选）")).toHaveValue("");
     expect(screen.getByLabelText("Rsync 源路径（可选）")).toHaveValue("");
-    expect(screen.getByLabelText("Rsync 目标路径（可选）")).toHaveValue("");
+    // rsync 模式下目标路径不再是输入框，而是自动生成的只读显示
   });
 });

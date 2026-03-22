@@ -26,6 +26,7 @@ type NodeEditorDraft = {
   password: string;
   tags: string;
   basePath: string;
+  backupDir: string;
   inlineKeyName: string;
   inlineKeyType: SSHKeyType;
   inlinePrivateKey: string;
@@ -43,6 +44,7 @@ const emptyDraft: NodeEditorDraft = {
   password: "",
   tags: "",
   basePath: "/",
+  backupDir: "",
   inlineKeyName: "",
   inlineKeyType: "auto",
   inlinePrivateKey: "",
@@ -91,6 +93,7 @@ function toDraft(node: NodeRecord): NodeEditorDraft {
     password: "",
     tags: node.tags.join(","),
     basePath: node.basePath || "/",
+    backupDir: node.backupDir || "",
     inlineKeyName: "",
     inlineKeyType: "auto",
     inlinePrivateKey: "",
@@ -112,6 +115,7 @@ function buildNodeInput(draft: NodeEditorDraft): NewNodeInput {
     password: draft.authType === "password" ? draft.password : undefined,
     tags: draft.tags,
     basePath: draft.basePath || "/",
+    backupDir: draft.backupDir,
     inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
     inlineKeyType: useInlineKey ? draft.inlineKeyType : undefined,
     inlinePrivateKey: useInlineKey ? draft.inlinePrivateKey : undefined,
@@ -140,8 +144,28 @@ export function NodeEditorDialog({
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<NodeEditorDraft, NodeRecord>(open, emptyDraft, editingNode, toDraft);
   const [saving, setSaving] = useState(false);
+  const [backupDirManuallyEdited, setBackupDirManuallyEdited] = useState(false);
 
   const isEditing = Boolean(draft.id);
+
+  // 编辑已有节点时，backupDir 已存在，视为手动编辑过
+  // useDialogDraft 在 editingNode 变化时会重建 draft，此处同步重置标记
+  const editingNodeId = editingNode?.id;
+  if (editingNodeId && !backupDirManuallyEdited && draft.id === editingNodeId && draft.backupDir) {
+    setBackupDirManuallyEdited(true);
+  }
+  // 对话框关闭后重置标记
+  if (!open && backupDirManuallyEdited) {
+    setBackupDirManuallyEdited(false);
+  }
+
+  function sanitizeForBackupDir(name: string): string {
+    let s = name.toLowerCase();
+    s = s.replace(/[^a-z0-9\-_.]/g, '-');
+    s = s.replace(/-{2,}/g, '-');
+    s = s.replace(/^-+|-+$/g, '');
+    return s.length < 2 ? '' : s;
+  }
 
   const handleSave = async () => {
     setSaving(true);
@@ -185,9 +209,14 @@ export function NodeEditorDialog({
         <label htmlFor="node-edit-name" className="mb-1 block text-sm font-medium">{t('nodeEditor.nodeName')}</label>
         <Input id="node-edit-name" placeholder={t('nodeEditor.namePlaceholder')}
           value={draft.name}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, name: event.target.value }))
-          }
+          onChange={(event) => {
+            const newName = event.target.value;
+            if (!backupDirManuallyEdited) {
+              setDraft((prev) => ({ ...prev, name: newName, backupDir: sanitizeForBackupDir(newName) }));
+            } else {
+              setDraft((prev) => ({ ...prev, name: newName }));
+            }
+          }}
         />
       </div>
 
@@ -343,6 +372,39 @@ export function NodeEditorDialog({
             setDraft((prev) => ({ ...prev, basePath: event.target.value }))
           }
         />
+      </div>
+
+      <div>
+        <label htmlFor="node-edit-backup-dir" className="mb-1 block text-sm font-medium">
+          {t('nodeEditor.backupDir')}
+        </label>
+        <Input
+          id="node-edit-backup-dir"
+          placeholder={t('nodeEditor.backupDirPlaceholder')}
+          value={draft.backupDir}
+          onChange={(event) => {
+            setBackupDirManuallyEdited(true);
+            setDraft((prev) => ({ ...prev, backupDir: event.target.value }));
+          }}
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t('nodeEditor.backupDirHint')}
+        </p>
+        {draft.backupDir && (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t('nodeEditor.backupDirPreview', { dir: draft.backupDir })}
+          </p>
+        )}
+        {isEditing && draft.backupDir && (
+          <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400">
+            {t('nodeEditor.backupDirChangeWarning')}
+          </p>
+        )}
+        {!backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name) && (
+          <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400">
+            {t('nodeEditor.backupDirNonAsciiWarning')}
+          </p>
+        )}
       </div>
 
       <div>

@@ -11,14 +11,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// NodeTargetPath appends the node name as a subdirectory to the policy target path,
+// NodeTargetPath appends the node's backup directory identifier as a subdirectory to the base path,
 // ensuring backups from different nodes don't overwrite each other.
-// 防御性校验：拒绝包含路径分隔符或遍历字符的节点名。
-func NodeTargetPath(basePath string, nodeName string) string {
-	if strings.ContainsAny(nodeName, "/\\") || strings.Contains(nodeName, "..") || nodeName == "" {
+func NodeTargetPath(basePath string, backupDir string) string {
+	if strings.ContainsAny(backupDir, "/\\") || strings.Contains(backupDir, "..") || backupDir == "" {
 		return filepath.Join(strings.TrimRight(basePath, "/"), "_invalid_node_")
 	}
-	return filepath.Join(strings.TrimRight(basePath, "/"), nodeName)
+	return filepath.Join(strings.TrimRight(basePath, "/"), backupDir)
 }
 
 // TaskRunner is the interface needed by sync logic to manage cron schedules.
@@ -73,7 +72,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			// 更新现有任务
 			updates := map[string]interface{}{
 				"rsync_source": policy.SourcePath,
-				"rsync_target": NodeTargetPath(policy.TargetPath, node.Name),
+				"rsync_target": NodeTargetPath(policy.TargetPath, node.BackupDir),
 				"cron_spec":    cronSpec,
 				"name":         fmt.Sprintf("%s-%s", policy.Name, node.Name),
 			}
@@ -96,7 +95,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 				NodeID:       nid,
 				PolicyID:     &policyID,
 				RsyncSource:  policy.SourcePath,
-				RsyncTarget:  NodeTargetPath(policy.TargetPath, node.Name),
+				RsyncTarget:  NodeTargetPath(policy.TargetPath, node.BackupDir),
 				ExecutorType: "rsync",
 				CronSpec:     cronSpec,
 				Status:       "pending",

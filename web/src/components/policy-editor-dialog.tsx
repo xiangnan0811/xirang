@@ -19,7 +19,7 @@ type PolicyDraft = NewPolicyInput & {
 const emptyDraft: PolicyDraft = {
   name: "",
   sourcePath: "",
-  targetPath: "",
+  targetPath: "/backup",
   cron: "0 */2 * * *",
   criticalThreshold: 2,
   enabled: true,
@@ -145,31 +145,20 @@ export function PolicyEditorDialog({
         />
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">{t('policyEditor.sourcePath')}</label>
-          <Input id="policy-edit-source" placeholder={t('policyEditor.sourcePathPlaceholder')}
-            value={draft.sourcePath}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                sourcePath: event.target.value,
-              }))
-            }
-          />
-        </div>
-        <div>
-          <label htmlFor="policy-edit-target" className="mb-1 block text-sm font-medium">{t('policyEditor.targetPath')}</label>
-          <Input id="policy-edit-target" placeholder={t('policyEditor.targetPathPlaceholder')}
-            value={draft.targetPath}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                targetPath: event.target.value,
-              }))
-            }
-          />
-        </div>
+      <div>
+        <label htmlFor="policy-edit-source" className="mb-1 block text-sm font-medium">{t('policyEditor.sourcePath')}</label>
+        <Input id="policy-edit-source" placeholder={t('policyEditor.sourcePathPlaceholder')}
+          value={draft.sourcePath}
+          onChange={(event) =>
+            setDraft((prev) => ({
+              ...prev,
+              sourcePath: event.target.value,
+            }))
+          }
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t('policyEditor.backupStorageInfo')}
+        </p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -242,6 +231,27 @@ export function PolicyEditorDialog({
           </div>
         </div>
       ) : null}
+
+      {/* 各节点备份路径预览 */}
+      {draft.nodeIds.length > 0 && nodes.length > 0 && (
+        <div>
+          <div className="mb-1 text-sm font-medium">{t('policyEditor.perNodePathPreview')}</div>
+          <div className="glass-panel rounded-md border border-border/60 px-3 py-2 font-mono text-xs text-muted-foreground">
+            {draft.nodeIds.map((nodeId, idx) => {
+              const node = nodes.find((n) => n.id === nodeId);
+              if (!node) return null;
+              const dirName = node.backupDir || node.name;
+              const isLast = idx === draft.nodeIds.length - 1;
+              const prefix = isLast ? '\u2514' : '\u251C';
+              return (
+                <div key={nodeId}>
+                  {prefix} {node.name} → /backup/{dirName}/
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* 校验配置 */}
       <div className="grid gap-3 md:grid-cols-2">

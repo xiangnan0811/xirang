@@ -88,6 +88,7 @@ export interface NodeRecord {
   maintenanceEnd?: string;
   expiryDate?: string;
   archived?: boolean;
+  backupDir?: string;
 }
 
 export interface PolicyRecord {
@@ -114,7 +115,7 @@ export interface PolicyRecord {
 export interface NewPolicyInput {
   name: string;
   sourcePath: string;
-  targetPath: string;
+  targetPath?: string;
   cron: string;
   criticalThreshold: number;
   enabled: boolean;
@@ -322,6 +323,7 @@ export interface NewNodeInput {
   maintenanceStart?: string;
   maintenanceEnd?: string;
   expiryDate?: string;
+  backupDir?: string;
 }
 
 export interface LoginResponse {

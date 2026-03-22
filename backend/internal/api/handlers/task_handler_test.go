@@ -54,8 +54,8 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node1 := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
-	node2 := model.Node{Name: "node-b", Host: "10.0.0.2", Username: "root", AuthType: "key"}
+	node1 := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
+	node2 := model.Node{Name: "node-b", Host: "10.0.0.2", Username: "root", AuthType: "key", BackupDir: "node-b"}
 	if err := db.Create(&node1).Error; err != nil {
 		t.Fatalf("创建 node1 失败: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-recent", Host: "10.0.0.9", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-recent", Host: "10.0.0.9", Username: "root", AuthType: "key", BackupDir: "node-recent"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestTaskLogsFilterLevelLimitBeforeID(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-log", Host: "10.0.1.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-log", Host: "10.0.1.1", Username: "root", AuthType: "key", BackupDir: "node-log"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestTaskCreateSyncFailureCompensatesByDeletingTask(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -584,7 +584,7 @@ func TestTaskUpdateRejectsUnknownPolicyReference(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-a", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}

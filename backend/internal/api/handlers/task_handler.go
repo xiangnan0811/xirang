@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/task"
@@ -138,6 +139,13 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	inferTaskExecutor(&req, "")
 	trimTaskRequest(&req)
 	ensureNodeTargetPrefix(h.db, &req)
+	// Auto-generate target for rsync/restic if still empty
+	if (req.ExecutorType == "rsync" || req.ExecutorType == "restic") && strings.TrimSpace(req.RsyncTarget) == "" {
+		var node model.Node
+		if err := h.db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
+		}
+	}
 
 	if err := validateTaskRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -230,6 +238,14 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	ensureNodeTargetPrefix(h.db, &req)
+	// When node changes for rsync/restic tasks, regenerate target from new node
+	if (req.ExecutorType == "rsync" || req.ExecutorType == "restic") &&
+		req.NodeID != 0 && req.NodeID != taskEntity.NodeID {
+		var node model.Node
+		if err := h.db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
+		}
+	}
 
 	if err := validateTaskRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -458,31 +474,28 @@ func hydrateTaskDefaultsFromPolicy(db *gorm.DB, req *taskRequest) {
 	if req.PolicyID == nil {
 		return
 	}
-	var policy model.Policy
-	if err := db.First(&policy, *req.PolicyID).Error; err != nil {
+	var p model.Policy
+	if err := db.First(&p, *req.PolicyID).Error; err != nil {
 		return
 	}
 	if strings.TrimSpace(req.RsyncSource) == "" {
-		req.RsyncSource = policy.SourcePath
+		req.RsyncSource = p.SourcePath
 	}
-	if strings.TrimSpace(req.RsyncTarget) == "" {
-		req.RsyncTarget = policy.TargetPath
-		if req.NodeID != 0 {
-			var node model.Node
-			if err := db.First(&node, req.NodeID).Error; err == nil && node.Name != "" {
-				req.RsyncTarget = policyPkg.NodeTargetPath(policy.TargetPath, node.Name)
-			}
+	if strings.TrimSpace(req.RsyncTarget) == "" && req.NodeID != 0 {
+		var node model.Node
+		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 		}
 	}
 	if strings.TrimSpace(req.CronSpec) == "" {
-		req.CronSpec = policy.CronSpec
+		req.CronSpec = p.CronSpec
 	}
 }
 
 // ensureNodeTargetPrefix 确保关联策略的任务 RsyncTarget 包含节点子目录。
-// 当 RsyncTarget 与策略的 TargetPath 完全相同（即缺少节点前缀）时自动补全。
+// 当 RsyncTarget 与备份根目录完全相同（即缺少节点前缀）时自动补全。
 func ensureNodeTargetPrefix(db *gorm.DB, req *taskRequest) {
-	if req.PolicyID == nil || req.NodeID == 0 {
+	if req.NodeID == 0 {
 		return
 	}
 	if strings.TrimSpace(req.RsyncTarget) == "" {
@@ -491,14 +504,11 @@ func ensureNodeTargetPrefix(db *gorm.DB, req *taskRequest) {
 	if util.IsRemotePathSpec(req.RsyncTarget) {
 		return
 	}
-	var p model.Policy
-	if err := db.First(&p, *req.PolicyID).Error; err != nil {
-		return
-	}
-	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(p.TargetPath, "/") {
+	// If target is just the backup root without node subdirectory, append it
+	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(config.BackupRoot, "/") {
 		var node model.Node
-		if err := db.First(&node, req.NodeID).Error; err == nil && node.Name != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(p.TargetPath, node.Name)
+		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 		}
 	}
 }

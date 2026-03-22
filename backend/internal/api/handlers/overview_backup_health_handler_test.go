@@ -87,7 +87,7 @@ func TestBackupHealth_StaleNodes_NeverBackedUp(t *testing.T) {
 
 	// 从未备份的节点（last_backup_at 为 NULL）
 	nodes := []model.Node{
-		{Name: "node-never", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online"},
+		{Name: "node-never", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-never"},
 	}
 	for i := range nodes {
 		if err := db.Create(&nodes[i]).Error; err != nil {
@@ -119,8 +119,8 @@ func TestBackupHealth_StaleNodes_OlderThan48h(t *testing.T) {
 	freshTime := now.Add(-12 * time.Hour) // 12 小时前，未超过阈值
 
 	nodes := []model.Node{
-		{Name: "node-stale", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &staleTime},
-		{Name: "node-fresh", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &freshTime},
+		{Name: "node-stale", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-stale", LastBackupAt: &staleTime},
+		{Name: "node-fresh", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-fresh", LastBackupAt: &freshTime},
 	}
 	for i := range nodes {
 		if err := db.Create(&nodes[i]).Error; err != nil {
@@ -149,9 +149,9 @@ func TestBackupHealth_StaleNodes_MixedNullAndOld(t *testing.T) {
 	freshTime := now.Add(-1 * time.Hour)
 
 	nodes := []model.Node{
-		{Name: "node-null", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online"},
-		{Name: "node-old", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &staleTime},
-		{Name: "node-ok", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &freshTime},
+		{Name: "node-null", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-null"},
+		{Name: "node-old", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-old", LastBackupAt: &staleTime},
+		{Name: "node-ok", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-ok", LastBackupAt: &freshTime},
 	}
 	for i := range nodes {
 		if err := db.Create(&nodes[i]).Error; err != nil {
@@ -412,9 +412,9 @@ func TestBackupHealth_Summary_AllStatistics(t *testing.T) {
 
 	// 3 个节点：1 个正常，1 个从未备份，1 个过期
 	nodes := []model.Node{
-		{Name: "node-healthy", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &freshTime},
-		{Name: "node-never", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online"},
-		{Name: "node-stale", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &staleTime},
+		{Name: "node-healthy", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-healthy", LastBackupAt: &freshTime},
+		{Name: "node-never", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-never"},
+		{Name: "node-stale", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "node-stale", LastBackupAt: &staleTime},
 	}
 	for i := range nodes {
 		if err := db.Create(&nodes[i]).Error; err != nil {
@@ -500,10 +500,10 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 
 	// 节点：2 正常 + 1 从未备份 + 1 过期
 	nodes := []model.Node{
-		{Name: "web-1", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &freshTime},
-		{Name: "web-2", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &freshTime},
-		{Name: "db-1", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online"},
-		{Name: "db-2", Host: "10.0.0.4", Port: 22, Username: "root", AuthType: "password", Status: "online", LastBackupAt: &staleTime},
+		{Name: "web-1", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "web-1", LastBackupAt: &freshTime},
+		{Name: "web-2", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "web-2", LastBackupAt: &freshTime},
+		{Name: "db-1", Host: "10.0.0.3", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "db-1"},
+		{Name: "db-2", Host: "10.0.0.4", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "db-2", LastBackupAt: &staleTime},
 	}
 	for i := range nodes {
 		if err := db.Create(&nodes[i]).Error; err != nil {

@@ -504,6 +504,12 @@ const zh = {
     maintenanceStart: "维护窗口开始",
     maintenanceEnd: "维护窗口结束",
     maintenanceHint: "维护窗口期间节点备份任务将被跳过。",
+    backupDir: "备份目录标识",
+    backupDirPlaceholder: "例如：prod-app-01",
+    backupDirHint: "此标识用于创建该节点的专属备份子目录。",
+    backupDirPreview: "该节点的备份数据将存储到 /backup/{{dir}}/ 下",
+    backupDirChangeWarning: "修改后旧备份数据不会自动迁移，请手动处理。",
+    backupDirNonAsciiWarning: "节点名称包含非 ASCII 字符，自动生成的备份目录标识可能不够直观，请确认或修改。",
   },
 
   // ── policies page ──
@@ -598,6 +604,8 @@ const zh = {
     retryBaseSeconds: "重试基础间隔（秒）",
     retryPreview: "重试延迟预览：",
     bandwidthSchedule: "带宽调度",
+    backupStorageInfo: "每个关联节点的数据将自动存储到 /backup/{节点备份目录}/ 下",
+    perNodePathPreview: "各节点实际备份路径",
   },
 
   // ── tasks page ──
@@ -805,6 +813,9 @@ const zh = {
     rcloneConcurrentTransfers: "并发传输数（可选）",
     errorNodeRequired: "保存失败：请选择目标节点。",
     errorNameRequired: "保存失败：请输入任务名称。",
+    autoTargetPath: "备份目标路径",
+    autoTargetHint: "本地备份数据将自动存储到该节点的专属目录下",
+    selectNodeFirst: "请先选择节点",
   },
 
   // ── logs page ──

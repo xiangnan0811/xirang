@@ -48,6 +48,7 @@ type nodeRequest struct {
 	Tags             string  `json:"tags"`
 	Status           string  `json:"status"`
 	BasePath         string  `json:"base_path"`
+	BackupDir        string  `json:"backup_dir"`
 	MaintenanceStart *string `json:"maintenance_start"`
 	MaintenanceEnd   *string `json:"maintenance_end"`
 	ExpiryDate       *string `json:"expiry_date"`
@@ -61,6 +62,7 @@ type nodeBatchDeleteRequest struct {
 const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+var consecutiveDashRegexp = regexp.MustCompile(`-{2,}`)
 
 func sanitizeNode(node model.Node) model.Node {
 	copyNode := node
@@ -217,7 +219,24 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	if req.Archived != nil {
 		node.Archived = *req.Archived
 	}
+	// BackupDir: auto-generate from name if empty
+	if strings.TrimSpace(req.BackupDir) == "" {
+		req.BackupDir = sanitizeBackupDir(req.Name)
+	}
+	if strings.TrimSpace(req.BackupDir) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "节点名称无法自动生成备份目录标识，请手动指定 backup_dir（仅允许英文字母、数字、连字符、下划线）"})
+		return
+	}
+	if err := validateBackupDir(req.BackupDir); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	node.BackupDir = req.BackupDir
 	if err := h.db.Create(&node).Error; err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir)})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -258,6 +277,14 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	if req.BasePath == "" {
 		req.BasePath = node.BasePath
 	}
+	oldBackupDir := node.BackupDir
+	if strings.TrimSpace(req.BackupDir) == "" {
+		req.BackupDir = node.BackupDir
+	}
+	if err := validateBackupDir(req.BackupDir); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := validateNodeName(req.Name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -289,6 +316,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	node.Tags = req.Tags
 	node.Status = req.Status
 	node.BasePath = req.BasePath
+	node.BackupDir = req.BackupDir
 
 	switch req.AuthType {
 	case "password":
@@ -329,6 +357,10 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		node.Archived = *req.Archived
 	}
 	if err := h.db.Save(&node).Error; err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir)})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -338,7 +370,11 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": sanitizeNode(node)})
+	resp := gin.H{"data": sanitizeNode(node)}
+	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
+		resp["warning"] = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func uniqueNodeIDs(ids []uint) []uint {
@@ -758,6 +794,40 @@ func validateNodeHostPort(host string, port int) error {
 	}
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口号必须在 1-65535 之间")
+	}
+	return nil
+}
+
+// sanitizeBackupDir generates a filesystem-safe backup directory identifier from a name.
+func sanitizeBackupDir(name string) string {
+	s := strings.ToLower(name)
+	var buf strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			buf.WriteRune(r)
+		} else {
+			buf.WriteByte('-')
+		}
+	}
+	// collapse consecutive dashes
+	result := consecutiveDashRegexp.ReplaceAllString(buf.String(), "-")
+	result = strings.Trim(result, "-")
+	if len(result) < 2 {
+		return ""
+	}
+	return result
+}
+
+// validateBackupDir checks that a backup directory identifier is safe for filesystem use.
+func validateBackupDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("备份目录标识不能为空")
+	}
+	if len(dir) > 128 {
+		return fmt.Errorf("备份目录标识长度不能超过 128 个字符")
+	}
+	if strings.ContainsAny(dir, "/\\") || strings.Contains(dir, "..") || strings.ContainsRune(dir, 0) {
+		return fmt.Errorf("备份目录标识不能包含 /、\\、.. 或空字符")
 	}
 	return nil
 }
