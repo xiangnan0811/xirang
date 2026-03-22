@@ -38,11 +38,13 @@ export function PoliciesPage() {
     deletePolicy,
     togglePolicy,
     refreshPolicies,
+    refreshNodes,
   } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
     void refreshPolicies();
-  }, [refreshPolicies]);
+    void refreshNodes();
+  }, [refreshPolicies, refreshNodes]);
 
   const {
     keyword,

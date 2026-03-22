@@ -45,11 +45,13 @@ export function useNodesPageState() {
     testNodeConnection,
     triggerNodeBackup,
     refreshNodes,
+    refreshSSHKeys,
   } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
     void refreshNodes();
-  }, [refreshNodes]);
+    void refreshSSHKeys();
+  }, [refreshNodes, refreshSSHKeys]);
 
   const queryKeyword = searchParams.get("keyword") ?? "";
   const {

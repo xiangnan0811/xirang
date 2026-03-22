@@ -49,11 +49,15 @@ export function TasksPage() {
     cancelTask,
     retryTask,
     refreshTasks,
+    refreshNodes,
+    refreshPolicies,
   } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
     void refreshTasks();
-  }, [refreshTasks]);
+    void refreshNodes();
+    void refreshPolicies();
+  }, [refreshTasks, refreshNodes, refreshPolicies]);
 
   // 当有活跃任务（running/pending/retrying）时，每 5 秒自动刷新任务状态
   useEffect(() => {

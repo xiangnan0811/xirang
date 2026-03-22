@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -22,7 +22,14 @@ export function NotificationsPage() {
     retryAlertDelivery,
     retryFailedAlertDeliveries,
     fetchAlertDeliveryStats,
+    refreshIntegrations,
+    refreshTasks,
   } = useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshIntegrations();
+    void refreshTasks();
+  }, [refreshIntegrations, refreshTasks]);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightAlertId = searchParams.get("alert");

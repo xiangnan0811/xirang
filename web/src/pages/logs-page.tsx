@@ -36,8 +36,13 @@ import { LogsFullscreenDialog } from "./logs-page.fullscreen-dialog";
 export function LogsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const { tasks, nodes, fetchTaskLogs, refreshTask } =
+  const { tasks, nodes, fetchTaskLogs, refreshTask, refreshNodes, refreshTasks } =
     useOutletContext<ConsoleOutletContext>();
+
+  useEffect(() => {
+    void refreshNodes();
+    void refreshTasks();
+  }, [refreshNodes, refreshTasks]);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const initialTask = searchParams.get("task") ?? "all";

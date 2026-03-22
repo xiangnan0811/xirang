@@ -141,6 +141,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     }),
     triggerNodeBackup: vi.fn().mockResolvedValue(undefined),
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    refreshSSHKeys: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

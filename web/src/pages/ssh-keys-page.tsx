@@ -26,11 +26,13 @@ export function SSHKeysPage() {
     updateSSHKey,
     deleteSSHKey,
     refreshSSHKeys,
+    refreshNodes,
   } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
     void refreshSSHKeys();
-  }, [refreshSSHKeys]);
+    void refreshNodes();
+  }, [refreshSSHKeys, refreshNodes]);
 
   const { confirm, dialog } = useConfirm();
 

@@ -89,6 +89,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     deletePolicy: vi.fn().mockResolvedValue(undefined),
     togglePolicy: vi.fn().mockResolvedValue(undefined),
     refreshPolicies: vi.fn().mockResolvedValue(undefined),
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

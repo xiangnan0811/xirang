@@ -149,6 +149,8 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     cancelTask: vi.fn().mockResolvedValue(undefined),
     retryTask: vi.fn().mockResolvedValue(undefined),
     refreshTasks: vi.fn().mockResolvedValue(undefined),
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    refreshPolicies: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConsoleOutletContext;
 
   contextRef.current = {

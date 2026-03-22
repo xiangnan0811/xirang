@@ -110,6 +110,8 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
     ],
     fetchTaskLogs: vi.fn().mockResolvedValue([]),
     refreshTask: refreshTaskMock,
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    refreshTasks: vi.fn().mockResolvedValue(undefined),
   };
   contextRef.current = base as ConsoleOutletContext;
 }
