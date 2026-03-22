@@ -39,7 +39,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/supercronic
 
 # 创建非 root 用户
-RUN groupadd -r -g 10000 xirang && useradd -r -u 10000 -g xirang -s /sbin/nologin xirang
+RUN groupadd -r -g 10000 xirang && useradd -r -u 10000 -g xirang -d /home/xirang -m -s /sbin/nologin xirang
 
 # 配置 nginx 以非 root 运行：PID 文件和临时目录
 RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tmp/nginx.pid|g' /etc/nginx/nginx.conf && \
@@ -64,6 +64,8 @@ ENV BACKEND_UPSTREAM=http://127.0.0.1:3000
 ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
+# known_hosts 默认存放在持久化卷，容器重启不丢失
+ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 
 VOLUME ["/data", "/backup"]
 EXPOSE 8080 8443

@@ -6,6 +6,10 @@ chown -R xirang:xirang /data /backup 2>/dev/null || true
 mkdir -p /backup/db
 chown xirang:xirang /backup/db 2>/dev/null || true
 
+# 确保 known_hosts 目录存在于持久化卷中
+mkdir -p /data/.ssh
+chown xirang:xirang /data/.ssh
+
 # 自动检测 TLS 证书，选择 HTTP 或 HTTPS 模式
 if [ -f /etc/nginx/certs/fullchain.pem ] && [ -f /etc/nginx/certs/privkey.pem ]; then
   echo "==> TLS 证书已检测到，启用 HTTPS 模式"

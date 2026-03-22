@@ -132,15 +132,16 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
-	knownHostsPath, err := util.ExpandHomePath(strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")))
+	rawPath := strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts"))
+	knownHostsPath, err := util.ExpandHomePath(rawPath)
 	if err != nil {
-		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
+		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败: path=%s, err=%v", rawPath, err)
 	}
 	if strings.TrimSpace(knownHostsPath) == "" {
 		return nil, fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
 	}
 	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
-		return nil, fmt.Errorf("准备 known_hosts 失败")
+		return nil, fmt.Errorf("准备 known_hosts 失败: path=%s, err=%v", knownHostsPath, err)
 	}
 
 	callback, err := knownhosts.New(knownHostsPath)
