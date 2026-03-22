@@ -72,7 +72,7 @@ type Policy struct {
 	TargetPath       string    `gorm:"size:512;not null" json:"target_path"`
 	CronSpec         string    `gorm:"size:128;not null" json:"cron_spec"`
 	ExcludeRules     string    `gorm:"type:text" json:"exclude_rules"`
-	BwLimit          int       `gorm:"not null;default:0" json:"bwlimit"`
+	BwLimit          int       `gorm:"column:bwlimit;not null;default:0" json:"bwlimit"`
 	RetentionDays    int       `gorm:"not null;default:7" json:"retention_days"`
 	MaxConcurrent    int       `gorm:"not null;default:1" json:"max_concurrent"`
 	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
