@@ -30,7 +30,7 @@ ARG TARGETARCH
 ARG SUPERCRONIC_SHA256
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \
-    apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*; \
+    apt-get update && apt-get install -y --no-install-recommends curl rsync openssh-client && rm -rf /var/lib/apt/lists/*; \
     curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" \
          -o /usr/local/bin/supercronic; \
     if [ -n "${SUPERCRONIC_SHA256:-}" ]; then \
