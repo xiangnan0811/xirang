@@ -31,6 +31,8 @@ type TaskResponse = {
   updated_at?: string;
   source?: string;
   verify_status?: string;
+  enabled?: boolean;
+  skip_next?: boolean;
 };
 
 type TaskLogResponse = {
@@ -137,6 +139,8 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     speedMbps: 0,
     source: row.source ?? "manual",
     verifyStatus: mapVerifyStatus(row.verify_status),
+    enabled: row.enabled !== false,
+    skipNext: row.skip_next === true,
   };
 }
 
@@ -269,6 +273,28 @@ export function createTasksApi() {
         body: { task_ids: taskIds }
       });
       return { total: payload.total ?? 0, successCount: payload.success_count ?? 0 };
+    },
+
+    async pauseTask(token: string, taskId: number, cancelRunning?: boolean): Promise<void> {
+      await request(`/tasks/${taskId}/pause`, {
+        method: "POST",
+        token,
+        body: cancelRunning ? { cancel_running: true } : {}
+      });
+    },
+
+    async resumeTask(token: string, taskId: number): Promise<void> {
+      await request(`/tasks/${taskId}/resume`, {
+        method: "POST",
+        token
+      });
+    },
+
+    async skipNextTask(token: string, taskId: number): Promise<void> {
+      await request(`/tasks/${taskId}/skip-next`, {
+        method: "POST",
+        token
+      });
     }
   };
 }

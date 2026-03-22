@@ -85,6 +85,7 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
       errorCode: undefined,
       lastError: undefined,
       speedMbps: 120,
+      enabled: true,
     })),
     nodes: [
       {

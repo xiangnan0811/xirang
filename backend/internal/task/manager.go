@@ -152,7 +152,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {
 	var tasks []model.Task
-	if err := m.db.WithContext(ctx).Where("cron_spec <> ''").Find(&tasks).Error; err != nil {
+	if err := m.db.WithContext(ctx).Where("cron_spec <> '' AND enabled = ?", true).Find(&tasks).Error; err != nil {
 		return err
 	}
 	for _, one := range tasks {
@@ -165,6 +165,10 @@ func (m *Manager) LoadSchedules(ctx context.Context) error {
 
 func (m *Manager) SyncSchedule(task model.Task) error {
 	if m.scheduler == nil {
+		return nil
+	}
+	if !task.Enabled {
+		m.RemoveSchedule(task.ID)
 		return nil
 	}
 	// 持久化下次调度时间
@@ -361,6 +365,97 @@ func (m *Manager) Cancel(taskID uint) error {
 		}
 		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")
 	}
+}
+
+// Pause 暂停任务：停止调度、阻止触发，保留任务配置和历史。
+func (m *Manager) Pause(taskID uint, cancelRunning bool) error {
+	var taskEntity model.Task
+	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
+		return fmt.Errorf("任务不存在")
+	}
+	if !taskEntity.Enabled {
+		return nil // 幂等
+	}
+
+	updates := map[string]interface{}{
+		"enabled":     false,
+		"skip_next":   false,
+		"next_run_at": nil,
+	}
+	if err := m.db.Model(&taskEntity).Updates(updates).Error; err != nil {
+		return err
+	}
+	taskEntity.Enabled = false
+
+	m.RemoveSchedule(taskID)
+
+	// 如果 retrying 状态，停止重试计时器并取消
+	if ParseStatus(taskEntity.Status) == StatusRetrying {
+		m.stopRetryTimer(taskID)
+		m.retryChainContexts.Delete(taskID)
+		_ = m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
+			"last_error": "任务已暂停",
+		})
+		m.emitLog(taskID, nil, "warn", "任务已暂停，重试已取消", taskEntity.Status)
+	}
+
+	// 如果要求取消当前运行
+	if cancelRunning && ParseStatus(taskEntity.Status) == StatusRunning {
+		_ = m.Cancel(taskID)
+	}
+
+	m.emitLog(taskID, nil, "info", "任务已暂停", taskEntity.Status)
+	return nil
+}
+
+// Resume 恢复任务调度。
+func (m *Manager) Resume(taskID uint) error {
+	var taskEntity model.Task
+	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
+		return fmt.Errorf("任务不存在")
+	}
+	if taskEntity.Enabled {
+		return nil // 幂等
+	}
+
+	updates := map[string]interface{}{
+		"enabled": true,
+	}
+	if err := m.db.Model(&taskEntity).Updates(updates).Error; err != nil {
+		return err
+	}
+	taskEntity.Enabled = true
+
+	if taskEntity.CronSpec != "" {
+		if err := m.SyncSchedule(taskEntity); err != nil {
+			return err
+		}
+	}
+
+	m.emitLog(taskID, nil, "info", "任务已恢复", taskEntity.Status)
+	return nil
+}
+
+// SetSkipNext 设置跳过下次 cron 执行。
+func (m *Manager) SetSkipNext(taskID uint) error {
+	var taskEntity model.Task
+	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
+		return fmt.Errorf("任务不存在")
+	}
+	if taskEntity.CronSpec == "" {
+		return fmt.Errorf("仅定时任务支持跳过下次执行")
+	}
+	if !taskEntity.Enabled {
+		return fmt.Errorf("任务已暂停，无需跳过")
+	}
+	if taskEntity.SkipNext {
+		return nil // 幂等
+	}
+	if err := m.db.Model(&taskEntity).Update("skip_next", true).Error; err != nil {
+		return err
+	}
+	m.emitLog(taskID, nil, "info", "已设置跳过下次执行", taskEntity.Status)
+	return nil
 }
 
 func (m *Manager) StopAccepting() {

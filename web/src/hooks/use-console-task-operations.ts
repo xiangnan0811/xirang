@@ -164,6 +164,60 @@ export function useTaskOperations({
     );
   }, [alerts, setAlerts, token, triggerTask]);
 
+  const pauseTask = useCallback(async (taskID: number, cancelRunning?: boolean) => {
+    const result = await exec(i18n.t("tasks.actions.pauseTask"), async (t) => {
+      await apiClient.pauseTask(t, taskID, cancelRunning);
+      return apiClient.getTask(t, taskID).catch(() => null);
+    });
+    if (result && !result.ok) return;
+
+    const latest = result?.ok ? result.data : null;
+    markTasksMutated();
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskID
+          ? latest ?? { ...task, enabled: false, skipNext: false, nextRunAt: undefined }
+          : task
+      )
+    );
+  }, [exec, markTasksMutated, setTasks]);
+
+  const resumeTask = useCallback(async (taskID: number) => {
+    const result = await exec(i18n.t("tasks.actions.resumeTask"), async (t) => {
+      await apiClient.resumeTask(t, taskID);
+      return apiClient.getTask(t, taskID).catch(() => null);
+    });
+    if (result && !result.ok) return;
+
+    const latest = result?.ok ? result.data : null;
+    markTasksMutated();
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskID
+          ? latest ?? { ...task, enabled: true }
+          : task
+      )
+    );
+  }, [exec, markTasksMutated, setTasks]);
+
+  const skipNextTask = useCallback(async (taskID: number) => {
+    const result = await exec(i18n.t("tasks.actions.skipNextTask"), async (t) => {
+      await apiClient.skipNextTask(t, taskID);
+      return apiClient.getTask(t, taskID).catch(() => null);
+    });
+    if (result && !result.ok) return;
+
+    const latest = result?.ok ? result.data : null;
+    markTasksMutated();
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskID
+          ? latest ?? { ...task, skipNext: true }
+          : task
+      )
+    );
+  }, [exec, markTasksMutated, setTasks]);
+
   const refreshTask = useCallback(async (taskID: number) => {
     const result = await exec(i18n.t("tasks.actions.refreshTask"), (t) => apiClient.getTask(t, taskID));
     if (result?.ok) {
@@ -191,6 +245,9 @@ export function useTaskOperations({
     triggerTask,
     cancelTask,
     retryTask,
+    pauseTask,
+    resumeTask,
+    skipNextTask,
     refreshTask,
     fetchTaskLogs
   };

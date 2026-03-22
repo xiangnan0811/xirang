@@ -64,6 +64,29 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 			return 0, fmt.Errorf("当前任务状态不支持重试，请稍候再试")
 		}
 	}
+
+	// 暂停检查
+	if !taskEntity.Enabled {
+		if reason == "cron" {
+			return 0, nil
+		}
+		if reason == "chain" {
+			m.skipTask(taskEntity, chainRunID, upstreamRunID, "任务已暂停，链式执行跳过")
+			return 0, nil
+		}
+		return 0, fmt.Errorf("任务已暂停，请先恢复后再触发")
+	}
+
+	// 跳过下次检查（仅 cron 触发）
+	if reason == "cron" && taskEntity.SkipNext {
+		m.db.Model(&taskEntity).Updates(map[string]interface{}{
+			"skip_next":   false,
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
+		})
+		m.emitLog(taskID, nil, "info", "本次定时执行已跳过（用户设置跳过下次）", taskEntity.Status)
+		return 0, nil
+	}
+
 	if ParseStatus(taskEntity.Status) == StatusRunning {
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}

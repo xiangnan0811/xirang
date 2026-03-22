@@ -23,6 +23,9 @@ type TaskRunner interface {
 	SyncSchedule(task model.Task) error
 	RemoveSchedule(taskID uint)
 	Cancel(taskID uint) error
+	Pause(taskID uint, cancelRunning bool) error
+	Resume(taskID uint) error
+	SetSkipNext(taskID uint) error
 }
 
 type TaskHandler struct {
@@ -342,6 +345,49 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "canceled"})
+}
+
+// Pause 暂停任务调度。
+func (h *TaskHandler) Pause(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		CancelRunning bool `json:"cancel_running"`
+	}
+	_ = c.ShouldBindJSON(&req) // optional body
+	if err := h.runner.Pause(id, req.CancelRunning); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "paused"})
+}
+
+// Resume 恢复任务调度。
+func (h *TaskHandler) Resume(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.runner.Resume(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "resumed"})
+}
+
+// SkipNext 跳过 cron 任务的下一次执行。
+func (h *TaskHandler) SkipNext(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.runner.SetSkipNext(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "skip_next set"})
 }
 
 // Restore 触发备份恢复，将备份数据反向同步回源路径或指定的自定义路径。

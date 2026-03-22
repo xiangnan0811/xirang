@@ -75,6 +75,9 @@ export interface ConsoleDataState {
   triggerTask: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
   retryTask: (taskId: number) => Promise<void>;
+  pauseTask: (taskId: number, cancelRunning?: boolean) => Promise<void>;
+  resumeTask: (taskId: number) => Promise<void>;
+  skipNextTask: (taskId: number) => Promise<void>;
   refreshTask: (taskId: number) => Promise<void>;
   fetchTaskLogs: (taskId: number, options?: { beforeId?: number; limit?: number }) => Promise<LogEvent[]>;
   togglePolicy: (policyId: number) => Promise<void>;
@@ -350,6 +353,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     triggerTask,
     cancelTask,
     retryTask,
+    pauseTask,
+    resumeTask,
+    skipNextTask,
     refreshTask,
     fetchTaskLogs
   } = useTaskOperations({
@@ -449,6 +455,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     triggerTask,
     cancelTask,
     retryTask,
+    pauseTask,
+    resumeTask,
+    skipNextTask,
     refreshTask,
     fetchTaskLogs,
     togglePolicy,

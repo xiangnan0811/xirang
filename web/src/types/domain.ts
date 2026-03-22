@@ -156,6 +156,8 @@ export interface TaskRecord {
   speedMbps: number;
   source?: string;
   verifyStatus?: "none" | "passed" | "warning" | "failed";
+  enabled: boolean;
+  skipNext?: boolean;
 }
 
 export interface NewTaskInput {

@@ -294,7 +294,8 @@ export const mockTasks: TaskRecord[] = Array.from({ length: 18 }, (_, idx) => {
               : 0,
     startedAt: formatDate(2 + idx * 3),
     errorCode: status === "failed" ? `XR-EXEC-${900 + idx}` : undefined,
-    speedMbps: 40 + (idx * 11) % 180
+    speedMbps: 40 + (idx * 11) % 180,
+    enabled: true
   };
 });
 

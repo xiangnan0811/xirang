@@ -70,6 +70,7 @@ function createTask(): TaskRecord {
     executorType: "rsync",
     cronSpec: "0 0 * * *",
     speedMbps: 0,
+    enabled: true,
   };
 }
 

@@ -76,7 +76,8 @@ export function buildDemoTask(
     rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
     executorType: input.executorType ?? "rsync",
     cronSpec: input.cronSpec ?? policy?.cron,
-    speedMbps: 0
+    speedMbps: 0,
+    enabled: true
   };
 }
 
@@ -125,7 +126,8 @@ export function buildDemoBackupTask(
     status: "running",
     progress: 6,
     startedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-    speedMbps: 96
+    speedMbps: 96,
+    enabled: true
   };
 }
 

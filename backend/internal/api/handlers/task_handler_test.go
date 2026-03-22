@@ -48,6 +48,18 @@ func (m *mockTaskRunner) Cancel(taskID uint) error {
 	return nil
 }
 
+func (m *mockTaskRunner) Pause(taskID uint, cancelRunning bool) error {
+	return nil
+}
+
+func (m *mockTaskRunner) Resume(taskID uint) error {
+	return nil
+}
+
+func (m *mockTaskRunner) SetSkipNext(taskID uint) error {
+	return nil
+}
+
 func TestTaskListFilterPaginationSort(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.NodeOwner{}); err != nil {

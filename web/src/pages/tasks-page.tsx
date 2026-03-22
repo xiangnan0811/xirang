@@ -48,6 +48,9 @@ export function TasksPage() {
     triggerTask,
     cancelTask,
     retryTask,
+    pauseTask,
+    resumeTask,
+    skipNextTask,
     refreshTasks,
     refreshNodes,
     refreshPolicies,
@@ -106,13 +109,17 @@ export function TasksPage() {
   const [batchRetain, setBatchRetain] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
+  const [pauseConfirmTask, setPauseConfirmTask] = useState<TaskRecord | null>(null);
 
   const filteredTasks = useMemo(() => {
     const effectiveKeyword = deferredKeyword.trim().toLowerCase();
 
     return [...tasks]
       .filter((task) => {
-        if (statusFilter !== "all" && task.status !== statusFilter) {
+        if (statusFilter === "paused" && task.enabled !== false) {
+          return false;
+        }
+        if (statusFilter !== "all" && statusFilter !== "paused" && task.status !== statusFilter) {
           return false;
         }
         if (nodeFilter !== "all" && String(task.nodeId) !== nodeFilter) {
@@ -167,7 +174,11 @@ export function TasksPage() {
     let running = 0;
     let failed = 0;
     let success = 0;
+    let paused = 0;
     for (const task of tasks) {
+      if (!task.enabled) {
+        paused += 1;
+      }
       if (task.status === "pending") {
         pending += 1;
       } else if (task.status === "running" || task.status === "retrying") {
@@ -178,7 +189,7 @@ export function TasksPage() {
         success += 1;
       }
     }
-    return { pending, running, failed, success };
+    return { pending, running, failed, success, paused };
   }, [tasks]);
 
   const handleCreateTask = async (input: NewTaskInput) => {
@@ -258,6 +269,52 @@ export function TasksPage() {
     }
   };
 
+  const handlePause = async (taskId: number, cancelRunning?: boolean) => {
+    try {
+      setPendingAction({ id: taskId, action: "pause" });
+      await pauseTask(taskId, cancelRunning);
+      toast.success(t("tasks.pauseSuccess", { id: taskId }));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const handleResume = async (taskId: number) => {
+    try {
+      setPendingAction({ id: taskId, action: "resume" });
+      await resumeTask(taskId);
+      toast.success(t("tasks.resumeSuccess", { id: taskId }));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const handleSkipNext = async (taskId: number) => {
+    try {
+      setPendingAction({ id: taskId, action: "skip-next" });
+      await skipNextTask(taskId);
+      toast.success(t("tasks.skipNextSuccess", { id: taskId }));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const handlePauseWithConfirm = async (taskId: number) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    if (task.status === "running" || task.status === "retrying") {
+      setPauseConfirmTask(task);
+      return;
+    }
+    await handlePause(taskId);
+  };
+
   const handleDelete = async (taskId: number) => {
     const ok = await confirm({
       title: t("tasks.confirmAction"),
@@ -305,6 +362,12 @@ export function TasksPage() {
             value: taskStats.failed,
             description: t("tasks.statFailedDesc"),
             tone: "destructive",
+          },
+          {
+            title: t("tasks.statPaused"),
+            value: taskStats.paused,
+            description: t("tasks.statPausedDesc"),
+            tone: "primary",
           },
         ]}
       />
@@ -404,6 +467,7 @@ export function TasksPage() {
               <option value="success">{t("tasks.statusSuccess")}</option>
               <option value="canceled">{t("tasks.statusCanceled")}</option>
               <option value="warning">{t("tasks.statusWarning")}</option>
+              <option value="paused">{t("tasks.statusPaused")}</option>
             </AppSelect>
 
             <AppSelect
@@ -452,6 +516,9 @@ export function TasksPage() {
               handleCancel={handleCancel}
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
+              handlePause={handlePauseWithConfirm}
+              handleResume={handleResume}
+              handleSkipNext={handleSkipNext}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
               selectedTaskSet={selectedTaskSet}
@@ -470,6 +537,9 @@ export function TasksPage() {
               handleCancel={handleCancel}
               handleDelete={handleDelete}
               handleTrigger={handleTrigger}
+              handlePause={handlePauseWithConfirm}
+              handleResume={handleResume}
+              handleSkipNext={handleSkipNext}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
               selectedTaskSet={selectedTaskSet}
@@ -512,6 +582,9 @@ export function TasksPage() {
         authToken={authToken}
         handleCreateTask={handleCreateTask}
         handleUpdateTask={handleUpdateTask}
+        pauseConfirmTask={pauseConfirmTask}
+        setPauseConfirmTask={setPauseConfirmTask}
+        onConfirmPause={handlePause}
       />
 
       <TasksSelectionBar

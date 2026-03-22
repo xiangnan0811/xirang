@@ -1,16 +1,29 @@
 import type { TaskStatus, TaskRecord } from "@/types/domain";
 
-export function canTrigger(status: TaskStatus) {
-  return status !== "running" && status !== "retrying";
+export function canTrigger(task: TaskRecord): boolean {
+  return task.enabled !== false && task.status !== "running" && task.status !== "retrying";
 }
 
 export function canCancel(status: TaskStatus) {
   return status === "running" || status === "retrying";
 }
 
-export function normalizeStatusFilter(value: string): "all" | TaskStatus {
+export function canPause(task: TaskRecord): boolean {
+  return task.enabled === true;
+}
+
+export function canResume(task: TaskRecord): boolean {
+  return task.enabled === false;
+}
+
+export function canSkipNext(task: TaskRecord): boolean {
+  return task.enabled !== false && !!task.cronSpec && !task.skipNext;
+}
+
+export function normalizeStatusFilter(value: string): "all" | "paused" | TaskStatus {
   if (
     value === "all" ||
+    value === "paused" ||
     value === "pending" ||
     value === "running" ||
     value === "retrying" ||
@@ -24,7 +37,7 @@ export function normalizeStatusFilter(value: string): "all" | TaskStatus {
   return "all";
 }
 
-export type PendingActionType = { id: number; action: "retry" | "cancel" | "delete" | "trigger" | "edit" } | null;
+export type PendingActionType = { id: number; action: "retry" | "cancel" | "delete" | "trigger" | "edit" | "pause" | "resume" | "skip-next" } | null;
 
 export type TasksViewProps = {
   loading: boolean;
@@ -36,6 +49,9 @@ export type TasksViewProps = {
   handleCancel: (taskId: number) => Promise<void>;
   handleDelete: (taskId: number) => Promise<void>;
   handleTrigger: (taskId: number) => Promise<void>;
+  handlePause: (taskId: number, cancelRunning?: boolean) => Promise<void>;
+  handleResume: (taskId: number) => Promise<void>;
+  handleSkipNext: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
   onViewHistory: (task: TaskRecord) => void;
   selectedTaskSet: Set<number>;

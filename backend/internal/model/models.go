@@ -195,6 +195,8 @@ type Task struct {
 	Source           string     `gorm:"size:32;not null;default:manual" json:"source"`
 	VerifyStatus     string     `gorm:"size:16;not null;default:none" json:"verify_status"`
 	RetryCount       int        `gorm:"not null;default:0" json:"retry_count"`
+	Enabled          bool       `gorm:"not null;default:true" json:"enabled"`
+	SkipNext         bool       `gorm:"not null;default:false" json:"skip_next"`
 	LastError        string     `gorm:"type:text" json:"last_error"`
 	LastRunAt        *time.Time `json:"last_run_at"`
 	NextRunAt        *time.Time `json:"next_run_at"`

@@ -126,6 +126,7 @@ function createTask(id: number, status: TaskRecord["status"], progress: number):
     cronSpec: undefined,
     updatedAt: "2026-03-06 10:00:00",
     speedMbps: 120,
+    enabled: true,
   };
 }
 

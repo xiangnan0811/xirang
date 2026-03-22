@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RotateCcw, FolderSearch, GitCompareArrows } from "lucide-react";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
@@ -58,6 +59,9 @@ export interface TasksPageDialogsProps {
   authToken: string | null;
   handleCreateTask: (input: NewTaskInput) => Promise<void>;
   handleUpdateTask: (input: NewTaskInput) => Promise<void>;
+  pauseConfirmTask: TaskRecord | null;
+  setPauseConfirmTask: (task: TaskRecord | null) => void;
+  onConfirmPause: (taskId: number, cancelRunning: boolean) => Promise<void>;
 }
 
 export function TasksPageDialogs({
@@ -91,6 +95,9 @@ export function TasksPageDialogs({
   authToken,
   handleCreateTask,
   handleUpdateTask,
+  pauseConfirmTask,
+  setPauseConfirmTask,
+  onConfirmPause,
 }: TasksPageDialogsProps) {
   const { t } = useTranslation();
 
@@ -220,6 +227,32 @@ export function TasksPageDialogs({
         </>
       )}
 
+      <Dialog
+        open={!!pauseConfirmTask}
+        onOpenChange={(open) => { if (!open) setPauseConfirmTask(null); }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>{t("tasks.pauseConfirmTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("tasks.pauseConfirmDesc", { name: pauseConfirmTask?.name || pauseConfirmTask?.policyName })}
+            </DialogDescription>
+            <DialogCloseButton />
+          </DialogHeader>
+          <DialogBody>
+            <PauseConfirmBody
+              onConfirm={async (cancelRunning) => {
+                if (pauseConfirmTask) {
+                  setPauseConfirmTask(null);
+                  await onConfirmPause(pauseConfirmTask.id, cancelRunning);
+                }
+              }}
+              onCancel={() => setPauseConfirmTask(null)}
+            />
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+
       {authToken && historyTask && (
         <RestoreConfirmDialog
           open={restoreDialogOpen}
@@ -236,5 +269,32 @@ export function TasksPageDialogs({
         />
       )}
     </>
+  );
+}
+
+function PauseConfirmBody({ onConfirm, onCancel }: { onConfirm: (cancelRunning: boolean) => void; onCancel: () => void }) {
+  const { t } = useTranslation();
+  const [cancelRunning, setCancelRunning] = useState(false);
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2" role="radiogroup" aria-label={t("tasks.pauseConfirmTitle")}>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="pause-option" checked={!cancelRunning} onChange={() => setCancelRunning(false)} />
+          <span className="text-sm">{t("tasks.pauseOptionContinue")}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="pause-option" checked={cancelRunning} onChange={() => setCancelRunning(true)} />
+          <span className="text-sm">{t("tasks.pauseOptionCancel")}</span>
+        </label>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+        <Button size="sm" onClick={() => onConfirm(cancelRunning)}>
+          {t("tasks.pause")}
+        </Button>
+      </div>
+    </div>
   );
 }

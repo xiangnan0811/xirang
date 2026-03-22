@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { History, Loader2, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
+import { History, Loader2, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Square, Terminal, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
-import { canCancel, canTrigger } from "@/pages/tasks-page.utils";
+import { canCancel, canSkipNext, canTrigger } from "@/pages/tasks-page.utils";
 
 export const TasksTable = React.memo(function TasksTable({
   loading,
@@ -20,6 +20,9 @@ export const TasksTable = React.memo(function TasksTable({
   handleCancel,
   handleDelete,
   handleTrigger,
+  handlePause,
+  handleResume,
+  handleSkipNext,
   onEdit,
   onViewHistory,
   selectedTaskSet,
@@ -64,7 +67,7 @@ export const TasksTable = React.memo(function TasksTable({
               const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
               const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
               return (
-                <tr key={task.id} className={cn("border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40", selectedTaskSet.has(task.id) && "bg-primary/5")}>
+                <tr key={task.id} className={cn("border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40", selectedTaskSet.has(task.id) && "bg-primary/5", task.enabled === false && "opacity-50")}>
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"
@@ -88,6 +91,16 @@ export const TasksTable = React.memo(function TasksTable({
                           className="text-[10px]"
                         >
                           {task.verifyStatus === "passed" ? t('tasks.verifyPassed') : task.verifyStatus === "warning" ? t('tasks.verifyWarning') : t('tasks.verifyFailed')}
+                        </Badge>
+                      )}
+                      {task.enabled === false && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {t('tasks.paused')}
+                        </Badge>
+                      )}
+                      {task.skipNext && (
+                        <Badge variant="outline" className="text-[10px]">
+                          {t('tasks.skipNextBadge')}
                         </Badge>
                       )}
                     </div>
@@ -173,6 +186,41 @@ export const TasksTable = React.memo(function TasksTable({
                       >
                         <Pencil className="size-4" />
                       </Button>
+                      {task.enabled !== false ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t('tasks.pause')}
+                          disabled={isPendingAny}
+                          onClick={() => void handlePause(task.id)}
+                        >
+                          <Pause className="size-4" />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-success hover:bg-success/10"
+                          aria-label={t('tasks.resume')}
+                          disabled={isPendingAny}
+                          onClick={() => void handleResume(task.id)}
+                        >
+                          <Play className="size-4" />
+                        </Button>
+                      )}
+                      {canSkipNext(task) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t('tasks.skipNext')}
+                          disabled={isPendingAny}
+                          onClick={() => void handleSkipNext(task.id)}
+                        >
+                          <SkipForward className="size-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -196,7 +244,8 @@ export const TasksTable = React.memo(function TasksTable({
                       <Button
                         size="sm"
                         className="ml-2"
-                        disabled={!canTrigger(task.status) || !!task.dependsOnTaskId || isPendingAny}
+                        disabled={!canTrigger(task) || !!task.dependsOnTaskId || isPendingAny}
+                        title={task.enabled === false ? t('tasks.pausedTooltip') : undefined}
                         onClick={() => void handleTrigger(task.id)}
                       >
                         {isPendingTrigger ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Play className="size-4 mr-1" />}
