@@ -62,6 +62,7 @@ export interface TasksPageDialogsProps {
   pauseConfirmTask: TaskRecord | null;
   setPauseConfirmTask: (task: TaskRecord | null) => void;
   onConfirmPause: (taskId: number, cancelRunning: boolean) => Promise<void>;
+  onSkipNext: (taskId: number) => Promise<void>;
 }
 
 export function TasksPageDialogs({
@@ -98,6 +99,7 @@ export function TasksPageDialogs({
   pauseConfirmTask,
   setPauseConfirmTask,
   onConfirmPause,
+  onSkipNext,
 }: TasksPageDialogsProps) {
   const { t } = useTranslation();
 
@@ -233,22 +235,27 @@ export function TasksPageDialogs({
       >
         <DialogContent size="sm">
           <DialogHeader>
-            <DialogTitle>{t("tasks.pauseConfirmTitle")}</DialogTitle>
+            <DialogTitle>{t("tasks.pauseCronTitle")}</DialogTitle>
             <DialogDescription>
-              {t("tasks.pauseConfirmDesc", { name: pauseConfirmTask?.name || pauseConfirmTask?.policyName })}
+              {t("tasks.pauseCronDesc", { name: pauseConfirmTask?.name || pauseConfirmTask?.policyName })}
             </DialogDescription>
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody>
-            <PauseConfirmBody
-              onConfirm={async (cancelRunning) => {
-                if (pauseConfirmTask) {
+            {pauseConfirmTask && (
+              <CronPauseOptions
+                task={pauseConfirmTask}
+                onConfirmPause={async (cancelRunning) => {
                   setPauseConfirmTask(null);
                   await onConfirmPause(pauseConfirmTask.id, cancelRunning);
-                }
-              }}
-              onCancel={() => setPauseConfirmTask(null)}
-            />
+                }}
+                onSkipNext={async () => {
+                  setPauseConfirmTask(null);
+                  await onSkipNext(pauseConfirmTask.id);
+                }}
+                onCancel={() => setPauseConfirmTask(null)}
+              />
+            )}
           </DialogBody>
         </DialogContent>
       </Dialog>
@@ -272,27 +279,64 @@ export function TasksPageDialogs({
   );
 }
 
-function PauseConfirmBody({ onConfirm, onCancel }: { onConfirm: (cancelRunning: boolean) => void; onCancel: () => void }) {
+function CronPauseOptions({
+  task,
+  onConfirmPause,
+  onSkipNext,
+  onCancel,
+}: {
+  task: TaskRecord;
+  onConfirmPause: (cancelRunning: boolean) => void;
+  onSkipNext: () => void;
+  onCancel: () => void;
+}) {
   const { t } = useTranslation();
-  const [cancelRunning, setCancelRunning] = useState(false);
+  const isRunning = task.status === "running" || task.status === "retrying";
+  const [selected, setSelected] = useState<"skip-next" | "pause-all" | "pause-cancel">(
+    task.skipNext ? "pause-all" : "skip-next"
+  );
+
+  const handleConfirm = () => {
+    if (selected === "skip-next") onSkipNext();
+    else if (selected === "pause-all") onConfirmPause(false);
+    else onConfirmPause(true);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="space-y-2" role="radiogroup" aria-label={t("tasks.pauseConfirmTitle")}>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="pause-option" checked={!cancelRunning} onChange={() => setCancelRunning(false)} />
-          <span className="text-sm">{t("tasks.pauseOptionContinue")}</span>
+      <div className="space-y-3" role="radiogroup" aria-label={t("tasks.pauseCronTitle")}>
+        {!task.skipNext && (
+          <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+            <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "skip-next"} onChange={() => setSelected("skip-next")} />
+            <div>
+              <span className="text-sm font-medium">{t("tasks.pauseOptionSkipNext")}</span>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionSkipNextDesc")}</p>
+            </div>
+          </label>
+        )}
+        <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+          <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-all"} onChange={() => setSelected("pause-all")} />
+          <div>
+            <span className="text-sm font-medium">{t("tasks.pauseOptionPauseAll")}</span>
+            <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionPauseAllDesc")}</p>
+          </div>
         </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="pause-option" checked={cancelRunning} onChange={() => setCancelRunning(true)} />
-          <span className="text-sm">{t("tasks.pauseOptionCancel")}</span>
-        </label>
+        {isRunning && (
+          <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+            <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-cancel"} onChange={() => setSelected("pause-cancel")} />
+            <div>
+              <span className="text-sm font-medium">{t("tasks.pauseOptionPauseCancel")}</span>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionPauseCancelDesc")}</p>
+            </div>
+          </label>
+        )}
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="outline" size="sm" onClick={onCancel}>
           {t("common.cancel")}
         </Button>
-        <Button size="sm" onClick={() => onConfirm(cancelRunning)}>
-          {t("tasks.pause")}
+        <Button size="sm" onClick={handleConfirm}>
+          {t("common.confirm")}
         </Button>
       </div>
     </div>

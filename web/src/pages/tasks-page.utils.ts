@@ -8,18 +8,6 @@ export function canCancel(status: TaskStatus) {
   return status === "running" || status === "retrying";
 }
 
-export function canPause(task: TaskRecord): boolean {
-  return task.enabled === true;
-}
-
-export function canResume(task: TaskRecord): boolean {
-  return task.enabled === false;
-}
-
-export function canSkipNext(task: TaskRecord): boolean {
-  return task.enabled !== false && !!task.cronSpec && !task.skipNext;
-}
-
 export function normalizeStatusFilter(value: string): "all" | "paused" | TaskStatus {
   if (
     value === "all" ||
@@ -51,7 +39,6 @@ export type TasksViewProps = {
   handleTrigger: (taskId: number) => Promise<void>;
   handlePause: (taskId: number, cancelRunning?: boolean) => Promise<void>;
   handleResume: (taskId: number) => Promise<void>;
-  handleSkipNext: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
   onViewHistory: (task: TaskRecord) => void;
   selectedTaskSet: Set<number>;

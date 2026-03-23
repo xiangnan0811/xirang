@@ -307,10 +307,12 @@ export function TasksPage() {
   const handlePauseWithConfirm = async (taskId: number) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    if (task.status === "running" || task.status === "retrying") {
+    // 定时任务弹出选项对话框，让用户选择跳过下次/暂停全部
+    if (task.cronSpec) {
       setPauseConfirmTask(task);
       return;
     }
+    // 手动任务直接暂停
     await handlePause(taskId);
   };
 
@@ -522,7 +524,6 @@ export function TasksPage() {
               handleTrigger={handleTrigger}
               handlePause={handlePauseWithConfirm}
               handleResume={handleResume}
-              handleSkipNext={handleSkipNext}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
               selectedTaskSet={selectedTaskSet}
@@ -543,7 +544,6 @@ export function TasksPage() {
               handleTrigger={handleTrigger}
               handlePause={handlePauseWithConfirm}
               handleResume={handleResume}
-              handleSkipNext={handleSkipNext}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
               selectedTaskSet={selectedTaskSet}
@@ -589,6 +589,7 @@ export function TasksPage() {
         pauseConfirmTask={pauseConfirmTask}
         setPauseConfirmTask={setPauseConfirmTask}
         onConfirmPause={handlePause}
+        onSkipNext={handleSkipNext}
       />
 
       {dialog}

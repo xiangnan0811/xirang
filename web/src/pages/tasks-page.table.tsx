@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { History, Loader2, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Square, Terminal, Trash2 } from "lucide-react";
+import { History, Loader2, Pause, Pencil, Play, Plus, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
-import { canCancel, canSkipNext, canTrigger } from "@/pages/tasks-page.utils";
+import { canCancel, canTrigger } from "@/pages/tasks-page.utils";
 
 export const TasksTable = React.memo(function TasksTable({
   loading,
@@ -22,7 +22,6 @@ export const TasksTable = React.memo(function TasksTable({
   handleTrigger,
   handlePause,
   handleResume,
-  handleSkipNext,
   onEdit,
   onViewHistory,
   selectedTaskSet,
@@ -207,18 +206,6 @@ export const TasksTable = React.memo(function TasksTable({
                           onClick={() => void handleResume(task.id)}
                         >
                           <Play className="size-4" />
-                        </Button>
-                      )}
-                      {canSkipNext(task) && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={t('tasks.skipNext')}
-                          disabled={isPendingAny}
-                          onClick={() => void handleSkipNext(task.id)}
-                        >
-                          <SkipForward className="size-4" />
                         </Button>
                       )}
                       <Button
