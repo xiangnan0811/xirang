@@ -510,6 +510,8 @@ const zh = {
     backupDirPreview: "该节点的备份数据将存储到 /backup/{{dir}}/ 下",
     backupDirChangeWarning: "修改后旧备份数据不会自动迁移，请手动处理。",
     backupDirNonAsciiWarning: "节点名称包含非 ASCII 字符，自动生成的备份目录标识可能不够直观，请确认或修改。",
+    useSudo: "使用 sudo 执行",
+    useSudoHint: "以 root 权限执行备份命令（需要节点配置 NOPASSWD sudo）",
   },
 
   // ── policies page ──

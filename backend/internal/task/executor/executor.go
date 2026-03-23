@@ -182,6 +182,9 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		}
 
 		args = append(args, "-e", strings.Join(sshParts, " "))
+		if NeedsSudo(task.Node) {
+			args = append(args, "--rsync-path", "sudo rsync")
+		}
 		source = fmt.Sprintf("%s@%s:%s", user, task.Node.Host, task.RsyncSource)
 	}
 	defer cleanup()
@@ -324,8 +327,12 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
 		bwPart = fmt.Sprintf(" --bwlimit %dk", bwLimit*1000/8)
 	}
-	rsyncCmd := fmt.Sprintf("rsync -avz --info=progress2%s -- %s %s",
-		bwPart,
+	rsyncBin := "rsync"
+	if NeedsSudo(task.Node) {
+		rsyncBin = "sudo rsync"
+	}
+	rsyncCmd := fmt.Sprintf("%s -avz --info=progress2%s -- %s %s",
+		rsyncBin, bwPart,
 		ShellEscape(task.RsyncSource),
 		ShellEscape(task.RsyncTarget))
 
@@ -639,7 +646,11 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 
 	// 检查目标路径是否存在，不存在则创建
 	quoted := ShellEscape(targetPath)
-	checkCmd := fmt.Sprintf("test -d %s || mkdir -p %s", quoted, quoted)
+	sudoPrefix := ""
+	if NeedsSudo(node) {
+		sudoPrefix = "sudo "
+	}
+	checkCmd := fmt.Sprintf("%stest -d %s || %smkdir -p %s", sudoPrefix, quoted, sudoPrefix, quoted)
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH 会话失败: %w", err)

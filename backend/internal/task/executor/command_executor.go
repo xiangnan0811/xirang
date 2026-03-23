@@ -97,6 +97,11 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 		return -1, err
 	}
 
+	// sudo 包裹（用户命令可能含管道/&&，需要 sh -c 包裹）
+	if NeedsSudo(task.Node) {
+		command = WrapWithSudoShell(command)
+	}
+
 	// 启动命令
 	logf("info", fmt.Sprintf("执行命令: %s", command))
 	if err := session.Start(command); err != nil {

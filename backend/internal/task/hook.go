@@ -10,6 +10,9 @@ import (
 
 // runSSHHook 通过 SSH 在节点上执行钩子命令。
 func (m *Manager) runSSHHook(ctx context.Context, task model.Task, command string) error {
+	if executor.NeedsSudo(task.Node) {
+		command = executor.WrapWithSudoShell(command)
+	}
 	client, err := executor.DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)

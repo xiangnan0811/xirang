@@ -510,6 +510,8 @@ const en = {
     backupDirPreview: "Backups will be stored at /backup/{{dir}}/",
     backupDirChangeWarning: "Changing this will not migrate existing backup data automatically.",
     backupDirNonAsciiWarning: "Node name contains non-ASCII characters. The auto-generated backup directory ID may not be intuitive\u2014please verify or modify.",
+    useSudo: "Use sudo for execution",
+    useSudoHint: "Run backup commands with root privileges (requires NOPASSWD sudo on node)",
   },
 
   // ── policies page ──

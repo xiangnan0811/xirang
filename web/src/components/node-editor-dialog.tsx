@@ -27,6 +27,7 @@ type NodeEditorDraft = {
   tags: string;
   basePath: string;
   backupDir: string;
+  useSudo: boolean;
   inlineKeyName: string;
   inlineKeyType: SSHKeyType;
   inlinePrivateKey: string;
@@ -45,6 +46,7 @@ const emptyDraft: NodeEditorDraft = {
   tags: "",
   basePath: "/",
   backupDir: "",
+  useSudo: false,
   inlineKeyName: "",
   inlineKeyType: "auto",
   inlinePrivateKey: "",
@@ -94,6 +96,7 @@ function toDraft(node: NodeRecord): NodeEditorDraft {
     tags: node.tags.join(","),
     basePath: node.basePath || "/",
     backupDir: node.backupDir || "",
+    useSudo: node.useSudo ?? false,
     inlineKeyName: "",
     inlineKeyType: "auto",
     inlinePrivateKey: "",
@@ -116,6 +119,7 @@ function buildNodeInput(draft: NodeEditorDraft): NewNodeInput {
     tags: draft.tags,
     basePath: draft.basePath || "/",
     backupDir: draft.backupDir,
+    useSudo: draft.useSudo,
     inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
     inlineKeyType: useInlineKey ? draft.inlineKeyType : undefined,
     inlinePrivateKey: useInlineKey ? draft.inlinePrivateKey : undefined,
@@ -249,11 +253,27 @@ export function NodeEditorDialog({
         <label htmlFor="node-edit-username" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshUsername')}</label>
         <Input id="node-edit-username" placeholder="root"
           value={draft.username}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, username: event.target.value }))
-          }
+          onChange={(event) => {
+            const newUsername = event.target.value;
+            const isRoot = newUsername.trim() === "" || newUsername.trim() === "root";
+            setDraft((prev) => ({ ...prev, username: newUsername, useSudo: isRoot ? false : prev.useSudo }));
+          }}
         />
       </div>
+
+      {draft.username.trim() !== "" && draft.username.trim() !== "root" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.useSudo}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, useSudo: event.target.checked }))
+            }
+          />
+          <span>{t('nodeEditor.useSudo')}</span>
+          <span className="text-xs text-muted-foreground">{t('nodeEditor.useSudoHint')}</span>
+        </label>
+      )}
 
       <div>
         <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">{t('nodeEditor.authMethod')}</label>

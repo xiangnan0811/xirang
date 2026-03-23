@@ -68,7 +68,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		return -1, fmt.Errorf("目标节点未安装 rclone，请先在节点上安装")
 	}
 
-	syncCmd := buildRcloneSyncCmd(bin, source, remote, cfg, false)
+	syncCmd := buildRcloneSyncCmd(bin, source, remote, cfg, false, NeedsSudo(task.Node))
 	logf("info", fmt.Sprintf("开始 rclone 同步: %s → %s", source, remote))
 
 	exitCode, runErr := e.streamSSHCommand(ctx, client, syncCmd, logf, progressf)
@@ -104,7 +104,7 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	defer client.Close()
 
 	bin := e.rcloneBinary()
-	syncCmd := buildRcloneSyncCmd(bin, remote, targetPath, cfg, true)
+	syncCmd := buildRcloneSyncCmd(bin, remote, targetPath, cfg, true, NeedsSudo(task.Node))
 	logf("info", fmt.Sprintf("开始 rclone 恢复: %s → %s", remote, targetPath))
 
 	exitCode, runErr := e.streamSSHCommand(ctx, client, syncCmd, logf, progressf)
@@ -199,8 +199,12 @@ func parseRcloneProgressLine(line string) (ProgressSample, bool) {
 	}, true
 }
 
-func buildRcloneSyncCmd(bin, source, dest string, cfg RcloneConfig, isRestore bool) string {
-	args := []string{bin, "sync", ShellEscape(source), ShellEscape(dest),
+func buildRcloneSyncCmd(bin, source, dest string, cfg RcloneConfig, isRestore bool, useSudo bool) string {
+	prefix := bin
+	if useSudo {
+		prefix = "sudo " + bin
+	}
+	args := []string{prefix, "sync", ShellEscape(source), ShellEscape(dest),
 		"--stats", "1s", "--stats-one-line", "-v"}
 	if cfg.BandwidthLimit != "" {
 		args = append(args, "--bwlimit", ShellEscape(cfg.BandwidthLimit))

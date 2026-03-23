@@ -89,6 +89,7 @@ export interface NodeRecord {
   expiryDate?: string;
   archived?: boolean;
   backupDir?: string;
+  useSudo?: boolean;
 }
 
 export interface PolicyRecord {
@@ -326,6 +327,7 @@ export interface NewNodeInput {
   maintenanceEnd?: string;
   expiryDate?: string;
   backupDir?: string;
+  useSudo?: boolean;
 }
 
 export interface LoginResponse {

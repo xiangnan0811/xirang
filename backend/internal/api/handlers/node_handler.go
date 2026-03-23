@@ -53,6 +53,7 @@ type nodeRequest struct {
 	MaintenanceEnd   *string `json:"maintenance_end"`
 	ExpiryDate       *string `json:"expiry_date"`
 	Archived         *bool   `json:"archived"`
+	UseSudo          *bool   `json:"use_sudo"`
 }
 
 type nodeBatchDeleteRequest struct {
@@ -219,6 +220,9 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	if req.Archived != nil {
 		node.Archived = *req.Archived
 	}
+	if req.UseSudo != nil {
+		node.UseSudo = *req.UseSudo
+	}
 	// BackupDir: auto-generate from name if empty
 	if strings.TrimSpace(req.BackupDir) == "" {
 		req.BackupDir = sanitizeBackupDir(req.Name)
@@ -355,6 +359,9 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 	if req.Archived != nil {
 		node.Archived = *req.Archived
+	}
+	if req.UseSudo != nil {
+		node.UseSudo = *req.UseSudo
 	}
 	if err := h.db.Save(&node).Error; err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {

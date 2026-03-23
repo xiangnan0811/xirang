@@ -50,6 +50,7 @@ type Node struct {
 	Status              string     `gorm:"size:32;not null;default:offline" json:"status"`
 	BasePath            string     `gorm:"size:255" json:"base_path"`
 	BackupDir           string     `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
+	UseSudo             bool       `gorm:"not null;default:false" json:"use_sudo"`
 	ConnectionLatency   int        `gorm:"not null;default:0" json:"connection_latency_ms"`
 	DiskUsedGB          int        `gorm:"not null;default:0" json:"disk_used_gb"`
 	DiskTotalGB         int        `gorm:"not null;default:0" json:"disk_total_gb"`
