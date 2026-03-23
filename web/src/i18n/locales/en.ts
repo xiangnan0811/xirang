@@ -569,6 +569,9 @@ const en = {
     selectedCount: "{{count}} policies selected",
     batchEnable: "Batch Enable",
     batchDisable: "Batch Disable",
+    batchEnableCount: "Batch Enable ({{count}})",
+    batchDisableCount: "Batch Disable ({{count}})",
+    clearSelection: "Clear Selection",
   },
 
   // ── policy editor dialog ──

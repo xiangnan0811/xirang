@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CheckSquare, Copy, Plus, Trash2, Wrench } from "lucide-react";
+import { Copy, Plus, Trash2, Wrench } from "lucide-react";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import {
@@ -187,6 +187,19 @@ export function PoliciesPage() {
                 <Plus className="mr-1 size-3.5" />
                 {t('policies.addPolicy')}
               </Button>
+              {selectedPolicyIds.length > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
+                    {t('policies.batchEnableCount', { count: selectedPolicyIds.length })}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
+                    {t('policies.batchDisableCount', { count: selectedPolicyIds.length })}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
+                    {t('policies.clearSelection')}
+                  </Button>
+                </>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="success">{t('policies.enabledCount', { count: activeCount })}</Badge>
@@ -225,9 +238,18 @@ export function PoliciesPage() {
                 className="interactive-surface p-4 flex flex-col"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="font-medium">{policy.name}</h3>
-                    <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary rounded-sm"
+                      checked={selectedPolicyIds.includes(policy.id)}
+                      onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
+                      aria-label={t('policies.selectAriaLabel', { name: policy.name })}
+                    />
+                    <div>
+                      <h3 className="font-medium">{policy.name}</h3>
+                      <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
@@ -435,28 +457,6 @@ export function PoliciesPage() {
           </div>
         </CardContent>
       </Card>
-
-      {selectedPolicyIds.length > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur-sm">
-          <div className="mx-auto flex max-w-5xl items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              <CheckSquare className="mr-1 inline size-4" />
-              {t('policies.selectedCount', { count: selectedPolicyIds.length })}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
-                {t('policies.batchEnable')}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
-                {t('policies.batchDisable')}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
-                {t('common.cancel')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <PolicyEditorDialog
         open={editorOpen}

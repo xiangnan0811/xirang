@@ -569,6 +569,9 @@ const zh = {
     selectedCount: "已选 {{count}} 个策略",
     batchEnable: "批量启用",
     batchDisable: "批量停用",
+    batchEnableCount: "批量启用 ({{count}})",
+    batchDisableCount: "批量停用 ({{count}})",
+    clearSelection: "取消选择",
   },
 
   // ── policy editor dialog ──

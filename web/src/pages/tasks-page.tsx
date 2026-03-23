@@ -24,7 +24,6 @@ import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
 import { normalizeStatusFilter } from "@/pages/tasks-page.utils";
 import { TasksPageDialogs } from "@/pages/tasks-page.dialogs";
-import { TasksSelectionBar } from "@/pages/tasks-page.selection-bar";
 
 const keywordStorageKey = "xirang.tasks.keyword";
 const statusStorageKey = "xirang.tasks.status";
@@ -430,6 +429,11 @@ export function TasksPage() {
                   ? t("tasks.triggerCount", { count: selectedTaskIds.length })
                   : t("tasks.batchTrigger")}
               </Button>
+              {selectedTaskIds.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setSelectedTaskIds([])}>
+                  {t("tasks.clearSelection")}
+                </Button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <ViewModeToggle
@@ -585,18 +589,6 @@ export function TasksPage() {
         pauseConfirmTask={pauseConfirmTask}
         setPauseConfirmTask={setPauseConfirmTask}
         onConfirmPause={handlePause}
-      />
-
-      <TasksSelectionBar
-        selectedTaskIds={selectedTaskIds}
-        setSelectedTaskIds={setSelectedTaskIds}
-        selectedTaskSet={selectedTaskSet}
-        tasks={tasks}
-        authToken={authToken}
-        confirm={confirm}
-        setBatchDefaultNodeIds={setBatchDefaultNodeIds}
-        setBatchDialogOpen={setBatchDialogOpen}
-        refreshTasks={refreshTasks}
       />
 
       {dialog}
