@@ -100,7 +100,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
 	storageGuideHandler := handlers.NewStorageGuideHandler()
-	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager)
+	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
 	v1 := router.Group("/api/v1")

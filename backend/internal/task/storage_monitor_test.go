@@ -2,6 +2,9 @@ package task
 
 import (
 	"os"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 
 	"xirang/backend/internal/model"
@@ -61,11 +64,17 @@ func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 		t.Fatalf("创建策略失败: %v", err)
 	}
 
-	// minFreeGB=0 不启用空闲检查；maxUsagePct=1 表示使用率超过 1% 即触发
-	// 真实文件系统使用率必然 >1%，所以一定会触发告警
-	os.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(tmpDir, &stat); err != nil {
+		t.Fatalf("获取测试目录磁盘信息失败: %v", err)
+	}
+	freeGB := float64(stat.Bavail*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
+	triggerThreshold := int(freeGB) + 1
+
+	// 通过提升最小剩余空间阈值来稳定触发告警，避免依赖宿主机实际使用率。
+	os.Setenv("BACKUP_STORAGE_MIN_FREE_GB", strconv.Itoa(triggerThreshold))
 	defer os.Unsetenv("BACKUP_STORAGE_MIN_FREE_GB")
-	os.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "1")
+	os.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
 	defer os.Unsetenv("BACKUP_STORAGE_MAX_USAGE_PCT")
 	os.Setenv("ALERT_DEDUP_WINDOW", "0")
 	defer os.Unsetenv("ALERT_DEDUP_WINDOW")
@@ -77,7 +86,7 @@ func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 	if len(alerts) != 1 {
 		t.Fatalf("期望产生 1 条告警，实际: %d", len(alerts))
 	}
-	if alerts[0].ErrorCode != "XR-STORAGE-LOW" {
+	if !strings.HasPrefix(alerts[0].ErrorCode, "XR-STORAGE-LOW:") {
 		t.Fatalf("告警错误码期望 XR-STORAGE-LOW，实际: %s", alerts[0].ErrorCode)
 	}
 }

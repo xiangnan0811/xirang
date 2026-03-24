@@ -152,11 +152,11 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		if callbackErr := callback(hostname, remote, key); callbackErr != nil {
 			var keyErr *knownhosts.KeyError
 			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
-				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 				if !autoAccept {
 					return fmt.Errorf("未知主机密钥被拒绝(host=%s)，如需自动接受请设置 SSH_AUTO_ACCEPT_NEW_HOSTS=true", hostname)
 				}
-				log.Printf("info: 自动接受未知主机密钥(host=%s)，可通过 SSH_AUTO_ACCEPT_NEW_HOSTS=false 禁用", hostname)
+				log.Printf("info: 自动接受未知主机密钥(host=%s)，仅建议在受控环境下临时启用 SSH_AUTO_ACCEPT_NEW_HOSTS=true", hostname)
 				if appendErr := AppendKnownHost(knownHostsPath, hostname, key); appendErr != nil {
 					return fmt.Errorf("knownhosts: accept new host failed: %w", appendErr)
 				}

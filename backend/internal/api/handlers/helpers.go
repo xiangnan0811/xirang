@@ -31,27 +31,62 @@ func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
 	return ids, true, nil
 }
 
-// checkOwnershipByNodeID 检查 operator 是否拥有指定节点。
-func checkOwnershipByNodeID(c *gin.Context, db *gorm.DB, nodeID uint) bool {
+func authorizeNodeOwnership(c *gin.Context, db *gorm.DB, nodeID uint) (bool, error) {
 	role := middleware.CurrentRole(c)
-	if role == "admin" || role == "viewer" {
-		return true
+	// 兼容未挂认证中间件的单元测试/内部直接调用场景；生产路由会先注入角色。
+	if role == "" {
+		return true, nil
 	}
+	if role == "admin" || role == "viewer" {
+		return true, nil
+	}
+	if role != "operator" {
+		return false, nil
+	}
+
 	userID := middleware.CurrentUserID(c)
 	var count int64
-	db.Table("node_owners").Where("node_id = ? AND user_id = ?", nodeID, userID).Count(&count)
-	return count > 0
+	if err := db.Table("node_owners").Where("node_id = ? AND user_id = ?", nodeID, userID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
-// checkOwnershipByPolicyNodes 检查 operator 是否拥有策略关联的任意节点（union 规则）。
-// 策略已通过 Preload("Nodes") 加载节点列表。
-func checkOwnershipByPolicyNodes(c *gin.Context, db *gorm.DB, p model.Policy) bool {
+func authorizeNodeOwnershipSet(c *gin.Context, db *gorm.DB, nodeIDs []uint) (map[uint]struct{}, error) {
 	role := middleware.CurrentRole(c)
-	if role == "admin" || role == "viewer" {
-		return true
+	if role == "" || role == "admin" || role == "viewer" {
+		allowed := make(map[uint]struct{}, len(nodeIDs))
+		for _, nodeID := range nodeIDs {
+			allowed[nodeID] = struct{}{}
+		}
+		return allowed, nil
+	}
+	if role != "operator" {
+		return map[uint]struct{}{}, nil
+	}
+
+	userID := middleware.CurrentUserID(c)
+	var owned []uint
+	if err := db.Table("node_owners").Where("user_id = ? AND node_id IN ?", userID, nodeIDs).Pluck("node_id", &owned).Error; err != nil {
+		return nil, err
+	}
+
+	allowed := make(map[uint]struct{}, len(owned))
+	for _, nodeID := range owned {
+		allowed[nodeID] = struct{}{}
+	}
+	return allowed, nil
+}
+
+// authorizePolicyOwnership 检查 operator 是否拥有策略关联的任意节点（union 规则）。
+// 策略已通过 Preload("Nodes") 加载节点列表。
+func authorizePolicyOwnership(c *gin.Context, db *gorm.DB, p model.Policy) (bool, error) {
+	role := middleware.CurrentRole(c)
+	if role == "" || role == "admin" || role == "viewer" {
+		return true, nil
 	}
 	if len(p.Nodes) == 0 {
-		return false
+		return false, nil
 	}
 	userID := middleware.CurrentUserID(c)
 	nodeIDs := make([]uint, len(p.Nodes))
@@ -59,15 +94,17 @@ func checkOwnershipByPolicyNodes(c *gin.Context, db *gorm.DB, p model.Policy) bo
 		nodeIDs[i] = n.ID
 	}
 	var count int64
-	db.Table("node_owners").Where("user_id = ? AND node_id IN ?", userID, nodeIDs).Count(&count)
-	return count > 0
+	if err := db.Table("node_owners").Where("user_id = ? AND node_id IN ?", userID, nodeIDs).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // paginationParams 统一分页参数。
 type paginationParams struct {
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
-	SortBy   string `json:"sort_by"`
+	Page      int    `json:"page"`
+	PageSize  int    `json:"page_size"`
+	SortBy    string `json:"sort_by"`
 	SortOrder string `json:"sort_order"`
 }
 

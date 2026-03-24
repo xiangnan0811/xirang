@@ -124,6 +124,8 @@ SQLITE_PATH=/data/xirang.db
 ```
 
 > 如使用 PostgreSQL，将 `DB_TYPE` 改为 `postgres` 并设置 `DB_DSN`。
+>
+> 升级注意：`SSH_AUTO_ACCEPT_NEW_HOSTS` 默认值已收紧为 `false`。如果历史部署依赖首次连接自动接受主机指纹，升级前请在环境变量中显式声明该值并确认风险。
 
 #### 2. 准备 HTTPS 证书
 

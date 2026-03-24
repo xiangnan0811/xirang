@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -417,6 +418,57 @@ func TestTaskCreateRejectsUnknownNodeReference(t *testing.T) {
 	}
 }
 
+func TestTaskCreateRejectsUnownedNodeForOperator(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	operator := model.User{Username: "operator", Role: "operator", PasswordHash: "hashed"}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	ownedNode := model.Node{Name: "node-owned", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-owned"}
+	unownedNode := model.Node{Name: "node-unowned", Host: "10.0.0.2", Username: "root", AuthType: "key", BackupDir: "node-unowned"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建 owned 节点失败: %v", err)
+	}
+	if err := db.Create(&unownedNode).Error; err != nil {
+		t.Fatalf("创建 unowned 节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, operator.ID)
+		c.Next()
+	})
+	r.POST("/tasks", handler.Create)
+
+	body := fmt.Sprintf(`{"name":"task-unowned","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, unownedNode.ID)
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("operator 创建未授权节点任务期望状态码 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var count int64
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("未授权节点不应创建任务，实际数量: %d", count)
+	}
+}
+
 func TestTaskCreateReturnsInternalErrorWhenTaskRefValidationQueryFails(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	// 不执行 AutoMigrate，触发引用校验查询失败，验证返回 500 而非 400。
@@ -641,6 +693,70 @@ func TestTaskUpdateRejectsUnknownPolicyReference(t *testing.T) {
 	}
 	if updated.PolicyID != nil {
 		t.Fatalf("非法策略引用不应写入任务，实际 policy_id=%v", *updated.PolicyID)
+	}
+}
+
+func TestTaskUpdateRejectsMovingTaskToUnownedNodeForOperator(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	operator := model.User{Username: "operator", Role: "operator", PasswordHash: "hashed"}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	ownedNode := model.Node{Name: "node-owned", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-owned"}
+	unownedNode := model.Node{Name: "node-unowned", Host: "10.0.0.2", Username: "root", AuthType: "key", BackupDir: "node-unowned"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建 owned 节点失败: %v", err)
+	}
+	if err := db.Create(&unownedNode).Error; err != nil {
+		t.Fatalf("创建 unowned 节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	taskEntity := model.Task{
+		Name:         "task-owned",
+		NodeID:       ownedNode.ID,
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+		ExecutorType: "rsync",
+		CronSpec:     "*/5 * * * *",
+		Status:       "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, &mockTaskRunner{})
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, operator.ID)
+		c.Next()
+	})
+	r.PUT("/tasks/:id", middleware.OwnershipTaskCheck(db), handler.Update)
+
+	body := fmt.Sprintf(`{"name":"task-owned","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, unownedNode.ID)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("operator 迁移任务到未授权节点期望状态码 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
+		t.Fatalf("查询任务失败: %v", err)
+	}
+	if updated.NodeID != ownedNode.ID {
+		t.Fatalf("未授权迁移不应改写 node_id，实际: %d", updated.NodeID)
 	}
 }
 

@@ -162,6 +162,13 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		}
 		return
 	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+		return
+	}
 
 	taskEntity := model.Task{
 		Name:            req.Name,
@@ -260,6 +267,13 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		} else {
 			respondInternalError(c, err)
 		}
+		return
+	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
 		return
 	}
 
@@ -577,13 +591,17 @@ func isTaskRefValidationError(err error) bool {
 }
 
 func (h *TaskHandler) validateTaskRefs(req taskRequest) error {
-	return h.validateTaskRefsWithID(req, 0)
+	return validateTaskRefsWithDB(h.db, req, 0)
 }
 
 func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error {
+	return validateTaskRefsWithDB(h.db, req, selfID)
+}
+
+func validateTaskRefsWithDB(db *gorm.DB, req taskRequest, selfID uint) error {
 	if req.NodeID != 0 {
 		var count int64
-		if err := h.db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
+		if err := db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
 			return fmt.Errorf("校验节点失败: %w", err)
 		}
 		if count == 0 {
@@ -592,7 +610,7 @@ func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error
 	}
 	if req.PolicyID != nil {
 		var count int64
-		if err := h.db.Model(&model.Policy{}).Where("id = ?", *req.PolicyID).Count(&count).Error; err != nil {
+		if err := db.Model(&model.Policy{}).Where("id = ?", *req.PolicyID).Count(&count).Error; err != nil {
 			return fmt.Errorf("校验策略失败: %w", err)
 		}
 		if count == 0 {
@@ -610,7 +628,7 @@ func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error
 		}
 		// 检查前置任务是否存在
 		var count int64
-		if err := h.db.Model(&model.Task{}).Where("id = ?", *req.DependsOnTaskID).Count(&count).Error; err != nil {
+		if err := db.Model(&model.Task{}).Where("id = ?", *req.DependsOnTaskID).Count(&count).Error; err != nil {
 			return fmt.Errorf("校验前置任务失败: %w", err)
 		}
 		if count == 0 {
@@ -618,7 +636,7 @@ func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error
 		}
 		// 环路检测：从前置任务向上追溯，深度不超过 10
 		if selfID != 0 {
-			if err := h.detectDependencyCycle(selfID, *req.DependsOnTaskID, 10); err != nil {
+			if err := detectDependencyCycle(db, selfID, *req.DependsOnTaskID, 10); err != nil {
 				return err
 			}
 		}
@@ -628,11 +646,11 @@ func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error
 
 // detectDependencyCycle 从 startID 开始沿 depends_on_task_id 链向上追溯，
 // 若遍历到 selfID 则说明形成环路，maxDepth 为最大追溯深度。
-func (h *TaskHandler) detectDependencyCycle(selfID, startID uint, maxDepth int) error {
+func detectDependencyCycle(db *gorm.DB, selfID, startID uint, maxDepth int) error {
 	current := startID
 	for i := 0; i < maxDepth; i++ {
 		var t model.Task
-		if err := h.db.Select("id", "depends_on_task_id").First(&t, current).Error; err != nil {
+		if err := db.Select("id", "depends_on_task_id").First(&t, current).Error; err != nil {
 			return nil // 任务不存在，无法继续追溯
 		}
 		if t.DependsOnTaskID == nil {

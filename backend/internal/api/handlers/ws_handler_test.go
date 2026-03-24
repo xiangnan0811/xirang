@@ -19,7 +19,7 @@ func createWSHandlerTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 }
 
 func TestWSHandlerServeWSNilHub(t *testing.T) {
-	handler := NewWSHandler(nil, nil)
+	handler := NewWSHandler(nil, nil, nil)
 	ctx, recorder := createWSHandlerTestContext()
 
 	handler.ServeWS(ctx)
@@ -30,7 +30,7 @@ func TestWSHandlerServeWSNilHub(t *testing.T) {
 }
 
 func TestWSHandlerServeWSNilJWTManager(t *testing.T) {
-	handler := NewWSHandler(&ws.Hub{}, nil)
+	handler := NewWSHandler(&ws.Hub{}, nil, nil)
 	ctx, recorder := createWSHandlerTestContext()
 
 	handler.ServeWS(ctx)

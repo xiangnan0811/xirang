@@ -29,6 +29,7 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 
 func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 	knownHostsPath := filepath.Join(t.TempDir(), "ssh", "known_hosts")
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
 
@@ -60,6 +61,24 @@ func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *tes
 
 	if err := callback(hostname, remote, changedKey); err == nil {
 		t.Fatalf("主机密钥变化时应继续拒绝连接")
+	}
+}
+
+func TestResolveSSHHostKeyCallbackRejectsUnknownKeyByDefault(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "")
+	knownHostsPath := filepath.Join(t.TempDir(), "ssh", "known_hosts")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+
+	callback, err := ResolveSSHHostKeyCallback()
+	if err != nil {
+		t.Fatalf("初始化 SSH host key callback 失败: %v", err)
+	}
+
+	hostname := "example.com:22"
+	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
+	if err := callback(hostname, remote, newTestPublicKey(t)); err == nil {
+		t.Fatalf("默认未知主机密钥应被拒绝")
 	}
 }
 

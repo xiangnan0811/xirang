@@ -10,19 +10,23 @@ import (
 	"strings"
 
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
+type BatchTaskRunner interface {
+	TriggerManual(taskID uint) (uint, error)
+	RemoveSchedule(taskID uint)
+}
+
 // BatchHandler 处理批量命令执行相关请求。
 type BatchHandler struct {
 	db      *gorm.DB
-	manager *task.Manager
+	manager BatchTaskRunner
 }
 
-func NewBatchHandler(db *gorm.DB, manager *task.Manager) *BatchHandler {
+func NewBatchHandler(db *gorm.DB, manager BatchTaskRunner) *BatchHandler {
 	return &BatchHandler{db: db, manager: manager}
 }
 
@@ -62,18 +66,34 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		name = fmt.Sprintf("批量命令 %s", batchID)
 	}
 
-	var taskIDs []uint
+	type batchNode struct {
+		ID   uint
+		Name string
+	}
+	nodes := make([]batchNode, 0, len(req.NodeIDs))
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, req.NodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	for _, nodeID := range req.NodeIDs {
-		// 校验节点是否存在
 		var node model.Node
 		if err := h.db.First(&node, nodeID).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("节点 %d 不存在", nodeID)})
 			return
 		}
+		if _, ok := allowedNodes[nodeID]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			return
+		}
+		nodes = append(nodes, batchNode{ID: node.ID, Name: node.Name})
+	}
 
+	var taskIDs []uint
+	for _, node := range nodes {
 		t := model.Task{
 			Name:         fmt.Sprintf("%s [%s]", name, node.Name),
-			NodeID:       nodeID,
+			NodeID:       node.ID,
 			ExecutorType: "command",
 			Command:      command,
 			Source:       "batch",
@@ -90,6 +110,10 @@ func (h *BatchHandler) Create(c *gin.Context) {
 	// 逐个触发任务执行
 	runIDs := make([]uint, 0, len(taskIDs))
 	for _, tid := range taskIDs {
+		if h.manager == nil {
+			runIDs = append(runIDs, 0)
+			continue
+		}
 		runID, err := h.manager.TriggerManual(tid)
 		if err != nil {
 			// 记录失败但不中断整体流程——任务已创建，仅触发失败
@@ -130,6 +154,26 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
 		return
 	}
+	nodeIDs := make([]uint, 0, len(tasks))
+	seen := make(map[uint]struct{}, len(tasks))
+	for _, taskEntity := range tasks {
+		if _, ok := seen[taskEntity.NodeID]; ok {
+			continue
+		}
+		seen[taskEntity.NodeID] = struct{}{}
+		nodeIDs = append(nodeIDs, taskEntity.NodeID)
+	}
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, nodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	for _, taskEntity := range tasks {
+		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			return
+		}
+	}
 
 	// 聚合各状态计数
 	statusCounts := map[string]int{}
@@ -169,10 +213,35 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
 		return
 	}
+	var tasks []model.Task
+	if err := h.db.Select("id", "node_id").Where("batch_id = ?", batchID).Find(&tasks).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	nodeIDs := make([]uint, 0, len(tasks))
+	seen := make(map[uint]struct{}, len(tasks))
+	for _, taskEntity := range tasks {
+		if _, ok := seen[taskEntity.NodeID]; ok {
+			continue
+		}
+		seen[taskEntity.NodeID] = struct{}{}
+		nodeIDs = append(nodeIDs, taskEntity.NodeID)
+	}
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, nodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	for _, taskEntity := range tasks {
+		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			return
+		}
+	}
 
 	// 事务删除关联记录及任务本身
 	var deleted int64
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.Transaction(func(tx *gorm.DB) error {
 		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{})
 		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{})
 		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{})
@@ -188,8 +257,10 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 	}
 
 	// 移除调度器中的定时计划
-	for _, tid := range taskIDs {
-		h.manager.RemoveSchedule(tid)
+	if h.manager != nil {
+		for _, tid := range taskIDs {
+			h.manager.RemoveSchedule(tid)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})

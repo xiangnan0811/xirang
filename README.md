@@ -38,6 +38,9 @@
 
 ### Docker Compose（推荐）
 
+升级提示：
+自 2026-03-24 起，`SSH_AUTO_ACCEPT_NEW_HOSTS` 的默认值按安全策略收紧为 `false`。如果你依赖首次连接时自动接受新主机指纹，请在升级前于生产环境显式设置该变量并评估风险。
+
 ```bash
 # 1. 获取项目
 git clone https://github.com/your-username/xirang.git

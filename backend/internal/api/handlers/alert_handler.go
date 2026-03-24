@@ -114,7 +114,10 @@ func (h *AlertHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警"})
 		return
 	}
@@ -131,7 +134,10 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
@@ -157,7 +163,10 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
@@ -181,7 +190,10 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警投递记录"})
 		return
 	}
@@ -212,7 +224,10 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}
@@ -266,7 +281,10 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
 		return
 	}
-	if !checkOwnershipByNodeID(c, h.db, alert.NodeID) {
+	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
 		return
 	}

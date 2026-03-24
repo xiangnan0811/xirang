@@ -90,8 +90,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		return
 	}
 
-	claims, err := h.jwtManager.ParseToken(authMsg.Token)
-	if err != nil || claims.Role != "admin" {
+	claims, err := authorizeRealtimeToken(authMsg.Token, h.jwtManager, h.db, realtimeAuthRequirements{Role: "admin"})
+	if err != nil {
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "认证失败或权限不足"))
 		_ = conn.Close()

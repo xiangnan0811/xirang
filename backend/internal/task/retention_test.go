@@ -2,6 +2,7 @@ package task
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,20 +12,23 @@ import (
 
 func TestShellEscape(t *testing.T) {
 	cases := []struct {
-		name   string
-		input  string
-		expect string
+		name  string
+		input string
 	}{
-		{"空字符串", "", "''"},
-		{"简单字符串", "hello", "'hello'"},
-		{"包含单引号", "it's", "'it'\"'\"'s'"},
-		{"包含空格", "a b", "'a b'"},
+		{"空字符串", ""},
+		{"简单字符串", "hello"},
+		{"包含单引号", "it's"},
+		{"包含空格", "a b"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := shellEscape(tc.input)
-			if got != tc.expect {
-				t.Fatalf("shellEscape(%q): 期望 %q，实际 %q", tc.input, tc.expect, got)
+			out, err := exec.Command("sh", "-c", "printf %s "+got).Output()
+			if err != nil {
+				t.Fatalf("shellEscape(%q) 生成的 shell 表达式执行失败: %v", tc.input, err)
+			}
+			if string(out) != tc.input {
+				t.Fatalf("shellEscape(%q) 回放结果错误，实际 %q", tc.input, string(out))
 			}
 		})
 	}

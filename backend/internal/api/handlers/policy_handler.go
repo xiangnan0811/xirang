@@ -78,7 +78,10 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "策略不存在"})
 		return
 	}
-	if !checkOwnershipByPolicyNodes(c, h.db, p) {
+	if allowed, err := authorizePolicyOwnership(c, h.db, p); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该策略"})
 		return
 	}
@@ -153,19 +156,19 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	p := model.Policy{
-		Name:             req.Name,
-		Description:      strings.TrimSpace(req.Description),
-		SourcePath:       req.SourcePath,
-		TargetPath:       req.TargetPath,
-		CronSpec:         req.CronSpec,
-		ExcludeRules:     strings.TrimSpace(req.ExcludeRules),
-		BwLimit:          req.BwLimit,
-		RetentionDays:    req.RetentionDays,
-		MaxConcurrent:    req.MaxConcurrent,
-		Enabled:          enabled,
-		VerifyEnabled:    verifyEnabled,
-		VerifySampleRate: verifySampleRate,
-		IsTemplate:       isTemplate,
+		Name:              req.Name,
+		Description:       strings.TrimSpace(req.Description),
+		SourcePath:        req.SourcePath,
+		TargetPath:        req.TargetPath,
+		CronSpec:          req.CronSpec,
+		ExcludeRules:      strings.TrimSpace(req.ExcludeRules),
+		BwLimit:           req.BwLimit,
+		RetentionDays:     req.RetentionDays,
+		MaxConcurrent:     req.MaxConcurrent,
+		Enabled:           enabled,
+		VerifyEnabled:     verifyEnabled,
+		VerifySampleRate:  verifySampleRate,
+		IsTemplate:        isTemplate,
 		PreHook:           strings.TrimSpace(req.PreHook),
 		PostHook:          strings.TrimSpace(req.PostHook),
 		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
@@ -561,20 +564,20 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 	}
 
 	newPolicy := model.Policy{
-		Name:             tmpl.Name + " (副本)",
-		Description:      tmpl.Description,
-		SourcePath:       tmpl.SourcePath,
-		TargetPath:       config.BackupRoot,
-		CronSpec:         tmpl.CronSpec,
-		ExcludeRules:     tmpl.ExcludeRules,
+		Name:              tmpl.Name + " (副本)",
+		Description:       tmpl.Description,
+		SourcePath:        tmpl.SourcePath,
+		TargetPath:        config.BackupRoot,
+		CronSpec:          tmpl.CronSpec,
+		ExcludeRules:      tmpl.ExcludeRules,
 		BwLimit:           tmpl.BwLimit,
 		BandwidthSchedule: tmpl.BandwidthSchedule,
-		RetentionDays:    tmpl.RetentionDays,
-		MaxConcurrent:    tmpl.MaxConcurrent,
-		Enabled:          false,
-		VerifyEnabled:    tmpl.VerifyEnabled,
-		VerifySampleRate: tmpl.VerifySampleRate,
-		IsTemplate:       false,
+		RetentionDays:     tmpl.RetentionDays,
+		MaxConcurrent:     tmpl.MaxConcurrent,
+		Enabled:           false,
+		VerifyEnabled:     tmpl.VerifyEnabled,
+		VerifySampleRate:  tmpl.VerifySampleRate,
+		IsTemplate:        false,
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {

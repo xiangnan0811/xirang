@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -95,32 +97,47 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		Total   int    `json:"total"`
 		Success int    `json:"success"`
 	}
-	sevenDaysAgo := now.AddDate(0, 0, -7)
-	type trendRow struct {
-		Day    string `gorm:"column:day"`
-		Status string `gorm:"column:status"`
-		Cnt    int    `gorm:"column:cnt"`
-	}
-	var trendRows []trendRow
-	if err := h.db.Raw(`
-		SELECT DATE(created_at) AS day, status, COUNT(*) AS cnt
-		FROM task_runs
-		WHERE created_at >= ?
-		GROUP BY DATE(created_at), status
-	`, sevenDaysAgo).Scan(&trendRows).Error; err != nil {
-		trendRows = nil
-	}
+	loc := now.Location()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	trendStart := startOfToday.AddDate(0, 0, -6)
+	trendEnd := startOfToday.AddDate(0, 0, 1)
 
 	trendMap := make(map[string]*trendPoint)
 	for i := 0; i < 7; i++ {
 		d := now.AddDate(0, 0, -i).Format("2006-01-02")
 		trendMap[d] = &trendPoint{Date: d}
 	}
-	for _, r := range trendRows {
-		if tp, ok := trendMap[r.Day]; ok {
-			tp.Total += r.Cnt
-			if r.Status == "success" {
-				tp.Success += r.Cnt
+	type trendRow struct {
+		Day    string `gorm:"column:day"`
+		Status string `gorm:"column:status"`
+		Cnt    int    `gorm:"column:cnt"`
+	}
+	caseBranches := make([]string, 0, 7)
+	args := make([]interface{}, 0, 23)
+	for i := 6; i >= 0; i-- {
+		dayStart := startOfToday.AddDate(0, 0, -i)
+		dayEnd := dayStart.Add(24 * time.Hour)
+		caseBranches = append(caseBranches, "WHEN created_at >= ? AND created_at < ? THEN ?")
+		args = append(args, dayStart, dayEnd, dayStart.Format("2006-01-02"))
+	}
+	caseExpr := "CASE " + strings.Join(caseBranches, " ") + " END"
+	args = append(args, trendStart, trendEnd)
+	query := fmt.Sprintf(`
+		SELECT %s AS day, status, COUNT(*) AS cnt
+		FROM task_runs
+		WHERE created_at >= ? AND created_at < ?
+		GROUP BY day, status
+	`, caseExpr)
+	var rows []trendRow
+	if err := h.db.Raw(query, args...).Scan(&rows).Error; err == nil {
+		for _, item := range rows {
+			tp, ok := trendMap[item.Day]
+			if !ok {
+				continue
+			}
+			tp.Total += item.Cnt
+			if item.Status == "success" {
+				tp.Success += item.Cnt
 			}
 		}
 	}
