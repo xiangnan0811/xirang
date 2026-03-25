@@ -39,7 +39,7 @@
 ### Docker Compose（推荐）
 
 升级提示：
-自 2026-03-24 起，`SSH_AUTO_ACCEPT_NEW_HOSTS` 的默认值按安全策略收紧为 `false`。如果你依赖首次连接时自动接受新主机指纹，请在升级前于生产环境显式设置该变量并评估风险。
+`SSH_AUTO_ACCEPT_NEW_HOSTS` 默认值为 `true`，首次连接的新主机密钥会被自动接受并写入 known_hosts，但已知主机密钥变更仍会被拒绝。如需禁用自动接受，请显式设置 `SSH_AUTO_ACCEPT_NEW_HOSTS=false`。
 
 ```bash
 # 1. 获取项目

@@ -59,9 +59,9 @@
 |------|------|--------|------|------|
 | `SSH_STRICT_HOST_KEY_CHECKING` | bool | `true` | 否 | 严格校验远端主机指纹（`.env.example` 开发值 `false`，生产建议 `true`） |
 | `SSH_KNOWN_HOSTS_PATH` | string | `~/.ssh/known_hosts` | 否 | known_hosts 文件路径 |
-| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 严格校验开启时，是否自动接受首次出现的主机指纹 |
+| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `true` | 否 | 严格校验开启时，是否自动接受首次出现的主机指纹（设为 `false` 可禁用） |
 
-**读取位置**：`SSH_STRICT_HOST_KEY_CHECKING` → `sshutil/ssh_auth.go:126` + `task/executor/executor.go:147`，`SSH_KNOWN_HOSTS_PATH` → `sshutil/ssh_auth.go:135` + `task/executor/executor.go:152`，`SSH_AUTO_ACCEPT_NEW_HOSTS` → `sshutil/ssh_auth.go:154`
+**读取位置**：`SSH_STRICT_HOST_KEY_CHECKING` → `sshutil/ssh_auth.go:126` + `task/executor/executor.go:147`，`SSH_KNOWN_HOSTS_PATH` → `sshutil/ssh_auth.go:135` + `task/executor/executor.go:152`，`SSH_AUTO_ACCEPT_NEW_HOSTS` → `sshutil/ssh_auth.go:155` + `task/executor/executor.go:158`
 
 ## 6. 备份与执行
 

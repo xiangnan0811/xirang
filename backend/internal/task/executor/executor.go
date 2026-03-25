@@ -155,8 +155,13 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			if err != nil {
 				return -1, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 			}
+			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+			hostKeyMode := "yes"
+			if autoAccept {
+				hostKeyMode = "accept-new"
+			}
 			sshParts = append(sshParts,
-				"-o", "StrictHostKeyChecking=yes",
+				"-o", fmt.Sprintf("StrictHostKeyChecking=%s", hostKeyMode),
 				"-o", fmt.Sprintf("UserKnownHostsFile=%s", expandedKnownHosts),
 			)
 		} else {

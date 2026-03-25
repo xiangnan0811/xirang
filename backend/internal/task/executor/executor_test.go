@@ -115,11 +115,58 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	if !strings.Contains(joined, "\n--\n") {
 		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
 	}
-	if !strings.Contains(joined, "StrictHostKeyChecking=yes") {
-		t.Fatalf("期望默认携带 StrictHostKeyChecking=yes，实际日志: %s", joined)
+	if !strings.Contains(joined, "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("期望默认携带 StrictHostKeyChecking=accept-new，实际日志: %s", joined)
 	}
 	if !strings.Contains(joined, "-i ") || !strings.Contains(joined, "xirang-key-") {
 		t.Fatalf("期望携带 -i 临时密钥参数，实际日志: %s", joined)
+	}
+}
+
+func TestRsyncExecutorUsesStrictHostKeyCheckingWhenAutoAcceptDisabled(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
+	target := t.TempDir()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	})
+
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  "/var/data",
+		RsyncTarget:  target,
+		Node: model.Node{
+			Host:     "1.2.3.4",
+			Port:     22,
+			Username: "root",
+			AuthType: "key",
+			SSHKey: &model.SSHKey{
+				PrivateKey: string(privateKey),
+			},
+		},
+	}
+
+	var lines []string
+	exitCode, runErr := exec.Run(context.Background(), task, func(_ string, message string) {
+		lines = append(lines, message)
+	}, nil)
+	if runErr != nil {
+		t.Fatalf("期望执行成功，实际失败: %v", runErr)
+	}
+	if exitCode != 0 {
+		t.Fatalf("期望退出码=0，实际=%d", exitCode)
+	}
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "StrictHostKeyChecking=yes") {
+		t.Fatalf("期望显式禁用时携带 StrictHostKeyChecking=yes，实际日志: %s", joined)
 	}
 }
 
