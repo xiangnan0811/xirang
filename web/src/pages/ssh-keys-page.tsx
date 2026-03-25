@@ -240,7 +240,10 @@ export function SSHKeysPage() {
 
       <SSHKeyEditorDialog
         open={editorOpen}
-        onOpenChange={setEditorOpen}
+        onOpenChange={(open) => {
+          setEditorOpen(open);
+          if (!open) setEditingKey(null);
+        }}
         editingKey={editingKey}
         onSave={handleSave}
       />

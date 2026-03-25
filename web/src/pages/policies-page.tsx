@@ -460,7 +460,10 @@ export function PoliciesPage() {
 
       <PolicyEditorDialog
         open={editorOpen}
-        onOpenChange={setEditorOpen}
+        onOpenChange={(open) => {
+          setEditorOpen(open);
+          if (!open) setEditingPolicy(null);
+        }}
         editingPolicy={editingPolicy}
         onSave={handleSave}
         nodes={nodes}

@@ -79,6 +79,12 @@ export function useNodesPageState() {
 
   const { confirm, dialog } = useConfirm();
   const [editorOpen, setEditorOpen] = useState(false);
+  const handleEditorOpenChange = (open: boolean) => {
+    setEditorOpen(open);
+    if (!open) {
+      setEditingNode(null);
+    }
+  };
   const [terminalNode, setTerminalNode] = useState<NodeRecord | null>(null);
   const [terminalKey, setTerminalKey] = useState(0);
   const [fileBrowserNode, setFileBrowserNode] = useState<NodeRecord | null>(null);
@@ -530,7 +536,7 @@ export function useNodesPageState() {
     emergencyNodeId,
     // editor
     editorOpen,
-    setEditorOpen,
+    handleEditorOpenChange,
     editingNode,
     // terminal
     terminalNode,
