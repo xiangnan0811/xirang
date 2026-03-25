@@ -502,11 +502,17 @@ export function LogsPage() {
             unit={t("logs.logUnit")}
           />
 
-          {connectionWarning ? (
+          <div
+            className={cn(
+              "overflow-hidden transition-all duration-300 ease-in-out",
+              connectionWarning ? "max-h-24 opacity-100" : "max-h-0 opacity-0"
+            )}
+            aria-hidden={!connectionWarning}
+          >
             <InlineAlert tone="warning">
-              {connectionWarning}
+              {connectionWarning ?? ""}
             </InlineAlert>
-          ) : null}
+          </div>
 
           {focusedTask?.errorCode ? (
             <InlineAlert tone="critical">

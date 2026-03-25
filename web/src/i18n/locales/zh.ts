@@ -878,7 +878,7 @@ const zh = {
     taskIdLabel: "任务#{{id}}",
     connectionWarning: {
       notLoggedIn: "未登录，实时日志通道未建立。",
-      maxRetries: "日志通道断开，已达最大重试次数，请刷新页面重新连接。",
+      maxRetries: "日志通道断开，切换回本页面时将自动重试。",
       reconnecting: "日志通道断开，正在尝试自动重连...",
     },
     allNodes: "全部节点",

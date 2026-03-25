@@ -344,5 +344,7 @@ func (c *client) readPump(onClose func()) {
 		if _, _, err := c.conn.ReadMessage(); err != nil {
 			return
 		}
+		// 任何客户端消息（含应用层心跳）都续期读超时
+		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	}
 }

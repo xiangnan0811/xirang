@@ -878,7 +878,7 @@ const en = {
     taskIdLabel: "Task #{{id}}",
     connectionWarning: {
       notLoggedIn: "Not logged in, real-time log channel not established.",
-      maxRetries: "Log channel disconnected, max retries reached. Please refresh the page.",
+      maxRetries: "Log channel disconnected. Will retry when you return to this tab.",
       reconnecting: "Log channel disconnected, attempting to reconnect...",
     },
     allNodes: "All nodes",
