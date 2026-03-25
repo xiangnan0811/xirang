@@ -109,6 +109,7 @@ type Integration struct {
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
 	FailThreshold   int       `gorm:"not null;default:1" json:"fail_threshold"`
 	CooldownMinutes int       `gorm:"not null;default:5" json:"cooldown_minutes"`
+	ProxyURL        string    `gorm:"size:512;not null;default:''" json:"proxy_url"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -128,6 +129,13 @@ func (i *Integration) BeforeSave(_ *gorm.DB) error {
 		}
 		i.Secret = encrypted
 	}
+	if i.ProxyURL != "" {
+		encrypted, err := secure.EncryptIfNeeded(i.ProxyURL)
+		if err != nil {
+			return err
+		}
+		i.ProxyURL = encrypted
+	}
 	return nil
 }
 
@@ -145,6 +153,13 @@ func (i *Integration) AfterFind(_ *gorm.DB) error {
 			return err
 		}
 		i.Secret = decrypted
+	}
+	if i.ProxyURL != "" {
+		decrypted, err := secure.DecryptIfNeeded(i.ProxyURL)
+		if err != nil {
+			return err
+		}
+		i.ProxyURL = decrypted
 	}
 	i.HasSecret = i.Secret != ""
 	return nil

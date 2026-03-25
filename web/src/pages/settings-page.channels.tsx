@@ -15,7 +15,7 @@ export function ChannelsTab() {
     addIntegration,
     removeIntegration,
     toggleIntegration,
-    updateIntegration,
+    patchIntegration,
     testIntegration,
     refreshIntegrations,
   } = useOutletContext<ConsoleOutletContext>();
@@ -45,14 +45,29 @@ export function ChannelsTab() {
   }, [removeIntegration]);
 
   const handleEditIntegration = async (draft: IntegrationEditorDraft) => {
-    await updateIntegration(draft.id, {
+    const patch: Record<string, unknown> = {
       name: draft.name,
-      endpoint: draft.endpoint,
-      failThreshold: draft.failThreshold,
-      cooldownMinutes: draft.cooldownMinutes,
-      secret: draft.secret || undefined,
-      skipEndpointHint: draft.skipEndpointHint,
-    });
+      fail_threshold: draft.failThreshold,
+      cooldown_minutes: draft.cooldownMinutes,
+      skip_endpoint_hint: draft.skipEndpointHint,
+    };
+    // 仅当 endpoint 实际修改时才发送
+    if (draft.endpointChanged) {
+      patch.endpoint = draft.endpoint;
+    }
+    // 结构化字段
+    if (draft.botToken) patch.bot_token = draft.botToken;
+    if (draft.chatId) patch.chat_id = draft.chatId;
+    if (draft.accessToken) patch.access_token = draft.accessToken;
+    if (draft.hookId) patch.hook_id = draft.hookId;
+    if (draft.webhookKey) patch.webhook_key = draft.webhookKey;
+    if (draft.secret) {
+      patch.secret = draft.secret;
+    }
+    if (draft.proxyUrl !== undefined) {
+      patch.proxy_url = draft.proxyUrl;
+    }
+    await patchIntegration(draft.id, patch);
     toast.success(t("notifications.integrationSaved", { name: draft.name }));
     setEditDialogOpen(false);
     setEditingIntegration(null);

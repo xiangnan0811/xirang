@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 // Sender 通知发送器接口
 type Sender interface {
-	Send(endpoint, secret string, body payload) error
+	Send(client *http.Client, endpoint, secret string, body payload) error
 }
 
 // senderRegistry 按通道类型注册发送器
@@ -30,16 +31,16 @@ var senderRegistry = map[string]Sender{
 
 type webhookSender struct{}
 
-func (s *webhookSender) Send(endpoint, _ string, body payload) error {
-	return postJSON(endpoint, body)
+func (s *webhookSender) Send(client *http.Client, endpoint, _ string, body payload) error {
+	return postJSON(client, endpoint, body)
 }
 
 // --- slack ---
 
 type slackSender struct{}
 
-func (s *slackSender) Send(endpoint, _ string, body payload) error {
-	return postJSON(endpoint, map[string]string{
+func (s *slackSender) Send(client *http.Client, endpoint, _ string, body payload) error {
+	return postJSON(client, endpoint, map[string]string{
 		"text": fmt.Sprintf("[XiRang][%s] %s (%s)", strings.ToUpper(body.Severity), body.Message, body.ErrorCode),
 	})
 }
@@ -48,17 +49,17 @@ func (s *slackSender) Send(endpoint, _ string, body payload) error {
 
 type telegramSender struct{}
 
-func (s *telegramSender) Send(endpoint, _ string, body payload) error {
+func (s *telegramSender) Send(client *http.Client, endpoint, _ string, body payload) error {
 	text := fmt.Sprintf("[XiRang][%s]\n节点: %s\n错误: %s\n说明: %s",
 		strings.ToUpper(body.Severity), body.NodeName, body.ErrorCode, body.Message)
-	return postTelegram(endpoint, text)
+	return postTelegram(client, endpoint, text)
 }
 
 // --- email ---
 
 type emailSender struct{}
 
-func (s *emailSender) Send(endpoint, _ string, body payload) error {
+func (s *emailSender) Send(_ *http.Client, endpoint, _ string, body payload) error {
 	subject := fmt.Sprintf("[XiRang][%s] %s", strings.ToUpper(body.Severity), body.ErrorCode)
 	content := fmt.Sprintf("节点: %s\n策略: %s\n错误码: %s\n详情: %s\n时间: %s\n",
 		body.NodeName, body.PolicyName, body.ErrorCode, body.Message, body.Triggered.Format(time.RFC3339))
@@ -76,7 +77,7 @@ func feishuSign(secret string, timestampSec int64) (string, error) {
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (s *feishuSender) Send(endpoint, secret string, body payload) error {
+func (s *feishuSender) Send(client *http.Client, endpoint, secret string, body payload) error {
 	text := fmt.Sprintf("[XiRang][%s]\n节点: %s\n错误码: %s\n说明: %s\n时间: %s",
 		strings.ToUpper(body.Severity), body.NodeName, body.ErrorCode, body.Message,
 		body.Triggered.Format("2006-01-02 15:04:05"))
@@ -98,7 +99,7 @@ func (s *feishuSender) Send(endpoint, secret string, body payload) error {
 		msg["sign"] = sign
 	}
 
-	return postJSON(endpoint, msg)
+	return postJSON(client, endpoint, msg)
 }
 
 // --- 钉钉 ---
@@ -113,7 +114,7 @@ func dingtalkSign(secret string, timestampMs int64) (string, error) {
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (s *dingtalkSender) Send(endpoint, secret string, body payload) error {
+func (s *dingtalkSender) Send(client *http.Client, endpoint, secret string, body payload) error {
 	endpointURL := endpoint
 	if secret != "" {
 		ts := time.Now().UnixMilli()
@@ -143,14 +144,14 @@ func (s *dingtalkSender) Send(endpoint, secret string, body payload) error {
 			"text":  text,
 		},
 	}
-	return postJSON(endpointURL, msg)
+	return postJSON(client, endpointURL, msg)
 }
 
 // --- 企业微信 ---
 
 type wecomSender struct{}
 
-func (s *wecomSender) Send(endpoint, _ string, body payload) error {
+func (s *wecomSender) Send(client *http.Client, endpoint, _ string, body payload) error {
 	text := fmt.Sprintf("> **[XiRang 告警][%s]**\n> 节点: %s\n> 错误码: <font color=\"warning\">%s</font>\n> 说明: %s\n> 时间: %s",
 		strings.ToUpper(body.Severity), body.NodeName, body.ErrorCode, body.Message,
 		body.Triggered.Format("2006-01-02 15:04:05"))
@@ -161,5 +162,5 @@ func (s *wecomSender) Send(endpoint, _ string, body payload) error {
 			"content": text,
 		},
 	}
-	return postJSON(endpoint, msg)
+	return postJSON(client, endpoint, msg)
 }

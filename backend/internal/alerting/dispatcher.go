@@ -2,9 +2,11 @@ package alerting
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -19,6 +21,7 @@ import (
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/util"
 
+	"golang.org/x/net/proxy"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +46,7 @@ func getSettingsSvc() *settings.Service {
 	return svc
 }
 
-var httpClient = &http.Client{Timeout: 8 * time.Second}
+var defaultHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 type payload struct {
 	Title      string    `json:"title"`
@@ -388,7 +391,51 @@ func send(channel model.Integration, alert model.Alert) error {
 	if !ok {
 		return fmt.Errorf("不支持的通知通道类型: %s", channel.Type)
 	}
-	return s.Send(channel.Endpoint, channel.Secret, body)
+	client := getHTTPClient(channel.ProxyURL)
+	return s.Send(client, channel.Endpoint, channel.Secret, body)
+}
+
+// proxyClients 缓存按代理 URL 创建的 HTTP 客户端，避免每次调用创建新 Transport
+var proxyClients sync.Map // proxyURL -> *http.Client
+
+// getHTTPClient 根据代理配置返回 HTTP 客户端（带缓存）
+func getHTTPClient(proxyURL string) *http.Client {
+	if proxyURL == "" {
+		return defaultHTTPClient
+	}
+	if cached, ok := proxyClients.Load(proxyURL); ok {
+		return cached.(*http.Client)
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return defaultHTTPClient
+	}
+	timeout := 30 * time.Second // 代理场景给更长超时
+
+	var client *http.Client
+	switch parsed.Scheme {
+	case "socks5", "socks5h":
+		dialer, err := proxy.FromURL(parsed, proxy.Direct)
+		if err != nil {
+			return defaultHTTPClient
+		}
+		transport := &http.Transport{}
+		if cd, ok := dialer.(proxy.ContextDialer); ok {
+			transport.DialContext = cd.DialContext
+		} else {
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			}
+		}
+		client = &http.Client{Timeout: timeout, Transport: transport}
+	default: // http, https
+		client = &http.Client{
+			Timeout:   timeout,
+			Transport: &http.Transport{Proxy: http.ProxyURL(parsed)},
+		}
+	}
+	proxyClients.Store(proxyURL, client)
+	return client
 }
 
 func SendProbe(channel model.Integration) error {
@@ -407,12 +454,12 @@ func SendAlert(channel model.Integration, alert model.Alert) error {
 	return send(channel, alert)
 }
 
-func postJSON(url string, body interface{}) error {
+func postJSON(client *http.Client, targetURL string, body interface{}) error {
 	payloadBytes, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(payloadBytes))
+	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(payloadBytes))
 	if err != nil {
 		return err
 	}
@@ -423,7 +470,7 @@ func postJSON(url string, body interface{}) error {
 	return nil
 }
 
-func postTelegram(endpoint, text string) error {
+func postTelegram(client *http.Client, endpoint, text string) error {
 	telegramURL, params, err := buildTelegramSendMessageEndpoint(endpoint)
 	if err != nil {
 		return err
@@ -439,7 +486,7 @@ func postTelegram(endpoint, text string) error {
 		form.Set("disable_web_page_preview", disabledPreview)
 	}
 
-	resp, err := httpClient.Post(telegramURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	resp, err := client.Post(telegramURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
 		return fmt.Errorf("telegram 请求失败: %s", util.SanitizeTelegramError(err))
 	}

@@ -1,0 +1,1 @@
+ALTER TABLE integrations ADD COLUMN proxy_url TEXT NOT NULL DEFAULT '';

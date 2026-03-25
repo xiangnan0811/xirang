@@ -154,6 +154,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/integrations/:id", middleware.RBAC("integrations:read"), integrationHandler.Get)
 	secured.POST("/integrations", middleware.RBAC("integrations:write"), integrationHandler.Create)
 	secured.PUT("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Update)
+	secured.PATCH("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Patch)
 	secured.POST("/integrations/:id/test", middleware.RBAC("integrations:write"), integrationHandler.Test)
 	secured.DELETE("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Delete)
 

@@ -279,6 +279,7 @@ export interface IntegrationChannel {
   enabled: boolean;
   failThreshold: number;
   cooldownMinutes: number;
+  proxyUrl: string;
 }
 
 export interface NewIntegrationInput {
@@ -290,6 +291,12 @@ export interface NewIntegrationInput {
   enabled: boolean;
   secret?: string;
   skipEndpointHint?: boolean;
+  botToken?: string;
+  chatId?: string;
+  accessToken?: string;
+  hookId?: string;
+  webhookKey?: string;
+  proxyUrl?: string;
 }
 
 export interface SSHKeyRecord {

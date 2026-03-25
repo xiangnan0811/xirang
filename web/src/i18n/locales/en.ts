@@ -1063,6 +1063,15 @@ const en = {
     secretHint: "Only required if signing verification is enabled in bot settings. Leave blank to skip.",
     sampleHint: "You can apply the sample URL and modify it afterwards.",
     applySample: "Apply Sample",
+    botTokenPlaceholder: "e.g. 123456789:ABCdefGHIjklMNOpqrSTUvwx",
+    botTokenHint: "Leave blank to keep unchanged. Get from @BotFather.",
+    chatIdPlaceholder: "e.g. -1001234567890",
+    chatIdHint: "Supports personal, group or channel IDs. Group/channel IDs usually start with -100.",
+    accessTokenPlaceholder: "Copy access_token from DingTalk robot",
+    hookIdPlaceholder: "Copy Hook ID from Feishu robot (UUID format)",
+    webhookKeyPlaceholder: "Copy Webhook Key from WeCom robot",
+    proxyUrl: "Proxy URL (optional)",
+    proxyHint: "Set a proxy to reach notification services behind a firewall. Leave blank for direct connection. Supports HTTP / SOCKS5.",
   },
 
   // ── audit page ──

@@ -11,15 +11,26 @@ import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationChannel, IntegrationType } from "@/types/domain";
 
+// 需要签名密钥的通道类型（与 create dialog 一致）
+const SECRET_TYPES: ReadonlySet<IntegrationType> = new Set(["feishu", "dingtalk"]);
+
 type IntegrationEditorDraft = {
   id: string;
   type: IntegrationType;
   name: string;
   endpoint: string;
+  originalEndpoint: string;
+  endpointChanged: boolean;
   secret: string;
   failThreshold: number;
   cooldownMinutes: number;
   skipEndpointHint?: boolean;
+  botToken?: string;
+  chatId?: string;
+  accessToken?: string;
+  hookId?: string;
+  webhookKey?: string;
+  proxyUrl?: string;
 };
 
 const emptyDraft: IntegrationEditorDraft = {
@@ -27,9 +38,12 @@ const emptyDraft: IntegrationEditorDraft = {
   type: "email",
   name: "",
   endpoint: "",
+  originalEndpoint: "",
+  endpointChanged: false,
   secret: "",
   failThreshold: 1,
   cooldownMinutes: 5,
+  proxyUrl: "",
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -40,16 +54,67 @@ function toBoundedInt(value: string, fallback: number, min: number, max: number)
   return Math.min(max, Math.max(min, parsed));
 }
 
+// 结构化通道类型集合
+const STRUCTURED_TYPES: ReadonlySet<IntegrationType> = new Set(["telegram", "dingtalk", "feishu", "wecom"]);
+
+function safeParseChatId(endpoint: string): string {
+  try {
+    return new URL(endpoint).searchParams.get("chat_id") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function safeParseQueryParam(endpoint: string, param: string): string {
+  try {
+    return new URL(endpoint).searchParams.get(param) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function safeParseLastPathSegment(endpoint: string): string {
+  try {
+    const segments = new URL(endpoint).pathname.split("/").filter(Boolean);
+    return segments.length > 0 ? segments[segments.length - 1] : "";
+  } catch {
+    return "";
+  }
+}
+
 function toDraft(integration: IntegrationChannel): IntegrationEditorDraft {
-  return {
+  const draft: IntegrationEditorDraft = {
     id: integration.id,
     type: integration.type,
     name: integration.name,
     endpoint: integration.endpoint,
+    originalEndpoint: integration.endpoint,
+    endpointChanged: false,
     secret: "",
     failThreshold: integration.failThreshold,
     cooldownMinutes: integration.cooldownMinutes,
+    proxyUrl: integration.proxyUrl ?? "",
   };
+
+  // 从现有 endpoint 解析结构化字段
+  switch (integration.type) {
+    case "telegram":
+      draft.chatId = safeParseChatId(integration.endpoint);
+      // bot token 已脱敏，不预填
+      draft.botToken = "";
+      break;
+    case "dingtalk":
+      draft.accessToken = safeParseQueryParam(integration.endpoint, "access_token");
+      break;
+    case "feishu":
+      draft.hookId = safeParseLastPathSegment(integration.endpoint);
+      break;
+    case "wecom":
+      draft.webhookKey = safeParseQueryParam(integration.endpoint, "key");
+      break;
+  }
+
+  return draft;
 }
 
 function integrationIcon(type: IntegrationType) {
@@ -125,16 +190,21 @@ export function IntegrationEditorDialog({
   const [saving, setSaving] = useState(false);
   const [pendingHint, setPendingHint] = useState<string | null>(null);
 
+  const isStructured = STRUCTURED_TYPES.has(draft.type);
+
   const handleSave = async (skipHint: boolean) => {
     if (!draft.name.trim()) {
       toast.error(t('integration.errorNameRequired'), { id: "integration-edit-name-required" });
       return;
     }
 
-    const validationError = validateDraft(draft.type, draft.endpoint);
-    if (validationError) {
-      toast.error(t(validationError), { id: "integration-edit-endpoint-invalid" });
-      return;
+    // 结构化类型不做 endpoint URL 校验（后端通过结构化字段构建）
+    if (!isStructured) {
+      const validationError = validateDraft(draft.type, draft.endpoint);
+      if (validationError) {
+        toast.error(t(validationError), { id: "integration-edit-endpoint-invalid" });
+        return;
+      }
     }
 
     setSaving(true);
@@ -211,16 +281,82 @@ export function IntegrationEditorDialog({
         </div>
       </div>
 
-      <div>
-        <label htmlFor="int-edit-endpoint" className="mb-1 block text-sm font-medium">{t('integration.endpointAddress')}</label>
-        <Input id="int-edit-endpoint" value={draft.endpoint}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, endpoint: event.target.value }))
-          }
-        />
-      </div>
+      {isStructured ? (
+        <>
+          {draft.type === "telegram" && (
+            <>
+              <div>
+                <label htmlFor="int-edit-bot-token" className="mb-1 block text-sm font-medium">Bot Token</label>
+                <Input id="int-edit-bot-token" autoComplete="off"
+                  placeholder={t('integration.botTokenPlaceholder')}
+                  value={draft.botToken ?? ""}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, botToken: event.target.value }))
+                  }
+                />
+                <p className="mt-1 text-xs text-muted-foreground">{t('integration.botTokenHint')}</p>
+              </div>
+              <div>
+                <label htmlFor="int-edit-chat-id" className="mb-1 block text-sm font-medium">Chat ID</label>
+                <Input id="int-edit-chat-id"
+                  placeholder={t('integration.chatIdPlaceholder')}
+                  value={draft.chatId ?? ""}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, chatId: event.target.value }))
+                  }
+                />
+              </div>
+            </>
+          )}
+          {draft.type === "dingtalk" && (
+            <div>
+              <label htmlFor="int-edit-access-token" className="mb-1 block text-sm font-medium">Access Token</label>
+              <Input id="int-edit-access-token" autoComplete="off"
+                placeholder={t('integration.accessTokenPlaceholder')}
+                value={draft.accessToken ?? ""}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, accessToken: event.target.value }))
+                }
+              />
+            </div>
+          )}
+          {draft.type === "feishu" && (
+            <div>
+              <label htmlFor="int-edit-hook-id" className="mb-1 block text-sm font-medium">Hook ID</label>
+              <Input id="int-edit-hook-id" autoComplete="off"
+                placeholder={t('integration.hookIdPlaceholder')}
+                value={draft.hookId ?? ""}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, hookId: event.target.value }))
+                }
+              />
+            </div>
+          )}
+          {draft.type === "wecom" && (
+            <div>
+              <label htmlFor="int-edit-webhook-key" className="mb-1 block text-sm font-medium">Webhook Key</label>
+              <Input id="int-edit-webhook-key" autoComplete="off"
+                placeholder={t('integration.webhookKeyPlaceholder')}
+                value={draft.webhookKey ?? ""}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, webhookKey: event.target.value }))
+                }
+              />
+            </div>
+          )}
+        </>
+      ) : (
+        <div>
+          <label htmlFor="int-edit-endpoint" className="mb-1 block text-sm font-medium">{t('integration.endpointAddress')}</label>
+          <Input id="int-edit-endpoint" value={draft.endpoint}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, endpoint: event.target.value, endpointChanged: event.target.value !== prev.originalEndpoint }))
+            }
+          />
+        </div>
+      )}
 
-      {draft.type !== "email" && (
+      {SECRET_TYPES.has(draft.type) && (
         <div>
           <label htmlFor="int-edit-secret" className="mb-1 block text-sm font-medium">{t('integration.signingSecret')}</label>
           <Input id="int-edit-secret" type="password" autoComplete="off"
@@ -230,6 +366,20 @@ export function IntegrationEditorDialog({
               setDraft((prev) => ({ ...prev, secret: event.target.value }))
             }
           />
+        </div>
+      )}
+
+      {draft.type !== "email" && (
+        <div>
+          <label htmlFor="int-edit-proxy" className="mb-1 block text-sm font-medium">{t('integration.proxyUrl')}</label>
+          <Input id="int-edit-proxy"
+            placeholder="http://proxy:8080 / socks5://proxy:1080"
+            value={draft.proxyUrl ?? ""}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, proxyUrl: event.target.value }))
+            }
+          />
+          <p className="mt-1 text-xs text-muted-foreground">{t('integration.proxyHint')}</p>
         </div>
       )}
 

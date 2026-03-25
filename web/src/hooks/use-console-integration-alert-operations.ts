@@ -80,13 +80,30 @@ export function useIntegrationAlertOperations({
     return { ok: true, message: i18n.t("notifications.actions.testNoticeSent"), latencyMs: 0 };
   }, [exec]);
 
+  const patchIntegration = useCallback(async (integrationID: string, patch: Record<string, unknown>) => {
+    if (!token) {
+      ensureDemoWriteAllowed(i18n.t("notifications.actions.updateIntegration"));
+      // demo 模式：将 snake_case API 字段映射为 camelCase 前端字段
+      const mapped: Partial<IntegrationChannel> = {};
+      if ("enabled" in patch) mapped.enabled = patch.enabled as boolean;
+      if ("name" in patch) mapped.name = patch.name as string;
+      if ("fail_threshold" in patch) mapped.failThreshold = patch.fail_threshold as number;
+      if ("cooldown_minutes" in patch) mapped.cooldownMinutes = patch.cooldown_minutes as number;
+      if ("proxy_url" in patch) mapped.proxyUrl = patch.proxy_url as string;
+      setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? { ...item, ...mapped } : item)));
+      return;
+    }
+    const updated = await apiClient.patchIntegration(token, integrationID, patch);
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? updated : item)));
+  }, [token, ensureDemoWriteAllowed, setIntegrations]);
+
   const toggleIntegration = useCallback(async (integrationID: string) => {
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
       return;
     }
-    await updateIntegration(integrationID, { enabled: !current.enabled });
-  }, [integrations, updateIntegration]);
+    await patchIntegration(integrationID, { enabled: !current.enabled });
+  }, [integrations, patchIntegration]);
 
   const retryAlert = useCallback(
     async (alertID: string) => {
@@ -226,6 +243,7 @@ export function useIntegrationAlertOperations({
     addIntegration,
     removeIntegration,
     updateIntegration,
+    patchIntegration,
     testIntegration,
     toggleIntegration,
     retryAlert,

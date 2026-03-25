@@ -38,6 +38,7 @@ const { apiClientMock } = vi.hoisted(() => ({
     removeIntegration: vi.fn(),
     toggleIntegration: vi.fn(),
     updateIntegration: vi.fn(),
+    patchIntegration: vi.fn(),
     retryAlert: vi.fn(),
     acknowledgeAlert: vi.fn(),
     resolveAlert: vi.fn(),

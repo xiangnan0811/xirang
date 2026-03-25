@@ -50,6 +50,11 @@ func ValidateTelegramEndpoint(parsedURL *url.URL) (*TelegramEndpointInfo, error)
 	}, nil
 }
 
+// BotTokenPattern 返回 bot token 正则（完整匹配，带 bot 前缀）
+func BotTokenPattern() *regexp.Regexp {
+	return botTokenPattern
+}
+
 // SanitizeTelegramError 对错误消息中可能包含的 bot token 进行脱敏
 func SanitizeTelegramError(err error) string {
 	if err == nil {

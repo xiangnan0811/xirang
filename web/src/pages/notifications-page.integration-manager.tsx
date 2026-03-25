@@ -19,7 +19,7 @@ import type { IntegrationChannel } from "@/types/domain";
 type IntegrationManagerProps = {
   integrations: IntegrationChannel[];
   toggleIntegration: (id: string) => Promise<void>;
-  testIntegration: (id: string) => Promise<{ message: string; latencyMs: number }>;
+  testIntegration: (id: string) => Promise<{ ok: boolean; message: string; latencyMs: number }>;
   removeIntegration: (id: string) => Promise<void>;
   onOpenCreate: () => void;
   onOpenEdit: (integration: IntegrationChannel) => void;
@@ -132,9 +132,13 @@ export function IntegrationManager({
                         onClick={() => {
                           beginOp(integration.id, "test");
                           void testIntegration(integration.id)
-                            .then((result) =>
-                              toast.success(t("notifications.testResultSuccess", { name: integration.name, message: result.message, latency: result.latencyMs }))
-                            )
+                            .then((result) => {
+                              if (result.ok) {
+                                toast.success(t("notifications.testResultSuccess", { name: integration.name, message: result.message, latency: result.latencyMs }));
+                              } else {
+                                toast.error(result.message);
+                              }
+                            })
                             .catch((error) => toast.error(getErrorMessage(error)))
                             .finally(() => endOp(integration.id, "test"));
                         }}

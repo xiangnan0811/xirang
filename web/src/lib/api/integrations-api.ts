@@ -11,6 +11,7 @@ type IntegrationResponse = {
   enabled: boolean;
   fail_threshold: number;
   cooldown_minutes: number;
+  proxy_url?: string;
 };
 
 type IntegrationHintResponse = {
@@ -43,7 +44,8 @@ function mapIntegration(row: IntegrationResponse): IntegrationChannel {
     hasSecret: Boolean(row.has_secret),
     enabled: row.enabled,
     failThreshold: row.fail_threshold,
-    cooldownMinutes: row.cooldown_minutes
+    cooldownMinutes: row.cooldown_minutes,
+    proxyUrl: row.proxy_url ?? "",
   };
 }
 
@@ -62,12 +64,18 @@ export function createIntegrationsApi() {
         body: {
           type: input.type,
           name: input.name,
-          endpoint: input.endpoint,
+          endpoint: input.endpoint || undefined,
           enabled: input.enabled,
           fail_threshold: input.failThreshold,
           cooldown_minutes: input.cooldownMinutes,
           secret: input.secret || undefined,
-          skip_endpoint_hint: input.skipEndpointHint ?? false
+          skip_endpoint_hint: input.skipEndpointHint ?? false,
+          bot_token: input.botToken || undefined,
+          chat_id: input.chatId || undefined,
+          access_token: input.accessToken || undefined,
+          hook_id: input.hookId || undefined,
+          webhook_key: input.webhookKey || undefined,
+          proxy_url: input.proxyUrl || undefined,
         }
       });
       // 域名建议提示（200 + created:false）
@@ -94,8 +102,27 @@ export function createIntegrationsApi() {
           fail_threshold: patch.failThreshold,
           cooldown_minutes: patch.cooldownMinutes,
           secret: patch.secret || undefined,
-          skip_endpoint_hint: patch.skipEndpointHint ?? false
+          skip_endpoint_hint: patch.skipEndpointHint ?? false,
+          proxy_url: patch.proxyUrl ?? undefined,
         }
+      });
+      // 域名建议提示（200 + updated:false）
+      if (raw && typeof raw === "object" && "updated" in raw && (raw as Record<string, unknown>).updated === false) {
+        throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
+      }
+      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
+    },
+
+    async patchIntegration(
+      token: string,
+      integrationId: string,
+      patch: Record<string, unknown>
+    ): Promise<IntegrationChannel> {
+      const numericId = parseNumericId(integrationId, "int");
+      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>(`/integrations/${numericId}`, {
+        method: "PATCH",
+        token,
+        body: patch
       });
       // 域名建议提示（200 + updated:false）
       if (raw && typeof raw === "object" && "updated" in raw && (raw as Record<string, unknown>).updated === false) {

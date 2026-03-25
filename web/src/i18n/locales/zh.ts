@@ -1063,6 +1063,15 @@ const zh = {
     secretHint: "仅在机器人启用了加签安全设置时填写，留空则不使用签名。",
     sampleHint: "可直接套用示例地址后再修改。",
     applySample: "套用示例",
+    botTokenPlaceholder: "例如 123456789:ABCdefGHIjklMNOpqrSTUvwx",
+    botTokenHint: "留空表示保持不变。从 @BotFather 获取 Bot Token。",
+    chatIdPlaceholder: "例如 -1001234567890",
+    chatIdHint: "支持个人、群组或频道 ID，群组/频道 ID 通常以 -100 开头。",
+    accessTokenPlaceholder: "从钉钉机器人复制 access_token",
+    hookIdPlaceholder: "从飞书机器人复制 Hook ID（UUID 格式）",
+    webhookKeyPlaceholder: "从企业微信机器人复制 Webhook Key",
+    proxyUrl: "代理地址（选填）",
+    proxyHint: "如需通过代理访问通知服务，填写代理地址。留空则直连。支持 HTTP / SOCKS5。",
   },
 
   // ── audit page ──

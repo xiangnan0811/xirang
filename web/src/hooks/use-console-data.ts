@@ -87,6 +87,7 @@ export interface ConsoleDataState {
   removeIntegration: (integrationId: string) => Promise<void>;
   toggleIntegration: (integrationId: string) => Promise<void>;
   updateIntegration: (integrationId: string, patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }) => Promise<void>;
+  patchIntegration: (integrationId: string, patch: Record<string, unknown>) => Promise<void>;
 
   createSSHKey: (input: NewSSHKeyInput) => Promise<string>;
   updateSSHKey: (keyId: string, input: NewSSHKeyInput) => Promise<void>;
@@ -393,6 +394,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     addIntegration,
     removeIntegration,
     updateIntegration,
+    patchIntegration,
     testIntegration,
     toggleIntegration,
     retryAlert,
@@ -467,6 +469,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     removeIntegration,
     toggleIntegration,
     updateIntegration,
+    patchIntegration,
 
     createSSHKey,
     updateSSHKey,

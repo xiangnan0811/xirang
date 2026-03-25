@@ -84,7 +84,7 @@ func TestFeishuSenderSendsCorrectPayload(t *testing.T) {
 		Triggered: time.Now(),
 	}
 
-	if err := sender.Send(srv.URL, "", body); err != nil {
+	if err := sender.Send(http.DefaultClient, srv.URL, "", body); err != nil {
 		t.Fatalf("Send 失败: %v", err)
 	}
 	if receivedBody["msg_type"] != "text" {
@@ -108,7 +108,7 @@ func TestFeishuSenderWithSecretAddsSign(t *testing.T) {
 	sender := &feishuSender{}
 	body := payload{Severity: "warning", NodeName: "node-y", ErrorCode: "XR-NODE-1", Triggered: time.Now()}
 
-	if err := sender.Send(srv.URL, "my-secret", body); err != nil {
+	if err := sender.Send(http.DefaultClient, srv.URL, "my-secret", body); err != nil {
 		t.Fatalf("Send with secret 失败: %v", err)
 	}
 	if _, ok := receivedBody["sign"]; !ok {
@@ -131,7 +131,7 @@ func TestDingtalkSenderSendsMarkdown(t *testing.T) {
 	sender := &dingtalkSender{}
 	body := payload{Severity: "critical", NodeName: "node-z", ErrorCode: "XR-EXEC-2", Triggered: time.Now()}
 
-	if err := sender.Send(srv.URL, "", body); err != nil {
+	if err := sender.Send(http.DefaultClient, srv.URL, "", body); err != nil {
 		t.Fatalf("Send 失败: %v", err)
 	}
 	if receivedBody["msgtype"] != "markdown" {
@@ -151,7 +151,7 @@ func TestDingtalkSenderWithSecretAppendsToURL(t *testing.T) {
 	sender := &dingtalkSender{}
 	body := payload{Severity: "warning", NodeName: "node-a", ErrorCode: "XR-NODE-2", Triggered: time.Now()}
 
-	if err := sender.Send(srv.URL+"?access_token=abc", "my-dk-secret", body); err != nil {
+	if err := sender.Send(http.DefaultClient, srv.URL+"?access_token=abc", "my-dk-secret", body); err != nil {
 		t.Fatalf("Send with secret 失败: %v", err)
 	}
 	if requestURL == "" {
@@ -177,7 +177,7 @@ func TestWecomSenderSendsMarkdown(t *testing.T) {
 	sender := &wecomSender{}
 	body := payload{Severity: "warning", NodeName: "node-b", ErrorCode: "XR-NODE-3", Triggered: time.Now()}
 
-	if err := sender.Send(srv.URL, "", body); err != nil {
+	if err := sender.Send(http.DefaultClient, srv.URL, "", body); err != nil {
 		t.Fatalf("Send 失败: %v", err)
 	}
 	if receivedBody["msgtype"] != "markdown" {

@@ -86,9 +86,11 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         type: "email",
         name: "运维邮箱",
         endpoint: "ops@example.com",
+        hasSecret: false,
         enabled: true,
         failThreshold: 2,
         cooldownMinutes: 5,
+        proxyUrl: "",
       },
     ],
     tasks: [
@@ -142,6 +144,7 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     removeIntegration: vi.fn().mockResolvedValue(undefined),
     toggleIntegration: vi.fn().mockResolvedValue(undefined),
     updateIntegration: vi.fn().mockResolvedValue(undefined),
+    patchIntegration: vi.fn().mockResolvedValue(undefined),
     testIntegration: vi.fn().mockResolvedValue({
       ok: true,
       message: "测试成功",
