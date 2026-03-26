@@ -110,33 +110,25 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 	}
 
 	startedCountByBucket := make(map[time.Time]int)
-	if h.db != nil && h.db.Migrator().HasTable(&model.Task{}) {
-		var tasks []model.Task
-		if err := h.db.Where("last_run_at IS NOT NULL").Find(&tasks).Error; err == nil {
-			for _, taskEntity := range tasks {
-				if taskEntity.LastRunAt == nil {
-					continue
+	failedCountByBucket := make(map[time.Time]int)
+	if h.db != nil && h.db.Migrator().HasTable(&model.TaskRun{}) {
+		// 已开始的执行：按 started_at 聚合（排除 pending/skipped 等未真正执行的记录）
+		var startedRuns []model.TaskRun
+		if err := h.db.Where("started_at IS NOT NULL AND started_at >= ? AND started_at < ?", windowStart, windowEnd).
+			Order("started_at asc").Limit(10000).Find(&startedRuns).Error; err == nil {
+			for _, run := range startedRuns {
+				if run.StartedAt != nil {
+					startedCountByBucket[run.StartedAt.UTC().Truncate(cfg.Bucket)]++
 				}
-				startedAtUTC := taskEntity.LastRunAt.UTC()
-				if startedAtUTC.Before(windowStart) || !startedAtUTC.Before(windowEnd) {
-					continue
-				}
-				startedCountByBucket[startedAtUTC.Truncate(cfg.Bucket)] += 1
 			}
 		}
-	}
-
-	failedCountByBucket := make(map[time.Time]int)
-	if h.db != nil && h.db.Migrator().HasTable(&model.TaskLog{}) {
-		var failedLogs []model.TaskLog
-		if err := h.db.Where("level = ?", "error").Order("created_at asc").Limit(5000).Find(&failedLogs).Error; err == nil {
-			for _, row := range failedLogs {
-				createdAtUTC := row.CreatedAt.UTC()
-				if createdAtUTC.Before(windowStart) || !createdAtUTC.Before(windowEnd) {
-					continue
-				}
-				if strings.HasPrefix(strings.TrimSpace(row.Message), "任务最终失败:") {
-					failedCountByBucket[createdAtUTC.Truncate(cfg.Bucket)] += 1
+		// 失败的执行：按 finished_at 聚合（记录在失败发生的时刻，而非创建时刻）
+		var failedRuns []model.TaskRun
+		if err := h.db.Where("status = ? AND finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", "failed", windowStart, windowEnd).
+			Order("finished_at asc").Limit(10000).Find(&failedRuns).Error; err == nil {
+			for _, run := range failedRuns {
+				if run.FinishedAt != nil {
+					failedCountByBucket[run.FinishedAt.UTC().Truncate(cfg.Bucket)]++
 				}
 			}
 		}
@@ -187,9 +179,9 @@ func parseOverviewTrafficWindow(raw string) (overviewTrafficWindowConfig, bool) 
 	case "", "1h":
 		return overviewTrafficWindowConfig{Window: "1h", Duration: time.Hour, Bucket: 5 * time.Minute, LabelLayout: "15:04"}, true
 	case "24h":
-		return overviewTrafficWindowConfig{Window: "24h", Duration: 24 * time.Hour, Bucket: time.Hour, LabelLayout: "15:04"}, true
+		return overviewTrafficWindowConfig{Window: "24h", Duration: 24 * time.Hour, Bucket: 30 * time.Minute, LabelLayout: "15:04"}, true
 	case "7d":
-		return overviewTrafficWindowConfig{Window: "7d", Duration: 7 * 24 * time.Hour, Bucket: 6 * time.Hour, LabelLayout: "01-02 15:04"}, true
+		return overviewTrafficWindowConfig{Window: "7d", Duration: 7 * 24 * time.Hour, Bucket: 3 * time.Hour, LabelLayout: "01-02 15:04"}, true
 	default:
 		return overviewTrafficWindowConfig{}, false
 	}

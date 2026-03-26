@@ -27,10 +27,6 @@ func openOverviewTrafficTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func ptrTime(value time.Time) *time.Time {
-	return &value
-}
-
 func TestOverviewTrafficRejectsInvalidWindow(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
@@ -54,7 +50,7 @@ func TestOverviewTrafficRejectsInvalidWindow(t *testing.T) {
 
 func TestOverviewTrafficFormatsTimestampInServiceLocalTimezone(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -105,7 +101,7 @@ func TestOverviewTrafficFormatsTimestampInServiceLocalTimezone(t *testing.T) {
 
 func TestOverviewTrafficReturnsZeroFilledSeriesWhenEmpty(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -165,7 +161,7 @@ func TestOverviewTrafficReturnsZeroFilledSeriesWhenEmpty(t *testing.T) {
 
 func TestOverviewTrafficAveragesWithinBucketAcrossMinutes(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -213,22 +209,21 @@ func TestOverviewTrafficAveragesWithinBucketAcrossMinutes(t *testing.T) {
 	t.Fatalf("未找到非零 bucket")
 }
 
-func TestOverviewTrafficUsesTaskLastRunAtForStartedEventsWithoutSamples(t *testing.T) {
+func TestOverviewTrafficUsesTaskRunForStartedCount(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
-	taskEntity := model.Task{
-		Name:         "quick-task",
-		NodeID:       1,
-		ExecutorType: "rsync",
-		Status:       "success",
-		LastRunAt:    ptrTime(now.Add(-6 * time.Minute)),
+	startedAt := now.Add(-6 * time.Minute)
+	taskRun := model.TaskRun{
+		TaskID:    1,
+		Status:    "success",
+		StartedAt: &startedAt,
 	}
-	if err := db.Create(&taskEntity).Error; err != nil {
-		t.Fatalf("写入任务失败: %v", err)
+	if err := db.Create(&taskRun).Error; err != nil {
+		t.Fatalf("写入 TaskRun 失败: %v", err)
 	}
 
 	r := gin.New()
@@ -259,7 +254,7 @@ func TestOverviewTrafficUsesTaskLastRunAtForStartedEventsWithoutSamples(t *testi
 
 func TestOverviewTrafficIncludesActivityAndEventCounts(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -269,24 +264,24 @@ func TestOverviewTrafficIncludesActivityAndEventCounts(t *testing.T) {
 		{TaskID: 2, NodeID: 1, RunStartedAt: now.Add(-50 * time.Minute), SampledAt: now.Add(-50 * time.Minute), ThroughputMbps: 140},
 		{TaskID: 3, NodeID: 1, RunStartedAt: now.Add(-6 * time.Minute), SampledAt: now.Add(-6 * time.Minute), ThroughputMbps: 80},
 	}
-	tasks := []model.Task{
-		{Name: "task-1", NodeID: 1, ExecutorType: "rsync", Status: "success", LastRunAt: ptrTime(now.Add(-50 * time.Minute))},
-		{Name: "task-2", NodeID: 1, ExecutorType: "rsync", Status: "success", LastRunAt: ptrTime(now.Add(-50 * time.Minute))},
-		{Name: "task-3", NodeID: 1, ExecutorType: "rsync", Status: "failed", LastRunAt: ptrTime(now.Add(-6 * time.Minute))},
-	}
 	for _, sample := range samples {
 		if err := db.Create(&sample).Error; err != nil {
 			t.Fatalf("写入采样失败: %v", err)
 		}
 	}
-	for _, taskEntity := range tasks {
-		if err := db.Create(&taskEntity).Error; err != nil {
-			t.Fatalf("写入任务失败: %v", err)
-		}
+	started1 := now.Add(-50 * time.Minute)
+	started2 := now.Add(-50 * time.Minute)
+	started3 := now.Add(-6 * time.Minute)
+	finished3 := now.Add(-6 * time.Minute)
+	taskRuns := []model.TaskRun{
+		{TaskID: 1, Status: "success", StartedAt: &started1},
+		{TaskID: 2, Status: "success", StartedAt: &started2},
+		{TaskID: 3, Status: "failed", StartedAt: &started3, FinishedAt: &finished3},
 	}
-	failedLog := model.TaskLog{TaskID: 3, Level: "error", Message: "任务最终失败: boom", CreatedAt: now.Add(-6 * time.Minute).In(time.FixedZone("CST", 8*3600))}
-	if err := db.Create(&failedLog).Error; err != nil {
-		t.Fatalf("写入失败日志失败: %v", err)
+	for _, run := range taskRuns {
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatalf("写入 TaskRun 失败: %v", err)
+		}
 	}
 
 	r := gin.New()
@@ -326,7 +321,7 @@ func TestOverviewTrafficIncludesActivityAndEventCounts(t *testing.T) {
 
 func TestOverviewTrafficAggregatesSamplesByWindowBucket(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
-	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -382,5 +377,69 @@ func TestOverviewTrafficAggregatesSamplesByWindowBucket(t *testing.T) {
 	}
 	if !has240 || !has80 {
 		t.Fatalf("聚合结果不正确：has240=%v has80=%v points=%+v", has240, has80, result.Data.Points)
+	}
+}
+
+func TestOverviewTraffic24hReturns48Buckets(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	r := gin.New()
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r.GET("/overview/traffic", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=24h", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	var result struct {
+		Data struct {
+			BucketMinutes int        `json:"bucket_minutes"`
+			Points        []struct{} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.BucketMinutes != 30 {
+		t.Fatalf("24h bucket_minutes 应为 30，实际: %d", result.Data.BucketMinutes)
+	}
+	if len(result.Data.Points) != 48 {
+		t.Fatalf("24h 应返回 48 个 bucket，实际: %d", len(result.Data.Points))
+	}
+}
+
+func TestOverviewTraffic7dReturns56Buckets(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	r := gin.New()
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r.GET("/overview/traffic", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=7d", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	var result struct {
+		Data struct {
+			BucketMinutes int        `json:"bucket_minutes"`
+			Points        []struct{} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.BucketMinutes != 180 {
+		t.Fatalf("7d bucket_minutes 应为 180，实际: %d", result.Data.BucketMinutes)
+	}
+	if len(result.Data.Points) != 56 {
+		t.Fatalf("7d 应返回 56 个 bucket，实际: %d", len(result.Data.Points))
 	}
 }
