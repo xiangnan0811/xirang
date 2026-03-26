@@ -8,6 +8,7 @@ type OverviewSummaryResponse = {
   activePolicies: number;
   runningTasks: number;
   failedTasks24h: number;
+  currentThroughputMbps?: number;
 };
 
 type OverviewTrafficPointResponse = {
@@ -44,6 +45,7 @@ function mapOverviewSummary(payload?: OverviewSummaryResponse | null): OverviewS
     activePolicies: Number(payload?.activePolicies || 0),
     runningTasks: Number(payload?.runningTasks || 0),
     failedTasks24h: Number(payload?.failedTasks24h || 0),
+    currentThroughputMbps: Number(payload?.currentThroughputMbps ?? 0),
   };
 }
 

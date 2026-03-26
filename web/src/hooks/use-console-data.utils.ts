@@ -11,9 +11,7 @@ export function deriveOverview(
   const localFailed = tasks.filter((task) => task.status === "failed").length;
   const successCount = tasks.filter((task) => task.status === "success").length;
   const successRate = tasks.length > 0 ? Number(((successCount / tasks.length) * 100).toFixed(1)) : 100;
-  const avgSyncMbps = tasks
-    .filter((task) => task.status === "running" || task.status === "retrying")
-    .reduce((sum, task) => sum + task.speedMbps, 0);
+  const avgSyncMbps = summary?.currentThroughputMbps ?? 0;
 
   return {
     totalNodes: summary?.totalNodes ?? nodes.length,

@@ -22,7 +22,7 @@ describe("overview api", () => {
     fetchMock.mockReset();
   });
 
-  it("getOverviewSummary 请求 /overview", async () => {
+  it("getOverviewSummary 请求 /overview 并映射 currentThroughputMbps", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
         data: {
@@ -30,7 +30,8 @@ describe("overview api", () => {
           healthyNodes: 8,
           activePolicies: 3,
           runningTasks: 2,
-          failedTasks24h: 1
+          failedTasks24h: 1,
+          currentThroughputMbps: 42.5
         }
       }))
     );
@@ -42,6 +43,25 @@ describe("overview api", () => {
     expect(url).toBe("/api/v1/overview");
     expect(init.headers).toMatchObject({ Authorization: "Bearer token-1" });
     expect(result.failedTasks24h).toBe(1);
+    expect(result.currentThroughputMbps).toBe(42.5);
+  });
+
+  it("getOverviewSummary 后端未返回 currentThroughputMbps 时降级为 0", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        data: {
+          totalNodes: 5,
+          healthyNodes: 3,
+          activePolicies: 1,
+          runningTasks: 0,
+          failedTasks24h: 0
+        }
+      }))
+    );
+
+    const result = await api.getOverviewSummary("token-1");
+
+    expect(result.currentThroughputMbps).toBe(0);
   });
 
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {

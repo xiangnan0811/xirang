@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"math"
 	"net/http"
 	"time"
 
@@ -20,7 +21,7 @@ func NewOverviewHandler(db *gorm.DB) *OverviewHandler {
 }
 
 func (h *OverviewHandler) Get(c *gin.Context) {
-	since24h := time.Now().Add(-24 * time.Hour)
+	since24h := time.Now().UTC().Add(-24 * time.Hour)
 
 	type overviewCounts struct {
 		TotalNodes     int64
@@ -46,12 +47,36 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 		return
 	}
 
+	// 聚合当前吞吐：每个 running 任务取最近 60s 内最新采样，求和
+	var currentThroughput float64
+	cutoff := time.Now().UTC().Add(-60 * time.Second)
+	throughputRow := h.db.Raw(`
+		SELECT COALESCE(SUM(t.throughput_mbps), 0)
+		FROM task_traffic_samples t
+		INNER JOIN (
+			SELECT s.task_id, MAX(s.id) AS max_id
+			FROM task_traffic_samples s
+			INNER JOIN tasks ON tasks.id = s.task_id
+				AND tasks.status = ?
+				AND tasks.last_run_at IS NOT NULL
+				AND s.run_started_at = tasks.last_run_at
+			WHERE s.sampled_at >= ?
+			GROUP BY s.task_id
+		) latest ON t.id = latest.max_id
+	`, string(task.StatusRunning), cutoff).Row()
+	if throughputRow != nil {
+		if err := throughputRow.Scan(&currentThroughput); err != nil {
+			log.Printf("聚合当前吞吐失败（降级为0）: %v", err)
+		}
+	}
+
 	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"totalNodes":     counts.TotalNodes,
-		"healthyNodes":   counts.HealthyNodes,
-		"activePolicies": counts.ActivePolicies,
-		"runningTasks":   counts.RunningTasks,
-		"failedTasks24h": counts.FailedTasks,
+		"totalNodes":            counts.TotalNodes,
+		"healthyNodes":          counts.HealthyNodes,
+		"activePolicies":        counts.ActivePolicies,
+		"runningTasks":          counts.RunningTasks,
+		"failedTasks24h":        counts.FailedTasks,
+		"currentThroughputMbps": math.Round(currentThroughput*10) / 10,
 	}})
 }

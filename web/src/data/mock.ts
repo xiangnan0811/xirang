@@ -316,7 +316,8 @@ export const mockOverviewSummary: OverviewSummary = {
   healthyNodes: mockOverview.healthyNodes,
   activePolicies: mockOverview.activePolicies,
   runningTasks: mockOverview.runningTasks,
-  failedTasks24h: mockOverview.failedTasks24h
+  failedTasks24h: mockOverview.failedTasks24h,
+  currentThroughputMbps: 318
 };
 
 function generateTrafficValues(count: number, base: number, step: number) {

@@ -40,6 +40,7 @@ export interface OverviewSummary {
   activePolicies: number;
   runningTasks: number;
   failedTasks24h: number;
+  currentThroughputMbps: number;
 }
 
 export type OverviewTrafficWindow = "1h" | "24h" | "7d";

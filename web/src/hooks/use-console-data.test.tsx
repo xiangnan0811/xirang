@@ -423,6 +423,7 @@ describe("useConsoleData", () => {
     expect(result.current.warning).toBeNull();
     expect(result.current.nodes.length).toBeGreaterThan(0);
     expect(result.current.tasks.length).toBeGreaterThan(0);
+    expect(result.current.overview.avgSyncMbps).toBe(318);
 
     const traffic = await result.current.fetchOverviewTraffic("24h");
     expect(traffic.window).toBe("24h");

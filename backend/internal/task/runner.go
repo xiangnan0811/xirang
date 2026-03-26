@@ -229,7 +229,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		}
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	m.lastSampleBucketByTask.Delete(taskID)
 	if err := m.updateStatus(&taskEntity, StatusRunning, map[string]interface{}{
 		"last_run_at": now,
@@ -284,7 +284,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	}
 
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
-	runStartedAt := now.UTC()
+	runStartedAt := now
 	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
 		m.emitLog(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
