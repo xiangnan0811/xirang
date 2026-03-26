@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
@@ -73,6 +73,29 @@ vi.mock("@/components/task-create-dialog", () => ({
           onClick={() => void onSave({ name: "新任务", nodeId: 1 })}
         >
           创建
+        </button>
+      </div>
+    );
+  },
+}));
+
+vi.mock("@/components/task-run-history", () => ({
+  TaskRunHistory: () => <div data-testid="task-run-history">历史记录</div>,
+}));
+
+vi.mock("@/components/restore-confirm-dialog", () => ({
+  RestoreConfirmDialog: ({ open, onSuccess }: {
+    open: boolean;
+    onSuccess?: (runId: number) => void;
+  }) => {
+    if (!open) return null;
+    return (
+      <div data-testid="restore-dialog">
+        <button
+          data-testid="restore-confirm-btn"
+          onClick={() => onSuccess?.(999)}
+        >
+          确认恢复
         </button>
       </div>
     );
@@ -375,6 +398,124 @@ describe("TasksPage", () => {
     await user.click(triggerButtons[0]);
 
     expect(triggerTaskMock).toHaveBeenCalledWith(102);
+  });
+
+  it("hasActiveRun 为 true 时启动 5 秒轮询（覆盖 restore 场景）", async () => {
+    vi.useFakeTimers();
+    const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
+    createContext({
+      tasks: [
+        {
+          id: 301,
+          name: "恢复中的任务",
+          policyName: "恢复中的任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const, // restore 不改变 Task.status
+          progress: 25,
+          hasActiveRun: true, // 有活跃的 restore run
+          startedAt: "2026-02-24 10:00:00",
+          speedMbps: 0,
+        },
+      ] as unknown as ConsoleOutletContext["tasks"],
+      refreshTasks: refreshTasksMock,
+    } as unknown as Partial<ConsoleOutletContext>);
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 初始加载会调用 refreshTasks，清除计数
+    refreshTasksMock.mockClear();
+
+    // 推进 5 秒，应触发轮询
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(refreshTasksMock).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("所有任务完成且无活跃 run 时不启动 5 秒轮询", async () => {
+    vi.useFakeTimers();
+    const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
+    createContext({
+      tasks: [
+        {
+          id: 302,
+          name: "已完成任务",
+          policyName: "已完成任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          // hasActiveRun 缺省为 undefined（无活跃 run）
+          startedAt: "2026-02-24 10:00:00",
+          speedMbps: 0,
+        },
+      ] as unknown as ConsoleOutletContext["tasks"],
+      refreshTasks: refreshTasksMock,
+    } as unknown as Partial<ConsoleOutletContext>);
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    refreshTasksMock.mockClear();
+
+    // 推进 10 秒，不应触发轮询
+    await vi.advanceTimersByTimeAsync(10_100);
+    expect(refreshTasksMock).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("restore 成功后立即调用 refreshTasks（整页集成，不依赖 5 秒轮询）", async () => {
+    const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
+    createContext({
+      tasks: [
+        {
+          id: 501,
+          name: "rsync 备份任务",
+          policyName: "rsync 备份",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          executorType: "rsync",
+          rsyncSource: "/data",
+          rsyncTarget: "/backup/data",
+          speedMbps: 0,
+        },
+      ] as unknown as ConsoleOutletContext["tasks"],
+      refreshTasks: refreshTasksMock,
+    } as unknown as Partial<ConsoleOutletContext>);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    // 初始加载会调用 refreshTasks，清除计数
+    refreshTasksMock.mockClear();
+
+    // 1. 点击执行历史按钮，打开历史对话框
+    await user.click(screen.getByRole("button", { name: "查看任务 #501 执行历史" }));
+
+    // 2. 点击"从此备份恢复"按钮，打开 restore 对话框
+    fireEvent.click(screen.getByText("从此备份恢复"));
+
+    // 3. 点击 mock 的确认恢复按钮
+    fireEvent.click(screen.getByTestId("restore-confirm-btn"));
+
+    // 4. 断言 refreshTasks 被立即调用（而非等待 5 秒轮询）
+    expect(refreshTasksMock).toHaveBeenCalledTimes(1);
   });
 
   it("updateTask 失败时不关闭弹窗且显示错误 toast", async () => {

@@ -61,10 +61,10 @@ export function TasksPage() {
     void refreshPolicies();
   }, [refreshTasks, refreshNodes, refreshPolicies]);
 
-  // 当有活跃任务（running/pending/retrying）时，每 5 秒自动刷新任务状态
+  // 当有活跃任务（running/pending/retrying 或有活跃 run 如 restore）时，每 5 秒自动刷新
   useEffect(() => {
     const hasActiveTask = tasks.some(
-      (t) => t.status === "running" || t.status === "pending" || t.status === "retrying"
+      (t) => t.status === "running" || t.status === "pending" || t.status === "retrying" || t.hasActiveRun
     );
     if (!hasActiveTask) return;
 
@@ -580,6 +580,7 @@ export function TasksPage() {
         setBatchRetain={setBatchRetain}
         restoreDialogOpen={restoreDialogOpen}
         setRestoreDialogOpen={setRestoreDialogOpen}
+        onRestoreTriggered={() => void refreshTasks()}
         nodes={nodes}
         policies={policies}
         tasks={tasks}

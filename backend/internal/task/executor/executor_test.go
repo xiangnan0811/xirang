@@ -310,6 +310,9 @@ func TestParseProgressSampleParsesRsyncProgress2Line(t *testing.T) {
 	if sample.ThroughputMbps != 100 {
 		t.Fatalf("期望吞吐为 100 Mbps，实际: %v", sample.ThroughputMbps)
 	}
+	if sample.Percent != 64 {
+		t.Fatalf("期望百分比为 64，实际: %v", sample.Percent)
+	}
 }
 
 func TestParseProgressSampleRejectsNonCanonicalLine(t *testing.T) {
@@ -343,6 +346,9 @@ func TestRsyncExecutorEmitsProgressSamplesFromCarriageReturnStream(t *testing.T)
 	}
 	if samples[0].ThroughputMbps != 8 || samples[1].ThroughputMbps != 16 || samples[2].ThroughputMbps != 24 {
 		t.Fatalf("样本吞吐不符合预期: %+v", samples)
+	}
+	if samples[0].Percent != 10 || samples[1].Percent != 20 || samples[2].Percent != 30 {
+		t.Fatalf("样本百分比不符合预期: %+v", samples)
 	}
 }
 
@@ -457,5 +463,8 @@ func TestRsyncExecutorEmitsProgressSamples(t *testing.T) {
 	}
 	if samples[0].ThroughputMbps != 100 {
 		t.Fatalf("期望样本吞吐为 100 Mbps，实际: %v", samples[0].ThroughputMbps)
+	}
+	if samples[0].Percent != 64 {
+		t.Fatalf("期望样本百分比为 64，实际: %v", samples[0].Percent)
 	}
 }

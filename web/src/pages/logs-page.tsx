@@ -33,6 +33,8 @@ import {
 import { LogEntry } from "./logs-page.log-entry";
 import { LogsFullscreenDialog } from "./logs-page.fullscreen-dialog";
 
+const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
+
 export function LogsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -66,6 +68,10 @@ export function LogsPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPaging, setHistoryPaging] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
+  const [wsProgress, setWsProgress] = useState<Record<number, number>>({});
+  const prevRunningIdsRef = useRef<Set<number>>(new Set());
+  const lastProcessedWsLogIdRef = useRef(0);
+  const wsRunIdByTaskRef = useRef<Record<number, number>>({});
 
   const focusedTaskID =
     selectedTask !== "all" ? Number(selectedTask) : undefined;
@@ -268,14 +274,117 @@ export function LogsPage() {
     })();
   }, [focusedTask?.status, focusedTaskNumber, logs, refreshFocusedTaskStatus]);
 
+  // 从新到达的 WS 日志中解析 rsync 进度（logId 水位线防重放 + runId 隔离）
+  useEffect(() => {
+    if (logs.length === 0) {
+      lastProcessedWsLogIdRef.current = 0;
+      return;
+    }
+
+    const prevMaxLogId = lastProcessedWsLogIdRef.current;
+    const updates: Record<number, number> = {};
+    const runIdResets: number[] = [];
+
+    // logs 按 logId 降序排列；倒序遍历以按 logId 升序处理，
+    // 保证终态日志先于新 run 进度日志被处理，避免同批次回滚
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const log = logs[i];
+      if (!log.logId || log.logId <= prevMaxLogId) continue;
+      if (!log.taskId) continue;
+
+      // 检测 taskRunId 变化 → 新 run 开始，清除旧进度
+      if (log.taskRunId && wsRunIdByTaskRef.current[log.taskId] !== log.taskRunId) {
+        wsRunIdByTaskRef.current[log.taskId] = log.taskRunId;
+        runIdResets.push(log.taskId);
+        delete updates[log.taskId];
+      }
+
+      // 终态日志 → 清除该任务的进度缓存
+      if (log.status && isTerminalTaskStatus(log.status)) {
+        runIdResets.push(log.taskId);
+        delete updates[log.taskId];
+        continue;
+      }
+
+      if (!log.message) continue;
+      const m = RSYNC_PROGRESS_RE.exec(log.message);
+      if (m) {
+        const pct = parseInt(m[1], 10);
+        if (pct > 0 && pct <= 100) {
+          updates[log.taskId] = Math.max(updates[log.taskId] ?? 0, pct);
+        }
+      }
+    }
+
+    // 更新水位线
+    const maxLogId = logs.reduce((max, l) => Math.max(max, l.logId ?? 0), prevMaxLogId);
+    lastProcessedWsLogIdRef.current = maxLogId;
+
+    if (Object.keys(updates).length > 0 || runIdResets.length > 0) {
+      setWsProgress((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const tid of runIdResets) {
+          if (next[tid] !== undefined) {
+            delete next[tid];
+            changed = true;
+          }
+        }
+        for (const [tidStr, pct] of Object.entries(updates)) {
+          const tid = Number(tidStr);
+          if (pct > (next[tid] ?? 0)) {
+            next[tid] = pct;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, [logs]);
+
+  // 跟踪 running 任务集合变化：新 run 启动时清除旧缓存，终态时也清除
+  useEffect(() => {
+    const currentRunningIds = new Set(
+      tasks
+        .filter((t) => t.status === "running" || t.status === "retrying")
+        .map((t) => t.id),
+    );
+    const toClear: number[] = [];
+    // 新进入 running 的任务（新 run 开始）→ 清除旧进度
+    for (const id of currentRunningIds) {
+      if (!prevRunningIdsRef.current.has(id)) {
+        toClear.push(id);
+      }
+    }
+    // 离开 running 的任务（进入终态）→ 清除缓存
+    for (const id of prevRunningIdsRef.current) {
+      if (!currentRunningIds.has(id)) {
+        toClear.push(id);
+      }
+    }
+    prevRunningIdsRef.current = currentRunningIds;
+    if (toClear.length > 0) {
+      setWsProgress((prev) => {
+        const next = { ...prev };
+        for (const id of toClear) {
+          delete next[id];
+        }
+        return next;
+      });
+    }
+  }, [tasks]);
+
   const runningTasks = tasks.filter(
     (task) => task.status === "running" || task.status === "retrying",
   );
+  const focusedWsProgress = focusedTask ? wsProgress[focusedTask.id] : undefined;
   const progressValue = focusedTask
-    ? focusedTask.progress
+    ? (focusedWsProgress ?? focusedTask.progress)
     : Math.round(
-        runningTasks.reduce((sum, task) => sum + task.progress, 0) /
-          Math.max(1, runningTasks.length),
+        runningTasks.reduce(
+          (sum, task) => sum + (wsProgress[task.id] ?? task.progress),
+          0,
+        ) / Math.max(1, runningTasks.length),
       );
   const normalizedProgress = Math.min(100, Math.max(0, progressValue || 0));
 

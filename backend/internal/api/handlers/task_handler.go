@@ -114,6 +114,35 @@ func (h *TaskHandler) List(c *gin.Context) {
 	for i := range tasks {
 		tasks[i].Node = sanitizeNode(tasks[i].Node)
 	}
+	// 为有 running TaskRun 的任务填充实时进度（覆盖备份和恢复场景）
+	taskIDs := make([]uint, len(tasks))
+	for i, t := range tasks {
+		taskIDs[i] = t.ID
+	}
+	if len(taskIDs) > 0 {
+		type taskProgress struct {
+			TaskID   uint
+			Progress int
+		}
+		var rows []taskProgress
+		if err := h.db.Raw(
+			"SELECT task_id, progress FROM task_runs WHERE id IN "+
+				"(SELECT MAX(id) FROM task_runs WHERE task_id IN ? AND status = 'running' GROUP BY task_id)",
+			taskIDs,
+		).Scan(&rows).Error; err != nil {
+			rows = nil
+		}
+		pm := make(map[uint]int, len(rows))
+		for _, r := range rows {
+			pm[r.TaskID] = r.Progress
+		}
+		for i := range tasks {
+			if p, ok := pm[tasks[i].ID]; ok {
+				v := p
+				tasks[i].Progress = &v
+			}
+		}
+	}
 	paginatedResponse(c, tasks, total, pg)
 }
 
@@ -128,6 +157,14 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		return
 	}
 	taskEntity.Node = sanitizeNode(taskEntity.Node)
+	// 查询最新 running TaskRun 的进度（覆盖备份和恢复场景）
+	var runProgress []int
+	if err := h.db.Model(&model.TaskRun{}).
+		Where("task_id = ? AND status = ?", taskEntity.ID, "running").
+		Order("id DESC").Limit(1).
+		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
+		taskEntity.Progress = &runProgress[0]
+	}
 	c.JSON(http.StatusOK, gin.H{"data": taskEntity})
 }
 

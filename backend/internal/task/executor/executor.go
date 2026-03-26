@@ -28,6 +28,7 @@ type LogFunc func(level, message string)
 type ProgressSample struct {
 	ObservedAt     time.Time
 	ThroughputMbps float64
+	Percent        int
 }
 
 type ProgressFunc func(sample ProgressSample)
@@ -88,7 +89,7 @@ func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc, _ Pro
 	return -1, fmt.Errorf("不支持的执行器类型")
 }
 
-var progressLinePattern = regexp.MustCompile(`(?i)^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+[0-9]+%\s+([0-9][0-9,]*(?:\.[0-9]+)?)([kmgt]?)(?:i?b|b)/s\s+`)
+var progressLinePattern = regexp.MustCompile(`(?i)^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+([0-9]+)%\s+([0-9][0-9,]*(?:\.[0-9]+)?)([kmgt]?)(?:i?b|b)/s\s+`)
 
 type RsyncExecutor struct {
 	binary string
@@ -448,16 +449,21 @@ func splitProgressTokens(data []byte, atEOF bool) (advance int, token []byte, er
 func parseProgressSample(message string) (ProgressSample, bool) {
 	normalized := strings.TrimSpace(message)
 	matches := progressLinePattern.FindStringSubmatch(normalized)
-	if len(matches) != 3 {
+	if len(matches) != 4 {
 		return ProgressSample{}, false
 	}
-	throughputMbps, ok := parseThroughputMbps(matches[1], matches[2])
+	percent, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return ProgressSample{}, false
+	}
+	throughputMbps, ok := parseThroughputMbps(matches[2], matches[3])
 	if !ok {
 		return ProgressSample{}, false
 	}
 	return ProgressSample{
 		ObservedAt:     time.Now().UTC(),
 		ThroughputMbps: throughputMbps,
+		Percent:        percent,
 	}, true
 }
 

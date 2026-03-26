@@ -143,6 +143,7 @@ export interface TaskRecord {
   createdAt?: string;
   status: TaskStatus;
   progress: number;
+  hasActiveRun?: boolean;
   startedAt: string;
   nextRunAt?: string;
   errorCode?: string;
@@ -190,6 +191,7 @@ export interface TaskRunRecord {
   durationMs: number;
   verifyStatus: "none" | "passed" | "warning" | "failed";
   throughputMbps: number;
+  progress: number;
   lastError?: string;
   createdAt: string;
 }

@@ -8,7 +8,7 @@ const splitByErrorCodeRegex = /(XR-[A-Z]+-\d+)/g;
 const singleErrorCodeRegex = /^XR-[A-Z]+-\d+$/;
 
 export function isTerminalTaskStatus(status?: TaskStatus) {
-  return status === "success" || status === "failed" || status === "canceled";
+  return status === "success" || status === "failed" || status === "canceled" || status === "warning";
 }
 
 export function isActiveTaskStatus(status?: TaskStatus) {

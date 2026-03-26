@@ -231,6 +231,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	now := time.Now().UTC()
 	m.lastSampleBucketByTask.Delete(taskID)
+	m.lastProgressBucketByTask.Delete(taskID)
 	if err := m.updateStatus(&taskEntity, StatusRunning, map[string]interface{}{
 		"last_run_at": now,
 		"next_run_at": nil,
@@ -289,6 +290,9 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		m.emitLog(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.emitTrafficSample(taskID, taskEntity.NodeID, runStartedAt, sample)
+		if sample.Percent > 0 {
+			m.emitProgress(taskID, runID, sample.Percent)
+		}
 	})
 
 	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID)
@@ -374,6 +378,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 					"duration_ms":   duration,
 					"verify_status": verifyStatus,
 					"last_error":    result.Message,
+					"progress":      100,
 				})
 				runCompleted = true
 				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
@@ -408,6 +413,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"verify_status":   verifyStatus,
 			"throughput_mbps": avgThroughput,
 			"last_error":      "",
+			"progress":        100,
 		})
 		runCompleted = true
 		// 更新关联节点的最后备份时间
@@ -510,6 +516,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 
 	// restoreNodes 已在 TriggerRestore 同步路径中注册，此处仅负责清理
 	defer m.restoreNodes.Delete(restoreTask.NodeID)
+	m.lastProgressBucketByTask.Delete(taskID)
 
 	runCompleted := false
 	defer func() {
@@ -588,7 +595,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 				"last_error":  "恢复任务已取消",
 			})
 			runCompleted = true
-			m.emitLog(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "")
+			m.emitLog(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
 			return
 		}
 		errorMsg := fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error())
@@ -601,7 +608,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
 		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
 		return
 	}
@@ -621,13 +628,18 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", errorMsg, "")
+		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
 		return
 	}
 
 	_, err := restoreExec.RunRestore(execCtx, restoreTask, func(level, message string) {
 		m.emitLog(taskID, runIDPtr, level, message, "running")
-	}, nil)
+	}, func(sample executor.ProgressSample) {
+		m.emitTrafficSample(taskID, restoreTask.NodeID, now, sample)
+		if sample.Percent > 0 {
+			m.emitProgress(taskID, runID, sample.Percent)
+		}
+	})
 
 	// 检查是否被取消
 	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled)
@@ -639,7 +651,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  "恢复任务已取消",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复任务已取消", "")
+		m.emitLog(taskID, runIDPtr, "warn", "恢复任务已取消", "canceled")
 		return
 	}
 
@@ -654,7 +666,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "")
+		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
 		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
 		return
 	}
@@ -680,7 +692,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  "恢复任务已取消",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "")
+		m.emitLog(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "canceled")
 		return
 	}
 
@@ -695,9 +707,10 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"duration_ms":   duration,
 			"verify_status": verifyStatus,
 			"last_error":    result.Message,
+			"progress":      100,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "")
+		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "warning")
 		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, result.Message)
 		return
 	}
@@ -711,9 +724,10 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"duration_ms":   duration,
 		"verify_status": verifyStatus,
 		"last_error":    "",
+		"progress":      100,
 	})
 	runCompleted = true
-	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "")
+	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
 	if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "恢复任务成功"); resolveErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 	}

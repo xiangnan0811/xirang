@@ -59,6 +59,7 @@ export interface TasksPageDialogsProps {
   authToken: string | null;
   handleCreateTask: (input: NewTaskInput) => Promise<void>;
   handleUpdateTask: (input: NewTaskInput) => Promise<void>;
+  onRestoreTriggered?: () => void;
   pauseConfirmTask: TaskRecord | null;
   setPauseConfirmTask: (task: TaskRecord | null) => void;
   onConfirmPause: (taskId: number, cancelRunning: boolean) => Promise<void>;
@@ -90,6 +91,7 @@ export function TasksPageDialogs({
   setBatchRetain,
   restoreDialogOpen,
   setRestoreDialogOpen,
+  onRestoreTriggered,
   nodes,
   policies,
   tasks,
@@ -272,6 +274,7 @@ export function TasksPageDialogs({
           onSuccess={(runId) => {
             setRestoreDialogOpen(false);
             toast.success(t("tasks.restoreSuccess", { runId }));
+            onRestoreTriggered?.();
           }}
         />
       )}

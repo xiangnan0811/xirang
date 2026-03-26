@@ -104,8 +104,9 @@ type Manager struct {
 	sampleFlushInterval    time.Duration
 	sampleWorkerCancel     context.CancelFunc
 	sampleWorkerDone       chan struct{}
-	lastSampleBucketByTask sync.Map
-	sampleRetentionDays    int
+	lastSampleBucketByTask    sync.Map
+	lastProgressBucketByTask sync.Map
+	sampleRetentionDays      int
 	lastSampleCleanupAt    time.Time
 	sampleCleanupMu        sync.Mutex
 

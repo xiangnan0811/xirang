@@ -216,6 +216,7 @@ type Task struct {
 	LastError        string     `gorm:"type:text" json:"last_error"`
 	LastRunAt        *time.Time `json:"last_run_at"`
 	NextRunAt        *time.Time `json:"next_run_at"`
+	Progress         *int       `gorm:"-" json:"progress,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
@@ -258,6 +259,7 @@ type TaskRun struct {
 	DurationMs         int64      `gorm:"not null;default:0" json:"duration_ms"`
 	VerifyStatus       string     `gorm:"size:16;not null;default:none" json:"verify_status"`
 	ThroughputMbps     float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	Progress           int        `gorm:"not null;default:0" json:"progress"`
 	LastError          string     `gorm:"type:text" json:"last_error"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`

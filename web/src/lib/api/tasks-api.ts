@@ -33,6 +33,7 @@ type TaskResponse = {
   verify_status?: string;
   enabled?: boolean;
   skip_next?: boolean;
+  progress?: number;
 };
 
 type TaskLogResponse = {
@@ -89,23 +90,19 @@ function mapLogLevel(raw?: string): LogEvent["level"] {
   return "info";
 }
 
-function deriveTaskProgress(status: TaskStatus, retryCount: number, index: number): number {
-  switch (status) {
-    case "success":
-      return 100;
-    case "running":
-      return 32 + (index * 11) % 52;
-    case "retrying":
-      return Math.min(95, 18 + retryCount * 15 + (index % 13));
-    case "failed":
-      return 68;
-    case "warning":
-      return 100;
-    case "canceled":
-      return 0;
-    default:
-      return 0;
-  }
+/** @internal 仅导出用于测试 */
+export function deriveTaskProgress(
+  status: TaskStatus,
+  _retryCount: number,
+  _index: number,
+  apiProgress?: number,
+): number {
+  // 后端返回了进度字段时直接使用（包含 0，表示有活跃 run 但尚无进度样本）
+  if (apiProgress != null) return apiProgress;
+  if (status === "success" || status === "warning") return 100;
+  if (status === "canceled" || status === "pending" || status === "skipped") return 0;
+  // running/retrying 无进度数据时显示 0（不再使用虚假值）
+  return 0;
 }
 
 function mapTask(row: TaskResponse, index: number): TaskRecord {
@@ -123,7 +120,8 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     dependsOnTaskId: row.depends_on_task_id ?? null,
     createdAt: formatTime(row.created_at),
     status,
-    progress: deriveTaskProgress(status, retryCount, index),
+    progress: deriveTaskProgress(status, retryCount, index, row.progress),
+    hasActiveRun: row.progress != null,
     startedAt: formatTime(row.last_run_at ?? row.created_at),
     nextRunAt: formatTime(row.next_run_at),
     errorCode,

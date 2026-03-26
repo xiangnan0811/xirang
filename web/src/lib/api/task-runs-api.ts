@@ -11,6 +11,7 @@ type TaskRunResponse = {
   duration_ms: number;
   verify_status: string;
   throughput_mbps: number;
+  progress?: number;
   last_error?: string;
   created_at: string;
   updated_at?: string;
@@ -87,6 +88,7 @@ function mapTaskRun(row: TaskRunResponse): TaskRunRecord {
     durationMs: row.duration_ms,
     verifyStatus: mapVerifyStatus(row.verify_status),
     throughputMbps: row.throughput_mbps,
+    progress: row.progress ?? 0,
     lastError: row.last_error ?? undefined,
     createdAt: formatTime(row.created_at),
   };
