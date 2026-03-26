@@ -11,7 +11,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   ComposedChart,
-  Cell,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -136,7 +135,20 @@ export function OverviewPage() {
     };
   }, [trafficData]);
 
-
+  const { yMaxLeft, yMaxRight } = useMemo(() => {
+    const points = chartMetrics.chartData;
+    let maxThroughput = 0;
+    let maxCount = 0;
+    for (const point of points) {
+      if (visibleLayers.throughput) maxThroughput = Math.max(maxThroughput, point.throughput);
+      if (visibleLayers.activity) maxCount = Math.max(maxCount, point.activity);
+      if (visibleLayers.failures) maxCount = Math.max(maxCount, point.failed);
+    }
+    return {
+      yMaxLeft: maxThroughput > 0 ? Math.ceil((maxThroughput * 1.1) / 50) * 50 : 100,
+      yMaxRight: maxCount > 0 ? Math.max(1, Math.ceil(maxCount * 1.2)) : 5,
+    };
+  }, [chartMetrics.chartData, visibleLayers]);
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -296,7 +308,7 @@ export function OverviewPage() {
                     <ResponsiveContainer width="100%" height={208}>
                       <ComposedChart
                         data={chartMetrics.chartData}
-                        margin={{ top: 6, right: 4, left: -20, bottom: 4 }}
+                        margin={{ top: 6, right: 8, left: -12, bottom: 4 }}
                       >
                         <defs>
                           <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
@@ -313,10 +325,24 @@ export function OverviewPage() {
                           tickLine={false}
                         />
                         <YAxis
+                          yAxisId="left"
+                          domain={[0, yMaxLeft]}
                           tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
                           stroke="transparent"
                           tickLine={false}
                           axisLine={false}
+                          hide={!visibleLayers.throughput}
+                        />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          domain={[0, yMaxRight]}
+                          allowDecimals={false}
+                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          stroke="transparent"
+                          tickLine={false}
+                          axisLine={false}
+                          hide={!visibleLayers.activity && !visibleLayers.failures}
                         />
                         <Tooltip
                           contentStyle={{
@@ -326,22 +352,26 @@ export function OverviewPage() {
                             borderRadius: 6,
                           }}
                           labelStyle={{ color: "hsl(var(--muted-foreground))" }}
+                          formatter={(value, name) => {
+                            if (name === t("overview.chartThroughput")) return [`${value} Mbps`, name];
+                            return [value, name];
+                          }}
                         />
                         {visibleLayers.activity && (
-                          <Bar dataKey="activity" name={t("overview.chartActivity")} maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false}>
-                            {chartMetrics.chartData.map((entry, index) => (
-                              <Cell
-                                key={`activity-${index}`}
-                                fill={entry.failed > 0 && visibleLayers.failures ? "hsl(var(--destructive))" : "hsl(var(--chart-egress))"}
-                                opacity={entry.failed > 0 && visibleLayers.failures ? 0.7 : 0.22}
-                              />
-                            ))}
-                          </Bar>
+                          <Bar dataKey="activity" yAxisId="right" name={t("overview.chartActivity")}
+                            fill="hsl(var(--chart-egress))" opacity={0.22}
+                            maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                        )}
+                        {visibleLayers.failures && (
+                          <Bar dataKey="failed" yAxisId="right" name={t("overview.chartFailures")}
+                            fill="hsl(var(--destructive))" opacity={0.7}
+                            maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
                         )}
                         {visibleLayers.throughput && (
                           <Area
                             type="monotone"
                             dataKey="throughput"
+                            yAxisId="left"
                             name={t("overview.chartThroughput")}
                             stroke="hsl(var(--chart-ingress))"
                             strokeWidth={2}

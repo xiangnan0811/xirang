@@ -247,6 +247,7 @@ const en = {
     trafficWindow7d: "Last 7 days",
     chartActivity: "Activity",
     chartThroughput: "Throughput (Mbps)",
+    chartFailures: "Failures",
     legendThroughput: "Throughput",
     legendActivity: "Activity",
     legendFailures: "Failures",

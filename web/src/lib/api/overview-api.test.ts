@@ -49,7 +49,7 @@ describe("overview api", () => {
       createMockResponse(200, JSON.stringify({
         data: {
           window: "24h",
-          bucket_minutes: 60,
+          bucket_minutes: 30,
           has_real_samples: true,
           generated_at: "2026-03-07T12:00:00Z",
           points: [
@@ -74,7 +74,7 @@ describe("overview api", () => {
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/overview/traffic?window=24h");
     expect(result.window).toBe("24h");
-    expect(result.bucketMinutes).toBe(60);
+    expect(result.bucketMinutes).toBe(30);
     expect(result.hasRealSamples).toBe(true);
     expect(result.points).toEqual([
       {

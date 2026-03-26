@@ -311,7 +311,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       }
       return {
         window,
-        bucketMinutes: window === "1h" ? 5 : window === "24h" ? 60 : 360,
+        bucketMinutes: window === "1h" ? 5 : window === "24h" ? 30 : 180,
         hasRealSamples: false,
         generatedAt: new Date().toISOString(),
         points: []

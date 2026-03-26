@@ -144,7 +144,7 @@ function createTaskInput(id: number): NewTaskInput {
 function createTrafficSeries(window: OverviewTrafficSeries["window"] = "1h"): OverviewTrafficSeries {
   return {
     window,
-    bucketMinutes: window === "1h" ? 5 : window === "24h" ? 60 : 360,
+    bucketMinutes: window === "1h" ? 5 : window === "24h" ? 30 : 180,
     hasRealSamples: true,
     generatedAt: "2026-03-08T00:30:00Z",
     points: [

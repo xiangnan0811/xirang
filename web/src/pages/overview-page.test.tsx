@@ -210,7 +210,7 @@ describe("OverviewPage", () => {
       }
       return Promise.resolve({
         window: "24h",
-        bucketMinutes: 60,
+        bucketMinutes: 30,
         hasRealSamples: true,
         generatedAt: "2026-03-08T00:00:00Z",
         points: [

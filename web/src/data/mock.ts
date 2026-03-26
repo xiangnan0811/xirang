@@ -338,16 +338,16 @@ export function buildMockOverviewTrafficSeries(window: OverviewTrafficWindow): O
       }
     : window === "24h"
       ? {
-          count: 24,
-          bucketMinutes: 60,
-          format: (date: Date) => `${String(date.getHours()).padStart(2, "0")}:00`,
-          values: generateTrafficValues(24, 180, 42)
+          count: 48,
+          bucketMinutes: 30,
+          format: (date: Date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+          values: generateTrafficValues(48, 180, 42)
         }
       : {
-          count: 28,
-          bucketMinutes: 360,
+          count: 56,
+          bucketMinutes: 180,
           format: (date: Date) => `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`,
-          values: generateTrafficValues(28, 210, 55)
+          values: generateTrafficValues(56, 210, 55)
         };
 
   return {

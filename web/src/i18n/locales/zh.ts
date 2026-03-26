@@ -247,6 +247,7 @@ const zh = {
     trafficWindow7d: "近 7 天",
     chartActivity: "活动",
     chartThroughput: "吞吐 (Mbps)",
+    chartFailures: "失败",
     legendThroughput: "吞吐",
     legendActivity: "活动",
     legendFailures: "失败",
