@@ -10,6 +10,8 @@ interface InlineAlertProps {
   icon?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** 仅用于动态紧急告警；静态提示不应设为 true */
+  live?: boolean;
 }
 
 const toneMap = {
@@ -25,12 +27,13 @@ export function InlineAlert({
   icon,
   children,
   className,
+  live,
 }: InlineAlertProps) {
   const s = toneMap[tone];
   const Icon = s.defaultIcon;
 
   return (
-    <div className={cn("glass-panel overflow-hidden relative group p-3 transition-colors", className)}>
+    <div {...(live ? { role: "alert" } : undefined)} className={cn("glass-panel overflow-hidden relative group p-3 transition-colors", className)}>
       <div className={cn("absolute top-0 left-0 w-1 h-full opacity-60 group-hover:opacity-100 transition-opacity", s.line)} />
       <div className="flex items-start gap-3 pl-2">
         <div className={cn("flex items-center justify-center rounded-lg p-2 shrink-0", s.bg, s.text)}>

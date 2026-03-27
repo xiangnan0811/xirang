@@ -60,4 +60,21 @@ describe("SettingsPage", () => {
     renderWithRouter(<SettingsPage />);
     expect(screen.getByText("settings.personal.title")).toBeDefined();
   });
+
+  it("each tab has aria-controls pointing to its own panel id", () => {
+    renderWithRouter(<SettingsPage />);
+    const tabs = screen.getAllByRole("tab");
+    const tabIds = ["personal", "account", "users", "channels", "system", "maintenance"];
+    tabs.forEach((tab, i) => {
+      expect(tab).toHaveAttribute("id", `settings-tab-${tabIds[i]}`);
+      expect(tab).toHaveAttribute("aria-controls", `settings-panel-${tabIds[i]}`);
+    });
+  });
+
+  it("active tabpanel has id and aria-labelledby matching active tab", () => {
+    renderWithRouter(<SettingsPage />);
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("id", "settings-panel-personal");
+    expect(panel).toHaveAttribute("aria-labelledby", "settings-tab-personal");
+  });
 });

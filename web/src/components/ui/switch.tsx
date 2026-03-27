@@ -26,7 +26,7 @@ export function Switch({
         onClick?.(event);
       }}
       className={cn(
-        "relative inline-flex h-6 w-11 items-center rounded-full border transition-colors",
+        "relative inline-flex h-6 w-11 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         checked ? "border-success bg-success" : "border-input bg-muted",
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         className

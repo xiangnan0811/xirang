@@ -1221,6 +1221,7 @@ const zh = {
     emptyDescAdmin: "点击\"新增配置\"创建第一个 SLA 报告配置。",
     emptyDescViewer: "管理员尚未创建报告配置。",
     loadFailed: "加载报告失败",
+    deleteConfirm: "确定要删除此报告配置吗？",
     deletedSuccess: "已删除",
     deleteFailed: "删除失败",
     generatedSuccess: "报告已生成",
@@ -1313,6 +1314,7 @@ const zh = {
     disableDesc: "输入账号密码和当前验证码以关闭两步验证。",
     generatingKey: "正在生成密钥…",
     generateKeyFailed: "生成密钥失败",
+    qrCodeAlt: "两步验证二维码",
     cannotScanHint: "无法扫码？手动输入密钥：",
     verificationCode: "验证码",
     verifyAndEnable: "验证并开启",
@@ -1342,6 +1344,7 @@ const zh = {
     minute: "分钟",
     executionTime: "执行时间",
     selectWeekday: "选择星期",
+    weekdayAriaLabel: "星期{{day}}",
     weekdays: {
       "1": "一",
       "2": "二",
@@ -1611,6 +1614,7 @@ const zh = {
     startTime: "开始时间",
     endTime: "结束时间",
     limitMbps: "限速 (Mbps)",
+    deleteRule: "删除规则",
   },
 
   // ── display preferences ──
@@ -1633,6 +1637,11 @@ const zh = {
     labelWithCount: "通知（{{count}} 条未读）",
     noUnread: "暂无未读告警",
     viewAll: "查看全部通知",
+    minutesAgo: "{{count}} 分钟前",
+    hoursAgo: "{{count}} 小时前",
+    daysAgo: "{{count}} 天前",
+    critical: "严重",
+    warning: "警告",
   },
 
   // ── error boundary ──
@@ -1721,6 +1730,7 @@ const zh = {
     importConfig: "导入配置",
     exportSuccess: "配置已导出",
     exportFailed: "导出失败",
+    importConfirm: "确定要导入配置吗？现有冲突项将被跳过。",
     importSuccess: "导入成功：导入 {{imported}} 项，跳过 {{skipped}} 项",
     importFailed: "导入失败",
   },

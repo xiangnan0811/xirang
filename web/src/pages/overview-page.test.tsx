@@ -15,7 +15,8 @@ vi.mock("react-router-dom", async () => {
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useOutletContext: () => mockContextRef.current
+    useOutletContext: () => mockContextRef.current,
+    Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>,
   };
 });
 
@@ -314,7 +315,7 @@ describe("OverviewPage", () => {
 
     // Basic structure
     expect(screen.getByText("最近同步任务")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /查看更多/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /查看更多/ })).toBeInTheDocument();
 
     // Headers
     expect(screen.getByText("节点名称")).toBeInTheDocument();

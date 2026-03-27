@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import { Bell } from "lucide-react";
-import i18next from "i18next";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -16,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-function formatRelativeTime(dateString: string): string {
+function formatRelativeTime(dateString: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
   if (!dateString || dateString === "-") return "";
   const date = new Date(dateString);
   if (Number.isNaN(date.getTime())) return dateString;
@@ -28,10 +27,10 @@ function formatRelativeTime(dateString: string): string {
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
 
-  if (seconds < 60) return i18next.t('common.justNow');
-  if (minutes < 60) return `${minutes} 分钟前`;
-  if (hours < 24) return `${hours} 小时前`;
-  if (days < 30) return `${days} 天前`;
+  if (seconds < 60) return t('common.justNow');
+  if (minutes < 60) return t('notificationBell.minutesAgo', { count: minutes });
+  if (hours < 24) return t('notificationBell.hoursAgo', { count: hours });
+  if (days < 30) return t('notificationBell.daysAgo', { count: days });
   return dateString;
 }
 
@@ -82,12 +81,12 @@ export function NotificationBell({ token }: NotificationBellProps) {
           <div className="flex items-center gap-1.5">
             {unreadCount.critical > 0 ? (
               <Badge variant="danger" className="h-5 px-1.5 text-[10px]">
-                严重 {unreadCount.critical}
+                {t('notificationBell.critical')} {unreadCount.critical}
               </Badge>
             ) : null}
             {unreadCount.warning > 0 ? (
               <Badge variant="warning" className="h-5 px-1.5 text-[10px]">
-                警告 {unreadCount.warning}
+                {t('notificationBell.warning')} {unreadCount.warning}
               </Badge>
             ) : null}
           </div>
@@ -123,7 +122,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
                       {alert.nodeName}
                     </span>
                     <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-                      {formatRelativeTime(alert.triggeredAt)}
+                      {formatRelativeTime(alert.triggeredAt, t)}
                     </span>
                   </div>
                   <p className="line-clamp-2 w-full text-xs text-muted-foreground">

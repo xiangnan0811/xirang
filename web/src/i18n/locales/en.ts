@@ -1221,6 +1221,7 @@ const en = {
     emptyDescAdmin: "Click 'Add Config' to create your first SLA report configuration.",
     emptyDescViewer: "No report configurations have been created by an admin yet.",
     loadFailed: "Failed to load reports",
+    deleteConfirm: "Are you sure you want to delete this report config?",
     deletedSuccess: "Deleted",
     deleteFailed: "Delete failed",
     generatedSuccess: "Report generated",
@@ -1313,6 +1314,7 @@ const en = {
     disableDesc: "Enter your account password and current verification code to disable 2FA.",
     generatingKey: "Generating key...",
     generateKeyFailed: "Failed to generate key",
+    qrCodeAlt: "Two-factor authentication QR code",
     cannotScanHint: "Can't scan? Enter secret key manually:",
     verificationCode: "Verification code",
     verifyAndEnable: "Verify and Enable",
@@ -1342,6 +1344,7 @@ const en = {
     minute: "Minute",
     executionTime: "Execution time",
     selectWeekday: "Select weekday",
+    weekdayAriaLabel: "{{day}}",
     weekdays: {
       "1": "Mon",
       "2": "Tue",
@@ -1611,6 +1614,7 @@ const en = {
     startTime: "Start time",
     endTime: "End time",
     limitMbps: "Limit (Mbps)",
+    deleteRule: "Delete rule",
   },
 
   // ── display preferences ──
@@ -1633,6 +1637,11 @@ const en = {
     labelWithCount: "Notifications ({{count}} unread)",
     noUnread: "No unread alerts",
     viewAll: "View all notifications",
+    minutesAgo: "{{count}}m ago",
+    hoursAgo: "{{count}}h ago",
+    daysAgo: "{{count}}d ago",
+    critical: "Critical",
+    warning: "Warning",
   },
 
   // ── error boundary ──
@@ -1721,6 +1730,7 @@ const en = {
     importConfig: "Import Config",
     exportSuccess: "Configuration exported",
     exportFailed: "Export failed",
+    importConfirm: "Import configuration? Conflicting items will be skipped.",
     importSuccess: "Imported {{imported}} items, skipped {{skipped}}",
     importFailed: "Import failed",
   },

@@ -204,7 +204,7 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
                     key={item.key}
                     type="button"
                     onClick={() => setProtocol(item.key)}
-                    className={`flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-all ${
+                    className={`flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-[color,background-color,border-color] ${
                       protocol === item.key
                         ? "border-primary bg-primary/5 ring-2 ring-primary/30"
                         : "border-border/70 hover:border-primary/30 hover:bg-accent/30"

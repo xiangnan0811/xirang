@@ -48,11 +48,13 @@ export function SettingsPage() {
         {visibleTabs.map((tab) => (
           <button
             key={tab}
+            id={`settings-tab-${tab}`}
             role="tab"
             aria-selected={activeTab === tab}
+            aria-controls={`settings-panel-${tab}`}
             onClick={() => handleTabChange(tab)}
             className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors rounded-t-md -mb-px",
+              "px-4 py-2 text-sm font-medium transition-colors rounded-t-md -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2",
               activeTab === tab
                 ? "border-b-2 border-primary text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -63,7 +65,7 @@ export function SettingsPage() {
         ))}
       </div>
 
-      <div role="tabpanel">
+      <div role="tabpanel" id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>
         {activeTab === "personal" && <PersonalTab />}
         {activeTab === "account" && <AccountTab />}
         {activeTab === "users" && isAdmin && <UsersTab />}

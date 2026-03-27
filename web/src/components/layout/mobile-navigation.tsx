@@ -185,10 +185,10 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                     onClick={() => setDrawerOpen(false)}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all duration-200",
+                      "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200",
                       active
                         ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
-                        : "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
+                        : "border-transparent text-muted-foreground transition-[color,background-color,opacity] duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
                     )}
                   >
                     <Icon className="size-4" />
@@ -204,10 +204,10 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
               onClick={() => setDrawerOpen(false)}
               aria-current={location.pathname === "/app/settings" ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all duration-200 mt-2",
+                "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200 mt-2",
                 location.pathname === "/app/settings"
                   ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
-                  : "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
+                  : "border-transparent text-muted-foreground transition-[color,background-color,opacity] duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
               )}
             >
               <Settings className="size-4" />

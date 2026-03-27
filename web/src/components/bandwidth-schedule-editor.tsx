@@ -92,7 +92,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
             aria-label={t('bandwidthEditor.limitMbps')}
           />
           <span className="text-xs text-muted-foreground shrink-0">Mbps</span>
-          <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => removeRule(i)}>
+          <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => removeRule(i)} aria-label={t('bandwidthEditor.deleteRule')}>
             <Trash2 className="size-3.5 text-destructive" />
           </Button>
         </div>

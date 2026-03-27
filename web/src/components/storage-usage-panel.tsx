@@ -117,7 +117,7 @@ export function StorageUsagePanel() {
                 </div>
                 <div className="h-2 w-full rounded-full bg-muted/50 overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all ${pctColor(mp.pct)}`}
+                    className={`h-full rounded-full transition-[width] ${pctColor(mp.pct)}`}
                     style={{ width: `${Math.min(100, mp.pct)}%` }}
                   />
                 </div>

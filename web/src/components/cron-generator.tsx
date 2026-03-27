@@ -279,7 +279,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                       onClick={() => toggleWeekday(day.val)}
                       disabled={disabled}
                       aria-pressed={weekdays.includes(day.val)}
-                      aria-label={`星期${day.label}`}
+                      aria-label={t('cron.weekdayAriaLabel', { day: day.label })}
                     >
                       {day.label}
                     </Button>

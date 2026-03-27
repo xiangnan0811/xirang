@@ -137,7 +137,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                   {qrUrl && (
                     <div className="flex justify-center">
                       <div className="rounded-xl border border-border/50 bg-white p-4 shadow-sm backdrop-blur-sm">
-                        <QRCodeSVG value={qrUrl} size={176} />
+                        <QRCodeSVG value={qrUrl} size={176} role="img" aria-label={t("totp.qrCodeAlt")} />
                       </div>
                     </div>
                   )}
@@ -162,6 +162,8 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                   id="totp-verify-code"
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value)}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   autoComplete="one-time-code"
                   placeholder={t("totp.codePlaceholder")}
                   autoFocus

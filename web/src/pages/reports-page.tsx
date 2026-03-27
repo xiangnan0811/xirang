@@ -204,6 +204,7 @@ function ConfigCard({
                 size="icon"
                 className="size-8 text-muted-foreground hover:text-foreground"
                 title={t("reports.generateNow")}
+                aria-label={t("reports.generateNow")}
                 disabled={generating}
                 onClick={() => void handleGenerate()}
               >
@@ -218,6 +219,7 @@ function ConfigCard({
                 size="icon"
                 className="size-8 text-destructive/80 hover:text-destructive"
                 title={t("reports.deleteConfig")}
+                aria-label={t("reports.deleteConfig")}
                 onClick={() => onDelete(cfg.id)}
               >
                 <Trash2 className="size-4" />
@@ -289,6 +291,7 @@ export function ReportsPage() {
 
   const handleDelete = async (id: number) => {
     if (!token) return;
+    if (!window.confirm(t("reports.deleteConfirm"))) return;
     try {
       await reportsApi.deleteConfig(token, id);
       toast.success(t("reports.deletedSuccess"));

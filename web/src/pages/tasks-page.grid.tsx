@@ -110,10 +110,10 @@ export const TasksGrid = React.memo(function TasksGrid({
                 <span>{t('tasks.columnProgress')}</span>
                 <span>{task.progress}%</span>
               </div>
-              <div className="h-2 rounded-full bg-muted">
+              <div className="h-2 rounded-full bg-muted" role="progressbar" aria-valuenow={task.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`${task.progress}%`}>
                 <div
                   className={cn(
-                    "h-2 rounded-full transition-all",
+                    "h-2 rounded-full transition-[width]",
                     task.status === "success"
                       ? "bg-success"
                       : task.status === "failed"

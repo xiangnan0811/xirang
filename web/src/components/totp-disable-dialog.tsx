@@ -93,6 +93,8 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
                 id="totp-disable-code"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
+                inputMode="numeric"
+                pattern="[0-9]*"
                 autoComplete="one-time-code"
                 placeholder={t("totp.codePlaceholder")}
                 required

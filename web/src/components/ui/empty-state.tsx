@@ -20,7 +20,7 @@ function EmptyState({
   return (
     <div
       className={cn(
-        "glass-panel px-6 py-16 text-center transition-all duration-300",
+        "glass-panel px-6 py-16 text-center transition-[transform,opacity] duration-300",
         className
       )}
     >

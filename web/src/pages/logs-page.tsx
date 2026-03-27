@@ -546,7 +546,7 @@ export function LogsPage() {
                   >
                     <div
                       className={cn(
-                        "h-full transition-all duration-500",
+                        "h-full transition-[width] duration-500",
                         normalizedProgress < 40
                           ? "bg-destructive"
                           : normalizedProgress < 70
@@ -613,7 +613,7 @@ export function LogsPage() {
 
           <div
             className={cn(
-              "overflow-hidden transition-all duration-300 ease-in-out",
+              "overflow-hidden transition-[opacity,max-height] duration-300 ease-in-out",
               connectionWarning ? "max-h-24 opacity-100" : "max-h-0 opacity-0"
             )}
             aria-hidden={!connectionWarning}

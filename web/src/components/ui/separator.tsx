@@ -8,6 +8,8 @@ type SeparatorProps = {
 export function Separator({ className, orientation = "horizontal" }: SeparatorProps) {
   return (
     <div
+      role="separator"
+      aria-orientation={orientation}
       className={cn(
         "bg-border shrink-0",
         orientation === "horizontal" ? "h-px w-full" : "h-full w-px",

@@ -137,7 +137,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
     }
 
     for (const t of sortedTimes) {
-      const label = new Date(t).toLocaleTimeString("zh-CN", {
+      const label = new Date(t).toLocaleTimeString(undefined, {
         hour: "2-digit",
         minute: "2-digit",
       });
@@ -198,7 +198,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
             <button
               key={node.id}
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-all hover:bg-muted/60"
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-[color,opacity] hover:bg-muted/60"
               style={{ opacity: active ? 1 : 0.35 }}
               onClick={() => toggleNode(node.id)}
               aria-pressed={active}
@@ -254,7 +254,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
                   <button
                     key={node.id}
                     type="button"
-                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-all hover:bg-muted/60"
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-[color,opacity] hover:bg-muted/60"
                     style={{ opacity: active ? 1 : 0.35 }}
                     onClick={() => toggleNode(node.id)}
                     aria-pressed={active}

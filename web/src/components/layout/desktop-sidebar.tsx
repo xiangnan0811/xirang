@@ -19,11 +19,11 @@ export function DesktopSidebar({ role, isCollapsed, hasWarning = false, onToggle
   const location = useLocation();
   const navItems = getVisibleNavItems(role);
   const navItemBaseClass =
-    "flex items-center rounded-lg border py-2 text-sm transition-all duration-200 md:justify-center md:px-2 lg:justify-start lg:gap-3 lg:px-3";
+    "flex items-center rounded-lg border py-2 text-sm transition-[color,background-color,border-color,opacity] duration-200 md:justify-center md:px-2 lg:justify-start lg:gap-3 lg:px-3";
   const navItemActiveClass =
     "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))] shadow-[inset_0_0_0_1px_rgba(16,185,129,0.22)]";
   const navItemIdleClass =
-    "border-transparent text-muted-foreground transition-all duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground";
+    "border-transparent text-muted-foreground transition-[color,background-color,border-color,opacity] duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground";
 
   return (
     <aside

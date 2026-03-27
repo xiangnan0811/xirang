@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { TrendingUp, Clock, AlertTriangle, CheckCircle2, Maximize2 } from "lucide-react";
 import {
   Area,
@@ -280,6 +280,7 @@ export function OverviewPage() {
                       key={window}
                       size="sm"
                       variant={trafficWindow === window ? "default" : "outline"}
+                      aria-pressed={trafficWindow === window}
                       onClick={() => setTrafficWindow(window)}
                     >
                       {window}
@@ -479,9 +480,9 @@ export function OverviewPage() {
               <Clock className="size-4 text-primary" />
               {t("overview.recentTasks")}
             </CardTitle>
-            <Button variant="ghost" size="sm" className="h-auto p-0 text-xs px-2 py-1 text-muted-foreground hover:text-foreground" onClick={() => navigate("/app/tasks")}>
+            <Link to="/app/tasks" className="inline-flex items-center text-xs px-2 py-1 rounded-md text-muted-foreground hover:text-foreground transition-colors">
               {t("overview.viewMore")} &rarr;
-            </Button>
+            </Link>
           </CardHeader>
           <CardContent>
             {loading ? (

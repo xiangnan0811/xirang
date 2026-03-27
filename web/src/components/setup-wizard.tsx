@@ -290,7 +290,7 @@ export function SetupWizard() {
                 </div>
                 <div className="h-2 rounded-full bg-muted/60 overflow-hidden backdrop-blur-sm">
                   <div
-                    className="h-full bg-primary transition-all duration-500 ease-in-out"
+                    className="h-full bg-primary transition-[width] duration-500 ease-in-out"
                     style={{ width: `${progress}%` }}
                   />
                 </div>
@@ -311,7 +311,7 @@ export function SetupWizard() {
                         setWizardState((prev) => ({ ...prev, currentStep: stepIndex }))
                       }
                       className={cn(
-                        "flex items-center justify-center rounded-full transition-all duration-300",
+                        "flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-300",
                         isCurrent
                           ? "size-8 border-2 border-primary bg-primary/10"
                           : isDone

@@ -100,14 +100,14 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
-                    aria-label={t("nodes.selectAllVisible")}
+                    aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
                     className="size-4"
                     checked={checked}
                     onChange={(event) =>
                       toggleNodeSelection(node.id, event.target.checked)
                     }
                   />
-                  {t("common.selectAll")}
+                  {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
                   <StatusPulse tone={node.status} />

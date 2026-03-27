@@ -43,6 +43,10 @@ export function ConfigExportImport() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!window.confirm(t('configExport.importConfirm'))) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     setImporting(true);
     try {
       const text = await file.text();

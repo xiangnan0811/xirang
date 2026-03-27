@@ -213,6 +213,7 @@ export function AppShell() {
                 disabled={consoleData.loading}
                 aria-busy={consoleData.loading}
                 title={t('appShell.refreshData')}
+                aria-label={t('appShell.refreshData')}
               >
                 <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} />
               </Button>
@@ -244,7 +245,7 @@ export function AppShell() {
 
       {/* 侧边栏与主区包裹层 */}
       <div className={cn(
-        "relative flex w-full transition-all duration-200",
+        "relative flex w-full transition-[padding,margin] duration-200",
         hasWarning ? "pt-[92px]" : "pt-[60px]",
         sidebarCollapsed ? "md:pl-20" : "md:pl-64"
       )}>

@@ -112,7 +112,7 @@ export const TasksTable = React.memo(function TasksTable({
                   <td className="px-3 py-2.5">
                     <div className="w-36 space-y-1">
                       <p className="text-xs text-muted-foreground">{task.progress}%</p>
-                      <div className="h-2 rounded-full bg-muted">
+                      <div className="h-2 rounded-full bg-muted" role="progressbar" aria-valuenow={task.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`${task.progress}%`}>
                         <div
                           className={cn(
                             "h-2 rounded-full",
