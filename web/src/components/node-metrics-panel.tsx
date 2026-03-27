@@ -329,6 +329,20 @@ function MetricChart({
     [nodes, metricKey, idPrefix]
   );
 
+  const yMax = useMemo(() => {
+    let max = 0;
+    for (const point of data) {
+      for (const node of nodes) {
+        if (!enabledNodes.has(node.id)) continue;
+        const v = point[`n${node.id}`];
+        if (typeof v === "number" && v > max) max = v;
+      }
+    }
+    if (max <= 0) return 100;
+    const padded = max * 1.1;
+    return Math.min(100, Math.max(10, Math.ceil(padded / 5) * 5));
+  }, [data, nodes, enabledNodes]);
+
   return (
     <div className="glass-panel p-4">
       {showLabel && (
@@ -374,7 +388,7 @@ function MetricChart({
             tickLine={false}
           />
           <YAxis
-            domain={[0, 100]}
+            domain={[0, yMax]}
             tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
             stroke="transparent"
             tickLine={false}

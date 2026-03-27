@@ -150,7 +150,7 @@ describe("NodeMetricsPanel 放大交互", () => {
     expect(within(screen.getByRole("dialog")).getByText("磁盘 (%)")).toBeInTheDocument();
   });
 
-  it("百分比图 Y 轴固定 [0, 100]，不随数据动态缩放", async () => {
+  it("Y 轴根据数据动态缩放，上限不超过 100", async () => {
     const nodes = makeNodes(1);
 
     render(<NodeMetricsPanel nodes={nodes} token="test-token" />);
@@ -159,12 +159,15 @@ describe("NodeMetricsPanel 放大交互", () => {
       expect(mockGetNodeMetrics).toHaveBeenCalled();
     });
 
-    // 3 张小图，每张各有 1 个 YAxis
+    // mock 数据: cpu max=50→yMax=60, mem max=65→yMax=75, disk max=31→yMax=35
+    // 注: 50*1.1=55.00000000000001（浮点精度），ceil(55.00000000000001/5)=12→60
     const yAxes = await screen.findAllByTestId("y-axis");
     expect(yAxes.length).toBe(3);
-    for (const axis of yAxes) {
-      expect(axis).toHaveAttribute("data-domain", JSON.stringify([0, 100]));
-    }
+
+    const domains = yAxes.map((el) => JSON.parse(el.getAttribute("data-domain")!));
+    expect(domains[0]).toEqual([0, 60]);  // CPU
+    expect(domains[1]).toEqual([0, 75]);  // MEM
+    expect(domains[2]).toEqual([0, 35]);  // DISK
   });
 
   it("无在线节点时不渲染任何内容", () => {
