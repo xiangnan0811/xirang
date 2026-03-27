@@ -1,6 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
+import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { buildDemoTask } from "@/hooks/use-console-data.demo";
@@ -117,7 +118,7 @@ export function useTaskOperations({
               progress: 12,
               errorCode: undefined,
               lastError: undefined,
-              startedAt: new Date().toLocaleString("zh-CN", { hour12: false })
+              startedAt: formatTime(new Date().toISOString())
             }
           : task
       )

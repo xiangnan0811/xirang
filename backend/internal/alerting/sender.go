@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"xirang/backend/internal/config"
 )
 
 // Sender 通知发送器接口
@@ -62,7 +64,7 @@ type emailSender struct{}
 func (s *emailSender) Send(_ *http.Client, endpoint, _ string, body payload) error {
 	subject := fmt.Sprintf("[XiRang][%s] %s", strings.ToUpper(body.Severity), body.ErrorCode)
 	content := fmt.Sprintf("节点: %s\n策略: %s\n错误码: %s\n详情: %s\n时间: %s\n",
-		body.NodeName, body.PolicyName, body.ErrorCode, body.Message, body.Triggered.Format(time.RFC3339))
+		body.NodeName, body.PolicyName, body.ErrorCode, body.Message, body.Triggered.Local().Format(config.DisplayTimeFormatTZ))
 	return sendEmail(endpoint, subject, content)
 }
 

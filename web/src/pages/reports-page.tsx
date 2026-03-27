@@ -10,12 +10,13 @@ import {
   Zap,
 } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
+import { formatDateOnly } from "@/lib/api/core";
 import {
   createReportsApi,
   type Report,
   type ReportConfig,
 } from "@/lib/api/reports-api";
-import { getErrorMessage, getLocale } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -27,7 +28,7 @@ import { ReportConfigDialog } from "@/components/report-config-dialog";
 const reportsApi = createReportsApi();
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(getLocale());
+  return formatDateOnly(iso);
 }
 
 function SuccessRateBadge({ rate }: { rate: number }) {

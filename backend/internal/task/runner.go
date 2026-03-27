@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
@@ -470,7 +471,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
 			return
 		}
-		m.emitLog(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Format(time.RFC3339)), taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Local().Format(config.DisplayTimeFormatTZ)), taskEntity.Status)
 		// 保存链路上下文，重试时由 trigger() 恢复
 		m.retryChainContexts.Store(taskID, chainContext{chainRunID: chainRunID})
 		delay := time.Until(nextRun)

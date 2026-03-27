@@ -5,9 +5,8 @@ function getWeekdayName(d: string): string {
 }
 
 function getLocaleString(date: Date): string {
-  const lng = i18n.language ?? "zh";
-  const locale = lng.startsWith("zh") ? "zh-CN" : "en-US";
-  return date.toLocaleString(locale, { hour12: false });
+  const p = (n: number) => n.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
 }
 
 export function cronToNatural(cron: string) {

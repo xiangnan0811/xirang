@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
-import { formatBytes, getErrorMessage, getLocale } from "@/lib/utils";
+import { formatBytes, getErrorMessage } from "@/lib/utils";
+import { formatTime } from "@/lib/api/core";
 import type { ResticSnapshot, ResticEntry } from "@/lib/api/snapshots-api";
 import { toast } from "sonner";
 
@@ -105,7 +106,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
             {t('snapshots.backToList')}
           </Button>
           <span className="text-xs text-muted-foreground">
-            {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: new Date(selectedSnapshot.time).toLocaleString(getLocale()) })}
+            {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: formatTime(selectedSnapshot.time) })}
           </span>
         </div>
 
@@ -222,7 +223,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{snap.short_id}</div>
                 <div className="text-xs text-muted-foreground">
-                  {new Date(snap.time).toLocaleString(getLocale())}
+                  {formatTime(snap.time)}
                   {snap.hostname && ` · ${snap.hostname}`}
                 </div>
               </div>

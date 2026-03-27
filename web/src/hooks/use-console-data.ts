@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import i18n from "@/i18n";
 import { getRefreshIntervalMs } from "@/hooks/use-user-preferences";
 import { apiClient } from "@/lib/api/client";
-import { getErrorMessage, getLocale } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/utils";
+import { formatTimeOnly } from "@/lib/api/core";
 
 // mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
 const loadMocks = () => import("@/data/mock");
@@ -116,7 +117,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const [loading, setLoading] = useState<boolean>(true);
   const [warning, setWarning] = useState<string | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
-  const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date().toLocaleTimeString(getLocale()));
+  const [lastSyncedAt, setLastSyncedAt] = useState(() => formatTimeOnly(new Date().toISOString()));
   const [refreshVersion, setRefreshVersion] = useState(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
@@ -173,14 +174,14 @@ export function useConsoleData(token: string | null): ConsoleDataState {
         setOverviewSummary(mocks.mockOverviewSummary);
         setWarning(null);
         setLoading(false);
-        setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
+        setLastSyncedAt(formatTimeOnly(new Date().toISOString()));
         return;
       }
       setOverviewSummary(null);
       setAlerts([]);
       setWarning(i18n.t("console.notLoggedIn"));
       setLoading(false);
-      setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
+      setLastSyncedAt(formatTimeOnly(new Date().toISOString()));
       return;
     }
 
@@ -221,7 +222,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     }
 
     setLoading(false);
-    setLastSyncedAt(new Date().toLocaleTimeString(getLocale()));
+    setLastSyncedAt(formatTimeOnly(new Date().toISOString()));
   }, [token, demoModeEnabled]);
 
   const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {

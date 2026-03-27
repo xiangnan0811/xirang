@@ -31,7 +31,8 @@ const tagPool = ["core", "db", "edge", "archive", "cdn", "critical", "prod", "st
 
 function formatDate(minutesAgo: number): string {
   const date = new Date(Date.now() - minutesAgo * 60_000);
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const p = (n: number) => n.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
 }
 
 function nodeStatusByIndex(index: number): NodeRecord["status"] {

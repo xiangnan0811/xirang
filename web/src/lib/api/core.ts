@@ -151,16 +151,30 @@ export function parseNumericId(rawId: string, prefix: string): number {
   throw new Error(i18n.t("common.invalidIdFormat", { prefix, rawId }));
 }
 
+function pad(n: number): string {
+  return n.toString().padStart(2, "0");
+}
+
+// 统一时间显示格式 YYYY-MM-DD HH:mm:ss，语言无关（中英文一致），本地时区。
 export function formatTime(input?: string | null): string {
-  if (!input) {
-    return "-";
-  }
-  const date = new Date(input);
-  if (Number.isNaN(date.getTime())) {
-    return input;
-  }
-  const locale = i18n.language === "en" ? "en-US" : "zh-CN";
-  return date.toLocaleString(locale, { hour12: false });
+  if (!input) return "-";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return input;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+export function formatDateOnly(input?: string | null): string {
+  if (!input) return "-";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return input;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function formatTimeOnly(input?: string | null): string {
+  if (!input) return "-";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return input;
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 export function extractErrorCode(message?: string): string | undefined {

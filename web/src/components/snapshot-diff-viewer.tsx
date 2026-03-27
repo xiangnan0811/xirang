@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
-import { formatBytes, getErrorMessage, getLocale } from "@/lib/utils";
+import { formatBytes, getErrorMessage } from "@/lib/utils";
+import { formatTime } from "@/lib/api/core";
 import type { ResticSnapshot } from "@/lib/api/snapshots-api";
 import type { SnapshotDiff } from "@/lib/api/snapshot-diff-api";
 import { toast } from "sonner";
@@ -72,7 +73,7 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
             <option value="">{t('snapshots.selectSnapshot')}</option>
             {snapshots.map((s) => (
               <option key={s.id} value={s.short_id}>
-                {s.short_id} — {new Date(s.time).toLocaleString(getLocale())}
+                {s.short_id} — {formatTime(s.time)}
               </option>
             ))}
           </select>
@@ -87,7 +88,7 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
             <option value="">{t('snapshots.selectSnapshot')}</option>
             {snapshots.map((s) => (
               <option key={s.id} value={s.short_id}>
-                {s.short_id} — {new Date(s.time).toLocaleString(getLocale())}
+                {s.short_id} — {formatTime(s.time)}
               </option>
             ))}
           </select>

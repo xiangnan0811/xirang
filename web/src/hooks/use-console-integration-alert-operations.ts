@@ -1,6 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
+import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { buildDemoIntegration } from "@/hooks/use-console-data.demo";
@@ -211,7 +212,7 @@ export function useIntegrationAlertOperations({
         alertId: alertID,
         integrationId: integrationID,
         status: "sent",
-        createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
+        createdAt: formatTime(new Date().toISOString())
       }
     };
   }, [exec]);

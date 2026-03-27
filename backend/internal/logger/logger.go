@@ -23,7 +23,7 @@ func Init(level string) {
 		Timestamp().
 		Logger()
 
-	// 使用 RFC3339 时间格式
+	// 结构化日志保留 RFC3339（含时区），便于机器消费和跨时区排障
 	zerolog.TimeFieldFormat = time.RFC3339
 }
 

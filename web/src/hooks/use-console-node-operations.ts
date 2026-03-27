@@ -1,6 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { formatTime } from "@/lib/api/core";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import {
@@ -247,7 +248,7 @@ export function useNodeOperations({
     if (result) {
       if (result.ok) {
         const r = result.data;
-        const probeTime = new Date().toLocaleString("zh-CN", { hour12: false });
+        const probeTime = formatTime(new Date().toISOString());
         markInventoryMutated();
         setNodes((prev) =>
           prev.map((node) =>

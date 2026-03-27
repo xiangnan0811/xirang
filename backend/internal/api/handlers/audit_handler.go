@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -87,7 +88,7 @@ func (h *AuditHandler) ExportCSV(c *gin.Context) {
 	for _, row := range items {
 		record := []string{
 			strconv.FormatUint(uint64(row.ID), 10),
-			row.CreatedAt.Format(time.RFC3339),
+			row.CreatedAt.Local().Format(config.DisplayTimeFormat),
 			row.Username,
 			row.Role,
 			row.Method,

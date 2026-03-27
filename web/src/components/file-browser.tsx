@@ -9,6 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { formatTime } from "@/lib/api/core";
 import { FilePreviewDialog } from "@/components/file-preview-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import type { FileEntry, FileListResult, FileContentResult } from "@/lib/api/files-api";
@@ -45,11 +46,7 @@ function formatSize(bytes: number, isDir: boolean): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-function formatModTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString("zh-CN", { hour12: false });
-}
+const formatModTime = formatTime;
 
 export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
   const { t } = useTranslation();

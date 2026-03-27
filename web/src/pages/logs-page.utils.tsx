@@ -1,4 +1,5 @@
 import type { LogEvent, TaskStatus } from "@/types/domain";
+import { formatTime } from "@/lib/api/core";
 
 export const selectedNodeStorageKey = "xirang.logs.selected-node";
 export const selectedTaskStorageKey = "xirang.logs.selected-task";
@@ -51,12 +52,7 @@ export function parseToMillis(log: LogEvent) {
   return parsed;
 }
 
-export function formatLogTime(ts: string) {
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return ts;
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
+export const formatLogTime = formatTime;
 
 export function minLogId(logs: LogEvent[]) {
   let min = Number.MAX_SAFE_INTEGER;

@@ -345,7 +345,7 @@ func listSFTPDir(client *sftp.Client, path string) ([]FileEntry, bool, error) {
 			IsDir:   info.IsDir(),
 			Size:    info.Size(),
 			Mode:    info.Mode().String(),
-			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+			ModTime: info.ModTime().Format(time.RFC3339),
 		})
 	}
 	return entries, truncated, nil
@@ -376,7 +376,7 @@ func listLocalDir(path string) ([]FileEntry, bool, error) {
 			IsDir:   de.IsDir(),
 			Size:    info.Size(),
 			Mode:    info.Mode().String(),
-			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+			ModTime: info.ModTime().Format(time.RFC3339),
 		})
 	}
 	return entries, truncated, nil

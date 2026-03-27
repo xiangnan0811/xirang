@@ -5,6 +5,7 @@ import {
   describeCron,
   parseTags
 } from "@/hooks/use-console-data.utils";
+import { formatTime } from "@/lib/api/core";
 import type {
   IntegrationChannel,
   NewIntegrationInput,
@@ -26,7 +27,7 @@ export function buildDemoSSHKey(input: NewSSHKeyInput): SSHKeyRecord {
     keyType: input.keyType,
     privateKey: input.privateKey,
     fingerprint: buildFingerprint(input.privateKey),
-    createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
+    createdAt: formatTime(new Date().toISOString())
   };
 }
 
@@ -126,7 +127,7 @@ export function buildDemoBackupTask(
     nodeId: node.id,
     status: "running",
     progress: 6,
-    startedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+    startedAt: formatTime(new Date().toISOString()),
     speedMbps: 96,
     enabled: true
   };
@@ -139,7 +140,7 @@ export function simulateDemoConnection(nodeID: number): {
   const now = new Date();
   const seed = (now.getSeconds() + nodeID * 17) % 10;
   const ok = seed >= 2;
-  const probeTime = now.toLocaleString("zh-CN", { hour12: false });
+  const probeTime = formatTime(now.toISOString());
 
   if (!ok) {
     return {
