@@ -1083,6 +1083,7 @@ const zh = {
     exporting: "导出中...",
     pathFilterPlaceholder: "按路径关键字过滤，例如 /nodes /policies",
     pathFilterAriaLabel: "按路径关键字过滤",
+    methodFilter: "按请求方法过滤",
     timeRanges: {
       all: "全部",
       "1h": "近 1 小时",
@@ -1221,7 +1222,8 @@ const zh = {
     emptyDescAdmin: "点击\"新增配置\"创建第一个 SLA 报告配置。",
     emptyDescViewer: "管理员尚未创建报告配置。",
     loadFailed: "加载报告失败",
-    deleteConfirm: "确定要删除此报告配置吗？",
+    deleteConfirm: "删除报告配置",
+    deleteConfirmDesc: "确定要删除此报告配置吗？此操作不可撤销。",
     deletedSuccess: "已删除",
     deleteFailed: "删除失败",
     generatedSuccess: "报告已生成",

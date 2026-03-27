@@ -111,7 +111,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   // 目录优先，文件其次，各自按名称排序
   const sorted = [...entries].sort((a, b) => {
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-    return a.name.localeCompare(b.name, "zh-CN");
+    return a.name.localeCompare(b.name);
   });
 
   return (

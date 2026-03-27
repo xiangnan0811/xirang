@@ -190,6 +190,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
               value={restoreTarget}
               onChange={(e) => setRestoreTarget(e.target.value)}
               placeholder={t('snapshots.restoreTargetPlaceholder')}
+              aria-label={t('snapshots.restoreTargetPlaceholder')}
               className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
             />
             <Button size="sm" onClick={handleRestore} disabled={restoring}>

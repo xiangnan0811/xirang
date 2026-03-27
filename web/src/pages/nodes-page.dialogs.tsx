@@ -143,6 +143,7 @@ export function NodesPageDialogs({
               <Button
                 variant={fileBrowserTab === "files" ? "default" : "outline"}
                 size="sm"
+                aria-pressed={fileBrowserTab === "files"}
                 onClick={() => setFileBrowserTab("files")}
               >
                 {t("nodes.tabFiles")}
@@ -150,6 +151,7 @@ export function NodesPageDialogs({
               <Button
                 variant={fileBrowserTab === "docker" ? "default" : "outline"}
                 size="sm"
+                aria-pressed={fileBrowserTab === "docker"}
                 onClick={() => setFileBrowserTab("docker")}
               >
                 {t("nodes.tabDockerVolumes")}

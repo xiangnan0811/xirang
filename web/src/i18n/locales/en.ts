@@ -1083,6 +1083,7 @@ const en = {
     exporting: "Exporting...",
     pathFilterPlaceholder: "Filter by path keyword, e.g. /nodes /policies",
     pathFilterAriaLabel: "Filter by path keyword",
+    methodFilter: "Filter by HTTP method",
     timeRanges: {
       all: "All",
       "1h": "Last 1 hour",
@@ -1221,7 +1222,8 @@ const en = {
     emptyDescAdmin: "Click 'Add Config' to create your first SLA report configuration.",
     emptyDescViewer: "No report configurations have been created by an admin yet.",
     loadFailed: "Failed to load reports",
-    deleteConfirm: "Are you sure you want to delete this report config?",
+    deleteConfirm: "Delete Report Config",
+    deleteConfirmDesc: "Are you sure you want to delete this report config? This action cannot be undone.",
     deletedSuccess: "Deleted",
     deleteFailed: "Delete failed",
     generatedSuccess: "Report generated",

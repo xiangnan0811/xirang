@@ -24,7 +24,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.theme")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.themeDesc")}</p>
           </div>
-          <select className={selectClass} value={theme} onChange={(e) => setTheme(e.target.value as "light" | "dark")}>
+          <select className={selectClass} value={theme} onChange={(e) => setTheme(e.target.value as "light" | "dark")} aria-label={t("settings.personal.theme")}>
             <option value="light">{t("settings.personal.themeLight")}</option>
             <option value="dark">{t("settings.personal.themeDark")}</option>
             <option value="system">{t("settings.personal.themeSystem")}</option>
@@ -37,7 +37,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.density")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.densityDesc")}</p>
           </div>
-          <select className={selectClass} value={density} onChange={(e) => setDensity(e.target.value as "comfortable" | "compact")}>
+          <select className={selectClass} value={density} onChange={(e) => setDensity(e.target.value as "comfortable" | "compact")} aria-label={t("settings.personal.density")}>
             <option value="comfortable">{t("settings.personal.densityComfortable")}</option>
             <option value="compact">{t("settings.personal.densityCompact")}</option>
           </select>
@@ -49,7 +49,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.powerMode")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.powerModeDesc")}</p>
           </div>
-          <select className={selectClass} value={powerMode} onChange={(e) => setPowerMode(e.target.value as "normal" | "save")}>
+          <select className={selectClass} value={powerMode} onChange={(e) => setPowerMode(e.target.value as "normal" | "save")} aria-label={t("settings.personal.powerMode")}>
             <option value="normal">{t("settings.personal.powerNormal")}</option>
             <option value="save">{t("settings.personal.powerSave")}</option>
           </select>
@@ -61,7 +61,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.language")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.languageDesc")}</p>
           </div>
-          <select className={selectClass} value={i18n.language} onChange={(e) => i18n.changeLanguage(e.target.value)}>
+          <select className={selectClass} value={i18n.language} onChange={(e) => i18n.changeLanguage(e.target.value)} aria-label={t("settings.personal.language")}>
             <option value="zh">中文</option>
             <option value="en">English</option>
           </select>
@@ -73,7 +73,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.refreshInterval")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.refreshIntervalDesc")}</p>
           </div>
-          <select className={selectClass} value={String(refreshInterval)} onChange={(e) => setRefreshInterval(e.target.value)}>
+          <select className={selectClass} value={String(refreshInterval)} onChange={(e) => setRefreshInterval(e.target.value)} aria-label={t("settings.personal.refreshInterval")}>
             <option value="0">{t("settings.personal.refreshOff")}</option>
             <option value="30">30s</option>
             <option value="60">60s</option>
@@ -88,7 +88,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.defaultPageSize")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.defaultPageSizeDesc")}</p>
           </div>
-          <select className={selectClass} value={String(defaultPageSize)} onChange={(e) => setDefaultPageSize(e.target.value)}>
+          <select className={selectClass} value={String(defaultPageSize)} onChange={(e) => setDefaultPageSize(e.target.value)} aria-label={t("settings.personal.defaultPageSize")}>
             <option value="10">10</option>
             <option value="25">25</option>
             <option value="50">50</option>
@@ -102,7 +102,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.datetimeFormat")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.datetimeFormatDesc")}</p>
           </div>
-          <select className={selectClass} value={datetimeFormat} onChange={(e) => setDatetimeFormat(e.target.value)}>
+          <select className={selectClass} value={datetimeFormat} onChange={(e) => setDatetimeFormat(e.target.value)} aria-label={t("settings.personal.datetimeFormat")}>
             <option value="locale">{t("settings.personal.dtLocale")}</option>
             <option value="iso">ISO 8601</option>
             <option value="relative">{t("settings.personal.dtRelative")}</option>

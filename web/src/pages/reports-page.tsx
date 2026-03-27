@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "@/components/ui/toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import { ReportConfigDialog } from "@/components/report-config-dialog";
 
 const reportsApi = createReportsApi();
@@ -268,6 +269,7 @@ export function ReportsPage() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [configs, setConfigs] = useState<ReportConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -291,7 +293,8 @@ export function ReportsPage() {
 
   const handleDelete = async (id: number) => {
     if (!token) return;
-    if (!window.confirm(t("reports.deleteConfirm"))) return;
+    const ok = await confirm({ title: t("reports.deleteConfirm"), description: t("reports.deleteConfirmDesc") });
+    if (!ok) return;
     try {
       await reportsApi.deleteConfig(token, id);
       toast.success(t("reports.deletedSuccess"));
@@ -315,6 +318,7 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-4 p-4">
+      {confirmDialog}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">{t("reports.pageTitle")}</h1>

@@ -236,7 +236,7 @@ export function OverviewPage() {
                         <button
                           key={node.id}
                           type="button"
-                          className={`relative size-3 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 group`}
+                          className={`relative size-3 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                           onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
@@ -447,7 +447,7 @@ export function OverviewPage() {
                   <button
                     key={node.id}
                     type="button"
-                    className={`relative size-3.5 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 group`}
+                    className={`relative size-3.5 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                     onClick={() => {
                       setMatrixFullscreen(false);
                       navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`);

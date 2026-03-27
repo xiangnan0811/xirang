@@ -232,6 +232,7 @@ export function AuditPage() {
             <AppSelect
               value={method}
               onChange={(event) => setMethod(event.target.value)}
+              aria-label={t("audit.methodFilter")}
             >
               <option value="all">{t("audit.allMethods")}</option>
               <option value="GET">GET</option>
