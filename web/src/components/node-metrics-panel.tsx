@@ -9,8 +9,16 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Loader2 } from "lucide-react";
+import { Loader2, Maximize2 } from "lucide-react";
 import { apiClient } from "@/lib/api/client";
+import {
+  Dialog,
+  DialogCloseButton,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { NodeMetricSample } from "@/lib/api/node-metrics-api";
 import type { NodeRecord } from "@/types/domain";
 
@@ -156,6 +164,8 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
     return result;
   }, [metricsMap, onlineNodes]);
 
+  const [expandedMetric, setExpandedMetric] = useState<MetricKey | null>(null);
+
   const hasData = Object.values(metricsMap).some((s) => s.length > 0);
 
   if (onlineNodes.length === 0) return null;
@@ -219,9 +229,66 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
             enabledNodes={enabledNodes}
             nodeColorMap={nodeColorMap}
             nodeNameMap={nodeNameMap}
+            onExpand={() => setExpandedMetric(key)}
           />
         ))}
       </div>
+
+      {/* 放大图表 Dialog */}
+      <Dialog open={expandedMetric !== null} onOpenChange={(open) => { if (!open) setExpandedMetric(null); }}>
+        <DialogContent size="lg" className="md:max-w-[900px]">
+          <DialogHeader>
+            <DialogTitle>{expandedMetric ? t(`nodes.metricLabel_${expandedMetric}`) : ""}</DialogTitle>
+            <DialogDescription className="sr-only">
+              {expandedMetric ? t("nodes.metricExpandAriaLabel", { label: t(`nodes.metricLabel_${expandedMetric}`) }) : ""}
+            </DialogDescription>
+            <DialogCloseButton />
+          </DialogHeader>
+          <div className="overflow-y-auto px-6 pb-6 space-y-4">
+            {/* Dialog 内节点图例 */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {onlineNodes.map((node) => {
+                const color = nodeColorMap.get(node.id);
+                const active = enabledNodes.has(node.id);
+                return (
+                  <button
+                    key={node.id}
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-all hover:bg-muted/60"
+                    style={{ opacity: active ? 1 : 0.35 }}
+                    onClick={() => toggleNode(node.id)}
+                    aria-pressed={active}
+                    title={t("nodes.metricToggleTitle", { action: active ? t("nodes.metricHide") : t("nodes.metricShow"), name: node.name })}
+                  >
+                    <span
+                      className="size-2.5 rounded-full shrink-0 transition-transform"
+                      style={{
+                        backgroundColor: color?.stroke,
+                        transform: active ? "scale(1)" : "scale(0.7)",
+                      }}
+                    />
+                    <span className="max-w-[8rem] truncate">{node.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {expandedMetric && (
+              <MetricChart
+                metricKey={expandedMetric}
+                label={t(`nodes.metricLabel_${expandedMetric}`)}
+                data={chartDataByMetric[expandedMetric]}
+                nodes={onlineNodes}
+                enabledNodes={enabledNodes}
+                nodeColorMap={nodeColorMap}
+                nodeNameMap={nodeNameMap}
+                height={400}
+                idPrefix="exp-"
+                showLabel={false}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -236,6 +303,10 @@ type MetricChartProps = {
   enabledNodes: Set<number>;
   nodeColorMap: Map<number, typeof NODE_PALETTE[0]>;
   nodeNameMap: Map<number, string>;
+  height?: number;
+  onExpand?: () => void;
+  idPrefix?: string;
+  showLabel?: boolean;
 };
 
 function MetricChart({
@@ -246,30 +317,37 @@ function MetricChart({
   enabledNodes,
   nodeColorMap,
   nodeNameMap,
+  height = 160,
+  onExpand,
+  idPrefix = "",
+  showLabel = true,
 }: MetricChartProps) {
-  const gradientIds = useMemo(
-    () => nodes.map((n) => `grad-${metricKey}-${n.id}`),
-    [nodes, metricKey]
-  );
+  const { t } = useTranslation();
 
-  const yMax = useMemo(() => {
-    let max = 0;
-    for (const point of data) {
-      for (const node of nodes) {
-        if (!enabledNodes.has(node.id)) continue;
-        const v = point[`n${node.id}`];
-        if (typeof v === "number" && v > max) max = v;
-      }
-    }
-    if (max <= 0) return 100;
-    const padded = max * 1.1;
-    return Math.min(100, Math.max(10, Math.ceil(padded / 5) * 5));
-  }, [data, nodes, enabledNodes]);
+  const gradientIds = useMemo(
+    () => nodes.map((n) => `${idPrefix}grad-${metricKey}-${n.id}`),
+    [nodes, metricKey, idPrefix]
+  );
 
   return (
     <div className="glass-panel p-4">
-      <p className="mb-2 text-xs font-medium text-muted-foreground">{label}</p>
-      <ResponsiveContainer width="100%" height={160}>
+      {showLabel && (
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          {onExpand && (
+            <button
+              type="button"
+              className="inline-flex items-center justify-center size-6 rounded-md text-muted-foreground transition-colors hover:text-foreground hover:bg-muted/60"
+              onClick={onExpand}
+              aria-label={t("nodes.metricExpandAriaLabel", { label })}
+              title={t("nodes.metricExpandTitle")}
+            >
+              <Maximize2 className="size-3" />
+            </button>
+          )}
+        </div>
+      )}
+      <ResponsiveContainer width="100%" height={height}>
         <AreaChart data={data} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
           <defs>
             {nodes.map((node, i) => {
@@ -296,7 +374,7 @@ function MetricChart({
             tickLine={false}
           />
           <YAxis
-            domain={[0, yMax]}
+            domain={[0, 100]}
             tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
             stroke="transparent"
             tickLine={false}

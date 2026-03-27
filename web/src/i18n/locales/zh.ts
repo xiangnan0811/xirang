@@ -468,6 +468,8 @@ const zh = {
     metricLabel_cpu: "CPU (%)",
     metricLabel_mem: "内存 (%)",
     metricLabel_disk: "磁盘 (%)",
+    metricExpandTitle: "放大图表",
+    metricExpandAriaLabel: "放大 {{label}} 图表",
   },
 
   // ── node editor dialog ──

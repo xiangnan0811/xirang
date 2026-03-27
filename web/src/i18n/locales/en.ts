@@ -468,6 +468,8 @@ const en = {
     metricLabel_cpu: "CPU (%)",
     metricLabel_mem: "Memory (%)",
     metricLabel_disk: "Disk (%)",
+    metricExpandTitle: "Expand chart",
+    metricExpandAriaLabel: "Expand {{label}} chart",
   },
 
   // ── node editor dialog ──
