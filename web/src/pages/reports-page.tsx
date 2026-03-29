@@ -4,6 +4,7 @@ import {
   BarChart3,
   ChevronDown,
   ChevronRight,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -129,12 +130,14 @@ function ConfigCard({
   cfg,
   isAdmin,
   token,
+  onEdit,
   onDelete,
   onGenerate,
 }: {
   cfg: ReportConfig;
   isAdmin: boolean;
   token: string;
+  onEdit: (cfg: ReportConfig) => void;
   onDelete: (id: number) => void;
   onGenerate: (id: number) => void;
 }) {
@@ -218,6 +221,16 @@ function ConfigCard({
               <Button
                 variant="ghost"
                 size="icon"
+                className="size-8 text-muted-foreground hover:text-foreground"
+                title={t("common.edit")}
+                aria-label={t("common.edit")}
+                onClick={() => onEdit(cfg)}
+              >
+                <Pencil className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 className="size-8 text-destructive/80 hover:text-destructive"
                 title={t("reports.deleteConfig")}
                 aria-label={t("reports.deleteConfig")}
@@ -273,6 +286,7 @@ export function ReportsPage() {
   const [configs, setConfigs] = useState<ReportConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingConfig, setEditingConfig] = useState<ReportConfig | null>(null);
 
   const loadConfigs = useCallback(async () => {
     if (!token) return;
@@ -339,7 +353,7 @@ export function ReportsPage() {
             {t("common.refresh")}
           </Button>
           {isAdmin && (
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Button size="sm" onClick={() => { setEditingConfig(null); setDialogOpen(true); }}>
               <Plus className="mr-1.5 size-4" />
               {t("reports.addConfig")}
             </Button>
@@ -367,6 +381,7 @@ export function ReportsPage() {
               cfg={cfg}
               isAdmin={isAdmin}
               token={token ?? ""}
+              onEdit={(c) => { setEditingConfig(c); setDialogOpen(true); }}
               onDelete={(id) => void handleDelete(id)}
               onGenerate={handleGenerate}
             />
@@ -377,9 +392,16 @@ export function ReportsPage() {
       {isAdmin && (
         <ReportConfigDialog
           open={dialogOpen}
-          onOpenChange={setDialogOpen}
-          onCreated={(cfg) => setConfigs((prev) => [...prev, cfg])}
+          onOpenChange={(v) => { setDialogOpen(v); if (!v) setEditingConfig(null); }}
+          onSaved={(cfg) =>
+            setConfigs((prev) =>
+              prev.some((c) => c.id === cfg.id)
+                ? prev.map((c) => (c.id === cfg.id ? cfg : c))
+                : [...prev, cfg]
+            )
+          }
           token={token ?? ""}
+          editingConfig={editingConfig}
         />
       )}
     </div>

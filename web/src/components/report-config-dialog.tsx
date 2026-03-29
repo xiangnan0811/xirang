@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FileText, Loader2 } from "lucide-react";
+import { FileText, Loader2, Pencil } from "lucide-react";
 import {
   createReportsApi,
   type NewReportConfigInput,
@@ -10,6 +10,7 @@ import { createIntegrationsApi } from "@/lib/api/integrations-api";
 import { integrationIcon } from "@/pages/notifications-page.utils";
 import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";
+import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { AppSelect } from "@/components/ui/app-select";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
@@ -23,11 +24,11 @@ const integrationsApi = createIntegrationsApi();
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (cfg: ReportConfig) => void;
+  onSaved: (cfg: ReportConfig) => void;
   token: string;
+  editingConfig?: ReportConfig | null;
 };
 
-// Labels are rendered via t() inside the component; these are placeholder values only
 const SCOPE_VALUES = ["all", "tag", "node_ids"] as const;
 const PERIOD_VALUES = ["weekly", "monthly"] as const;
 
@@ -50,6 +51,26 @@ const DEFAULT_DRAFT: Draft = {
   selectedChannelIds: [],
   enabled: true,
 };
+
+/** Module-level for referential stability with useDialogDraft */
+function toDraft(cfg: ReportConfig): Draft {
+  let channelIds: number[] = [];
+  try {
+    const parsed = JSON.parse(cfg.integration_ids);
+    if (Array.isArray(parsed)) channelIds = parsed;
+  } catch {
+    /* ignore */
+  }
+  return {
+    name: cfg.name,
+    scopeType: cfg.scope_type,
+    scopeValue: cfg.scope_value,
+    period: cfg.period,
+    cron: cfg.cron,
+    selectedChannelIds: channelIds,
+    enabled: cfg.enabled,
+  };
+}
 
 function LabelRow({
   label,
@@ -74,12 +95,14 @@ function numericId(ch: IntegrationChannel): number {
 export function ReportConfigDialog({
   open,
   onOpenChange,
-  onCreated,
+  onSaved,
   token,
+  editingConfig,
 }: Props) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
+  const [draft, setDraft] = useDialogDraft(open, DEFAULT_DRAFT, editingConfig, toDraft);
   const [saving, setSaving] = useState(false);
+  const isEditing = Boolean(editingConfig);
 
   // Integration channels state
   const [channels, setChannels] = useState<IntegrationChannel[]>([]);
@@ -88,8 +111,6 @@ export function ReportConfigDialog({
 
   useEffect(() => {
     if (open) {
-      setDraft(DEFAULT_DRAFT);
-      // Fetch enabled integration channels
       setChannelsLoading(true);
       setChannelsError(false);
       integrationsApi
@@ -137,14 +158,17 @@ export function ReportConfigDialog({
 
     setSaving(true);
     try {
-      const cfg = await reportsApi.createConfig(token, input);
-      toast.success(t("reportConfig.createSuccess"));
-      onCreated(cfg);
+      const cfg = isEditing
+        ? await reportsApi.updateConfig(token, editingConfig!.id, input)
+        : await reportsApi.createConfig(token, input);
+      toast.success(t(isEditing ? "reportConfig.updateSuccess" : "reportConfig.createSuccess"));
+      onSaved(cfg);
       onOpenChange(false);
-      setDraft(DEFAULT_DRAFT);
     } catch (err) {
       toast.error(
-        t("reportConfig.createFailed") + ": " + getErrorMessage(err),
+        t(isEditing ? "reportConfig.updateFailed" : "reportConfig.createFailed") +
+          ": " +
+          getErrorMessage(err),
       );
     } finally {
       setSaving(false);
@@ -155,12 +179,12 @@ export function ReportConfigDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t("reportConfig.title")}
-      icon={<FileText className="size-5" />}
+      title={t(isEditing ? "reportConfig.titleEdit" : "reportConfig.title")}
+      icon={isEditing ? <Pencil className="size-5" /> : <FileText className="size-5" />}
       size="lg"
       saving={saving}
       onSubmit={() => void handleSubmit()}
-      submitLabel={t("reportConfig.submitLabel")}
+      submitLabel={t(isEditing ? "reportConfig.submitEdit" : "reportConfig.submitLabel")}
     >
       <div className="space-y-4">
         <LabelRow label={t("reportConfig.configName")}>
