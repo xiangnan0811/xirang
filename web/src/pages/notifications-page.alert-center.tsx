@@ -8,10 +8,7 @@ import {
   MoreHorizontal,
   RefreshCw,
 } from "lucide-react";
-import {
-  alertStatusMeta,
-  severityToTone,
-} from "@/pages/notifications-page.utils";
+import { alertStatusMeta } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,7 +23,6 @@ import { FilterPanel } from "@/components/ui/filter-panel";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
-import { StatusPulse } from "@/components/status-pulse";
 import { ViewModeToggle, type ViewMode } from "@/components/ui/view-mode-toggle";
 import { toast } from "@/components/ui/toast";
 import { usePageFilters } from "@/hooks/use-page-filters";
@@ -71,7 +67,7 @@ export function AlertCenter({
   } = usePageFilters({
     keyword: { key: "xirang.notifications.keyword", default: "" },
     severity: { key: "xirang.notifications.severity", default: "all" },
-    status: { key: "xirang.notifications.status", default: "all" },
+    status: { key: "xirang.notifications.status", default: "unresolved" },
   }, globalSearch, setGlobalSearch);
 
   // --- 分页与排序状态 ---
@@ -428,22 +424,20 @@ export function AlertCenter({
             <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <StatusPulse tone={severityToTone(alert.severity)} />
                   <span className="font-medium text-foreground/90 truncate">
                     {alert.nodeName}
                   </span>
                   <Badge variant={severity.variant}>{severity.label}</Badge>
                   <Badge variant={status.variant}>{status.label}</Badge>
                 </div>
-                <p className="mt-1.5 text-sm pl-5">{alert.message}</p>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground pl-5">
+                <p className="mt-1.5 text-sm">{alert.message}</p>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                   {alert.taskId ? (
                     <span>{t("notifications.taskLabel", { id: alert.taskId })}{alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}</span>
                   ) : (
                     <span>{t("notifications.nodeProbe")}</span>
                   )}
                   <span>{alert.policyName}</span>
-                  <span>{alert.errorCode}</span>
                   <span>{alert.triggeredAt}</span>
                 </div>
               </div>
@@ -461,7 +455,7 @@ export function AlertCenter({
   // --- 渲染：表格视图 ---
   const renderTableView = (items: AlertRecord[]) => (
     <div className="glass-panel overflow-x-auto">
-      <table className="min-w-[1080px] text-left text-sm w-full">
+      <table className="min-w-[960px] text-left text-sm w-full">
         <thead>
           <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
             <th scope="col" {...sortableThProps("severity")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
@@ -474,11 +468,10 @@ export function AlertCenter({
               {t("notifications.colMessage")}
             </th>
             <th scope="col" className="px-3 py-2.5 w-[120px]">{t("notifications.colPolicy")}</th>
-            <th scope="col" className="px-3 py-2.5 w-[100px]">{t("notifications.colErrorCode")}</th>
             <th scope="col" {...sortableThProps("triggered_at")} className="px-3 py-2.5 w-[160px] cursor-pointer select-none">
               {t("notifications.colTime")} {sortIndicator("triggered_at")}
             </th>
-            <th scope="col" {...sortableThProps("status")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
+            <th scope="col" {...sortableThProps("status")} className="px-3 py-2.5 w-[100px] cursor-pointer select-none">
               {t("notifications.colStatus")} {sortIndicator("status")}
             </th>
             <th scope="col" className="px-3 py-2.5 w-[120px]">{t("common.actions")}</th>
@@ -491,13 +484,11 @@ export function AlertCenter({
             return (
               <tr key={alert.id} ref={alert.id === highlightedAlert?.id ? highlightRef : undefined} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group">
                 <td className="px-3 py-2.5">
-                  <StatusPulse tone={severityToTone(alert.severity)} />
-                  <Badge variant={severity.variant} className="ml-1">{severity.label}</Badge>
+                  <Badge variant={severity.variant}>{severity.label}</Badge>
                 </td>
                 <td className="px-3 py-2.5 font-medium">{alert.nodeName}</td>
                 <td className="px-3 py-2.5 max-w-[300px] truncate" title={alert.message}>{alert.message}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.policyName}</td>
-                <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{alert.errorCode}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.triggeredAt}</td>
                 <td className="px-3 py-2.5">
                   <Badge variant={status.variant}>{status.label}</Badge>
@@ -575,6 +566,7 @@ export function AlertCenter({
             onChange={(event) => handleStatusChange(event.target.value)}
           >
             <option value="all">{t("common.all")}{t("common.status")}</option>
+            <option value="unresolved">{t("notifications.statusUnresolved")}</option>
             <option value="open">{t("notifications.statusOpen")}</option>
             <option value="acked">{t("notifications.statusAcked")}</option>
             <option value="resolved">{t("notifications.statusResolved")}</option>

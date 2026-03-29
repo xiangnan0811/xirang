@@ -71,7 +71,11 @@ func (h *AlertHandler) List(c *gin.Context) {
 
 	status := strings.TrimSpace(c.Query("status"))
 	if status != "" {
-		query = query.Where("status = ?", status)
+		if status == "unresolved" {
+			query = query.Where("status != ?", "resolved")
+		} else {
+			query = query.Where("status = ?", status)
+		}
 	}
 	if rawNodeID := strings.TrimSpace(c.Query("node_id")); rawNodeID != "" {
 		nodeID, err := strconv.ParseUint(rawNodeID, 10, 64)
