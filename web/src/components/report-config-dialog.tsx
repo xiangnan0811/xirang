@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FileText } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
 import {
   createReportsApi,
   type NewReportConfigInput,
   type ReportConfig,
 } from "@/lib/api/reports-api";
+import { createIntegrationsApi } from "@/lib/api/integrations-api";
+import { integrationIcon } from "@/pages/notifications-page.utils";
 import { getErrorMessage } from "@/lib/utils";
+import type { IntegrationChannel } from "@/types/domain";
 import { AppSelect } from "@/components/ui/app-select";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
+import { CronGenerator } from "@/components/cron-generator";
 
 const reportsApi = createReportsApi();
+const integrationsApi = createIntegrationsApi();
 
 type Props = {
   open: boolean;
@@ -32,7 +37,7 @@ type Draft = {
   scopeValue: string;
   period: "weekly" | "monthly";
   cron: string;
-  integrationIds: string; // comma-separated IDs
+  selectedChannelIds: number[];
   enabled: boolean;
 };
 
@@ -42,7 +47,7 @@ const DEFAULT_DRAFT: Draft = {
   scopeValue: "",
   period: "weekly",
   cron: "0 8 * * 1",
-  integrationIds: "",
+  selectedChannelIds: [],
   enabled: true,
 };
 
@@ -61,6 +66,11 @@ function LabelRow({
   );
 }
 
+/** Extract numeric id from "int-{n}" format */
+function numericId(ch: IntegrationChannel): number {
+  return parseInt(ch.id.replace("int-", ""), 10);
+}
+
 export function ReportConfigDialog({
   open,
   onOpenChange,
@@ -71,12 +81,39 @@ export function ReportConfigDialog({
   const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
   const [saving, setSaving] = useState(false);
 
+  // Integration channels state
+  const [channels, setChannels] = useState<IntegrationChannel[]>([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsError, setChannelsError] = useState(false);
+
   useEffect(() => {
-    if (open) setDraft(DEFAULT_DRAFT);
-  }, [open]);
+    if (open) {
+      setDraft(DEFAULT_DRAFT);
+      // Fetch enabled integration channels
+      setChannelsLoading(true);
+      setChannelsError(false);
+      integrationsApi
+        .getIntegrations(token)
+        .then((all) => setChannels(all.filter((ch) => ch.enabled)))
+        .catch((err) => {
+          setChannelsError(true);
+          toast.error(t("reportConfig.channelsLoadError") + ": " + getErrorMessage(err));
+        })
+        .finally(() => setChannelsLoading(false));
+    }
+  }, [open, token, t]);
 
   const set = (patch: Partial<Draft>) =>
     setDraft((prev) => ({ ...prev, ...patch }));
+
+  const toggleChannel = (id: number) => {
+    setDraft((prev) => ({
+      ...prev,
+      selectedChannelIds: prev.selectedChannelIds.includes(id)
+        ? prev.selectedChannelIds.filter((x) => x !== id)
+        : [...prev.selectedChannelIds, id],
+    }));
+  };
 
   const handleSubmit = async () => {
     if (!draft.name.trim()) {
@@ -88,18 +125,13 @@ export function ReportConfigDialog({
       return;
     }
 
-    const integrationIds = draft.integrationIds
-      .split(",")
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isFinite(n) && n > 0);
-
     const input: NewReportConfigInput = {
       name: draft.name.trim(),
       scope_type: draft.scopeType,
       scope_value: draft.scopeValue.trim(),
       period: draft.period,
       cron: draft.cron.trim(),
-      integration_ids: integrationIds,
+      integration_ids: draft.selectedChannelIds,
       enabled: draft.enabled,
     };
 
@@ -125,6 +157,7 @@ export function ReportConfigDialog({
       onOpenChange={onOpenChange}
       title={t("reportConfig.title")}
       icon={<FileText className="size-5" />}
+      size="lg"
       saving={saving}
       onSubmit={() => void handleSubmit()}
       submitLabel={t("reportConfig.submitLabel")}
@@ -190,20 +223,63 @@ export function ReportConfigDialog({
         )}
 
         <LabelRow label={t("reportConfig.cronLabel")}>
-          <Input
+          <CronGenerator
             value={draft.cron}
-            onChange={(e) => set({ cron: e.target.value })}
-            placeholder={t("reportConfig.cronPlaceholder")}
-            className="font-mono"
+            onChange={(val) => set({ cron: val })}
+            disabled={saving}
           />
         </LabelRow>
 
         <LabelRow label={t("reportConfig.channelIds")}>
-          <Input
-            value={draft.integrationIds}
-            onChange={(e) => set({ integrationIds: e.target.value })}
-            placeholder={t("reportConfig.channelIdsPlaceholder")}
-          />
+          <div className="rounded-md border bg-muted/30 p-3 max-h-[200px] overflow-y-auto thin-scrollbar">
+            {channelsLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-1">
+                <Loader2 className="size-4 animate-spin" />
+                {t("reportConfig.channelsLoading")}
+              </div>
+            )}
+            {channelsError && !channelsLoading && (
+              <p className="text-sm text-destructive py-1">
+                {t("reportConfig.channelsLoadError")}
+              </p>
+            )}
+            {!channelsLoading && !channelsError && channels.length === 0 && (
+              <p className="text-sm text-muted-foreground py-1">
+                {t("reportConfig.channelsEmpty")}
+              </p>
+            )}
+            {!channelsLoading && !channelsError && channels.length > 0 && (
+              <div className="space-y-1">
+                {channels.map((ch) => {
+                  const nid = numericId(ch);
+                  const checked = draft.selectedChannelIds.includes(nid);
+                  const Icon = integrationIcon(ch.type);
+                  return (
+                    <label
+                      key={ch.id}
+                      className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm cursor-pointer transition-colors ${
+                        checked
+                          ? "bg-primary/10 text-foreground"
+                          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleChannel(nid)}
+                        className="accent-primary size-3.5 shrink-0"
+                      />
+                      <Icon className="size-4 shrink-0" />
+                      <span className="truncate">{ch.name}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {ch.type}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </LabelRow>
 
         <div className="flex items-center gap-2">
