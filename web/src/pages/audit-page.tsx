@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { AppSelect } from "@/components/ui/app-select";
+import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast";
 
 const pageSize = 30;
@@ -70,8 +71,6 @@ export function AuditPage() {
 
   const autoLoadKeyRef = useRef("");
 
-  const pageIndex = page;
-  const hasNext = page * pageSize < total;
   const auditStats = useMemo(() => {
     let writeOps = 0;
     let readOps = 0;
@@ -349,27 +348,13 @@ export function AuditPage() {
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{t("common.pageInfo", { page: pageIndex, total })}</span>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void load(Math.max(1, page - 1))}
-                disabled={loading || page <= 1}
-              >
-                {t("common.prevPage")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void load(page + 1)}
-                disabled={loading || !hasNext}
-              >
-                {t("common.nextPage")}
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            loading={loading}
+            onPageChange={(p) => void load(p)}
+          />
         </CardContent>
       </Card>
     </div>

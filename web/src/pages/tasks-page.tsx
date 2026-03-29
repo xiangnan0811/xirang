@@ -8,10 +8,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { LoadingState } from "@/components/ui/loading-state";
+import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { toast } from "@/components/ui/toast";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
@@ -137,9 +139,11 @@ export function TasksPage() {
       .sort((first, second) => second.id - first.id);
   }, [deferredKeyword, nodeFilter, statusFilter, tasks]);
 
+  const { pagedItems: pagedTasks, page, pageSize, total: filteredTotal, setPage, setPageSize } = useClientPagination(filteredTasks);
+
   const selectedTaskSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
-  const allVisibleSelected = filteredTasks.length > 0
-    && filteredTasks.every((t) => selectedTaskSet.has(t.id));
+  const allVisibleSelected = pagedTasks.length > 0
+    && pagedTasks.every((t) => selectedTaskSet.has(t.id));
 
   const toggleTaskSelection = useCallback((id: number, checked: boolean) => {
     setSelectedTaskIds((prev) =>
@@ -151,13 +155,13 @@ export function TasksPage() {
     setSelectedTaskIds((prev) => {
       if (checked) {
         const ids = new Set(prev);
-        for (const t of filteredTasks) ids.add(t.id);
+        for (const t of pagedTasks) ids.add(t.id);
         return Array.from(ids);
       }
-      const visibleIds = new Set(filteredTasks.map((t) => t.id));
+      const visibleIds = new Set(pagedTasks.map((t) => t.id));
       return prev.filter((id) => !visibleIds.has(id));
     });
-  }, [filteredTasks]);
+  }, [pagedTasks]);
 
   // 任务列表变化时清理已删除任务的选中状态
   useEffect(() => {
@@ -514,7 +518,7 @@ export function TasksPage() {
           {viewMode === "cards" ? (
             <TasksGrid
               loading={loading}
-              filteredTasks={filteredTasks}
+              filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}
               setCreateDialogOpen={setCreateDialogOpen}
@@ -534,7 +538,7 @@ export function TasksPage() {
           ) : (
             <TasksTable
               loading={loading}
-              filteredTasks={filteredTasks}
+              filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}
               setCreateDialogOpen={setCreateDialogOpen}
@@ -552,6 +556,14 @@ export function TasksPage() {
               toggleSelectAllVisible={toggleSelectAllVisible}
             />
           )}
+
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredTotal}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); }}
+          />
         </CardContent>
       </Card>
 

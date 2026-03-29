@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 import type { NodeRecord } from "@/types/domain";
 
 export function NodesPage() {
@@ -67,18 +69,40 @@ export function NodesPage() {
     setTerminalKey((k) => k + 1);
   };
 
+  const {
+    pagedItems: pagedNodes,
+    page,
+    pageSize,
+    total: filteredTotal,
+    setPage,
+    setPageSize,
+  } = useClientPagination(sortedNodes);
+
+  // 分页后的全选仅作用于当前页可见节点
+  const pagedAllVisibleSelected = pagedNodes.length > 0
+    && pagedNodes.every((node) => selectedNodeSet.has(node.id));
+  const pagedToggleSelectAllVisible = (checked: boolean) => {
+    state.setSelectedNodeIds((prev: number[]) => {
+      if (checked) {
+        return Array.from(new Set([...prev, ...pagedNodes.map((node) => node.id)]));
+      }
+      const visibleIDs = new Set(pagedNodes.map((node) => node.id));
+      return prev.filter((id) => !visibleIDs.has(id));
+    });
+  };
+
   const nodesViewProps = {
     loading,
-    sortedNodes,
+    sortedNodes: groupView ? sortedNodes : pagedNodes,
     sshKeys,
     selectedNodeSet,
     selectedNodeId,
     selectedNodeIds,
-    allVisibleSelected,
+    allVisibleSelected: groupView ? allVisibleSelected : pagedAllVisibleSelected,
     testingNodeId,
     triggeringNodeId,
     toggleNodeSelection,
-    toggleSelectAllVisible,
+    toggleSelectAllVisible: groupView ? toggleSelectAllVisible : pagedToggleSelectAllVisible,
     setSelectedNodeId,
     handleBulkDelete,
     resetFilters,
@@ -139,10 +163,10 @@ export function NodesPage() {
             setGroupView={state.setGroupView}
             selectedNodeIds={state.selectedNodeIds}
             setSelectedNodeIds={state.setSelectedNodeIds}
-            allVisibleSelected={state.allVisibleSelected}
+            allVisibleSelected={groupView ? state.allVisibleSelected : pagedAllVisibleSelected}
             csvInputRef={state.csvInputRef}
             openCreateDialog={state.openCreateDialog}
-            toggleSelectAllVisible={state.toggleSelectAllVisible}
+            toggleSelectAllVisible={groupView ? state.toggleSelectAllVisible : pagedToggleSelectAllVisible}
             handleBulkDelete={state.handleBulkDelete}
             handleImportCSV={state.handleImportCSV}
             handleExportCSV={state.handleExportCSV}
@@ -230,6 +254,13 @@ export function NodesPage() {
           {viewMode === "list" && (
             <NodesTable {...nodesViewProps} />
           )}
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredTotal}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
           </>
           )}
         </CardContent>

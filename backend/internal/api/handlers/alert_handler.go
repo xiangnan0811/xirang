@@ -85,6 +85,13 @@ func (h *AlertHandler) List(c *gin.Context) {
 			query = query.Where("task_id = ?", uint(taskID))
 		}
 	}
+	if severity := strings.TrimSpace(c.Query("severity")); severity != "" {
+		query = query.Where("severity = ?", severity)
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		like := "%" + strings.ToLower(keyword) + "%"
+		query = query.Where("LOWER(node_name) LIKE ? OR LOWER(policy_name) LIKE ? OR LOWER(error_code) LIKE ? OR LOWER(message) LIKE ?", like, like, like, like)
+	}
 
 	pg := parsePagination(c, 200, "triggered_at", map[string]bool{
 		"triggered_at": true, "severity": true, "status": true, "node_name": true,

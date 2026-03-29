@@ -13,9 +13,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/loading-state";
+import { Pagination } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -89,6 +91,15 @@ export function PoliciesPage() {
         .includes(effectiveKeyword)
     );
   }, [deferredKeyword, policies]);
+
+  const {
+    pagedItems: pagedPolicies,
+    page,
+    pageSize,
+    total: filteredTotal,
+    setPage,
+    setPageSize,
+  } = useClientPagination(filteredPolicies);
 
   const activeCount = policies.filter((policy) => policy.enabled).length;
   const disabledCount = policies.length - activeCount;
@@ -232,7 +243,7 @@ export function PoliciesPage() {
 
           {/* 小屏卡片，大屏表格 */}
           <div className="grid gap-3 sm:grid-cols-2 md:hidden">
-            {filteredPolicies.map((policy) => (
+            {pagedPolicies.map((policy) => (
               <div
                 key={policy.id}
                 className="interactive-surface p-4 flex flex-col"
@@ -329,6 +340,14 @@ export function PoliciesPage() {
                 )}
               />
             ) : null}
+            <Pagination
+              className="col-span-full"
+              page={page}
+              pageSize={pageSize}
+              total={filteredTotal}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
 
           <div className="glass-panel hidden overflow-x-auto md:block">
@@ -339,12 +358,13 @@ export function PoliciesPage() {
                     <input
                       type="checkbox"
                       className="size-4 accent-primary rounded-sm"
-                      checked={filteredPolicies.length > 0 && filteredPolicies.every((p) => selectedPolicyIds.includes(p.id))}
+                      checked={pagedPolicies.length > 0 && pagedPolicies.every((p) => selectedPolicyIds.includes(p.id))}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedPolicyIds(filteredPolicies.map((p) => p.id));
+                          setSelectedPolicyIds((prev) => Array.from(new Set([...prev, ...pagedPolicies.map((p) => p.id)])));
                         } else {
-                          setSelectedPolicyIds([]);
+                          const pagedIds = new Set(pagedPolicies.map((p) => p.id));
+                          setSelectedPolicyIds((prev) => prev.filter((id) => !pagedIds.has(id)));
                         }
                       }}
                       aria-label={t('policies.selectAllAriaLabel')}
@@ -361,7 +381,7 @@ export function PoliciesPage() {
               </thead>
               <tbody>
                 {filteredPolicies.length ? (
-                  filteredPolicies.map((policy) => (
+                  pagedPolicies.map((policy) => (
                     <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
                       <td className="px-3 py-2.5">
                         <input
@@ -454,6 +474,14 @@ export function PoliciesPage() {
                 )}
               </tbody>
             </table>
+            <Pagination
+              className="mt-3 px-3 pb-2"
+              page={page}
+              pageSize={pageSize}
+              total={filteredTotal}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         </CardContent>
       </Card>

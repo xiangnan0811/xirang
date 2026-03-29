@@ -199,7 +199,8 @@ describe("AuditPage", () => {
 
     const emptyHints = await screen.findAllByText("当前筛选条件下没有审计记录。");
     expect(emptyHints.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("第 1 页 · 共 0 条")).toBeInTheDocument();
+    // Pagination 组件在 total=0 时不渲染
+    expect(screen.queryByText("第 1 页 · 共 0 条")).not.toBeInTheDocument();
   });
 
   it("导出 CSV 成功时触发成功提示", async () => {

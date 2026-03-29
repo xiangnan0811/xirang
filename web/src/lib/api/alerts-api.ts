@@ -6,7 +6,7 @@ import type {
   AlertRecord
 } from "@/types/domain";
 import i18n from "@/i18n";
-import { formatTime, parseNumericId, request, type Envelope, unwrapData } from "./core";
+import { formatTime, parseNumericId, request, type Envelope, type PaginatedEnvelope, unwrapData, unwrapPaginated } from "./core";
 
 type AlertResponse = {
   id: number;
@@ -132,6 +132,42 @@ export function createAlertsApi() {
       const payload = await request<Envelope<AlertResponse[]>>("/alerts", { token, signal: options?.signal });
       const rows = unwrapData(payload) ?? [];
       return rows.map((row) => mapAlert(row));
+    },
+
+    async getAlertsPaginated(
+      token: string,
+      options?: {
+        page?: number;
+        pageSize?: number;
+        sortBy?: "triggered_at" | "severity" | "status" | "node_name";
+        sortOrder?: "asc" | "desc";
+        status?: string;
+        severity?: string;
+        keyword?: string;
+        signal?: AbortSignal;
+      },
+    ): Promise<{ items: AlertRecord[]; total: number; page: number; pageSize: number }> {
+      const query = new URLSearchParams();
+      if (options?.page) query.set("page", String(options.page));
+      if (options?.pageSize) query.set("page_size", String(options.pageSize));
+      if (options?.sortBy) query.set("sort_by", options.sortBy);
+      if (options?.sortOrder) query.set("sort_order", options.sortOrder);
+      if (options?.status) query.set("status", options.status);
+      if (options?.severity) query.set("severity", options.severity);
+      if (options?.keyword) query.set("keyword", options.keyword);
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const payload = await request<PaginatedEnvelope<AlertResponse[]>>(`/alerts${suffix}`, {
+        token,
+        signal: options?.signal,
+      });
+      const result = unwrapPaginated(payload);
+      return { items: result.items.map(mapAlert), total: result.total, page: result.page, pageSize: result.pageSize };
+    },
+
+    async getAlert(token: string, alertId: string, options?: { signal?: AbortSignal }): Promise<AlertRecord> {
+      const numericId = parseNumericId(alertId, "alert");
+      const payload = await request<Envelope<AlertResponse>>(`/alerts/${numericId}`, { token, signal: options?.signal });
+      return mapAlert(unwrapData(payload));
     },
 
     async getAlertDeliveries(token: string, alertId: string): Promise<AlertDeliveryRecord[]> {

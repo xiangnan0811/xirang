@@ -1,29 +1,25 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications-page.alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { useAuth } from "@/context/auth-context";
+import { apiClient } from "@/lib/api/client";
 
 export function NotificationsPage() {
   const { t } = useTranslation();
+  const { token } = useAuth();
   const {
-    alerts,
     integrations,
     tasks,
-    loading,
     globalSearch,
     setGlobalSearch,
-    retryAlert,
-    acknowledgeAlert,
-    resolveAlert,
-    fetchAlertDeliveries,
-    retryAlertDelivery,
-    retryFailedAlertDeliveries,
     fetchAlertDeliveryStats,
     refreshIntegrations,
     refreshTasks,
+    refreshVersion,
   } = useOutletContext<ConsoleOutletContext>();
 
   useEffect(() => {
@@ -40,9 +36,17 @@ export function NotificationsPage() {
     }
   }, [searchParams, setSearchParams]);
 
+  // 统计卡片数据：复用 getAlertUnreadCount API
+  const [alertStats, setAlertStats] = useState({ total: 0, critical: 0, warning: 0 });
+  const refreshAlertStats = useCallback(() => {
+    if (!token) return;
+    apiClient.getAlertUnreadCount(token).then(setAlertStats).catch(() => {});
+  }, [token]);
+  useEffect(() => {
+    refreshAlertStats();
+  }, [refreshAlertStats, refreshVersion]);
+
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
-  const openAlerts = alerts.filter((item) => item.status === "open");
-  const criticalAlerts = openAlerts.filter((item) => item.severity === "critical");
   const failedTasks = tasks.filter((task) => task.status === "failed").length;
 
   return (
@@ -52,13 +56,13 @@ export function NotificationsPage() {
         items={[
           {
             title: t("notifications.statOpenAlerts"),
-            value: openAlerts.length,
+            value: alertStats.total,
             description: t("notifications.statOpenAlertsDesc"),
             tone: "destructive",
           },
           {
             title: t("notifications.statCriticalAlerts"),
-            value: criticalAlerts.length,
+            value: alertStats.critical,
             description: t("notifications.statCriticalAlertsDesc"),
             tone: "warning",
           },
@@ -79,21 +83,18 @@ export function NotificationsPage() {
 
       <DeliveryStatsCard fetchAlertDeliveryStats={fetchAlertDeliveryStats} />
 
-      <AlertCenter
-        alerts={alerts}
-        integrations={integrations}
-        loading={loading}
-        globalSearch={globalSearch}
-        setGlobalSearch={setGlobalSearch}
-        retryAlert={retryAlert}
-        acknowledgeAlert={acknowledgeAlert}
-        resolveAlert={resolveAlert}
-        fetchAlertDeliveries={fetchAlertDeliveries}
-        retryAlertDelivery={retryAlertDelivery}
-        retryFailedAlertDeliveries={retryFailedAlertDeliveries}
-        initialAlertId={highlightAlertId}
-        onAlertHighlighted={clearHighlightAlert}
-      />
+      {token ? (
+        <AlertCenter
+          token={token}
+          integrations={integrations}
+          globalSearch={globalSearch}
+          setGlobalSearch={setGlobalSearch}
+          initialAlertId={highlightAlertId}
+          onAlertHighlighted={clearHighlightAlert}
+          onAlertMutated={refreshAlertStats}
+          refreshVersion={refreshVersion}
+        />
+      ) : null}
     </div>
   );
 }

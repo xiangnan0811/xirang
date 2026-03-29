@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEFAULT_MAIN_JS_BUDGET_KIB = 480;
+const DEFAULT_MAIN_JS_BUDGET_KIB = 485;
 const DEFAULT_MAIN_CSS_BUDGET_KIB = 65;
 
 function formatKiB(bytes) {

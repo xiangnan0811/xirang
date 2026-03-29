@@ -120,6 +120,29 @@ export async function fetchWithFallback(url: string, options: RequestInit): Prom
   return response;
 }
 
+export type PaginatedEnvelope<T> = {
+  data?: T;
+  total?: number;
+  page?: number;
+  page_size?: number;
+  message?: string;
+  error?: string;
+};
+
+export function unwrapPaginated<T>(payload: PaginatedEnvelope<T[]>): {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+} {
+  return {
+    items: payload.data ?? ([] as T[]),
+    total: Number(payload.total ?? 0),
+    page: Number(payload.page ?? 1),
+    pageSize: Number(payload.page_size ?? 20),
+  };
+}
+
 export function unwrapData<T>(payload: Envelope<T> | T): T {
   if (payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)) {
     return ((payload as Envelope<T>).data ?? null) as T;
