@@ -1,4 +1,4 @@
-.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init
+.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -47,6 +47,11 @@ e2e-alert-demo:
 
 e2e-check:
 	bash scripts/smoke-e2e.sh
+
+# ── Git Hooks ──
+setup-hooks:
+	git config core.hooksPath .githooks
+	@echo "✅ Git hooks 已配置为 .githooks/ 目录"
 
 # ── Docker 镜像 ──
 DOCKER_REGISTRY ?= docker.io

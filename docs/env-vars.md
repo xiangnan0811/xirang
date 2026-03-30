@@ -165,8 +165,3 @@
 
 **读取位置**：`VERSION_CHECK_URL` → `api/handlers/version_handler.go:37`，`DB_BACKUP_DIR` → `api/handlers/system_handler.go:39`
 
-## 已废弃变量
-
-| 变量 | 废弃原因 |
-|------|---------|
-| `EXECUTOR_SHELL` | 历史参数，当前本地执行器已禁用，代码中无任何引用 |

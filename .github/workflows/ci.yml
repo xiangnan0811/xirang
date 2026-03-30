@@ -63,3 +63,15 @@ jobs:
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
         run: node scripts/check-bundle-budget.mjs
+
+  doc-freshness:
+    name: Doc Freshness Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check doc freshness
+        run: bash scripts/check-doc-freshness.sh

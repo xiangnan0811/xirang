@@ -62,9 +62,29 @@ git push origin feat/your-feature
 - 优先复用 `web/src/components/ui/` 下已有组件
 - 不引入无必要的外部依赖
 
+## 文档同步
+
+PR 涉及以下变更时，请同步更新对应文档：
+
+- 新增/修改数据库模型 → 更新 `CLAUDE.md` 核心领域模型
+- 新增/修改 API 路由 → 更新 `backend/README_backend.md` 接口列表
+- 新增/修改前端页面 → 更新 `CLAUDE.md` 前端结构
+- 新增/修改环境变量 → 更新 `docs/env-vars.md` 和 `.env.example`
+- 新增数据库迁移 → 更新 `CLAUDE.md` 迁移版本号
+
+CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
+
 ## 开发环境搭建
 
 参考 [README.md](README.md) 中的快速开始章节。
+
+首次 clone 后请安装 Git hooks：
+
+```bash
+make setup-hooks
+```
+
+这会启用 pre-commit 文档新鲜度检查，在关键代码文件变更但文档未同步时阻止提交。
 
 ## 发布流程
 

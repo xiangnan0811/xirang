@@ -1,17 +1,16 @@
-# Xirang Backend MVP
+# Xirang 后端
 
 ## 概述
 
-这是一个基于 Go + Gin + GORM 的后端 MVP，包含：
+基于 Go + Gin + GORM 的后端服务，提供完整的服务器运维管理 API。
 
-- 数据库切换：`DB_TYPE=sqlite|postgres`
-- 用户登录：JWT
-- 权限控制：RBAC 中间件
-- 资源管理：节点 / 策略 / 任务 CRUD
-- 任务执行：手动触发 + 状态机
-- 重试策略：最多 2 次，指数退避 `30s / 90s`
-- 日志推送：WebSocket 框架
-- 定时调度：cron 框架
+主要能力：
+- 多引擎备份（Rsync / Restic / Rclone）+ 命令执行
+- 节点管理与健康探测（SSH 连接、资源采样）
+- 任务调度与依赖编排（cron、链式执行、暂停/跳过）
+- 多渠道通知（邮件 / Webhook / Slack / Telegram / 飞书 / 钉钉 / 企业微信）
+- RBAC 权限控制 + TOTP 两步验证 + 审计日志
+- SLA 报告、配置导入导出、系统自助备份
 
 ## 快速运行
 
@@ -23,90 +22,227 @@ go run ./cmd/server
 
 默认监听：`127.0.0.1:8080`
 
+## API 接口
+
+所有接口前缀 `/api/v1`，需 JWT 认证的接口标注 🔒。
+
+### 认证与用户
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /auth/captcha | 获取登录验证码 |
+| POST | /auth/login | 用户登录 |
+| POST | /auth/2fa/login | TOTP 二次验证登录 |
+| GET | /me | 🔒 当前用户信息 |
+| POST | /me/onboarded | 🔒 完成新手引导 |
+| POST | /auth/logout | 🔒 注销 |
+| POST | /auth/change-password | 🔒 修改密码 |
+| POST | /auth/2fa/setup | 🔒 配置 TOTP |
+| POST | /auth/2fa/verify | 🔒 验证 TOTP |
+| POST | /auth/2fa/disable | 🔒 关闭 TOTP |
+| GET | /users | 🔒 用户列表 |
+| POST | /users | 🔒 创建用户 |
+| PUT | /users/:id | 🔒 更新用户 |
+| DELETE | /users/:id | 🔒 删除用户 |
+
+### 概览与监控
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /overview | 🔒 仪表盘概览 |
+| GET | /overview/traffic | 🔒 任务流量趋势 |
+| GET | /overview/backup-health | 🔒 备份健康状态 |
+| GET | /overview/storage-usage | 🔒 存储使用统计 |
+
+### 节点管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /nodes | 🔒 节点列表 |
+| GET | /nodes/:id | 🔒 节点详情 |
+| POST | /nodes | 🔒 创建节点 |
+| POST | /nodes/batch-delete | 🔒 批量删除 |
+| PUT | /nodes/:id | 🔒 更新节点 |
+| DELETE | /nodes/:id | 🔒 删除节点 |
+| POST | /nodes/:id/test-connection | 🔒 测试连接 |
+| GET | /nodes/:id/metrics | 🔒 资源指标 |
+| GET | /nodes/:id/files | 🔒 远程文件列表 |
+| GET | /nodes/:id/files/content | 🔒 文件内容 |
+| GET | /nodes/:id/docker-volumes | 🔒 Docker 卷列表 |
+| GET | /nodes/:id/owners | 🔒 节点 owner 列表 |
+| POST | /nodes/:id/owners | 🔒 添加 owner |
+| DELETE | /nodes/:id/owners/:user_id | 🔒 移除 owner |
+| POST | /nodes/:id/emergency-backup | 🔒 紧急备份 |
+| POST | /nodes/:id/migrate | 🔒 节点迁移 |
+| POST | /nodes/:id/migrate/preflight | 🔒 迁移预检 |
+
+### SSH 密钥
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /ssh-keys | 🔒 密钥列表 |
+| GET | /ssh-keys/:id | 🔒 密钥详情 |
+| POST | /ssh-keys | 🔒 创建密钥 |
+| PUT | /ssh-keys/:id | 🔒 更新密钥 |
+| DELETE | /ssh-keys/:id | 🔒 删除密钥 |
+
+### 备份策略
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /policies | 🔒 策略列表 |
+| GET | /policies/:id | 🔒 策略详情 |
+| POST | /policies | 🔒 创建策略 |
+| POST | /policies/batch-toggle | 🔒 批量启停 |
+| POST | /policies/from-template/:id | 🔒 从模板创建 |
+| PUT | /policies/:id | 🔒 更新策略 |
+| DELETE | /policies/:id | 🔒 删除策略 |
+
+### 任务与执行
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /tasks | 🔒 任务列表 |
+| GET | /tasks/:id | 🔒 任务详情 |
+| GET | /tasks/:id/logs | 🔒 任务日志 |
+| POST | /tasks | 🔒 创建任务 |
+| PUT | /tasks/:id | 🔒 更新任务 |
+| DELETE | /tasks/:id | 🔒 删除任务 |
+| GET | /tasks/:id/runs | 🔒 执行历史 |
+| POST | /tasks/batch-trigger | 🔒 批量触发 |
+| POST | /tasks/:id/trigger | 🔒 手动触发 |
+| POST | /tasks/:id/cancel | 🔒 取消执行 |
+| POST | /tasks/:id/pause | 🔒 暂停调度 |
+| POST | /tasks/:id/resume | 🔒 恢复调度 |
+| POST | /tasks/:id/skip-next | 🔒 跳过下次 |
+| POST | /tasks/:id/restore | 🔒 从备份恢复 |
+| GET | /tasks/:id/backup-files | 🔒 备份文件列表 |
+| GET | /task-runs/:id | 🔒 执行详情 |
+| GET | /task-runs/:id/logs | 🔒 执行日志 |
+
+### 批量命令
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /batch-commands | 🔒 创建批量命令 |
+| GET | /batch-commands/:batch_id | 🔒 查询状态 |
+| DELETE | /batch-commands/:batch_id | 🔒 取消/删除 |
+
+### 通知集成
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /integrations | 🔒 渠道列表 |
+| GET | /integrations/:id | 🔒 渠道详情 |
+| POST | /integrations | 🔒 创建渠道 |
+| PUT | /integrations/:id | 🔒 更新渠道 |
+| PATCH | /integrations/:id | 🔒 部分更新 |
+| POST | /integrations/:id/test | 🔒 测试发送 |
+| DELETE | /integrations/:id | 🔒 删除渠道 |
+
+### 告警
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /alerts | 🔒 告警列表 |
+| GET | /alerts/unread-count | 🔒 未读数量 |
+| GET | /alerts/:id | 🔒 告警详情 |
+| GET | /alerts/delivery-stats | 🔒 投递统计 |
+| GET | /alerts/:id/deliveries | 🔒 投递记录 |
+| POST | /alerts/:id/ack | 🔒 确认告警 |
+| POST | /alerts/:id/resolve | 🔒 解决告警 |
+| POST | /alerts/:id/retry-delivery | 🔒 重试投递 |
+| POST | /alerts/:id/retry-failed-deliveries | 🔒 批量重试 |
+
+### 审计日志
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /audit-logs | 🔒 日志列表 |
+| GET | /audit-logs/export | 🔒 导出 CSV |
+
+### SLA 报告
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /report-configs | 🔒 报告配置列表 |
+| POST | /report-configs | 🔒 创建配置 |
+| PUT | /report-configs/:id | 🔒 更新配置 |
+| DELETE | /report-configs/:id | 🔒 删除配置 |
+| POST | /report-configs/:id/generate | 🔒 立即生成 |
+| GET | /report-configs/:id/reports | 🔒 报告列表 |
+| GET | /reports/:id | 🔒 报告详情 |
+
+### 快照与恢复
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /tasks/:id/snapshots | 🔒 快照列表 |
+| GET | /tasks/:id/snapshots/:sid/files | 🔒 快照文件 |
+| POST | /tasks/:id/snapshots/:sid/restore | 🔒 从快照恢复 |
+| GET | /tasks/:id/snapshots/diff | 🔒 快照对比 |
+
+### 系统设置与配置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /settings | 🔒 全部设置 |
+| PUT | /settings | 🔒 批量更新 |
+| DELETE | /settings/:key | 🔒 删除设置 |
+| GET | /config/export | 🔒 导出配置 |
+| POST | /config/import | 🔒 导入配置 |
+| GET | /hook-templates | 🔒 钩子模板列表 |
+
+### 系统管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /version | 版本信息 |
+| GET | /version/check | 🔒 检查更新 |
+| POST | /system/backup-db | 🔒 备份数据库 |
+| GET | /system/backups | 🔒 备份列表 |
+| POST | /system/verify-mount | 🔒 验证挂载点 |
+
+### WebSocket
+
+| 路径 | 说明 |
+|------|------|
+| /ws/logs | 实时日志推送（协议内认证） |
+| /ws/terminal | Web SSH 终端（协议内认证） |
+
+### 健康检查
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /healthz | 健康检查（无需认证） |
+
+## 执行器
+
+| 类型 | 说明 |
+|------|------|
+| `rsync` | 基于 rsync 的文件同步，支持远端源/目标、SSH 密钥注入、带宽限制 |
+| `restic` | 加密去重备份，支持仓库初始化、快照管理、进度解析 |
+| `rclone` | 云存储同步（S3/MinIO 等），支持进度解析 |
+| `command` | 远程 SSH 命令执行（批量命令场景） |
+
 ## 环境变量
 
-- `SERVER_ADDR`：服务地址，默认 `:8080`
-- `DB_TYPE`：数据库类型，`sqlite` 或 `postgres`，默认 `sqlite`
-- `SQLITE_PATH`：SQLite 文件路径，默认 `./xirang.db`
-- `DB_DSN`：PostgreSQL DSN（仅 `DB_TYPE=postgres` 时必填）
-- `JWT_SECRET`：JWT 密钥，默认 `xirang-dev-secret`
-- `JWT_TTL`：JWT 有效期，默认 `24h`
-- `LOGIN_RATE_LIMIT`：登录限流次数，默认 `10`
-- `LOGIN_RATE_WINDOW`：登录限流窗口，默认 `1m`
-- `LOGIN_FAIL_LOCK_THRESHOLD`：登录失败锁定阈值（用户名+IP），默认 `5`
-- `LOGIN_FAIL_LOCK_DURATION`：登录锁定时长，默认 `15m`
-- `LOGIN_CAPTCHA_ENABLED`：登录验证码字段校验开关，默认 `false`
-- `LOGIN_SECOND_CAPTCHA_ENABLED`：登录二次验证码字段校验开关，默认 `false`
-- `ALERT_DEDUP_WINDOW`：告警去重窗口（同节点+同任务+同错误码），默认 `10m`，`0` 为关闭
-- `CORS_ALLOWED_ORIGINS`：跨域白名单（逗号分隔）
-  - 若未命中白名单，但 `Origin` 与请求主机同名（忽略端口）也会放行
-- `WS_ALLOW_EMPTY_ORIGIN`：是否允许 WebSocket 空 Origin，默认 `false`
-- `EXECUTOR_SHELL`：历史参数，当前本地执行器已禁用（保留兼容）
-- `RSYNC_BINARY`：rsync 可执行文件名，默认 `rsync`
-- `ADMIN_INITIAL_PASSWORD`：首次启动创建 `admin` 的初始密码（必填）
+完整参考见 [docs/env-vars.md](../docs/env-vars.md)。
 
-## 初始化账号策略（自动初始化）
+关键必填项（生产环境）：
+- `ADMIN_INITIAL_PASSWORD`：初始 admin 密码
+- `JWT_SECRET`：JWT 签名密钥（≥16 字符）
+- `DATA_ENCRYPTION_KEY`：敏感字段加密密钥
 
-- 首次启动仅自动创建 `admin`
-- 必须通过 `ADMIN_INITIAL_PASSWORD` 显式提供管理员初始密码
-- 不再自动创建 `operator` 与 `viewer`，需由 `admin` 手工创建
+## 数据库
 
-## 关键接口
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000030_task_run_progress`。
 
-- 登录：`POST /api/v1/auth/login`
-- 当前用户：`GET /api/v1/me`
-- 节点 CRUD：`/api/v1/nodes`
-- 节点连通性测试：`POST /api/v1/nodes/:id/test-connection`
-- SSH Key CRUD：`/api/v1/ssh-keys`
-- 通知通道 CRUD：`/api/v1/integrations`
-- 通知通道测试发送：`POST /api/v1/integrations/:id/test`
-- 策略 CRUD：`/api/v1/policies`
-- 任务 CRUD：`/api/v1/tasks`
-- 概览统计：`GET /api/v1/overview`
-- 流量趋势：`GET /api/v1/overview/traffic?window=1h|24h|7d`
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting
 
-## 流量趋势采样与保留
-
-- 后端会在任务执行期间记录吞吐采样，用于概览页 `1h / 24h / 7d` 趋势展示。
-- 采样保留天数由 `TASK_TRAFFIC_RETENTION_DAYS` 控制，默认 `8` 天。
-- 设置为 `0` 可禁用自动清理。
-- 手动触发任务：`POST /api/v1/tasks/:id/trigger`
-- 取消任务：`POST /api/v1/tasks/:id/cancel`
-- 任务日志：`GET /api/v1/tasks/:id/logs`
-- 审计日志查询（仅 admin）：`GET /api/v1/audit-logs`
-- 审计日志导出（CSV，仅 admin）：`GET /api/v1/audit-logs/export`
-- 告警投递重发：`POST /api/v1/alerts/:id/retry-delivery`
-- 告警失败投递批量重发：`POST /api/v1/alerts/:id/retry-failed-deliveries`
-- 告警投递统计：`GET /api/v1/alerts/delivery-stats`
-- WebSocket 日志：`GET /api/v1/ws/logs?task_id=<id>&since_id=<last_log_id>`（建立连接后发送 `{"type":"auth","token":"<jwt>"}` 进行鉴权）
-
-## 任务执行说明
-
-- `executor_type=rsync`：执行真实 rsync（唯一允许的执行器）。
-  - 无节点信息时：`rsync -avz <source> <target>`
-  - 有节点信息时：自动拼接为远端源 `user@host:source`，并注入 `ssh -p <port>`。
-  - 节点有私钥时：执行前创建临时密钥文件，任务结束后自动清理。
-- `executor_type=local` 与 `command` 输入链路已禁用，后端会直接拒绝。
-
-## 测试与格式化
+## 测试
 
 ```bash
 cd backend
-gofmt -w ./cmd ./internal
 go test ./...
-```
-
-## 数据库备份与恢复脚本
-
-仓库根目录提供：
-
-- `scripts/backup-db.sh`
-- `scripts/restore-db.sh`
-
-示例：
-
-```bash
-# 仓库根目录执行
-DB_TYPE=sqlite SQLITE_PATH=./backend/xirang.db bash scripts/backup-db.sh ./backups
-DB_TYPE=sqlite SQLITE_PATH=./backend/xirang.db bash scripts/restore-db.sh ./backups/xirang-sqlite-20260215-120000.db
 ```
