@@ -53,7 +53,7 @@ export const NodesTable = React.memo(function NodesTable({
             <th scope="col" className="px-3 py-2.5">{t("nodes.colNode")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAddress")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAuth")}</th>
-            <th scope="col" className="px-3 py-2.5">{t("nodes.colStatus")}</th>
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colStatus")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colDiskProbe")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colTags")}</th>
@@ -118,7 +118,7 @@ export const NodesTable = React.memo(function NodesTable({
                       {node.authType === "key" ? keyLabel : "-"}
                     </p>
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="px-3 py-2.5 whitespace-nowrap">
                     <Badge variant={status.variant}>
                       {status.label}
                     </Badge>
