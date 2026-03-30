@@ -5,7 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { StatusPulse } from "@/components/status-pulse";
 import { getNodeStatusMeta } from "@/lib/status";
 import { getDiskBarToneClass } from "@/pages/nodes-page.utils";
 import { cn } from "@/lib/utils";
@@ -120,12 +119,9 @@ export const NodesTable = React.memo(function NodesTable({
                     </p>
                   </td>
                   <td className="px-3 py-2.5">
-                    <div className="inline-flex items-center gap-1.5">
-                      <StatusPulse tone={node.status} />
-                      <Badge variant={status.variant}>
-                        {status.label}
-                      </Badge>
-                    </div>
+                    <Badge variant={status.variant}>
+                      {status.label}
+                    </Badge>
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="w-44">

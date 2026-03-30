@@ -87,6 +87,21 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
   }
 
+  const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login"];
+  if (response.status === 401 && !AUTH_PUBLIC_PATHS.includes(path)) {
+    try {
+      sessionStorage.removeItem("xirang-auth-token");
+      sessionStorage.removeItem("xirang-username");
+      sessionStorage.removeItem("xirang-role");
+      sessionStorage.removeItem("xirang-user-id");
+      sessionStorage.removeItem("xirang-totp-enabled");
+    } catch { /* ignore */ }
+    const returnPath = typeof window !== "undefined" ? window.location.pathname : "";
+    const query = returnPath && returnPath !== "/login" ? `?redirect=${encodeURIComponent(returnPath)}` : "";
+    window.location.href = `/login${query}`;
+    throw new ApiError(401, "session expired", payload);
+  }
+
   if (!response.ok) {
     throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload);
   }

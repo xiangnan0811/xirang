@@ -56,7 +56,8 @@ export function LoginPage() {
     return <Navigate to="/app/overview" replace />;
   }
 
-  const redirectTo = (location.state as LocationState | null)?.from ?? "/app/overview";
+  const queryRedirect = new URLSearchParams(location.search).get("redirect");
+  const redirectTo = (location.state as LocationState | null)?.from ?? queryRedirect ?? "/app/overview";
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

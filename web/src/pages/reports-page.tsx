@@ -83,7 +83,7 @@ function ReportRow({ report }: { report: Report }) {
       </button>
 
       {open && (
-        <div className="px-6 pb-4 pt-1 text-sm text-muted-foreground">
+        <div className="overflow-x-auto px-6 pb-4 pt-1 text-sm text-muted-foreground">
           {topFailures.length > 0 ? (
             <div>
               <p className="mb-2 font-medium text-foreground">
@@ -106,8 +106,8 @@ function ReportRow({ report }: { report: Report }) {
                       key={i}
                       className="border-b border-border/20 last:border-0"
                     >
-                      <td className="py-1 pr-4">{f.node_name}</td>
-                      <td className="py-1 pr-4">{f.task_name}</td>
+                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.node_name}>{f.node_name}</td>
+                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.task_name}>{f.task_name}</td>
                       <td className="py-1 pr-4 tabular-nums">{f.count}</td>
                       <td className="max-w-xs truncate py-1">
                         {f.last_err || "—"}
@@ -259,7 +259,7 @@ function ConfigCard({
         </button>
 
         {expanded && (
-          <div className="mt-2 rounded-lg border border-border/50 bg-muted/10">
+          <div className="mt-2 overflow-hidden rounded-lg border border-border/50 bg-muted/10">
             {loadingReports ? (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                 {t("common.loading")}

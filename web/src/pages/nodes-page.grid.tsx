@@ -7,7 +7,6 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { StatusPulse } from "@/components/status-pulse";
 import { getNodeStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
@@ -110,7 +109,6 @@ export const NodesGrid = React.memo(function NodesGrid({
                   {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
-                  <StatusPulse tone={node.status} />
                   <Badge variant={status.variant}>{status.label}</Badge>
                   <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
@@ -278,7 +276,6 @@ export const NodesGrid = React.memo(function NodesGrid({
                   {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
-                  <StatusPulse tone={node.status} />
                   <Badge variant={status.variant}>{status.label}</Badge>
                   <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
