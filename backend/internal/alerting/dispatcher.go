@@ -3,6 +3,7 @@ package alerting
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -412,6 +413,19 @@ func getHTTPClient(proxyURL string) *http.Client {
 	}
 	timeout := 30 * time.Second // 代理场景给更长超时
 
+	// blockLinkLocal 拦截链路本地地址（169.254.x.x），防止云环境中通过代理访问实例元数据
+	blockLinkLocal := func(innerDial func(ctx context.Context, network, addr string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+		return func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, _ := net.SplitHostPort(addr)
+			if ip := net.ParseIP(host); ip != nil && ip.IsLinkLocalUnicast() {
+				return nil, fmt.Errorf("blocked: link-local address not allowed")
+			}
+			return innerDial(ctx, network, addr)
+		}
+	}
+
+	defaultDial := (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+
 	var client *http.Client
 	switch parsed.Scheme {
 	case "socks5", "socks5h":
@@ -421,17 +435,20 @@ func getHTTPClient(proxyURL string) *http.Client {
 		}
 		transport := &http.Transport{}
 		if cd, ok := dialer.(proxy.ContextDialer); ok {
-			transport.DialContext = cd.DialContext
+			transport.DialContext = blockLinkLocal(cd.DialContext)
 		} else {
-			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			transport.DialContext = blockLinkLocal(func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
-			}
+			})
 		}
 		client = &http.Client{Timeout: timeout, Transport: transport}
 	default: // http, https
 		client = &http.Client{
-			Timeout:   timeout,
-			Transport: &http.Transport{Proxy: http.ProxyURL(parsed)},
+			Timeout: timeout,
+			Transport: &http.Transport{
+				Proxy:       http.ProxyURL(parsed),
+				DialContext: blockLinkLocal(defaultDial),
+			},
 		}
 	}
 	proxyClients.Store(proxyURL, client)
@@ -598,5 +615,72 @@ func sendEmail(toRaw, subject, content string) error {
 	if user != "" {
 		auth = smtp.PlainAuth("", user, password, host)
 	}
+
+	// SMTP_REQUIRE_TLS=true（默认）强制使用 TLS 连接
+	requireTLS := strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_REQUIRE_TLS"))) != "false"
+	if requireTLS {
+		return sendEmailWithTLS(addr, host, port, auth, from, to, message)
+	}
 	return smtp.SendMail(addr, auth, from, to, message)
+}
+
+// sendEmailWithTLS 强制使用 TLS 发送邮件
+func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	tlsConfig := &tls.Config{ServerName: host}
+
+	if port == "465" {
+		// 隐式 TLS（SMTPS）
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("TLS 连接失败: %w", err)
+		}
+		defer conn.Close()
+		c, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return fmt.Errorf("创建 SMTP 客户端失败: %w", err)
+		}
+		defer c.Close()
+		return smtpSend(c, auth, from, to, msg)
+	}
+
+	// 显式 TLS（STARTTLS，端口 587 等）
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("SMTP 连接失败: %w", err)
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); !ok {
+		return fmt.Errorf("SMTP 服务器不支持 STARTTLS，拒绝发送（设置 SMTP_REQUIRE_TLS=false 可关闭此检查）")
+	}
+	if err := c.StartTLS(tlsConfig); err != nil {
+		return fmt.Errorf("STARTTLS 握手失败: %w", err)
+	}
+	return smtpSend(c, auth, from, to, msg)
+}
+
+func smtpSend(c *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
+	if auth != nil {
+		if err := c.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP 认证失败: %w", err)
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, addr := range to {
+		if err := c.Rcpt(addr); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }

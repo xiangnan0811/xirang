@@ -11,6 +11,7 @@ import (
 	"xirang/backend/internal/model"
 
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 )
 
 type Claims struct {
@@ -28,6 +29,7 @@ type JWTManager struct {
 	mu          sync.Mutex
 	revoked     map[string]time.Time
 	lastPruneAt time.Time
+	db          *gorm.DB
 }
 
 func NewJWTManager(secret string, ttl time.Duration) *JWTManager {
@@ -36,6 +38,26 @@ func NewJWTManager(secret string, ttl time.Duration) *JWTManager {
 		ttl:     ttl,
 		revoked: make(map[string]time.Time),
 	}
+}
+
+// SetDB 设置数据库连接，启用撤销持久化
+func (m *JWTManager) SetDB(db *gorm.DB) {
+	m.db = db
+	m.loadRevokedFromDB()
+}
+
+// loadRevokedFromDB 从数据库加载未过期的撤销记录到内存
+func (m *JWTManager) loadRevokedFromDB() {
+	if m.db == nil {
+		return
+	}
+	var revocations []model.TokenRevocation
+	m.db.Where("expires_at > ?", time.Now()).Find(&revocations)
+	m.mu.Lock()
+	for _, r := range revocations {
+		m.revoked[r.TokenHash] = r.ExpiresAt
+	}
+	m.mu.Unlock()
 }
 
 // Generate2FAPendingToken 生成用于 2FA 验证步骤的短期令牌（5 分钟有效）。
@@ -104,6 +126,15 @@ func (m *JWTManager) RevokeToken(tokenString string) error {
 	m.revoked[key] = expireAt
 	m.pruneRevokedLocked(time.Now())
 	m.mu.Unlock()
+
+	// 持久化到数据库
+	if m.db != nil {
+		m.db.Create(&model.TokenRevocation{
+			TokenHash: key,
+			UserID:    claims.UserID,
+			ExpiresAt: expireAt,
+		})
+	}
 	return nil
 }
 
@@ -143,6 +174,11 @@ func (m *JWTManager) pruneRevokedLocked(now time.Time) {
 		if !expiresAt.After(now) {
 			delete(m.revoked, key)
 		}
+	}
+	// 异步清理数据库过期记录
+	if m.db != nil {
+		db := m.db
+		go db.Where("expires_at <= ?", now).Delete(&model.TokenRevocation{})
 	}
 }
 

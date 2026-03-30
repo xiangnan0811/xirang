@@ -47,7 +47,7 @@ User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task,
 
 ## 数据库迁移
 
-当前版本：`000030_task_run_progress`（SQLite + PostgreSQL 双轨迁移）
+当前版本：`000031_token_revocations`（SQLite + PostgreSQL 双轨迁移）
 
 ## 环境变量
 

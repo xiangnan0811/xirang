@@ -110,6 +110,7 @@
 | `SMTP_USER` | string | — | 启用 email 时 | SMTP 用户名 |
 | `SMTP_PASS` | string | — | 启用 email 时 | SMTP 密码 |
 | `SMTP_FROM` | string | 回退到 `SMTP_USER` | 否 | 发件人地址 |
+| `SMTP_REQUIRE_TLS` | bool | `true` | 否 | 强制 TLS 连接（465 隐式/587 STARTTLS），设为 `false` 回退到明文 |
 
 **读取位置**：`alerting/dispatcher.go:394-407`
 

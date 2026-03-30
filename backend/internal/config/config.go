@@ -228,10 +228,13 @@ func isWeakJWTSecret(value string) bool {
 		return true
 	}
 	weakSet := map[string]struct{}{
-		"xirang-dev-secret":                   {},
-		"change-me":                           {},
-		"change-me-in-production":             {},
-		"replace-with-a-strong-random-secret": {},
+		"xirang-dev-secret":                    {},
+		"xirang-docker-secret":                 {},
+		"change-me":                            {},
+		"change-me-in-production":              {},
+		"replace-with-a-strong-random-secret":  {},
+		"please-change-this-jwt-secret":        {},
+		"CHANGE-ME-use-a-strong-jwt-secret":    {},
 	}
 	_, weak := weakSet[trimmed]
 	return weak
@@ -243,10 +246,12 @@ func isWeakDataEncryptionKey(value string) bool {
 		return true
 	}
 	weakSet := map[string]struct{}{
-		"xirang-dev-encryption-key-change-me": {},
-		"change-me":                           {},
-		"change-me-encryption-key":            {},
-		"replace-with-32-byte-base64-key":     {},
+		"xirang-dev-encryption-key-change-me":      {},
+		"change-me":                                {},
+		"change-me-encryption-key":                 {},
+		"replace-with-32-byte-base64-key":          {},
+		"please-change-this-encryption-key":        {},
+		"CHANGE-ME-use-a-strong-encryption-key":    {},
 	}
 	_, weak := weakSet[trimmed]
 	return weak

@@ -39,6 +39,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		appCtx = context.Background()
 	}
 	router := gin.New()
+	router.MaxMultipartMemory = 10 << 20 // 10 MB
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
@@ -107,11 +108,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
-	v1.GET("/version", versionHandler.Info)
-
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
 	secured.Use(middleware.AuditLogger(dep.DB))
+	secured.Use(middleware.APIRateLimit(200, time.Minute))
+	secured.Use(middleware.MaxBodySize(20 << 20)) // 20 MB
 	secured.GET("/me", authHandler.Me)
 	secured.POST("/me/onboarded", authHandler.CompleteOnboarding)
 	secured.POST("/auth/logout", authHandler.Logout)
@@ -223,6 +224,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
 
+	secured.GET("/version", versionHandler.Info)
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)

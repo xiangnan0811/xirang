@@ -106,3 +106,76 @@ func LoginRateLimitWithContext(ctx context.Context, settingsSvc *settings.Servic
 		c.Abort()
 	}
 }
+
+// apiRateLimiter 通用 API 限流器
+type apiRateLimiter struct {
+	mu     sync.Mutex
+	store  map[string]rateWindow
+	limit  int
+	window time.Duration
+}
+
+func newAPIRateLimiter(limit int, window time.Duration) *apiRateLimiter {
+	rl := &apiRateLimiter{
+		store:  make(map[string]rateWindow),
+		limit:  limit,
+		window: window,
+	}
+	go rl.cleanup()
+	return rl
+}
+
+func (l *apiRateLimiter) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		l.mu.Lock()
+		for ip, entry := range l.store {
+			if now.After(entry.reset) {
+				delete(l.store, ip)
+			}
+		}
+		l.mu.Unlock()
+	}
+}
+
+func (l *apiRateLimiter) allow(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry, ok := l.store[ip]
+	if !ok || now.After(entry.reset) {
+		l.store[ip] = rateWindow{count: 1, reset: now.Add(l.window)}
+		return true
+	}
+	if entry.count >= l.limit {
+		return false
+	}
+	entry.count++
+	l.store[ip] = entry
+	return true
+}
+
+// APIRateLimit 返回通用 API 限流中间件（per IP）
+func APIRateLimit(limit int, window time.Duration) gin.HandlerFunc {
+	limiter := newAPIRateLimiter(limit, window)
+	return func(c *gin.Context) {
+		if limiter.allow(c.ClientIP(), time.Now()) {
+			c.Next()
+			return
+		}
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁，请稍后再试"})
+		c.Abort()
+	}
+}
+
+// MaxBodySize 限制请求体大小
+func MaxBodySize(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		}
+		c.Next()
+	}
+}

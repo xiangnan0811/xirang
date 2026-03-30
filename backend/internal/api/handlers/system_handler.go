@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/logger"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -39,13 +41,15 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 
 	// 确保备份目录存在
 	if err := os.MkdirAll(backupDir, 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("创建备份目录失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("创建备份目录失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建备份目录失败"})
 		return
 	}
 
 	// 执行 WAL checkpoint，确保所有数据写入主数据库文件
 	if err := h.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("执行 WAL checkpoint 失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("执行 WAL checkpoint 失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "执行 WAL checkpoint 失败"})
 		return
 	}
 
@@ -57,7 +61,8 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	// 复制数据库文件
 	checksum, size, err := copyFileWithChecksum(dbPath, backupPath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("备份数据库文件失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("备份数据库文件失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份数据库文件失败"})
 		return
 	}
 
@@ -65,7 +70,8 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	checksumPath := backupPath + ".sha256"
 	checksumContent := fmt.Sprintf("%s  %s\n", checksum, backupFilename)
 	if err := os.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("写入校验和文件失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("写入校验和文件失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入校验和文件失败"})
 		return
 	}
 
@@ -121,7 +127,8 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"data": []gin.H{}})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("读取备份目录失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("读取备份目录失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取备份目录失败"})
 		return
 	}
 

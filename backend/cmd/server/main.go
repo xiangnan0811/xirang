@@ -84,6 +84,7 @@ func main() {
 	reportScheduler.Start()
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
+	jwtManager.SetDB(db)
 	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
 		FailLockThreshold: cfg.LoginFailLockThreshold,
 		FailLockDuration:  cfg.LoginFailLockDuration,

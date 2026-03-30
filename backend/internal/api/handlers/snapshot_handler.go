@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 
@@ -64,7 +65,8 @@ func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 	exec := &executor.ResticExecutor{}
 	snapshots, err := exec.ListSnapshots(c.Request.Context(), task)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		logger.Log.Error().Err(err).Msg("列出快照失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "列出快照失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": snapshots})
@@ -100,7 +102,8 @@ func (h *SnapshotHandler) ListFiles(c *gin.Context) {
 	exec := &executor.ResticExecutor{}
 	entries, err := exec.ListFiles(c.Request.Context(), task, snapshotID, path)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		logger.Log.Error().Err(err).Msg("列出快照文件失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "列出快照文件失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": entries})
@@ -146,7 +149,8 @@ func (h *SnapshotHandler) Restore(c *gin.Context) {
 
 	exec := &executor.ResticExecutor{}
 	if err := exec.RestoreFiles(c.Request.Context(), task, snapshotID, req.Includes, req.TargetPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		logger.Log.Error().Err(err).Msg("快照恢复失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "快照恢复失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "恢复成功"}})

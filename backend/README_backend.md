@@ -197,7 +197,7 @@ go run ./cmd/server
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /version | 版本信息 |
+| GET | /version | 🔒 版本信息 |
 | GET | /version/check | 🔒 检查更新 |
 | POST | /system/backup-db | 🔒 备份数据库 |
 | GET | /system/backups | 🔒 备份列表 |

@@ -13,6 +13,8 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
+	"xirang/backend/internal/logger"
+
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
@@ -57,7 +59,8 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 
 	volumes, warning, err := listDockerVolumes(sshClient)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []DockerVolume{}, "warning": fmt.Sprintf("获取 Docker 卷失败: %v", err)})
+		logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
+		c.JSON(http.StatusOK, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
 		return
 	}
 
