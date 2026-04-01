@@ -9,7 +9,6 @@
 - [架构概览](#架构概览)
 - [镜像构建](#镜像构建)
   - [All-in-One 生产镜像（推荐）](#all-in-one-生产镜像推荐)
-  - [纯后端镜像](#纯后端镜像)
   - [多架构构建](#多架构构建)
 - [部署方式](#部署方式)
   - [生产部署](#生产部署)
@@ -68,21 +67,6 @@
 ```bash
 docker build -f deploy/allinone/Dockerfile -t xirang/xirang:latest .
 ```
-
-### 纯后端镜像
-
-基于 `distroless` 的轻量后端镜像，适合前后端分离部署场景。
-
-**Dockerfile**: `backend/Dockerfile`
-
-```bash
-cd backend
-docker build -t xirang/backend:latest .
-```
-
-- 仅暴露 `:8080`，不含 Nginx 和前端静态文件
-- 运行时镜像为 `distroless`（无 shell，体积小，安全性高）
-- 使用 `CGO_ENABLED=0` 纯静态编译
 
 ### 多架构构建
 
