@@ -114,6 +114,37 @@ func TestLoadBackfillEventsHidesMissingTaskLogsForViewer(t *testing.T) {
 	}
 }
 
+func TestLoadBackfillEventsAllowsViewerToSeeExistingTaskLogs(t *testing.T) {
+	db := openHubTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskLog{}); err != nil {
+		t.Fatalf("初始化任务/任务日志表失败: %v", err)
+	}
+
+	task := model.Task{Name: "visible-task", NodeID: 1, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	if err := db.Create(&model.TaskLog{TaskID: task.ID, Level: "info", Message: "visible-log"}).Error; err != nil {
+		t.Fatalf("创建任务日志失败: %v", err)
+	}
+	// 孤立日志：不应出现在 viewer 结果中
+	if err := db.Create(&model.TaskLog{TaskID: 9999, Level: "info", Message: "orphan-log"}).Error; err != nil {
+		t.Fatalf("创建孤立日志失败: %v", err)
+	}
+
+	hub := NewHub(db, nil, false)
+	events, err := hub.loadBackfillEvents(0, nil, AccessScope{Role: "viewer"})
+	if err != nil {
+		t.Fatalf("加载 viewer 补日志失败: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("viewer 应看到 1 条存活任务日志，实际: %d", len(events))
+	}
+	if events[0].TaskID != task.ID {
+		t.Fatalf("viewer 日志 task_id 不符，期望 %d，实际 %d", task.ID, events[0].TaskID)
+	}
+}
+
 func TestLoadBackfillEventsAppliesTaskAccessChecker(t *testing.T) {
 	db := openHubTestDB(t)
 	if err := db.AutoMigrate(&model.Task{}, &model.TaskLog{}); err != nil {

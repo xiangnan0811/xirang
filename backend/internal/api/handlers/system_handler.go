@@ -184,6 +184,12 @@ func createSQLiteBackup(db *gorm.DB, backupPath string) (checksum string, size i
 }
 
 func checksumFile(path string) (checksum string, size int64, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("读取备份文件大小失败: %w", err)
+	}
+	size = info.Size()
+
 	file, err := os.Open(path)
 	if err != nil {
 		return "", 0, fmt.Errorf("打开备份文件失败: %w", err)
@@ -191,13 +197,6 @@ func checksumFile(path string) (checksum string, size int64, err error) {
 	defer file.Close()
 
 	hasher := sha256.New()
-	size, err = file.Seek(0, 2)
-	if err != nil {
-		return "", 0, fmt.Errorf("读取备份文件大小失败: %w", err)
-	}
-	if _, err := file.Seek(0, 0); err != nil {
-		return "", 0, fmt.Errorf("重置备份文件读取游标失败: %w", err)
-	}
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", 0, fmt.Errorf("计算备份文件校验和失败: %w", err)
 	}

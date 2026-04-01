@@ -13,7 +13,11 @@ cleanup() {
 }
 
 is_running() {
-  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+  [ -n "${1:-}" ] || return 1
+  case "$(ps -o stat= -p "${1}" 2>/dev/null)" in
+    Z*|"") return 1 ;;
+    *)     return 0 ;;
+  esac
 }
 
 # 修复 bind mount 目录权限（宿主机目录可能是 root 所有）
