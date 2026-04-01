@@ -76,9 +76,9 @@ cd xirang
 # 2. 构建镜像
 docker build -f deploy/allinone/Dockerfile -t xirang:latest .
 
-# 3. 配置环境变量
-cp backend/.env.production.example backend/.env.production
-# 编辑 backend/.env.production，设置以下三项：
+# 3. 配置 docker compose 环境变量
+cp .env.deploy .env
+# 编辑 .env，设置以下三项：
 #   ADMIN_INITIAL_PASSWORD  — 管理员初始密码
 #   JWT_SECRET              — JWT 签名密钥（随机字符串）
 #   DATA_ENCRYPTION_KEY     — 敏感字段加密密钥
@@ -94,7 +94,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 访问 `https://your-domain`，使用 `admin` 和设置的初始密码登录。
 
-> 默认使用 SQLite，无需额外配置数据库。如需 PostgreSQL，在 `.env.production` 中修改 `DB_TYPE=postgres` 并设置 `DB_DSN`。完整配置项说明见 [`backend/.env.production.example`](backend/.env.production.example)。
+> `docker-compose.prod.yml` 默认读取仓库根目录 `.env`。默认使用 SQLite，无需额外配置数据库。如需 PostgreSQL，在 `.env` 中修改 `DB_TYPE=postgres` 并设置 `DB_DSN`。完整配置项说明见 [`backend/.env.production.example`](backend/.env.production.example) 和 [`.env.deploy`](.env.deploy)。
 
 ### Docker Run
 

@@ -233,17 +233,17 @@ export const NodesGrid = React.memo(function NodesGrid({
             t("common.keyBound")
             : t("common.keyUnbound");
           const checked = selectedNodeSet.has(node.id);
+          const isSelected = selectedNodeId === node.id;
 
           return (
             <div
               key={node.id}
+              tabIndex={0}
+              aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
               className={cn(
                 "interactive-surface p-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
-                selectedNodeId === node.id && "border-primary/45 ring-1 ring-primary/40"
+                isSelected && "border-primary/45 ring-1 ring-primary/40"
               )}
-              role="button"
-              aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
-              tabIndex={0}
               onClick={(e) => {
                 if (
                   e.target instanceof HTMLElement &&
@@ -254,12 +254,14 @@ export const NodesGrid = React.memo(function NodesGrid({
                 setSelectedNodeId(node.id);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  if (e.target === e.currentTarget) {
-                    e.preventDefault();
-                    setSelectedNodeId(node.id);
-                  }
+                if (e.target !== e.currentTarget) {
+                  return;
                 }
+                if (e.key !== "Enter" && e.key !== " ") {
+                  return;
+                }
+                e.preventDefault();
+                setSelectedNodeId(node.id);
               }}
             >
               <div className="flex items-start justify-between gap-2">

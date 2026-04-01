@@ -10,6 +10,10 @@ on:
         description: "镜像版本号（例如 0.2.0 或 v0.2.0）"
         required: true
         type: string
+      source_ref:
+        description: "构建所用源码 ref（tag/branch/SHA）"
+        required: true
+        type: string
 
 concurrency:
   group: publish-images-${{ github.ref }}
@@ -30,6 +34,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}
+
+      - name: Resolve source commit
+        id: source
+        shell: bash
+        run: echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -81,7 +92,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && !github.event.release.prerelease) }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
       - name: Build and push image
@@ -110,6 +121,8 @@ jobs:
             echo "### Image Published: xirang"
             echo ""
             echo "- Version: ${{ steps.version.outputs.version }}"
+            echo "- Source ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}"
+            echo "- Source commit: ${{ steps.source.outputs.commit }}"
             echo "- Digest: ${{ steps.build.outputs.digest }}"
             echo "- Tags:"
             echo "\`${{ steps.meta.outputs.tags }}\`"

@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,10 @@ type TaskRunHandler struct {
 
 func NewTaskRunHandler(db *gorm.DB) *TaskRunHandler {
 	return &TaskRunHandler{db: db}
+}
+
+func canReadOrphanedTaskRun(role string) bool {
+	return role == "" || role == "admin"
 }
 
 // ListByTask 返回某任务的执行历史，按 created_at DESC 分页
@@ -60,6 +66,7 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	role := middleware.CurrentRole(c)
 
 	var run model.TaskRun
 	if err := h.db.Preload("Task", func(db *gorm.DB) *gorm.DB {
@@ -68,7 +75,12 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "执行记录不存在"})
 		return
 	}
-	if run.Task.ID != 0 {
+	if run.Task.ID == 0 {
+		if !canReadOrphanedTaskRun(role) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+			return
+		}
+	} else {
 		allowed, err := authorizeNodeOwnership(c, h.db, run.Task.NodeID)
 		if err != nil {
 			respondInternalError(c, err)
@@ -90,6 +102,7 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 	if !ok {
 		return
 	}
+	role := middleware.CurrentRole(c)
 	// ownership 校验：通过 task_run → task → node 链查
 	var taskRun model.TaskRun
 	if err := h.db.Select("id", "task_id").First(&taskRun, runID).Error; err != nil {
@@ -107,6 +120,12 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
 			return
 		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		respondInternalError(c, err)
+		return
+	} else if !canReadOrphanedTaskRun(role) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+		return
 	}
 
 	limit := 200

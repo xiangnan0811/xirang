@@ -34,6 +34,19 @@ type client struct {
 	send          chan LogEvent
 	filterTaskID  *uint
 	authenticated bool
+	access        AccessScope
+	taskAccessMu  sync.RWMutex
+	taskAccess    map[uint]taskAccessEntry
+}
+
+type taskAccessEntry struct {
+	allowed   bool
+	expiresAt time.Time
+}
+
+type AccessScope struct {
+	Role           string
+	AllowedNodeIDs map[uint]struct{}
 }
 
 type Hub struct {
@@ -48,6 +61,8 @@ type Hub struct {
 	droppedCount     uint64
 	maxClients       int
 }
+
+const taskAccessCacheTTL = 30 * time.Second
 
 func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
 	maxClients := 100
@@ -90,9 +105,11 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 			h.mu.Unlock()
 		case event := <-h.broadcast:
-			h.mu.RLock()
-			for c := range h.clients {
+			for _, c := range h.snapshotClients() {
 				if c.filterTaskID != nil && event.TaskID != *c.filterTaskID {
+					continue
+				}
+				if !h.clientCanAccessTask(c, event.TaskID) {
 					continue
 				}
 				select {
@@ -101,9 +118,19 @@ func (h *Hub) Run(ctx context.Context) {
 					go func(cc *client) { h.unregister <- cc }(c)
 				}
 			}
-			h.mu.RUnlock()
 		}
 	}
+}
+
+func (h *Hub) snapshotClients() []*client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	clients := make([]*client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	return clients
 }
 
 func (h *Hub) Publish(event LogEvent) {
@@ -167,7 +194,7 @@ type authMessage struct {
 	Token string `json:"token"`
 }
 
-func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
+func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error)) {
 	if h.ClientCount() >= h.maxClients {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "WebSocket 连接数已达上限"})
 		return
@@ -189,7 +216,14 @@ func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
 	}
 
 	var authMsg authMessage
-	if err := json.Unmarshal(msg, &authMsg); err != nil || authMsg.Type != "auth" || !validateToken(authMsg.Token) {
+	if err := json.Unmarshal(msg, &authMsg); err != nil || authMsg.Type != "auth" {
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "认证失败"))
+		_ = conn.Close()
+		return
+	}
+	access, err := authorize(authMsg.Token)
+	if err != nil {
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "认证失败"))
 		_ = conn.Close()
@@ -204,6 +238,12 @@ func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
 		id64, parseErr := strconv.ParseUint(raw, 10, 64)
 		if parseErr == nil {
 			id := uint(id64)
+			if !h.canAccessTask(access, id) {
+				_ = conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "无权访问该任务"))
+				_ = conn.Close()
+				return
+			}
 			filterTaskID = &id
 		}
 	}
@@ -211,7 +251,7 @@ func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
 	sinceID := parseUint(c.Query("since_id"))
 	backfillEvents := make([]LogEvent, 0)
 	if sinceID > 0 {
-		events, loadErr := h.loadBackfillEvents(sinceID, filterTaskID)
+		events, loadErr := h.loadBackfillEvents(sinceID, filterTaskID, access)
 		if loadErr == nil {
 			backfillEvents = events
 		}
@@ -222,6 +262,8 @@ func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
 		send:          make(chan LogEvent, 64),
 		filterTaskID:  filterTaskID,
 		authenticated: true,
+		access:        access,
+		taskAccess:    make(map[uint]taskAccessEntry),
 	}
 	h.register <- cl
 
@@ -238,7 +280,7 @@ func (h *Hub) ServeWS(c *gin.Context, validateToken func(string) bool) {
 	}
 }
 
-func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint) ([]LogEvent, error) {
+func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint, access AccessScope) ([]LogEvent, error) {
 	if h.db == nil {
 		return nil, nil
 	}
@@ -287,7 +329,82 @@ func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint) ([]LogEvent, error)
 			Timestamp: item.CreatedAt,
 		})
 	}
-	return events, nil
+	return h.filterEventsByAccess(events, access), nil
+}
+
+func (h *Hub) canAccessTask(access AccessScope, taskID uint) bool {
+	if access.Role == "" || access.Role == "admin" {
+		return true
+	}
+	if h.db == nil {
+		return false
+	}
+	if access.Role == "viewer" {
+		var count int64
+		if err := h.db.Model(&model.Task{}).Where("id = ?", taskID).Count(&count).Error; err != nil {
+			return false
+		}
+		return count > 0
+	}
+	if access.Role != "operator" {
+		return false
+	}
+	if len(access.AllowedNodeIDs) == 0 {
+		return false
+	}
+
+	var task struct {
+		NodeID uint
+	}
+	if err := h.db.Model(&model.Task{}).Select("node_id").First(&task, taskID).Error; err != nil {
+		return false
+	}
+	_, allowed := access.AllowedNodeIDs[task.NodeID]
+	return allowed
+}
+
+func (h *Hub) filterEventsByAccess(events []LogEvent, access AccessScope) []LogEvent {
+	if access.Role == "" || access.Role == "admin" {
+		return events
+	}
+
+	filtered := make([]LogEvent, 0, len(events))
+	taskCache := make(map[uint]bool)
+	for _, event := range events {
+		allowed, ok := taskCache[event.TaskID]
+		if !ok {
+			allowed = h.canAccessTask(access, event.TaskID)
+			taskCache[event.TaskID] = allowed
+		}
+		if allowed {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
+}
+
+func (h *Hub) clientCanAccessTask(c *client, taskID uint) bool {
+	if c.access.Role == "" || c.access.Role == "admin" {
+		return true
+	}
+
+	now := time.Now()
+	c.taskAccessMu.RLock()
+	entry, ok := c.taskAccess[taskID]
+	c.taskAccessMu.RUnlock()
+	if ok && entry.expiresAt.After(now) {
+		return entry.allowed
+	}
+
+	allowed := h.canAccessTask(c.access, taskID)
+
+	c.taskAccessMu.Lock()
+	c.taskAccess[taskID] = taskAccessEntry{
+		allowed:   allowed,
+		expiresAt: now.Add(taskAccessCacheTTL),
+	}
+	c.taskAccessMu.Unlock()
+	return allowed
 }
 
 func parseUint(raw string) uint {

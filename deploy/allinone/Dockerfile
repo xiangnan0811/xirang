@@ -24,18 +24,19 @@ RUN set -eux; \
 
 FROM nginx:1.27
 
-# 安装 supercronic（非 root cron 替代）和 curl（健康检查）
-# 构建时可通过 --build-arg SUPERCRONIC_SHA256=<hash> 强制校验完整性
+# 安装 supercronic（非 root cron 替代）、sqlite3（WAL 一致性备份）和 curl（健康检查）
 ARG TARGETARCH
-ARG SUPERCRONIC_SHA256
 RUN set -eux; \
-    arch="${TARGETARCH:-amd64}"; \
-    apt-get update && apt-get install -y --no-install-recommends curl rsync openssh-client && rm -rf /var/lib/apt/lists/*; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${arch}" in \
+      amd64) supercronic_sha256="feefa310da569c81b99e1027b86b27b51e6ee9ab647747b49099645120cfc671" ;; \
+      arm64) supercronic_sha256="f1f8585c66de020fef494dd636058f99949d108f569fef00016a1c8b9eb145b3" ;; \
+      *) echo "unsupported supercronic arch: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    apt-get update && apt-get install -y --no-install-recommends curl rsync openssh-client sqlite3 && rm -rf /var/lib/apt/lists/*; \
     curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" \
          -o /usr/local/bin/supercronic; \
-    if [ -n "${SUPERCRONIC_SHA256:-}" ]; then \
-      echo "${SUPERCRONIC_SHA256}  /usr/local/bin/supercronic" | sha256sum -c -; \
-    fi; \
+    echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum -c --strict -; \
     chmod +x /usr/local/bin/supercronic
 
 # 创建非 root 用户

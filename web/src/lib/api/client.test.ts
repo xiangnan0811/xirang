@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
+import { buildLoginRedirectPath, normalizeRedirectTarget } from "./core";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -122,5 +123,33 @@ describe("apiClient 任务请求约束", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.cache).toBe("no-cache");
+  });
+});
+
+describe("apiClient 会话跳转", () => {
+  it("会保留当前完整相对路径作为登录返回地址", () => {
+    expect(
+      buildLoginRedirectPath({
+        pathname: "/app/logs",
+        search: "?task=7&level=error",
+        hash: "#tail",
+      })
+    ).toBe("/login?redirect=%2Fapp%2Flogs%3Ftask%3D7%26level%3Derror%23tail");
+  });
+
+  it("登录页本身不会再附加 redirect 参数", () => {
+    expect(
+      buildLoginRedirectPath({
+        pathname: "/login",
+        search: "?redirect=%2Fapp%2Foverview",
+        hash: "",
+      })
+    ).toBe("/login");
+  });
+
+  it("会拒绝站外 redirect 参数", () => {
+    expect(normalizeRedirectTarget("https://evil.example/phish")).toBe("/app/overview");
+    expect(normalizeRedirectTarget("//evil.example/phish")).toBe("/app/overview");
+    expect(normalizeRedirectTarget("/\\evil.example/phish")).toBe("/app/overview");
   });
 });

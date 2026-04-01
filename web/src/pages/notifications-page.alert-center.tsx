@@ -90,12 +90,19 @@ export function AlertCenter({
   const [retryingAllAlertId, setRetryingAllAlertId] = useState<string | null>(null);
 
   // --- 深链接高亮 ---
+  const highlightClearTimerRef = useRef<number | null>(null);
   // 一次性落位：滚动到目标告警后立即清除高亮注入，避免污染后续分页结果
-  const highlightRef = useCallback((el: HTMLElement | null) => {
+  const highlightRef = useCallback((alertId: string, el: HTMLElement | null) => {
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
-      // 等动画结束后清除高亮状态，不再向列表注入额外记录
-      setTimeout(() => setHighlightedAlert(null), 600);
+      if (highlightClearTimerRef.current !== null) {
+        window.clearTimeout(highlightClearTimerRef.current);
+      }
+      // 仅允许当前高亮实例清理自己，避免旧 timer 回写掉新高亮
+      highlightClearTimerRef.current = window.setTimeout(() => {
+        setHighlightedAlert((current) => (current?.id === alertId ? null : current));
+        highlightClearTimerRef.current = null;
+      }, 600);
     }
   }, []);
   const [highlightedAlert, setHighlightedAlert] = useState<AlertRecord | null>(null);
@@ -152,6 +159,14 @@ export function AlertCenter({
       void fetchAlerts(page);
     }
   }, [refreshVersion]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightClearTimerRef.current !== null) {
+        window.clearTimeout(highlightClearTimerRef.current);
+      }
+    };
+  }, []);
 
   // 翻页（同时清除深链接高亮）
   const handlePageChange = (p: number) => {
@@ -417,7 +432,7 @@ export function AlertCenter({
         return (
           <div
             key={alert.id}
-            ref={alert.id === highlightedAlert?.id ? highlightRef : undefined}
+            ref={alert.id === highlightedAlert?.id ? (el) => highlightRef(alert.id, el) : undefined}
             className="glass-panel overflow-hidden relative group p-4 transition-colors hover:bg-muted/10"
           >
             <div className={`absolute top-0 left-0 w-1.5 h-full ${toneClass} opacity-60 group-hover:opacity-100 transition-opacity`} />
@@ -482,7 +497,11 @@ export function AlertCenter({
             const severity = getSeverityMeta(alert.severity);
             const status = alertStatusMeta(alert.status);
             return (
-              <tr key={alert.id} ref={alert.id === highlightedAlert?.id ? highlightRef : undefined} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group">
+              <tr
+                key={alert.id}
+                ref={alert.id === highlightedAlert?.id ? (el) => highlightRef(alert.id, el) : undefined}
+                className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group"
+              >
                 <td className="px-3 py-2.5">
                   <Badge variant={severity.variant}>{severity.label}</Badge>
                 </td>

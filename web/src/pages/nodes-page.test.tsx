@@ -170,7 +170,7 @@ describe("NodesPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -198,7 +198,7 @@ describe("NodesPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -211,6 +211,43 @@ describe("NodesPage", () => {
     expect(navigateMock).toHaveBeenCalledWith("/app/logs?node=node-prod-1");
   });
 
+  it("桌面节点卡片不会再把整张卡片暴露为按钮语义", () => {
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /节点卡片 node-prod-1|Node card node-prod-1/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("桌面节点卡片支持键盘选中当前节点", async () => {
+    const user = userEvent.setup();
+
+    const view = render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const secondCard = view.container.querySelector(
+      '.interactive-surface[aria-label="节点卡片 node-dr-2"]'
+    ) as HTMLElement | null;
+
+    expect(secondCard).not.toBeNull();
+    if (!secondCard) {
+      throw new Error("未找到第二张节点卡片");
+    }
+
+    secondCard.focus();
+    await user.keyboard("{Enter}");
+
+    expect(secondCard).toHaveClass("border-primary/45");
+    expect(secondCard).toHaveFocus();
+  });
+
   it("持久化列表视图时移动端仍展示卡片视图", () => {
     window.localStorage.setItem(
       "xirang.nodes.view",
@@ -219,7 +256,7 @@ describe("NodesPage", () => {
     createContext();
 
     const { container } = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -236,7 +273,7 @@ describe("NodesPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -264,7 +301,7 @@ describe("NodesPage", () => {
     });
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -295,7 +332,7 @@ describe("NodesPage", () => {
     });
 
     const view = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
@@ -308,7 +345,7 @@ describe("NodesPage", () => {
     expect(setGlobalSearchMock).toHaveBeenCalledWith("");
 
     view.rerender(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );

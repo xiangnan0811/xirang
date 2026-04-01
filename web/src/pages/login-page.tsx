@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { normalizeRedirectTarget } from "@/lib/api/core";
 
 type LocationState = {
   from?: string;
@@ -52,12 +53,12 @@ export function LoginPage() {
     void fetchCaptcha();
   }, []);
 
-  if (isAuthenticated) {
-    return <Navigate to="/app/overview" replace />;
-  }
-
   const queryRedirect = new URLSearchParams(location.search).get("redirect");
-  const redirectTo = (location.state as LocationState | null)?.from ?? queryRedirect ?? "/app/overview";
+  const redirectTo = normalizeRedirectTarget((location.state as LocationState | null)?.from ?? queryRedirect);
+
+  if (isAuthenticated) {
+    return <Navigate to={redirectTo} replace />;
+  }
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

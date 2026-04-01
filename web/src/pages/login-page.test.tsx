@@ -51,8 +51,15 @@ vi.mock("@/context/auth-context", () => ({
 }));
 
 function renderLoginPage() {
+  return renderLoginPageWithEntries(["/login"]);
+}
+
+function renderLoginPageWithEntries(initialEntries: string[]) {
   return render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter
+      initialEntries={initialEntries}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <LoginPage />
     </MemoryRouter>
   );
@@ -157,6 +164,65 @@ describe("LoginPage", () => {
     expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
   });
 
+  it("成功登录后保留 redirect 查询参数中的完整返回路径", async () => {
+    const user = userEvent.setup();
+    apiLoginMock.mockResolvedValue({
+      token: "jwt-token",
+      user: { id: 9, username: "admin", role: "admin" },
+    });
+
+    renderLoginPageWithEntries([
+      "/login?redirect=%2Fapp%2Flogs%3Ftask%3D7%26level%3Derror%23tail",
+    ]);
+
+    await user.type(screen.getByLabelText("用户名"), "admin");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(loginMock).toHaveBeenCalledWith("jwt-token", "admin", "admin", 9, false);
+    });
+    expect(navigateMock).toHaveBeenCalledWith("/app/logs?task=7&level=error#tail", { replace: true });
+  });
+
+  it("忽略站外 redirect 参数，回退到站内默认页", async () => {
+    const user = userEvent.setup();
+    apiLoginMock.mockResolvedValue({
+      token: "jwt-token",
+      user: { id: 10, username: "admin", role: "admin" },
+    });
+
+    renderLoginPageWithEntries(["/login?redirect=https%3A%2F%2Fevil.example%2Fphish"]);
+
+    await user.type(screen.getByLabelText("用户名"), "admin");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(loginMock).toHaveBeenCalledWith("jwt-token", "admin", "admin", 10, false);
+    });
+    expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
+  });
+
+  it("忽略带反斜杠的畸形 redirect 参数，回退到站内默认页", async () => {
+    const user = userEvent.setup();
+    apiLoginMock.mockResolvedValue({
+      token: "jwt-token",
+      user: { id: 11, username: "admin", role: "admin" },
+    });
+
+    renderLoginPageWithEntries(["/login?redirect=%2F%5Cevil.example%2Fphish"]);
+
+    await user.type(screen.getByLabelText("用户名"), "admin");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(loginMock).toHaveBeenCalledWith("jwt-token", "admin", "admin", 11, false);
+    });
+    expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
+  });
+
   it("账号被锁定（403）时显示无权访问错误", async () => {
     const user = userEvent.setup();
     apiLoginMock.mockRejectedValue(new ApiErrorClass(403, "当前账号无权访问该系统。"));
@@ -171,6 +237,27 @@ describe("LoginPage", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
     expect(screen.getByRole("alert")).toHaveTextContent("当前账号无权访问该系统。");
+    expect(loginMock).not.toHaveBeenCalled();
+  });
+
+  it("登录频率被锁定（423）时显示后端返回的锁定提示", async () => {
+    const user = userEvent.setup();
+    apiLoginMock.mockRejectedValue(
+      new ApiErrorClass(423, "登录失败次数过多，请稍后再试", {
+        error: "登录失败次数过多，请稍后再试",
+      })
+    );
+
+    renderLoginPage();
+
+    await user.type(screen.getByLabelText("用户名"), "locked");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("登录失败次数过多，请稍后再试");
     expect(loginMock).not.toHaveBeenCalled();
   });
 });

@@ -110,10 +110,10 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 #### 1. 准备环境变量
 
 ```bash
-cp backend/.env.production.example backend/.env.production
+cp .env.deploy .env
 ```
 
-编辑 `backend/.env.production`，**必须配置**以下字段：
+编辑根目录 `.env`，**必须配置**以下字段：
 
 ```env
 ADMIN_INITIAL_PASSWORD=<强密码，首次启动创建 admin 账号>
@@ -123,7 +123,7 @@ DB_TYPE=sqlite
 SQLITE_PATH=/data/xirang.db
 ```
 
-> 如使用 PostgreSQL，将 `DB_TYPE` 改为 `postgres` 并设置 `DB_DSN`。
+> `docker-compose.prod.yml` 会读取同目录下的 `.env`。如使用 PostgreSQL，将 `DB_TYPE` 改为 `postgres` 并设置 `DB_DSN`。
 >
 > `SSH_AUTO_ACCEPT_NEW_HOSTS` 默认值为 `true`，首次连接的新主机密钥会被自动接受，已知主机密钥变更仍会被拒绝。如需禁用，请设置 `SSH_AUTO_ACCEPT_NEW_HOSTS=false`。
 

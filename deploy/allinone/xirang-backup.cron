@@ -1,4 +1,4 @@
 # Xirang 平台数据库自动备份
 # 每日 02:00 执行备份，02:30 清理 30 天前的旧备份
 0 2 * * * /usr/local/bin/backup-db.sh /backup/db
-30 2 * * * find /backup/db -maxdepth 1 \( -name "*.db" -o -name "*.sha256" \) -mtime +30 -delete
+30 2 * * * find /backup/db -maxdepth 1 \( -name "*.db" -o -name "*.dump" -o -name "*.sha256" \) -mtime +30 -delete

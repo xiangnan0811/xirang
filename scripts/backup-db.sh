@@ -13,9 +13,13 @@ if [[ "${db_type}" == "sqlite" ]]; then
     echo "❌ SQLite 文件不存在：${sqlite_path}" >&2
     exit 1
   fi
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "❌ 未找到 sqlite3，无法执行一致性 SQLite 备份" >&2
+    exit 1
+  fi
 
   backup_file="${output_dir}/xirang-sqlite-${timestamp}.db"
-  cp "${sqlite_path}" "${backup_file}"
+  sqlite3 "${sqlite_path}" ".timeout 5000" ".backup '${backup_file}'"
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "${backup_file}" > "${backup_file}.sha256"
   elif command -v shasum >/dev/null 2>&1; then
@@ -45,4 +49,3 @@ fi
 
 echo "❌ 不支持的 DB_TYPE：${db_type}（仅支持 sqlite / postgres）" >&2
 exit 1
-

@@ -1,6 +1,21 @@
 #!/bin/sh
 set -eu
 
+NGINX_PID=""
+XIRANG_PID=""
+CRON_PID=""
+
+cleanup() {
+  [ -n "${NGINX_PID}" ] && kill -TERM "${NGINX_PID}" 2>/dev/null || true
+  [ -n "${XIRANG_PID}" ] && kill -TERM "${XIRANG_PID}" 2>/dev/null || true
+  [ -n "${CRON_PID}" ] && kill -TERM "${CRON_PID}" 2>/dev/null || true
+  wait ${NGINX_PID:-} ${XIRANG_PID:-} ${CRON_PID:-} 2>/dev/null || true
+}
+
+is_running() {
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
 # 修复 bind mount 目录权限（宿主机目录可能是 root 所有）
 chown -R xirang:xirang /data /backup 2>/dev/null || true
 mkdir -p /backup/db
@@ -26,13 +41,22 @@ CRON_PID=$!
 su -s /bin/sh xirang -c '/usr/local/bin/xirang' &
 XIRANG_PID=$!
 
-trap 'kill -TERM $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null' TERM INT
+trap cleanup EXIT
+trap 'exit 143' TERM INT
 
 # 等待后端就绪（后端监听在容器内部端口 3000）
 attempts=0
 max_attempts=30
 until curl -fsS http://127.0.0.1:3000/healthz >/dev/null 2>&1; do
   attempts=$((attempts + 1))
+  if ! is_running "${XIRANG_PID}"; then
+    echo "==> 后端在就绪前提前退出，中止启动" >&2
+    exit 1
+  fi
+  if ! is_running "${CRON_PID}"; then
+    echo "==> supercronic 在就绪前提前退出，中止启动" >&2
+    exit 1
+  fi
   if [ "$attempts" -ge "$max_attempts" ]; then
     echo "==> 后端未在 ${max_attempts}s 内就绪，中止启动" >&2
     exit 1
@@ -46,10 +70,19 @@ echo "==> 后端已就绪，启动 nginx"
 /docker-entrypoint.sh nginx -g 'daemon off;' &
 NGINX_PID=$!
 
-# 更新 trap 覆盖所有进程
-trap 'kill -TERM $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null; wait $NGINX_PID $XIRANG_PID $CRON_PID 2>/dev/null' TERM INT
-
-# 等待 nginx；如果退出则清理
-wait $NGINX_PID
-kill -TERM $XIRANG_PID $CRON_PID 2>/dev/null
-wait $XIRANG_PID $CRON_PID 2>/dev/null
+# 任一关键子进程退出都应终止容器，避免 nginx 独自对外提供 502。
+while :; do
+  if ! is_running "${XIRANG_PID}"; then
+    echo "==> 后端进程已退出，停止容器" >&2
+    exit 1
+  fi
+  if ! is_running "${CRON_PID}"; then
+    echo "==> supercronic 已退出，停止容器" >&2
+    exit 1
+  fi
+  if ! is_running "${NGINX_PID}"; then
+    wait "${NGINX_PID}"
+    exit $?
+  fi
+  sleep 1
+done

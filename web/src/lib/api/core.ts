@@ -28,6 +28,14 @@ export type Envelope<T> = {
   error?: string;
 };
 
+type LocationLike = {
+  pathname: string;
+  search?: string;
+  hash?: string;
+};
+
+const DEFAULT_REDIRECT_TARGET = "/app/overview";
+
 function shouldTryDirectFallback(baseUrl: string): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -52,6 +60,35 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
     signal: options.signal,
     cache: method === "GET" ? "no-cache" : undefined
   });
+}
+
+export function buildReturnPath(locationLike: LocationLike): string {
+  const pathname = locationLike.pathname || "";
+  const search = locationLike.search || "";
+  const hash = locationLike.hash || "";
+  const path = `${pathname}${search}${hash}`;
+
+  if (!path || pathname === "/login") {
+    return "";
+  }
+  return path;
+}
+
+export function buildLoginRedirectPath(locationLike: LocationLike): string {
+  const returnPath = buildReturnPath(locationLike);
+  if (!returnPath) {
+    return "/login";
+  }
+  return `/login?redirect=${encodeURIComponent(returnPath)}`;
+}
+
+export function normalizeRedirectTarget(raw: string | null | undefined): string {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  const isAppRoute = value === "/app" || value.startsWith("/app/");
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\") || !isAppRoute) {
+    return DEFAULT_REDIRECT_TARGET;
+  }
+  return value;
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -96,9 +133,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       sessionStorage.removeItem("xirang-user-id");
       sessionStorage.removeItem("xirang-totp-enabled");
     } catch { /* ignore */ }
-    const returnPath = typeof window !== "undefined" ? window.location.pathname : "";
-    const query = returnPath && returnPath !== "/login" ? `?redirect=${encodeURIComponent(returnPath)}` : "";
-    window.location.href = `/login${query}`;
+    if (typeof window !== "undefined") {
+      window.location.href = buildLoginRedirectPath(window.location);
+    }
     throw new ApiError(401, "session expired", payload);
   }
 

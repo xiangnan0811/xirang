@@ -27,8 +27,18 @@ func NewSystemHandler(db *gorm.DB) *SystemHandler {
 	return &SystemHandler{db: db}
 }
 
+func isSQLiteRuntime() bool {
+	dbType := strings.TrimSpace(os.Getenv("DB_TYPE"))
+	return dbType == "" || strings.EqualFold(dbType, "sqlite")
+}
+
 // BackupDB 创建 SQLite 数据库的时间戳备份
 func (h *SystemHandler) BackupDB(c *gin.Context) {
+	if !isSQLiteRuntime() {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})
+		return
+	}
+
 	dbPath := os.Getenv("SQLITE_PATH")
 	if dbPath == "" {
 		dbPath = "./xirang.db"
@@ -46,20 +56,12 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 		return
 	}
 
-	// 执行 WAL checkpoint，确保所有数据写入主数据库文件
-	if err := h.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
-		logger.Log.Error().Err(err).Msg("执行 WAL checkpoint 失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "执行 WAL checkpoint 失败"})
-		return
-	}
-
 	// 生成带时间戳的备份文件名
 	timestamp := time.Now().Format("20060102-150405")
 	backupFilename := fmt.Sprintf("xirang-%s.db", timestamp)
 	backupPath := filepath.Join(backupDir, backupFilename)
 
-	// 复制数据库文件
-	checksum, size, err := copyFileWithChecksum(dbPath, backupPath)
+	checksum, size, err := createSQLiteBackup(h.db, backupPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("备份数据库文件失败")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份数据库文件失败"})
@@ -111,6 +113,11 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 
 // ListBackups 列出已有的数据库备份文件
 func (h *SystemHandler) ListBackups(c *gin.Context) {
+	if !isSQLiteRuntime() {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})
+		return
+	}
+
 	dbPath := os.Getenv("SQLITE_PATH")
 	if dbPath == "" {
 		dbPath = "./xirang.db"
@@ -168,27 +175,32 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": backups})
 }
 
-// copyFileWithChecksum 复制文件并同时计算 SHA-256 校验和
-func copyFileWithChecksum(src, dst string) (checksum string, size int64, err error) {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return "", 0, fmt.Errorf("打开源文件失败: %w", err)
+func createSQLiteBackup(db *gorm.DB, backupPath string) (checksum string, size int64, err error) {
+	escapedPath := strings.ReplaceAll(backupPath, "'", "''")
+	if err := db.Exec(fmt.Sprintf("VACUUM INTO '%s'", escapedPath)).Error; err != nil {
+		return "", 0, fmt.Errorf("执行 SQLite 一致性备份失败: %w", err)
 	}
-	defer srcFile.Close()
+	return checksumFile(backupPath)
+}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+func checksumFile(path string) (checksum string, size int64, err error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return "", 0, fmt.Errorf("创建目标文件失败: %w", err)
+		return "", 0, fmt.Errorf("打开备份文件失败: %w", err)
 	}
-	defer dstFile.Close()
+	defer file.Close()
 
 	hasher := sha256.New()
-	writer := io.MultiWriter(dstFile, hasher)
-
-	written, err := io.Copy(writer, srcFile)
+	size, err = file.Seek(0, 2)
 	if err != nil {
-		return "", 0, fmt.Errorf("复制文件失败: %w", err)
+		return "", 0, fmt.Errorf("读取备份文件大小失败: %w", err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return "", 0, fmt.Errorf("重置备份文件读取游标失败: %w", err)
+	}
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", 0, fmt.Errorf("计算备份文件校验和失败: %w", err)
 	}
 
-	return fmt.Sprintf("%x", hasher.Sum(nil)), written, nil
+	return fmt.Sprintf("%x", hasher.Sum(nil)), size, nil
 }
