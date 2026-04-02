@@ -45,6 +45,14 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 - Run lint, typecheck, tests, and static analysis after changes.
 - Final reports must include changed files, simplifications made, and remaining risks.
 
+## Open Source Release Standards
+- Treat GitHub Release as the only authoritative public version source and changelog surface for Xirang.
+- Treat Docker Hub as the only official public image registry for Xirang; do not introduce GHCR or extra public registries without an explicit product decision.
+- Keep public releases on stable semver tags only (`vX.Y.Z`); do not add prerelease, nightly, or ad-hoc channels implicitly.
+- Treat `latest` as "newest stable release" only. Manual rebuilds, recovery jobs, or test publications must not move `latest`.
+- Keep public release workflows separate from private deployment workflows. Do not couple GitHub Release events to automatic deployment of private environments.
+- When changing release automation, Docker image flow, deployment entrypoints, or version-check behavior, update the matching documentation and templates in the same change.
+
 ---
 
 <delegation_rules>
@@ -210,6 +218,11 @@ Parallelization:
 - Use background execution for builds and tests when helpful.
 - Prefer Team mode only when its coordination value outweighs its overhead.
 - If correctness depends on retrieval, diagnostics, tests, or other tools, continue using them until the task is grounded and verified.
+
+Release and versioning guardrails:
+- Keep `release-please.yml`, `publish-images.yml`, `deploy.yml`, `docker-compose.prod.yml`, `.env.deploy`, `backend/.env.production.example`, `README.md`, `docs/deployment.md`, `docs/env-vars.md`, and maintainer release docs aligned.
+- Prefer prebuilt Docker Hub images in user-facing docs; local `docker build` belongs to maintainer or advanced workflows, not the default install path.
+- Treat `VERSION_CHECK_URL` as a public-release integration point. If the public release source changes, update the backend contract, env docs, and user docs together.
 
 Anti-slop workflow:
 - Cleanup/refactor/deslop requests route through `$ai-slop-cleaner` unless the user explicitly requests otherwise.

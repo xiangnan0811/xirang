@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "镜像版本号（例如 0.2.0 或 v0.2.0）"
+        description: "维护者手动重发时使用的镜像版本号（例如 0.2.0 或 v0.2.0）"
         required: true
         type: string
       source_ref:
-        description: "构建所用源码 ref（tag/branch/SHA）"
+        description: "维护者手动重发时使用的源码 ref（tag/branch/SHA）"
         required: true
         type: string
 
@@ -32,6 +32,12 @@ jobs:
       IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
 
     steps:
+      - name: Reject prerelease releases
+        if: github.event_name == 'release' && github.event.release.prerelease
+        run: |
+          echo "pre-release publishing is not supported in this repository" >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -89,7 +95,7 @@ jobs:
           tags: |
             type=raw,value=v${{ steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && !github.event.release.prerelease) }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
@@ -124,6 +130,7 @@ jobs:
             echo "- Source ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}"
             echo "- Source commit: ${{ steps.source.outputs.commit }}"
             echo "- Digest: ${{ steps.build.outputs.digest }}"
+            echo "- Latest updated: ${{ github.event_name == 'release' && 'yes' || 'no (manual rebuild)' }}"
             echo "- Tags:"
             echo "\`${{ steps.meta.outputs.tags }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"

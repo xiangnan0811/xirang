@@ -17,7 +17,7 @@
 ### 提交代码
 
 1. Fork 本仓库并 clone 到本地
-2. 基于 `master` 创建功能分支：`git checkout -b feat/your-feature`
+2. 基于 `main` 创建功能分支：`git checkout -b feat/your-feature`
 3. 完成开发后运行校验：
 
 ```bash
@@ -37,6 +37,12 @@ git push origin feat/your-feature
 ```
 
 5. 在 GitHub 上发起 Pull Request
+
+### Pull Request 标题与合并方式
+
+- Pull Request 标题必须遵循 Conventional Commits；CI 会校验标题格式。
+- Maintainer 合并到 `main` 时应优先使用 `Squash and merge`，并保留符合规范的 PR 标题，让最终进入发布分支的提交语义稳定可预测。
+- 不要直接向 `main` 推送发布相关改动；正式版本通过 Release Please 生成的 Release PR 落地。
 
 ### Commit 规范
 
@@ -61,6 +67,14 @@ git push origin feat/your-feature
 - 前端改动需关注可访问性（`aria-*`、键盘操作）
 - 优先复用 `web/src/components/ui/` 下已有组件
 - 不引入无必要的外部依赖
+
+## 发布与镜像标准
+
+- GitHub Release 是 Xirang 唯一权威公开版本源；`CHANGELOG.md` 由 Release Please 自动维护。
+- Docker Hub 是唯一官方公开镜像源；`latest` 仅代表最新稳定版。
+- 本仓库当前只支持稳定版 `vX.Y.Z` 发布，不支持 prerelease/nightly 通道。
+- 公开发布流程不自动部署私有环境；`.github/workflows/deploy.yml` 仅用于维护者手动部署。
+- 如修改 release/image/deploy/version-check 路径，必须同步更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md` 以及维护者发布文档。
 
 ## 文档同步
 
@@ -88,4 +102,6 @@ make setup-hooks
 
 ## 发布流程
 
-本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 CHANGELOG。合并到 `master` 的 PR 会自动触发版本发布流程。
+本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 `CHANGELOG.md`。合并到 `main` 的 PR 会自动更新或创建 Release PR；合并该 Release PR 后会创建 GitHub Release，并触发 Docker Hub 镜像发布。
+
+维护者发布与仓库设置说明见 [docs/release-maintainers.md](docs/release-maintainers.md)。

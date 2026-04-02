@@ -1,13 +1,10 @@
-name: Deploy
+name: Manual Deploy
 
 on:
-  release:
-    types:
-      - published
   workflow_dispatch:
     inputs:
       environment:
-        description: "部署环境"
+        description: "部署环境（仅维护者私有环境）"
         required: true
         default: production
         type: choice
@@ -15,9 +12,8 @@ on:
           - staging
           - production
       image_tag:
-        description: "镜像标签（默认 latest，可填 v0.2.0）"
-        required: false
-        default: latest
+        description: "要部署的镜像标签（例如 latest 或 v0.2.0）"
+        required: true
         type: string
 
 permissions:
@@ -25,13 +21,13 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy (${{ github.event_name == 'release' && 'staging' || github.event.inputs.environment }})
+    name: Manual Deploy (${{ github.event.inputs.environment }})
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'release' && 'staging' || github.event.inputs.environment }}
+    environment: ${{ github.event.inputs.environment }}
     env:
       IMAGE_REGISTRY: docker.io
       IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-      IMAGE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.image_tag }}
+      IMAGE_TAG: ${{ github.event.inputs.image_tag }}
       IMAGE_WAIT_MAX_ATTEMPTS: ${{ vars.IMAGE_WAIT_MAX_ATTEMPTS || 90 }}
       IMAGE_WAIT_INTERVAL_SECONDS: ${{ vars.IMAGE_WAIT_INTERVAL_SECONDS || 10 }}
     steps:

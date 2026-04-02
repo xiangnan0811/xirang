@@ -142,8 +142,8 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `IMAGE_REGISTRY` | `docker.io` | 镜像仓库地址 |
-| `IMAGE_NAMESPACE` | `xirang` | 镜像命名空间 |
-| `IMAGE_TAG` | `latest` | 镜像标签 |
+| `IMAGE_NAMESPACE` | `xirang` | 镜像命名空间；官方公开镜像默认使用 `docker.io/xirang/xirang` |
+| `IMAGE_TAG` | `latest` | 镜像标签；`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
 | `BACKEND_UPSTREAM` | `127.0.0.1:8080` | Nginx 反代后端地址 |
 
 ---
@@ -161,8 +161,7 @@
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `VERSION_CHECK_URL` | string | — | 否 | 版本检查地址（如 Gitea/GitHub releases API），未设置时版本检查接口返回"未配置" |
+| `VERSION_CHECK_URL` | string | — | 否 | 版本检查地址，推荐使用 `https://api.github.com/repos/xiangnan0811/xirang/releases/latest`；当前仅支持稳定版 semver 响应，未设置时版本检查接口返回"未配置" |
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 数据库备份文件存放目录 |
 
 **读取位置**：`VERSION_CHECK_URL` → `api/handlers/version_handler.go:37`，`DB_BACKUP_DIR` → `api/handlers/system_handler.go:39`
-

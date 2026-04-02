@@ -64,6 +64,13 @@ if echo "$CHANGED" | grep -q "backend/internal/config/config.go"; then
   fi
 fi
 
+# 规则 6：发布/镜像/部署/版本检查变更 → 发布文档
+if echo "$CHANGED" | grep -qE '^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.prod\.yml|\.env\.deploy|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'; then
+  if ! echo "$CHANGED" | grep -qE '^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/release-maintainers\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'; then
+    warn "发布/镜像/部署/版本检查相关文件已修改，但配套文档或仓库规范未同步更新"
+  fi
+fi
+
 if [ "$WARN" -gt 0 ]; then
   echo ""
   echo "📝 共 ${WARN} 条文档同步提醒。请确认是否需要更新对应文档。"

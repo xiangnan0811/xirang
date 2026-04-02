@@ -1,33 +1,20 @@
-# 构建与部署指南
+# 构建、发布与部署指南
 
-本文档详细说明 Xirang（息壤）的镜像构建、生产部署、数据管理及日常运维操作。
+本文档说明 Xirang 的官方发布约定、生产部署方式、版本回滚和维护者发布入口。
 
----
+## 官方交付标准
 
-## 目录
-
-- [架构概览](#架构概览)
-- [镜像构建](#镜像构建)
-  - [All-in-One 生产镜像（推荐）](#all-in-one-生产镜像推荐)
-  - [多架构构建](#多架构构建)
-- [部署方式](#部署方式)
-  - [生产部署](#生产部署)
-  - [开发环境（Docker Compose）](#开发环境docker-compose)
-  - [本地直接运行](#本地直接运行)
-- [环境变量参考](#环境变量参考)
-- [HTTPS 证书配置](#https-证书配置)
-- [数据持久化与备份](#数据持久化与备份)
-- [健康检查与运维](#健康检查与运维)
-- [版本回滚](#版本回滚)
-- [CI/CD 自动发布](#cicd-自动发布)
-
----
+- GitHub Release 是唯一权威公开版本源和变更说明源。
+- Docker Hub 是唯一官方镜像源，默认镜像地址为 `docker.io/xirang/xirang`。
+- 当前仅支持稳定版 semver：`vX.Y.Z`。
+- `latest` 仅代表最新稳定版；生产环境建议固定到显式版本标签。
+- 公开 release 不自动触发私有部署；维护者部署使用手动 workflow。
 
 ## 架构概览
 
 生产环境使用 All-in-One 单容器架构：
 
-```
+```text
                     ┌────────────────────────────────┐
                     │        Docker Container        │
    :80 (HTTP)  ───> │  Nginx ── 301 ──> HTTPS        │
@@ -36,7 +23,7 @@
                     │    ├── /healthz   ──> Backend  │
                     │    └── /*         ──> 静态文件  │
                     │                                │
-                    │  Backend (:8080)               │
+                    │  Backend (:3000)               │
                     │    └── SQLite(/data) 或 PG     │
                     │                                │
                     │  Cron (每日 02:00 自动备份)      │
@@ -46,23 +33,127 @@
                     └────────────────────────────────┘
 ```
 
----
+## 生产部署
 
-## 镜像构建
+### Docker Compose（推荐）
 
-### All-in-One 生产镜像（推荐）
+`docker-compose.prod.yml` 已默认指向官方 Docker Hub 镜像。
 
-三阶段构建，将前端、后端、Nginx 打包为单一镜像。
+```bash
+# 1. 获取部署文件
+git clone https://github.com/xiangnan0811/xirang.git
+cd xirang
 
-**Dockerfile**: `deploy/allinone/Dockerfile`
+# 2. 准备环境变量
+cp .env.deploy .env
 
-| 构建阶段 | 基础镜像 | 产物 |
-|---------|---------|------|
-| web-builder | `node:20-alpine` | 前端静态文件 (`web/dist`) |
-| backend-builder | `golang:1.26` | Go 二进制 (`xirang`) |
-| 运行时 | `nginx:1.27` | Nginx + 后端 + 前端 + cron |
+# 必填项
+# ADMIN_INITIAL_PASSWORD=<强密码>
+# JWT_SECRET=<强随机字符串>
+# DATA_ENCRYPTION_KEY=<加密密钥>
 
-在**项目根目录**执行：
+# 生产环境建议固定稳定版镜像
+echo 'IMAGE_TAG=vX.Y.Z' >> .env
+
+# 可选：开启版本检查（替换成正式 GitHub 仓库地址）
+echo 'VERSION_CHECK_URL=https://api.github.com/repos/xiangnan0811/xirang/releases/latest' >> .env
+
+# 3. 放入证书
+mkdir -p deploy/certs
+cp /path/to/fullchain.pem deploy/certs/
+cp /path/to/privkey.pem deploy/certs/
+
+# 4. 拉取并启动
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+默认情况下：
+
+- 镜像地址：`docker.io/xirang/xirang`
+- 数据目录：`./data`
+- 备份目录：`./backups`
+- HTTP 端口：`80 -> 8080`
+- HTTPS 端口：`443 -> 8443`
+
+如需 PostgreSQL，在 `.env` 中改为：
+
+```env
+DB_TYPE=postgres
+DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
+```
+
+### Docker Run
+
+```bash
+cp .env.deploy .env
+
+docker run -d \
+  --name xirang \
+  --restart unless-stopped \
+  -p 80:8080 -p 443:8443 \
+  -v xirang-data:/data \
+  -v xirang-backup:/backup \
+  -v ./deploy/certs:/etc/nginx/certs:ro \
+  --env-file .env \
+  docker.io/xirang/xirang:vX.Y.Z
+```
+
+### 环境变量要点
+
+必填变量：
+
+- `ADMIN_INITIAL_PASSWORD`
+- `JWT_SECRET`
+- `DATA_ENCRYPTION_KEY`
+
+常用部署变量：
+
+- `IMAGE_TAG`
+- `DB_TYPE`
+- `DB_DSN`
+- `SQLITE_PATH`
+- `HTTP_PORT`
+- `HTTPS_PORT`
+- `VERSION_CHECK_URL`
+
+完整列表见 [docs/env-vars.md](env-vars.md)。
+
+## 更新与回滚
+
+### 升级到新稳定版
+
+推荐方式是修改 `.env` 中的 `IMAGE_TAG`：
+
+```env
+IMAGE_TAG=v1.0.0
+```
+
+然后执行：
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### 临时指定版本
+
+```bash
+IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
+```
+
+### 关于 `latest`
+
+- `latest` 仅表示当前最新稳定版
+- 适合快速试用
+- 不建议作为生产环境长期固定标签
+
+## 镜像构建（仅维护者或高级用户）
+
+如果你不是在维护发布链路，通常不需要本地构建镜像。
+
+### All-in-One 单镜像构建
 
 ```bash
 docker build -f deploy/allinone/Dockerfile -t xirang/xirang:latest .
@@ -70,193 +161,36 @@ docker build -f deploy/allinone/Dockerfile -t xirang/xirang:latest .
 
 ### 多架构构建
 
-支持同时构建 `linux/amd64` 和 `linux/arm64`：
-
 ```bash
-# 需要先创建 buildx builder（仅首次）
 docker buildx create --use
 
-# 构建并推送到镜像仓库
-docker buildx build --platform linux/amd64,linux/arm64 \
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
   -f deploy/allinone/Dockerfile \
   -t xirang/xirang:latest \
   --push .
 ```
 
----
+说明：
 
-## 部署方式
+- SQLite 默认要求 `CGO_ENABLED=1`
+- 本仓库的官方镜像发布由 GitHub Actions 完成
+- 用户默认路径应始终优先使用预构建镜像，而不是手工 build
 
-### 生产部署
-
-使用 `docker-compose.prod.yml`，从镜像仓库拉取预构建镜像。
-
-#### 1. 准备环境变量
-
-```bash
-cp .env.deploy .env
-```
-
-编辑根目录 `.env`，**必须配置**以下字段：
-
-```env
-ADMIN_INITIAL_PASSWORD=<强密码，首次启动创建 admin 账号>
-JWT_SECRET=<随机字符串，建议 32 位以上>
-DATA_ENCRYPTION_KEY=<加密密钥，用于敏感字段加解密>
-DB_TYPE=sqlite
-SQLITE_PATH=/data/xirang.db
-```
-
-> `docker-compose.prod.yml` 会读取同目录下的 `.env`。如使用 PostgreSQL，将 `DB_TYPE` 改为 `postgres` 并设置 `DB_DSN`。
->
-> `SSH_AUTO_ACCEPT_NEW_HOSTS` 默认值为 `true`，首次连接的新主机密钥会被自动接受，已知主机密钥变更仍会被拒绝。如需禁用，请设置 `SSH_AUTO_ACCEPT_NEW_HOSTS=false`。
-
-#### 2. 准备 HTTPS 证书
-
-将证书文件放到 `deploy/certs/` 目录：
-
-```
-deploy/certs/fullchain.pem   # 证书链
-deploy/certs/privkey.pem     # 私钥
-```
-
-#### 3. 启动服务
-
-```bash
-# 拉取最新镜像
-make prod-pull
-
-# 后台启动
-make prod-up
-```
-
-或直接使用 docker compose：
-
-```bash
-docker compose -f docker-compose.prod.yml up -d
-```
-
-#### 4. 验证部署
-
-```bash
-# 健康检查
-curl -kfsS https://127.0.0.1/healthz
-
-# 查看容器状态
-docker compose -f docker-compose.prod.yml ps
-
-# 查看日志
-docker compose -f docker-compose.prod.yml logs -f xirang
-```
-
-#### 5. 停止服务
-
-```bash
-make prod-down
-```
-
-#### 镜像参数（可选）
-
-通过环境变量自定义镜像来源：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `IMAGE_REGISTRY` | `docker.io` | 镜像仓库地址 |
-| `IMAGE_NAMESPACE` | `xirang` | 镜像命名空间 |
-| `IMAGE_TAG` | `latest` | 镜像标签 |
-
-示例：
-
-```bash
-IMAGE_TAG=v1.2.0 make prod-pull prod-up
-```
-
-### 开发环境（Docker Compose）
-
-`docker-compose.yml` 直接挂载源码，支持热更新：
-
-```bash
-docker compose up
-```
-
-- 前端：`http://localhost:5173`（Vite HMR）
-- 后端：`http://localhost:8080`（go run 热编译）
-
-### 本地直接运行
-
-不依赖 Docker，分两个终端启动：
-
-```bash
-# 终端 1：后端
-make backend-run    # 等价于 cd backend && go run ./cmd/server
-
-# 终端 2：前端
-make web-dev        # 等价于 cd web && npm run dev
-```
-
----
-
-## 环境变量参考
-
-### 必填变量（生产环境）
-
-| 变量 | 说明 |
-|------|------|
-| `ADMIN_INITIAL_PASSWORD` | 初始 admin 密码（首次启动时创建） |
-| `JWT_SECRET` | JWT 签名密钥（≥16 字符强随机字符串） |
-| `DATA_ENCRYPTION_KEY` | 敏感字段加密密钥（推荐 32 字节 base64） |
-
-### 前端变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `VITE_API_BASE_URL` | `/api/v1` | API 路径前缀 |
-| `VITE_PROXY_TARGET` | `http://127.0.0.1:8080` | 开发代理目标地址 |
-| `VITE_DEV_API_DIRECT_URL` | — | 开发模式直连后端地址 |
-| `VITE_WS_URL` | 自动推导 | 自定义 WebSocket 地址 |
-| `VITE_ENABLE_DEMO_MODE` | — | 设为 `true` 启用 mock 数据 |
-
-完整环境变量参考见 [环境变量参考](env-vars.md)。
-
----
-
-## HTTPS 证书配置
-
-Nginx 模板（`deploy/nginx/templates/default.conf.template`）默认配置：
-
-- 监听 80 端口，HTTP 自动 301 跳转 HTTPS
-- 监听 443 端口，启用 HTTP/2
-- TLS 协议：TLSv1.2 + TLSv1.3
-- 安全头：HSTS、X-Content-Type-Options、X-Frame-Options、Referrer-Policy、Permissions-Policy
-- 启用 gzip 压缩
-
-证书获取建议使用 Let's Encrypt：
-
-```bash
-# 使用 certbot 申请证书（示例）
-certbot certonly --standalone -d your-domain.com
-
-# 将证书复制到部署目录
-cp /etc/letsencrypt/live/your-domain.com/fullchain.pem deploy/certs/
-cp /etc/letsencrypt/live/your-domain.com/privkey.pem deploy/certs/
-```
-
----
-
-## 数据持久化与备份
+## 数据与备份
 
 ### 数据卷
 
-生产容器使用两个 Docker volume：
+生产容器使用两个持久化目录：
 
-| 卷名 | 容器路径 | 用途 |
-|------|---------|------|
-| `xirang-data` | `/data` | 数据库文件（SQLite） |
-| `xirang-backup` | `/backup` | 自动/手动备份文件 |
+| 路径 | 用途 |
+|------|------|
+| `/data` | SQLite 数据库及应用数据 |
+| `/backup` | 自动/手动备份文件 |
 
 ### 自动备份
 
-容器内置 cron 定时任务（`deploy/allinone/xirang-backup.cron`）：
+容器内置 cron：
 
 | 时间 | 操作 |
 |------|------|
@@ -283,15 +217,9 @@ DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
   bash scripts/restore-db.sh ./backups/xirang-postgres-20260301-020000.dump
 ```
 
-> 恢复前脚本会自动生成 `.before-restore` 时间戳文件用于回滚。
-
----
-
 ## 健康检查与运维
 
 ### 健康检查
-
-容器内置 healthcheck，每 30 秒探测后端 `/healthz`：
 
 ```bash
 # 容器内部
@@ -316,76 +244,64 @@ docker compose -f docker-compose.prod.yml logs --tail=200 xirang
 # 进入容器排查
 docker exec -it xirang bash
 
-# 容器内查看 SQLite 数据
+# 查看 SQLite 任务数量
 docker exec -it xirang sh -lc \
   "sqlite3 /data/xirang.db 'SELECT count(*) FROM tasks;'"
 ```
 
----
-
-## 版本回滚
-
-指定镜像标签即可回滚到历史版本：
-
-```bash
-IMAGE_TAG=v1.0.0 make prod-pull prod-up
-```
-
----
-
-## CI/CD 自动发布
-
-项目配置了完整的 CI/CD 流水线：
+## CI/CD 发布链路
 
 ### 持续集成
 
 - 工作流：`.github/workflows/ci.yml`
-- 触发：push / pull_request
-- 检查项：后端 `go test + go build`，前端 `typecheck + test + build`
+- 触发：`push` / `pull_request`
+- 检查项：
+  - PR 标题 Conventional Commits 校验
+  - 后端 `go test ./...` + `go build ./...`
+  - 前端 `npm run check`
+  - bundle budget
+  - 文档新鲜度提醒
 
-### 版本发布（Release Please）
+### Release Please
 
 - 工作流：`.github/workflows/release-please.yml`
-- 触发：master 分支 push
-- 自动维护 Release PR，合并后打 Tag 并创建 GitHub Release
+- 触发：`main` 分支 push
+- 作用：自动维护 Release PR、更新 `CHANGELOG.md`、生成 GitHub Release
 
-### 镜像发布
+### Docker 镜像发布
 
 - 工作流：`.github/workflows/publish-images.yml`
-- 触发：`release.published` 或手动
-- 推送到 DockerHub，标签：`vX.Y.Z`、`X.Y.Z`、`latest`
-- 多架构：`linux/amd64` + `linux/arm64`
+- 正式入口：`release.published`
+- 手动入口：仅用于维护者重发
+- 产物标签：
+  - `vX.Y.Z`
+  - `X.Y.Z`
+  - `latest`（仅正式稳定版更新）
 
-### 自动部署
+### 私有部署
 
 - 工作流：`.github/workflows/deploy.yml`
-- 发布后自动部署 staging，可手动部署 production
-- 远程执行 `docker compose pull && up -d`
+- 触发：仅 `workflow_dispatch`
+- 用途：维护者私有环境部署
+- 不属于公开开源发布主线
 
-### 所需 GitHub Secrets
+## 维护者说明
 
-| Scope | 变量 | 说明 |
-|-------|------|------|
-| 仓库级 | `DOCKERHUB_USERNAME` | DockerHub 用户名 |
-| 仓库级 | `DOCKERHUB_TOKEN` | DockerHub 访问令牌 |
-| Environment | `DEPLOY_HOST` | 部署目标主机 |
-| Environment | `DEPLOY_USER` | SSH 用户名 |
-| Environment | `DEPLOY_SSH_KEY` | SSH 私钥 |
-| Environment | `DEPLOY_PATH` | 远端部署目录 |
+维护者需要额外关注：
 
----
+- 首个公开版本 bootstrap
+- GitHub branch protection / squash merge 设置
+- Docker Hub secrets / variables
+- 镜像重发与私有部署
+
+详见 [docs/release-maintainers.md](release-maintainers.md)。
 
 ## 快速参考
 
 ```bash
-# 构建镜像
-docker build -f deploy/allinone/Dockerfile -t xirang/xirang:latest .
-
 # 生产部署
-make prod-pull && make prod-up
-
-# 停止服务
-make prod-down
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 
 # 健康检查
 curl -kfsS https://127.0.0.1/healthz
@@ -394,5 +310,6 @@ curl -kfsS https://127.0.0.1/healthz
 docker compose -f docker-compose.prod.yml logs -f xirang
 
 # 版本回滚
-IMAGE_TAG=v1.0.0 make prod-pull prod-up
+IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
 ```
