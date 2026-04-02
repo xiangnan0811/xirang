@@ -7,13 +7,14 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26 AS backend-builder
+FROM golang:1.26-alpine AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
 ARG TARGETARCH
 
 COPY backend/go.mod backend/go.sum ./
+RUN apk add --no-cache gcc musl-dev
 RUN go mod download
 
 COPY backend/ ./
@@ -22,25 +23,25 @@ RUN set -eux; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
 
-FROM nginx:1.27
+FROM nginx:1.27-alpine
 
 # 安装 supercronic（非 root cron 替代）、sqlite3（WAL 一致性备份）和 curl（健康检查）
 ARG TARGETARCH
 RUN set -eux; \
-    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    arch="${TARGETARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}"; \
     case "${arch}" in \
       amd64) supercronic_sha256="feefa310da569c81b99e1027b86b27b51e6ee9ab647747b49099645120cfc671" ;; \
       arm64) supercronic_sha256="f1f8585c66de020fef494dd636058f99949d108f569fef00016a1c8b9eb145b3" ;; \
       *) echo "unsupported supercronic arch: ${arch}" >&2; exit 1 ;; \
     esac; \
-    apt-get update && apt-get install -y --no-install-recommends curl rsync openssh-client sqlite3 && rm -rf /var/lib/apt/lists/*; \
+    apk add --no-cache curl rsync openssh-client sqlite bash; \
     curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" \
          -o /usr/local/bin/supercronic; \
-    echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum -c --strict -; \
+    echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum -c -; \
     chmod +x /usr/local/bin/supercronic
 
 # 创建非 root 用户
-RUN groupadd -r -g 10000 xirang && useradd -r -u 10000 -g xirang -d /home/xirang -m -s /sbin/nologin xirang
+RUN addgroup -S -g 10000 xirang && adduser -S -u 10000 -G xirang -h /home/xirang -s /sbin/nologin xirang
 
 # 配置 nginx 以非 root 运行：PID 文件和临时目录
 RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tmp/nginx.pid|g' /etc/nginx/nginx.conf && \

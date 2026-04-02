@@ -1,0 +1,10 @@
+.git
+node_modules
+web/node_modules
+web/.vite
+web/dist
+.env
+.env.*
+.omc
+.claude
+backend/tmp
