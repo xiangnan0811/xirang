@@ -37,6 +37,7 @@
 
 ### 仓库级
 
+- `RELEASE_PLEASE_TOKEN`（PAT，至少需要 `repo` 和 `workflow`；用于让 release-please 创建的分支正常触发 CI）
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
 - `DOCKERHUB_NAMESPACE`（可用 variable；不设时回退到用户名）
@@ -52,7 +53,7 @@
 ## 标准发布流程
 
 1. 功能 PR 标题使用 Conventional Commits，合并到 `main` 时保持语义不变。
-2. `release-please.yml` 自动更新或创建 Release PR。
+2. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 自动更新或创建 Release PR，确保 release 分支会触发 CI。
 3. 审阅并合并 Release PR。
 4. GitHub 创建对应 `vX.Y.Z` Release。
 5. `publish-images.yml` 监听 `release.published`，向 Docker Hub 发布：
