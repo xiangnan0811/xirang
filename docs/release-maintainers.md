@@ -62,6 +62,18 @@
    - `latest`
 6. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
+## Docker Hub 仓库介绍同步
+
+- 工作流：`.github/workflows/dockerhub-description.yml`
+- 触发：
+  - `README.md` 变更并合并到 `main`
+  - 手动 `workflow_dispatch`
+- 同步规则：
+  - Docker Hub 短描述使用 GitHub 仓库 description
+  - Docker Hub 长描述使用仓库 `README.md`
+
+如果 Docker Hub 页面介绍没有及时更新，先检查这个 workflow 是否成功，再考虑手工页面编辑。
+
 ## 手动重发镜像
 
 仅在以下情况使用 `publish-images.yml` 的 `workflow_dispatch`：
