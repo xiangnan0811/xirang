@@ -4,7 +4,6 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "xirang",
       "changelog-path": "CHANGELOG.md"
     }
   }
