@@ -20,11 +20,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Resolve Docker Hub metadata credentials
+        id: credentials
+        env:
+          DOCKERHUB_PUSH_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_DESCRIPTION_USERNAME: ${{ secrets.DOCKERHUB_DESCRIPTION_USERNAME }}
+          DOCKERHUB_DESCRIPTION_PASSWORD: ${{ secrets.DOCKERHUB_DESCRIPTION_PASSWORD }}
+        run: |
+          set -euo pipefail
+          username="${DOCKERHUB_DESCRIPTION_USERNAME:-${DOCKERHUB_PUSH_USERNAME:-}}"
+          if [[ -n "${username}" && -n "${DOCKERHUB_DESCRIPTION_PASSWORD:-}" ]]; then
+            echo "ready=true" >> "${GITHUB_OUTPUT}"
+            echo "username=${username}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "### Docker Hub description sync skipped"
+              echo ""
+              echo "Set \`DOCKERHUB_DESCRIPTION_PASSWORD\` (and optionally \`DOCKERHUB_DESCRIPTION_USERNAME\`) to enable metadata sync."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
       - name: Update Docker Hub repository description
+        if: steps.credentials.outputs.ready == 'true'
         uses: peter-evans/dockerhub-description@e98e4d1628a5f3be2be7c231e50981aee98723ae # v4.0.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/xirang
+          username: ${{ steps.credentials.outputs.username }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_PASSWORD }}
+          repository: ${{ vars.DOCKERHUB_NAMESPACE || steps.credentials.outputs.username }}/xirang
           short-description: ${{ github.event.repository.description || '轻量、易部署的服务器运维管理平台。' }}
           readme-filepath: ./README.md

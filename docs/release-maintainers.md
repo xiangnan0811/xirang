@@ -71,8 +71,15 @@
 - 同步规则：
   - Docker Hub 短描述使用 GitHub 仓库 description
   - Docker Hub 长描述使用仓库 `README.md`
+- 需要额外仓库 secret：
+  - `DOCKERHUB_DESCRIPTION_PASSWORD`
+  - `DOCKERHUB_DESCRIPTION_USERNAME`（可选；不设时回退到 `DOCKERHUB_USERNAME`）
 
-如果 Docker Hub 页面介绍没有及时更新，先检查这个 workflow 是否成功，再考虑手工页面编辑。
+说明：
+
+- 当前用于镜像推送的 `DOCKERHUB_TOKEN` 可能没有 Docker Hub 仓库元数据编辑权限。
+- 因此，仓库介绍同步与镜像推送使用分离凭据更稳妥。
+- 如果缺少上述 metadata 凭据，workflow 会跳过同步而不是失败。
 
 ## 手动重发镜像
 
