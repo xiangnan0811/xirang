@@ -1290,6 +1290,8 @@ const zh = {
     scopeInUse: "仅在用密钥（{{count}} 个）",
     scopeSelected: "当前选中（{{count}} 个）",
     downloadFile: "下载文件",
+    exportPreview: "预览",
+    exportFailed: "导出失败",
 
     // 轮换向导
     rotationTitle: "密钥轮换",

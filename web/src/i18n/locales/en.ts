@@ -1290,6 +1290,8 @@ const en = {
     scopeInUse: "In-use keys only ({{count}})",
     scopeSelected: "Currently selected ({{count}})",
     downloadFile: "Download File",
+    exportPreview: "Preview",
+    exportFailed: "Export failed",
 
     // Rotation wizard
     rotationTitle: "Key Rotation",
