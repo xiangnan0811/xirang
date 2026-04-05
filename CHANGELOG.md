@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/xiangnan0811/xirang/compare/v0.2.0...v0.2.1) (2026-04-05)
+
+
+### Bug Fixes
+
+* **release:** keep GitHub tags on plain semver ([#3](https://github.com/xiangnan0811/xirang/issues/3)) ([38ac648](https://github.com/xiangnan0811/xirang/commit/38ac6485193921cbf4d31e4a058a93a51e1fbb46))
+
 ## [0.2.0](https://github.com/xiangnan0811/xirang/compare/xirang-v0.1.0...xirang-v0.2.0) (2026-04-02)
 
 
