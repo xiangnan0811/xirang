@@ -237,8 +237,8 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	go stream(newProgressScanner(stdout), "info")
 	go stream(newProgressScanner(stderr), "error")
 
-	waitErr := cmd.Wait()
 	wg.Wait()
+	waitErr := cmd.Wait()
 	if waitErr == nil {
 		return 0, nil
 	}

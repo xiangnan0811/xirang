@@ -27,6 +27,9 @@ web/.env
 .codex/
 .gemini/
 .agent/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
 
 # git worktrees
 .worktrees/
