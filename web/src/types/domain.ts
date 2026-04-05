@@ -308,6 +308,7 @@ export interface SSHKeyRecord {
   username: string;
   keyType: SSHKeyType;
   privateKey?: string;
+  publicKey?: string;
   fingerprint: string;
   createdAt: string;
   lastUsedAt?: string;
