@@ -80,11 +80,15 @@ go run ./cmd/server
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /ssh-keys | 🔒 密钥列表 |
-| GET | /ssh-keys/:id | 🔒 密钥详情 |
+| GET | /ssh-keys | 🔒 密钥列表（含派生公钥） |
 | POST | /ssh-keys | 🔒 创建密钥 |
+| POST | /ssh-keys/batch | 🔒 批量创建（最多 50 条） |
+| POST | /ssh-keys/batch-delete | 🔒 批量删除（跳过使用中） |
+| GET | /ssh-keys/export | 🔒 导出（authorized_keys/json/csv） |
+| GET | /ssh-keys/:id | 🔒 密钥详情 |
 | PUT | /ssh-keys/:id | 🔒 更新密钥 |
 | DELETE | /ssh-keys/:id | 🔒 删除密钥 |
+| POST | /ssh-keys/:id/test-connection | 🔒 测试密钥连接节点 |
 
 ### 备份策略
 
