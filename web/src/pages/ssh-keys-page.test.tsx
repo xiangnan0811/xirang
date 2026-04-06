@@ -34,8 +34,32 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({ token: "test-token" }),
+}));
+
 vi.mock("@/components/ssh-key-editor-dialog", () => ({
   SSHKeyEditorDialog: () => null,
+}));
+
+vi.mock("@/components/ssh-key-test-connection-dialog", () => ({
+  SSHKeyTestConnectionDialog: () => null,
+}));
+
+vi.mock("@/components/ssh-key-associated-nodes-sheet", () => ({
+  SSHKeyAssociatedNodesSheet: () => null,
+}));
+
+vi.mock("@/components/ssh-key-batch-import-dialog", () => ({
+  SSHKeyBatchImportDialog: () => null,
+}));
+
+vi.mock("@/components/ssh-key-export-dialog", () => ({
+  SSHKeyExportDialog: () => null,
+}));
+
+vi.mock("@/components/ssh-key-rotation-wizard", () => ({
+  SSHKeyRotationWizard: () => null,
 }));
 
 vi.mock("@/hooks/use-confirm", () => ({
@@ -142,8 +166,9 @@ describe("SSHKeysPage", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText("生产密钥")).toBeInTheDocument();
-    expect(screen.getByText("测试密钥")).toBeInTheDocument();
+    // 卡片视图 + 表格视图会各渲染一份，使用 getAllByText
+    expect(screen.getAllByText("生产密钥").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("测试密钥").length).toBeGreaterThanOrEqual(1);
   });
 
   it("无密钥时显示空态", () => {
@@ -155,6 +180,7 @@ describe("SSHKeysPage", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText("当前还没有 SSH Key")).toBeInTheDocument();
+    // 卡片视图 + 表格视图均渲染空态
+    expect(screen.getAllByText("当前还没有 SSH Key").length).toBeGreaterThanOrEqual(1);
   });
 });
