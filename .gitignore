@@ -40,6 +40,7 @@ tmp/
 
 # temp docs
 docs/plans/
+docs/superpowers/
 
 # deploy
 deploy/certs/
@@ -48,3 +49,4 @@ deploy-kit/
 # local build artifacts
 backend/.env.production
 web/*.tsbuildinfo
+docs/superpowers/
