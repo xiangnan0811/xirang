@@ -79,6 +79,7 @@ const zh = {
     invalidIdEmpty: "无效的 {{prefix}} ID：不能为空",
     invalidIdFormat: "无效的 {{prefix}} ID：{{rawId}}（期望格式：{{prefix}}-123 或 123）",
     reset: "重置",
+    networkError: "网络错误",
   },
 
   // ── nav ──
@@ -1213,6 +1214,174 @@ const zh = {
     boundNodes: "绑定节点",
     securityWarning: "安全提示：请妥善保管私钥，避免在不安全的环境中暴露。",
     inUseWarning: "该密钥正在被节点使用，删除前请先解绑。",
+
+    // 页面统计
+    total: "总计",
+    inUseCount: "在用",
+    unusedCount: "未用",
+    associatedNodesCount: "关联节点",
+    statsTotal: "密钥总数",
+    statsTotalDesc: "系统中所有 SSH 密钥",
+    statsInUse: "使用中",
+    statsInUseDesc: "使用率 {{rate}}%",
+    statsUnused: "未使用",
+    statsUnusedDesc: "可清理的闲置密钥",
+    statsNodes: "关联节点",
+    statsNodesDesc: "使用 SSH 密钥的节点总数",
+
+    // 工具栏
+    batchImport: "批量导入",
+    exportPublicKeys: "导出公钥",
+    rotateKeys: "密钥轮换",
+    batchDelete: "批量删除",
+    selectedCount: "已选 {{count}} 个",
+
+    // 筛选
+    allTypes: "所有类型",
+    allStatus: "所有状态",
+    allKeyTypes: "所有类型",
+    allUsageStatus: "所有状态",
+    filterInUse: "使用中",
+    filterUnused: "未使用",
+    sortByName: "按名称排序",
+    sortByNameDesc: "按名称倒序",
+    sortByCreated: "按创建时间",
+    sortByLastUsed: "按最后使用",
+    sortNameAsc: "名称 A-Z",
+    sortNameDesc: "名称 Z-A",
+    sortCreated: "按创建时间",
+    sortLastUsed: "按最后使用",
+    searchPlaceholder: "搜索密钥名称 / 用户名 / 指纹",
+    searchAriaLabel: "搜索 SSH 密钥",
+    keyTypeAriaLabel: "按密钥类型筛选",
+    usageStatusAriaLabel: "按使用状态筛选",
+    sortAriaLabel: "排序方式",
+    keyUnit: "个密钥",
+
+    // 行操作
+    copyPublicKey: "复制公钥",
+    publicKeyCopied: "公钥已复制到剪贴板",
+    noPublicKey: "无法获取公钥",
+    copyFailed: "复制失败",
+    testConnection: "测试连接",
+    viewAssociatedNodes: "查看关联节点",
+    rotateKey: "轮换密钥",
+
+    // 测试连接对话框
+    testConnectionTitle: "测试 SSH 连接",
+    testConnectionDesc: "使用 {{name}} 测试与节点的连通性",
+    selectTestNodes: "选择测试节点",
+    startTest: "开始测试",
+    retest: "重新测试",
+    connectionSuccess: "连接成功",
+    connectionFailed: "连接失败",
+    testHint: "仅测试 SSH 握手和密钥认证，不执行任何命令",
+    testing: "测试中...",
+
+    // 关联节点面板
+    associatedNodesTitle: "关联节点",
+    associatedNodesDesc: "{{name}} · {{count}} 个节点",
+    clickToNavigate: "点击节点名称可跳转到节点详情",
+    noAssociatedNodes: "此密钥未被任何节点使用",
+
+    // 批量导入
+    batchImportTitle: "批量导入密钥",
+    batchImportDesc: "从 JSON 文件批量导入多个 SSH 密钥",
+    dropOrUpload: "拖拽文件到此处或点击上传",
+    jsonFormatOnly: "支持 .json 格式",
+    jsonFormatHint: "JSON 格式示例：",
+    previewTitle: "预览（{{count}} 个密钥待导入）：",
+    validKey: "有效",
+    nameExists: "名称已存在",
+    formatError: "格式错误",
+    importValidKeys: "导入 {{count}} 个有效密钥",
+    importSuccess: "成功导入 {{count}} 个密钥",
+    importing: "导入中...",
+
+    // 导出
+    exportTitle: "导出公钥列表",
+    exportDesc: "导出所有密钥的公钥信息，便于部署到服务器",
+    exportFormat: "导出格式",
+    exportScope: "导出范围",
+    formatAuthorizedKeys: "authorized_keys",
+    formatAuthorizedKeysDesc: "标准 SSH 格式",
+    formatJSON: "JSON",
+    formatJSONDesc: "结构化数据",
+    formatCSV: "CSV",
+    formatCSVDesc: "表格格式",
+    scopeAll: "所有密钥（{{count}} 个）",
+    scopeInUse: "仅在用密钥（{{count}} 个）",
+    scopeSelected: "当前选中（{{count}} 个）",
+    downloadFile: "下载文件",
+    exportPreview: "预览",
+    exportFailed: "导出失败",
+
+    // 轮换向导
+    rotationTitle: "密钥轮换",
+    rotationStep1: "选择密钥",
+    rotationStep2: "上传新密钥",
+    rotationStep3: "确认影响",
+    rotationStep4: "执行结果",
+    rotationSelectKey: "选择要轮换的密钥",
+    rotationSelectKeyDesc: "选择一个当前在用的密钥进行轮换替换",
+    rotationUploadKey: "上传替换密钥",
+    rotationUploadKeyDesc: "为 {{name}} 提供新的私钥",
+    rotationConfirmTitle: "确认轮换影响",
+    rotationWarning: "以下 {{count}} 个节点将使用新密钥，请确保新密钥已部署到目标服务器",
+    rotationAffectedNodes: "受影响的节点",
+    rotationOldFingerprint: "旧密钥指纹",
+    rotationNewFingerprint: "新密钥指纹",
+    rotationConfirm: "确认轮换",
+    rotationComplete: "轮换完成",
+    rotationSuccess: "密钥 {{name}} 已成功更新",
+    rotationVerifyResults: "连通性验证结果",
+    rotationVerified: "验证通过",
+    rotationSkipped: "跳过（离线）",
+    rotationFailed: "验证失败",
+    rotationOfflineHint: "{{count}} 个离线节点已跳过，上线后需手动验证密钥配置",
+    rotationDone: "完成",
+    rotationNext: "下一步",
+    rotationPrev: "上一步",
+    rotationCancel: "取消",
+
+    // 表格
+    colName: "名称",
+    colUsername: "用户名",
+    colType: "类型",
+    colFingerprint: "指纹",
+    colLastUsed: "最后使用",
+    colNodes: "节点数",
+    colActions: "操作",
+    neverUsed: "从未使用",
+
+    // 批量删除
+    batchDeleteConfirm: "确认删除 {{count}} 个 SSH Key？在用的密钥将被跳过。",
+    batchDeleteSuccess: "成功删除 {{deleted}} 个密钥",
+    batchDeleteSkipped: "{{count}} 个在用密钥已跳过：{{names}}",
+    bulkDeletePartial: "批量删除完成：成功 {{deleted}} 个，跳过 {{skipped}} 个在用密钥",
+    bulkDeleteSuccess: "成功删除 {{count}} 个密钥",
+    confirmDeleteTitle: "确认删除",
+
+    // 视图切换
+    viewTable: "表格视图",
+    viewCards: "卡片视图",
+    viewToggleGroup: "视图切换",
+
+    // 选择
+    selectAllVisible: "全选当前页",
+    selectKeyAriaLabel: "选择密钥 {{name}}",
+
+    // 空状态
+    emptyFilteredTitle: "没有匹配的 SSH 密钥",
+    emptyFilteredDesc: "尝试调整筛选条件，或新增一个密钥。",
+
+    // 加载状态
+    loadingTitle: "加载密钥中",
+    loadingDesc: "正在获取 SSH 密钥列表...",
+
+    // 卡片视图
+    nodesInUse: "{{count}} 个节点使用中",
+    unusedLabel: "未使用",
   },
 
   // ── reports page ──

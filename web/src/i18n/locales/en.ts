@@ -79,6 +79,7 @@ const en = {
     invalidIdEmpty: "Invalid {{prefix}} ID: cannot be empty",
     invalidIdFormat: "Invalid {{prefix}} ID: {{rawId}} (expected format: {{prefix}}-123 or 123)",
     reset: "Reset",
+    networkError: "Network error",
   },
 
   // ── nav ──
@@ -1213,6 +1214,174 @@ const en = {
     boundNodes: "Bound Nodes",
     securityWarning: "Security notice: keep your private key safe and avoid exposing it in insecure environments.",
     inUseWarning: "This key is in use by nodes. Please unbind before deleting.",
+
+    // Page stats
+    total: "Total",
+    inUseCount: "In Use",
+    unusedCount: "Unused",
+    associatedNodesCount: "Linked Nodes",
+    statsTotal: "Total Keys",
+    statsTotalDesc: "All SSH keys in the system",
+    statsInUse: "In Use",
+    statsInUseDesc: "Usage rate {{rate}}%",
+    statsUnused: "Unused",
+    statsUnusedDesc: "Idle keys available for cleanup",
+    statsNodes: "Linked Nodes",
+    statsNodesDesc: "Total nodes using SSH keys",
+
+    // Toolbar
+    batchImport: "Batch Import",
+    exportPublicKeys: "Export Public Keys",
+    rotateKeys: "Rotate Keys",
+    batchDelete: "Batch Delete",
+    selectedCount: "{{count}} selected",
+
+    // Filters
+    allTypes: "All Types",
+    allStatus: "All Status",
+    allKeyTypes: "All Types",
+    allUsageStatus: "All Status",
+    filterInUse: "In Use",
+    filterUnused: "Unused",
+    sortByName: "Sort by Name",
+    sortByNameDesc: "Sort by Name Desc",
+    sortByCreated: "Sort by Created",
+    sortByLastUsed: "Sort by Last Used",
+    sortNameAsc: "Name A-Z",
+    sortNameDesc: "Name Z-A",
+    sortCreated: "Created Time",
+    sortLastUsed: "Last Used",
+    searchPlaceholder: "Search key name / username / fingerprint",
+    searchAriaLabel: "Search SSH keys",
+    keyTypeAriaLabel: "Filter by key type",
+    usageStatusAriaLabel: "Filter by usage status",
+    sortAriaLabel: "Sort order",
+    keyUnit: "keys",
+
+    // Row actions
+    copyPublicKey: "Copy Public Key",
+    publicKeyCopied: "Public key copied to clipboard",
+    noPublicKey: "Unable to get public key",
+    copyFailed: "Copy failed",
+    testConnection: "Test Connection",
+    viewAssociatedNodes: "View Linked Nodes",
+    rotateKey: "Rotate Key",
+
+    // Test connection dialog
+    testConnectionTitle: "Test SSH Connection",
+    testConnectionDesc: "Test connectivity to nodes using {{name}}",
+    selectTestNodes: "Select test nodes",
+    startTest: "Start Test",
+    retest: "Retest",
+    connectionSuccess: "Connection succeeded",
+    connectionFailed: "Connection failed",
+    testHint: "Only tests SSH handshake and key authentication, no commands are executed",
+    testing: "Testing...",
+
+    // Associated nodes panel
+    associatedNodesTitle: "Linked Nodes",
+    associatedNodesDesc: "{{name}} · {{count}} nodes",
+    clickToNavigate: "Click a node name to navigate to its details",
+    noAssociatedNodes: "This key is not used by any node",
+
+    // Batch import
+    batchImportTitle: "Batch Import Keys",
+    batchImportDesc: "Batch import multiple SSH keys from a JSON file",
+    dropOrUpload: "Drop file here or click to upload",
+    jsonFormatOnly: "Supports .json format",
+    jsonFormatHint: "JSON format example:",
+    previewTitle: "Preview ({{count}} keys to import):",
+    validKey: "Valid",
+    nameExists: "Name already exists",
+    formatError: "Format error",
+    importValidKeys: "Import {{count}} valid keys",
+    importSuccess: "Successfully imported {{count}} keys",
+    importing: "Importing...",
+
+    // Export
+    exportTitle: "Export Public Keys",
+    exportDesc: "Export public key information for all keys, for deployment to servers",
+    exportFormat: "Export Format",
+    exportScope: "Export Scope",
+    formatAuthorizedKeys: "authorized_keys",
+    formatAuthorizedKeysDesc: "Standard SSH format",
+    formatJSON: "JSON",
+    formatJSONDesc: "Structured data",
+    formatCSV: "CSV",
+    formatCSVDesc: "Spreadsheet format",
+    scopeAll: "All keys ({{count}})",
+    scopeInUse: "In-use keys only ({{count}})",
+    scopeSelected: "Currently selected ({{count}})",
+    downloadFile: "Download File",
+    exportPreview: "Preview",
+    exportFailed: "Export failed",
+
+    // Rotation wizard
+    rotationTitle: "Key Rotation",
+    rotationStep1: "Select Key",
+    rotationStep2: "Upload New Key",
+    rotationStep3: "Confirm Impact",
+    rotationStep4: "Results",
+    rotationSelectKey: "Select key to rotate",
+    rotationSelectKeyDesc: "Select an in-use key to replace with a new one",
+    rotationUploadKey: "Upload replacement key",
+    rotationUploadKeyDesc: "Provide a new private key for {{name}}",
+    rotationConfirmTitle: "Confirm Rotation Impact",
+    rotationWarning: "The following {{count}} nodes will use the new key. Ensure the new key is deployed to target servers",
+    rotationAffectedNodes: "Affected Nodes",
+    rotationOldFingerprint: "Old Key Fingerprint",
+    rotationNewFingerprint: "New Key Fingerprint",
+    rotationConfirm: "Confirm Rotation",
+    rotationComplete: "Rotation Complete",
+    rotationSuccess: "Key {{name}} updated successfully",
+    rotationVerifyResults: "Connectivity Verification Results",
+    rotationVerified: "Verified",
+    rotationSkipped: "Skipped (Offline)",
+    rotationFailed: "Verification Failed",
+    rotationOfflineHint: "{{count}} offline nodes were skipped. Verify key configuration manually after they come online",
+    rotationDone: "Done",
+    rotationNext: "Next",
+    rotationPrev: "Previous",
+    rotationCancel: "Cancel",
+
+    // Table
+    colName: "Name",
+    colUsername: "Username",
+    colType: "Type",
+    colFingerprint: "Fingerprint",
+    colLastUsed: "Last Used",
+    colNodes: "Nodes",
+    colActions: "Actions",
+    neverUsed: "Never used",
+
+    // Batch delete
+    batchDeleteConfirm: "Delete {{count}} SSH Keys? In-use keys will be skipped.",
+    batchDeleteSuccess: "Successfully deleted {{deleted}} keys",
+    batchDeleteSkipped: "{{count}} in-use keys were skipped: {{names}}",
+    bulkDeletePartial: "Batch delete complete: {{deleted}} deleted, {{skipped}} in-use keys skipped",
+    bulkDeleteSuccess: "Successfully deleted {{count}} keys",
+    confirmDeleteTitle: "Confirm Delete",
+
+    // View toggle
+    viewTable: "Table View",
+    viewCards: "Card View",
+    viewToggleGroup: "View toggle",
+
+    // Selection
+    selectAllVisible: "Select all on this page",
+    selectKeyAriaLabel: "Select key {{name}}",
+
+    // Empty states
+    emptyFilteredTitle: "No matching SSH keys",
+    emptyFilteredDesc: "Try adjusting your filters, or add a new key.",
+
+    // Loading states
+    loadingTitle: "Loading keys",
+    loadingDesc: "Fetching SSH key list...",
+
+    // Card view
+    nodesInUse: "{{count}} nodes in use",
+    unusedLabel: "Unused",
   },
 
   // ── reports page ──
