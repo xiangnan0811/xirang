@@ -53,7 +53,7 @@ export function SSHKeyAssociatedNodesSheet({
             "fixed inset-y-0 right-0 z-50 flex w-full flex-col",
             "border-l border-border/60 bg-background/95 backdrop-blur-md shadow-panel",
             "sm:max-w-[420px]",
-            "data-[state=open]:animate-slide-in-right data-[state=closed]:animate-slide-out-right",
+            "transition-transform duration-300 ease-out data-[state=open]:translate-x-0 data-[state=closed]:translate-x-full",
             "focus:outline-none"
           )}
           aria-describedby="sheet-description"
