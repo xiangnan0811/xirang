@@ -30,6 +30,7 @@ web/.env
 AGENTS.md
 CLAUDE.md
 GEMINI.md
+.superpowers/
 
 # git worktrees
 .worktrees/
