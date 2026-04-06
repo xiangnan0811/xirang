@@ -79,6 +79,7 @@ const en = {
     invalidIdEmpty: "Invalid {{prefix}} ID: cannot be empty",
     invalidIdFormat: "Invalid {{prefix}} ID: {{rawId}} (expected format: {{prefix}}-123 or 123)",
     reset: "Reset",
+    networkError: "Network error",
   },
 
   // ── nav ──
@@ -1219,6 +1220,14 @@ const en = {
     inUseCount: "In Use",
     unusedCount: "Unused",
     associatedNodesCount: "Linked Nodes",
+    statsTotal: "Total Keys",
+    statsTotalDesc: "All SSH keys in the system",
+    statsInUse: "In Use",
+    statsInUseDesc: "Usage rate {{rate}}%",
+    statsUnused: "Unused",
+    statsUnusedDesc: "Idle keys available for cleanup",
+    statsNodes: "Linked Nodes",
+    statsNodesDesc: "Total nodes using SSH keys",
 
     // Toolbar
     batchImport: "Batch Import",
@@ -1230,10 +1239,24 @@ const en = {
     // Filters
     allTypes: "All Types",
     allStatus: "All Status",
+    allKeyTypes: "All Types",
+    allUsageStatus: "All Status",
+    filterInUse: "In Use",
+    filterUnused: "Unused",
     sortByName: "Sort by Name",
     sortByNameDesc: "Sort by Name Desc",
     sortByCreated: "Sort by Created",
     sortByLastUsed: "Sort by Last Used",
+    sortNameAsc: "Name A-Z",
+    sortNameDesc: "Name Z-A",
+    sortCreated: "Created Time",
+    sortLastUsed: "Last Used",
+    searchPlaceholder: "Search key name / username / fingerprint",
+    searchAriaLabel: "Search SSH keys",
+    keyTypeAriaLabel: "Filter by key type",
+    usageStatusAriaLabel: "Filter by usage status",
+    sortAriaLabel: "Sort order",
+    keyUnit: "keys",
 
     // Row actions
     copyPublicKey: "Copy Public Key",
@@ -1335,10 +1358,30 @@ const en = {
     batchDeleteConfirm: "Delete {{count}} SSH Keys? In-use keys will be skipped.",
     batchDeleteSuccess: "Successfully deleted {{deleted}} keys",
     batchDeleteSkipped: "{{count}} in-use keys were skipped: {{names}}",
+    bulkDeletePartial: "Batch delete complete: {{deleted}} deleted, {{skipped}} in-use keys skipped",
+    bulkDeleteSuccess: "Successfully deleted {{count}} keys",
+    confirmDeleteTitle: "Confirm Delete",
 
     // View toggle
     viewTable: "Table View",
     viewCards: "Card View",
+    viewToggleGroup: "View toggle",
+
+    // Selection
+    selectAllVisible: "Select all on this page",
+    selectKeyAriaLabel: "Select key {{name}}",
+
+    // Empty states
+    emptyFilteredTitle: "No matching SSH keys",
+    emptyFilteredDesc: "Try adjusting your filters, or add a new key.",
+
+    // Loading states
+    loadingTitle: "Loading keys",
+    loadingDesc: "Fetching SSH key list...",
+
+    // Card view
+    nodesInUse: "{{count}} nodes in use",
+    unusedLabel: "Unused",
   },
 
   // ── reports page ──

@@ -105,6 +105,11 @@ export function SSHKeysPage() {
   // 批量删除
   const handleBulkDelete = async () => {
     if (!token || selectedIds.size === 0) return;
+    const ok = await state.confirm({
+      title: t("sshKeys.confirmDeleteTitle"),
+      description: t("sshKeys.batchDeleteConfirm", { count: selectedIds.size }),
+    });
+    if (!ok) return;
     try {
       const api = createSSHKeysApi();
       const result = await api.deleteSSHKeys(token, Array.from(selectedIds));

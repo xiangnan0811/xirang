@@ -290,7 +290,9 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 
 	type testResult struct {
 		NodeID    uint   `json:"node_id"`
-		NodeName  string `json:"node_name"`
+		Name      string `json:"name"`
+		Host      string `json:"host"`
+		Port      int    `json:"port"`
 		Success   bool   `json:"success"`
 		LatencyMs int64  `json:"latency_ms"`
 		Error     string `json:"error,omitempty"`
@@ -306,10 +308,12 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 		authMethods, err := sshutil.BuildSSHAuth(testNode, h.db)
 		if err != nil {
 			results = append(results, testResult{
-				NodeID:   node.ID,
-				NodeName: node.Name,
-				Success:  false,
-				Error:    err.Error(),
+				NodeID:  node.ID,
+				Name:    node.Name,
+				Host:    node.Host,
+				Port:    node.Port,
+				Success: false,
+				Error:   err.Error(),
 			})
 			continue
 		}
@@ -325,7 +329,9 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 		if dialErr != nil {
 			results = append(results, testResult{
 				NodeID:    node.ID,
-				NodeName:  node.Name,
+				Name:      node.Name,
+				Host:      node.Host,
+				Port:      node.Port,
 				Success:   false,
 				LatencyMs: latency,
 				Error:     dialErr.Error(),
@@ -336,7 +342,9 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 
 		results = append(results, testResult{
 			NodeID:    node.ID,
-			NodeName:  node.Name,
+			Name:      node.Name,
+			Host:      node.Host,
+			Port:      node.Port,
 			Success:   true,
 			LatencyMs: latency,
 		})

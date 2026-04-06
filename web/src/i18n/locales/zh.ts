@@ -79,6 +79,7 @@ const zh = {
     invalidIdEmpty: "无效的 {{prefix}} ID：不能为空",
     invalidIdFormat: "无效的 {{prefix}} ID：{{rawId}}（期望格式：{{prefix}}-123 或 123）",
     reset: "重置",
+    networkError: "网络错误",
   },
 
   // ── nav ──
@@ -1219,6 +1220,14 @@ const zh = {
     inUseCount: "在用",
     unusedCount: "未用",
     associatedNodesCount: "关联节点",
+    statsTotal: "密钥总数",
+    statsTotalDesc: "系统中所有 SSH 密钥",
+    statsInUse: "使用中",
+    statsInUseDesc: "使用率 {{rate}}%",
+    statsUnused: "未使用",
+    statsUnusedDesc: "可清理的闲置密钥",
+    statsNodes: "关联节点",
+    statsNodesDesc: "使用 SSH 密钥的节点总数",
 
     // 工具栏
     batchImport: "批量导入",
@@ -1230,10 +1239,24 @@ const zh = {
     // 筛选
     allTypes: "所有类型",
     allStatus: "所有状态",
+    allKeyTypes: "所有类型",
+    allUsageStatus: "所有状态",
+    filterInUse: "使用中",
+    filterUnused: "未使用",
     sortByName: "按名称排序",
     sortByNameDesc: "按名称倒序",
     sortByCreated: "按创建时间",
     sortByLastUsed: "按最后使用",
+    sortNameAsc: "名称 A-Z",
+    sortNameDesc: "名称 Z-A",
+    sortCreated: "按创建时间",
+    sortLastUsed: "按最后使用",
+    searchPlaceholder: "搜索密钥名称 / 用户名 / 指纹",
+    searchAriaLabel: "搜索 SSH 密钥",
+    keyTypeAriaLabel: "按密钥类型筛选",
+    usageStatusAriaLabel: "按使用状态筛选",
+    sortAriaLabel: "排序方式",
+    keyUnit: "个密钥",
 
     // 行操作
     copyPublicKey: "复制公钥",
@@ -1335,10 +1358,30 @@ const zh = {
     batchDeleteConfirm: "确认删除 {{count}} 个 SSH Key？在用的密钥将被跳过。",
     batchDeleteSuccess: "成功删除 {{deleted}} 个密钥",
     batchDeleteSkipped: "{{count}} 个在用密钥已跳过：{{names}}",
+    bulkDeletePartial: "批量删除完成：成功 {{deleted}} 个，跳过 {{skipped}} 个在用密钥",
+    bulkDeleteSuccess: "成功删除 {{count}} 个密钥",
+    confirmDeleteTitle: "确认删除",
 
     // 视图切换
     viewTable: "表格视图",
     viewCards: "卡片视图",
+    viewToggleGroup: "视图切换",
+
+    // 选择
+    selectAllVisible: "全选当前页",
+    selectKeyAriaLabel: "选择密钥 {{name}}",
+
+    // 空状态
+    emptyFilteredTitle: "没有匹配的 SSH 密钥",
+    emptyFilteredDesc: "尝试调整筛选条件，或新增一个密钥。",
+
+    // 加载状态
+    loadingTitle: "加载密钥中",
+    loadingDesc: "正在获取 SSH 密钥列表...",
+
+    // 卡片视图
+    nodesInUse: "{{count}} 个节点使用中",
+    unusedLabel: "未使用",
   },
 
   // ── reports page ──

@@ -124,9 +124,12 @@ export function useSSHKeysPageState() {
   const stats = useMemo(() => {
     let inUse = 0;
     let unused = 0;
+    let linkedNodes = 0;
     for (const key of sshKeys) {
-      if (keyUsageMap.has(key.id)) {
+      const nodeList = keyUsageMap.get(key.id);
+      if (nodeList && nodeList.length > 0) {
         inUse += 1;
+        linkedNodes += nodeList.length;
       } else {
         unused += 1;
       }
@@ -135,9 +138,9 @@ export function useSSHKeysPageState() {
       total: sshKeys.length,
       inUse,
       unused,
-      totalNodes: nodes.length,
+      totalNodes: linkedNodes,
     };
-  }, [sshKeys, nodes.length, keyUsageMap]);
+  }, [sshKeys, keyUsageMap]);
 
   // ----- 筛选 + 排序 -----
   const filteredKeys = useMemo(() => {
@@ -360,6 +363,7 @@ export function useSSHKeysPageState() {
     setExportOpen,
 
     // 确认对话框
+    confirm,
     dialog,
 
     // 刷新
