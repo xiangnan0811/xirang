@@ -95,6 +95,11 @@ const en = {
     reports: "Reports",
     backups: "Backups",
     settings: "Settings",
+    group: {
+      core: "Core",
+      backup: "Backup",
+      monitor: "Monitor",
+    },
   },
 
   // ── status labels ──

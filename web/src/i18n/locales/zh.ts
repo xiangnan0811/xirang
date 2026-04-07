@@ -95,6 +95,11 @@ const zh = {
     reports: "报告",
     backups: "备份",
     settings: "设置",
+    group: {
+      core: "核心",
+      backup: "备份",
+      monitor: "监控",
+    },
   },
 
   // ── status labels ──
