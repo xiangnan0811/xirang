@@ -27,6 +27,31 @@ import {
   type ThemeMode
 } from "@/lib/theme";
 
+export type AccentColor = "emerald" | "blue" | "violet" | "amber" | "pink";
+
+const accentMap: Record<AccentColor, string> = {
+  emerald: "160 84% 39.4%",
+  blue: "217 91% 60%",
+  violet: "263 70% 50.4%",
+  amber: "43 96% 56.3%",
+  pink: "330 81% 60%",
+};
+
+const ACCENT_STORAGE_KEY = "xirang-accent-color";
+const DEFAULT_ACCENT: AccentColor = "emerald";
+
+function getStoredAccent(): AccentColor | null {
+  try {
+    const stored = localStorage.getItem(ACCENT_STORAGE_KEY);
+    if (stored && stored in accentMap) return stored as AccentColor;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function applyAccentColor(color: AccentColor) {
+  document.documentElement.style.setProperty("--accent-brand", accentMap[color]);
+}
+
 type ThemeContextValue = {
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
@@ -37,6 +62,8 @@ type ThemeContextValue = {
   powerMode: PowerMode;
   setPowerMode: (mode: PowerMode) => void;
   togglePowerMode: () => void;
+  accentColor: AccentColor;
+  setAccentColor: (color: AccentColor) => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -62,6 +89,9 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   );
   const [powerMode, setPowerMode] = useState<PowerMode>(() =>
     resolveInitialPowerMode(getStoredPowerMode(), resolveReducedMotionPreference())
+  );
+  const [accentColor, setAccentColorState] = useState<AccentColor>(
+    () => getStoredAccent() ?? DEFAULT_ACCENT
   );
 
   useEffect(() => {
@@ -97,6 +127,17 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     persistPowerMode(powerMode);
   }, [powerMode]);
 
+  useEffect(() => {
+    applyAccentColor(accentColor);
+    try {
+      localStorage.setItem(ACCENT_STORAGE_KEY, accentColor);
+    } catch { /* ignore */ }
+  }, [accentColor]);
+
+  const setAccentColor = useCallback((color: AccentColor) => {
+    setAccentColorState(color);
+  }, []);
+
   const setManualTheme = useCallback((nextTheme: ThemeMode) => {
     setThemeSource("manual");
     setTheme(nextTheme);
@@ -125,9 +166,11 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       toggleDensity,
       powerMode,
       setPowerMode,
-      togglePowerMode
+      togglePowerMode,
+      accentColor,
+      setAccentColor
     }),
-    [density, powerMode, setManualTheme, theme, toggleDensity, togglePowerMode, toggleTheme]
+    [accentColor, density, powerMode, setAccentColor, setManualTheme, theme, toggleDensity, togglePowerMode, toggleTheme]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
