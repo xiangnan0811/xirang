@@ -165,7 +165,7 @@ export function UsersTab() {
         {t("users.userManagement")}
       </h2>
 
-      <div className="glass-panel relative overflow-hidden p-5 space-y-4">
+      <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4">
         <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium flex items-center gap-2">
           <UserPlus className="size-4" />
@@ -209,7 +209,7 @@ export function UsersTab() {
           {sortedUsers.map((item) => {
             const isSelf = userId === item.id;
             return (
-              <div key={item.id} className="rounded-xl border border-border/70 p-3">
+              <div key={item.id} className="rounded-xl border border-border p-3">
                 <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_auto] md:items-center">
                   <div>
                     <p className="font-medium">{item.username}</p>

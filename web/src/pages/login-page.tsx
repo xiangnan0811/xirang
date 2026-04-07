@@ -143,34 +143,34 @@ export function LoginPage() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,137,92,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.16),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.04),rgba(15,23,42,0.24))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.2),transparent_38%),linear-gradient(180deg,rgba(2,6,23,0.68),rgba(2,6,23,0.9))]" />
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="hidden glass-panel-heavy p-8 md:flex md:flex-col md:justify-center lg:p-12">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border/75 bg-background/70 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms] border-border/75">
-            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-[4px] border border-border/70 bg-background" />
+        <section className="hidden rounded-lg border border-border bg-card shadow-md p-8 md:flex md:flex-col md:justify-center lg:p-12">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms]">
+            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-[4px] border border-border bg-background" />
             <span>XiRang / X-Soil</span>
           </div>
           <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
-            <span className="text-gradient">{t("login.platformName")}</span>
+            <span>{t("login.platformName")}</span>
           </h1>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
             {t("login.platformSlogan")}
           </p>
 
           <div className="mt-8 grid gap-4 sm:grid-cols-2 animate-slide-up [animation-delay:250ms]">
-            <div className="glass-panel p-4 interactive-surface">
+            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
               <p className="text-sm font-semibold">{t("login.featureMonitor")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t("login.featureMonitorDesc")}</p>
             </div>
-            <div className="glass-panel p-4 interactive-surface">
+            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
               <p className="text-sm font-semibold">{t("login.featureOrchestrate")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t("login.featureOrchestrateDesc")}</p>
             </div>
-            <div className="glass-panel p-4 interactive-surface sm:col-span-2">
+            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4 sm:col-span-2">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ShieldCheck className="size-4" />
               </div>
@@ -180,7 +180,7 @@ export function LoginPage() {
           </div>
         </section>
 
-        <Card className="flex flex-col justify-center glass-panel-heavy border-t-4 border-t-primary/80 animate-slide-up [animation-delay:200ms]">
+        <Card className="flex flex-col justify-center rounded-lg border border-border bg-card shadow-md border-t-4 border-t-primary/80 animate-slide-up [animation-delay:200ms]">
           <CardHeader className="space-y-3 pb-6 animate-slide-up [animation-delay:250ms]">
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
               <ShieldCheck className="size-6" />
