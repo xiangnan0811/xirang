@@ -1,3 +1,4 @@
+import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import { Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,20 +21,20 @@ function EmptyState({
   return (
     <div
       className={cn(
-        "glass-panel px-6 py-16 text-center transition-[transform,opacity] duration-300",
+        "flex flex-col items-center justify-center py-16 text-center",
         className
       )}
     >
-      <div className="mx-auto mb-6 flex size-20 animate-float items-center justify-center rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5 text-primary shadow-sm relative before:absolute before:-inset-4 before:-z-10 before:rounded-full before:bg-primary/5 before:blur-xl">
-        <Icon className="size-8 opacity-80" />
+      <div className="mb-4 flex size-16 items-center justify-center rounded-xl bg-secondary">
+        <Icon className="size-7 text-muted-foreground" />
       </div>
-      <h3 className="text-lg font-semibold tracking-wide text-foreground">{title}</h3>
+      <h3 className="text-base font-semibold">{title}</h3>
       {description ? (
-        <p className="mx-auto mt-2.5 max-w-sm text-sm leading-relaxed text-muted-foreground/90">
+        <p className="mt-1.5 max-w-[300px] text-sm text-muted-foreground">
           {description}
         </p>
       ) : null}
-      {action ? <div className="mt-6 flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-500 delay-150">{action}</div> : null}
+      {action ? <div className="mt-5">{action}</div> : null}
     </div>
   );
 }
