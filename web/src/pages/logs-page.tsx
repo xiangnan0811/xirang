@@ -475,7 +475,7 @@ export function LogsPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="glass-panel border-border/70">
+      <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <FilterPanel
             sticky={false}
@@ -682,7 +682,7 @@ export function LogsPage() {
             )}
 
             {focusedTaskNumber ? (
-              <div className="flex items-center justify-between gap-2 rounded-xl border border-border/75 bg-background/60 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2">
                 <p className="text-xs text-muted-foreground">
                   {t("logs.historyCount", { count: historyLogs.length })}
                   {historyCursor

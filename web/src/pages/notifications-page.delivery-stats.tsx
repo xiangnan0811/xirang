@@ -63,7 +63,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
     : t("common.loading");
 
   return (
-    <Card className="glass-panel border-border/70">
+    <Card className="rounded-lg border border-border bg-card">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <button
@@ -126,7 +126,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
               {deliveryStats.byIntegration.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {deliveryStats.byIntegration.map((item) => (
-                    <div key={item.integrationId} className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                    <div key={item.integrationId} className="rounded-xl border border-border bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-medium">{item.name}</p>
                         <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
