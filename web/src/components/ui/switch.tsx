@@ -26,15 +26,15 @@ export function Switch({
         onClick?.(event);
       }}
       className={cn(
-        "relative inline-flex h-6 w-11 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        checked ? "border-success bg-success" : "border-input bg-muted",
+        "relative inline-flex h-6 w-11 items-center rounded-full border-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        checked ? "bg-foreground" : "bg-muted",
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         className
       )}
     >
       <span
         className={cn(
-          "inline-block size-5 rounded-full bg-white transition-transform",
+          "inline-block size-5 rounded-full bg-white shadow-sm transition-transform",
           checked ? "translate-x-5" : "translate-x-0.5"
         )}
       />
