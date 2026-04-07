@@ -1,3 +1,12 @@
+export interface ChartTheme {
+  series: readonly [string, string, string];
+  grid: string;
+  axis: string;
+  success: string;
+  error: string;
+  tooltip: { bg: string; text: string; border: string };
+}
+
 export const chartColors = {
   light: {
     series: ["hsl(0 0% 3.9%)", "hsl(240 3.8% 46.1%)", "hsl(240 5% 64.9%)"],
@@ -15,9 +24,7 @@ export const chartColors = {
     error: "hsl(0 72% 51%)",
     tooltip: { bg: "#fafafa", text: "#0a0a0a", border: "none" }
   }
-} as const;
-
-export type ChartTheme = typeof chartColors.light;
+} satisfies Record<string, ChartTheme>;
 
 export function getChartTheme(): ChartTheme {
   const isDark = document.documentElement.classList.contains("dark");

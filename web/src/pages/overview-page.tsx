@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
   ComposedChart,
 } from "recharts";
+import { getChartTheme } from "@/lib/chart-theme";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
@@ -135,6 +136,8 @@ export function OverviewPage() {
     };
   }, [trafficData]);
 
+  const chartTheme = useMemo(() => getChartTheme(), []);
+
   const { yMaxLeft, yMaxRight } = useMemo(() => {
     const points = chartMetrics.chartData;
     let maxThroughput = 0;
@@ -236,7 +239,7 @@ export function OverviewPage() {
                         <button
                           key={node.id}
                           type="button"
-                          className={`relative size-3 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                          className={`relative size-3 rounded-sm ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                           onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
@@ -311,16 +314,10 @@ export function OverviewPage() {
                         data={chartMetrics.chartData}
                         margin={{ top: 6, right: 8, left: -12, bottom: 4 }}
                       >
-                        <defs>
-                          <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.25" />
-                            <stop offset="100%" stopColor="hsl(var(--chart-ingress))" stopOpacity="0.02" />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
+<CartesianGrid strokeDasharray="none" stroke={chartTheme.grid} vertical={false} />
                         <XAxis
                           dataKey="label"
-                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          tick={{ fontSize: 10, fill: chartTheme.axis }}
                           stroke="transparent"
                           interval="preserveStartEnd"
                           tickLine={false}
@@ -328,7 +325,7 @@ export function OverviewPage() {
                         <YAxis
                           yAxisId="left"
                           domain={[0, yMaxLeft]}
-                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          tick={{ fontSize: 10, fill: chartTheme.axis }}
                           stroke="transparent"
                           tickLine={false}
                           axisLine={false}
@@ -339,7 +336,7 @@ export function OverviewPage() {
                           orientation="right"
                           domain={[0, yMaxRight]}
                           allowDecimals={false}
-                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", opacity: 0.6 }}
+                          tick={{ fontSize: 10, fill: chartTheme.axis }}
                           stroke="transparent"
                           tickLine={false}
                           axisLine={false}
@@ -347,12 +344,13 @@ export function OverviewPage() {
                         />
                         <Tooltip
                           contentStyle={{
-                            backgroundColor: "hsl(var(--card))",
-                            border: "1px solid hsl(var(--border))",
+                            backgroundColor: chartTheme.tooltip.bg,
+                            color: chartTheme.tooltip.text,
+                            border: chartTheme.tooltip.border,
                             fontSize: 11,
                             borderRadius: 6,
                           }}
-                          labelStyle={{ color: "hsl(var(--muted-foreground))" }}
+                          labelStyle={{ color: chartTheme.axis }}
                           formatter={(value, name) => {
                             if (name === t("overview.chartThroughput")) return [`${value} Mbps`, name];
                             return [value, name];
@@ -360,12 +358,12 @@ export function OverviewPage() {
                         />
                         {visibleLayers.activity && (
                           <Bar dataKey="activity" yAxisId="right" name={t("overview.chartActivity")}
-                            fill="hsl(var(--chart-egress))" opacity={0.22}
+                            fill={chartTheme.series[1]} opacity={0.22}
                             maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
                         )}
                         {visibleLayers.failures && (
                           <Bar dataKey="failed" yAxisId="right" name={t("overview.chartFailures")}
-                            fill="hsl(var(--destructive))" opacity={0.7}
+                            fill={chartTheme.error} opacity={0.7}
                             maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
                         )}
                         {visibleLayers.throughput && (
@@ -374,9 +372,10 @@ export function OverviewPage() {
                             dataKey="throughput"
                             yAxisId="left"
                             name={t("overview.chartThroughput")}
-                            stroke="hsl(var(--chart-ingress))"
-                            strokeWidth={2}
-                            fill="url(#throughputGrad)"
+                            stroke={chartTheme.series[0]}
+                            strokeWidth={1.5}
+                            fill={chartTheme.series[0]}
+                            fillOpacity={0.06}
                             dot={false}
                             activeDot={{ r: 3 }}
                             isAnimationActive={false}
@@ -447,7 +446,7 @@ export function OverviewPage() {
                   <button
                     key={node.id}
                     type="button"
-                    className={`relative size-3.5 rounded-full ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                    className={`relative size-3.5 rounded-sm ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                     onClick={() => {
                       setMatrixFullscreen(false);
                       navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`);
