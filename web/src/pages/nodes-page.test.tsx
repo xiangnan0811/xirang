@@ -233,7 +233,7 @@ describe("NodesPage", () => {
     );
 
     const secondCard = view.container.querySelector(
-      '.interactive-surface[aria-label="节点卡片 node-dr-2"]'
+      '[aria-label="节点卡片 node-dr-2"]'
     ) as HTMLElement | null;
 
     expect(secondCard).not.toBeNull();

@@ -81,11 +81,11 @@ describe("AppShell", () => {
 
     const status = screen.getByRole("status");
     const header = status.closest("header");
-    expect(header).toHaveClass("h-[92px]");
+    expect(header).toHaveClass("h-[84px]");
 
     const sidebar = screen
       .getByRole("button", { name: "收起侧边栏" })
       .closest("aside");
-    expect(sidebar).toHaveClass("pt-[92px]");
+    expect(sidebar).toHaveClass("pt-[84px]");
   });
 });
