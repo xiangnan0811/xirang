@@ -1,44 +1,70 @@
+@import "@fontsource-variable/inter";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* --- Vercel-inspired Zinc palette (Light) --- */
+    --background: 0 0% 98%;
+    --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 3.9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.75rem;
-    --success: 142 76% 36%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 160 84% 39.4%;
+    --success-foreground: 0 0% 98%;
+    --warning: 43 96% 56.3%;
+    --warning-foreground: 0 0% 3.9%;
     --info: 217 91% 60%;
-    --info-foreground: 0 0% 100%;
+    --info-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 0 0% 3.9%;
+    --accent-brand: 160 84% 39.4%;
+    --chart-1: 0 0% 3.9%;
+    --chart-2: 240 3.8% 46.1%;
+    --chart-3: 240 5% 64.9%;
+    --chart-ingress: 0 0% 3.9%;
+    --chart-egress: 240 5% 83.5%;
+    --radius: 0.375rem;
+    --radius-lg: 0.5rem;
+    --radius-sm: 0.25rem;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.12);
+    --duration-fast: 100ms;
+    --duration-normal: 150ms;
+    --duration-slow: 200ms;
+    --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+    --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --touch-target-size: 44px;
+
+    /* --- Legacy aliases (referenced by existing components / tailwind.config.ts) --- */
     --brand-soil: 30 36% 44%;
     --brand-clay: 22 44% 56%;
-    --brand-life: 147 71% 44%;
-    --surface-1: 210 33% 98%;
-    --surface-2: 210 32% 96%;
-    --chart-ingress: 147 71% 44%;
-    --chart-egress: 198 93% 60%;
-    --nav-active: 147 58% 86%;
-    --nav-active-foreground: 156 78% 16%;
+    --brand-life: 160 84% 39.4%;
+    --surface-1: 0 0% 96%;
+    --surface-2: 0 0% 94%;
+    --nav-active: 240 4.8% 95.9%;
+    --nav-active-foreground: 0 0% 3.9%;
+    --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-panel-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-mobile-sheet: 0 -4px 16px rgba(0, 0, 0, 0.1);
+
+    /* --- Terminal theme (preserved — terminal has its own aesthetic) --- */
     --terminal-bg-start: 220 44% 11%;
     --terminal-bg-end: 224 62% 7%;
     --terminal-glow: 147 66% 42%;
@@ -50,53 +76,57 @@
     --terminal-panel-border: 216 20% 44%;
     --terminal-chip-bg: 218 19% 30%;
     --terminal-chip-foreground: 214 29% 84%;
-    --shadow-panel: 0 18px 38px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-    --shadow-panel-hover: 0 24px 48px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-    --shadow-mobile-sheet: 0 -14px 40px rgba(15, 23, 42, 0.28);
-    --duration-fast: 150ms;
-    --duration-normal: 200ms;
-    --duration-slow: 300ms;
-    --ease-enter: cubic-bezier(0, 0, 0.2, 1);
-    --ease-exit: cubic-bezier(0.4, 0, 1, 1);
-    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-    --touch-target-size: 44px;
   }
 
   .dark {
-    --background: 224 48% 6%;
-    --foreground: 213 31% 91%;
-    --card: 222 39% 10%;
-    --card-foreground: 213 31% 91%;
-    --popover: 222 39% 10%;
-    --popover-foreground: 213 31% 91%;
-    --primary: 147 71% 44%;
-    --primary-foreground: 156 100% 8%;
-    --secondary: 222 30% 16%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 223 29% 14%;
-    --muted-foreground: 215.4 16.3% 62%;
-    --accent: 220 30% 18%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217 26% 22%;
-    --input: 217 26% 22%;
-    --ring: 224 64% 33%;
-    --success: 142 71% 45%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 3.9%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 160 72% 52.4%;
+    --success-foreground: 0 0% 3.9%;
+    --warning: 45 93% 47.5%;
+    --warning-foreground: 0 0% 3.9%;
     --info: 217 91% 60%;
-    --info-foreground: 0 0% 100%;
+    --info-foreground: 0 0% 3.9%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --accent-brand: 160 72% 52.4%;
+    --chart-1: 0 0% 98%;
+    --chart-2: 240 3.8% 46.1%;
+    --chart-3: 240 3.7% 25%;
+    --chart-ingress: 0 0% 98%;
+    --chart-egress: 240 3.7% 25%;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.5);
+
+    /* --- Legacy aliases (dark) --- */
     --brand-soil: 34 42% 62%;
     --brand-clay: 20 45% 58%;
-    --brand-life: 147 71% 44%;
-    --surface-1: 223 35% 11%;
-    --surface-2: 222 31% 14%;
-    --chart-ingress: 147 62% 50%;
-    --chart-egress: 198 88% 64%;
-    --nav-active: 147 55% 20%;
-    --nav-active-foreground: 146 68% 78%;
+    --brand-life: 160 72% 52.4%;
+    --surface-1: 0 0% 7%;
+    --surface-2: 0 0% 11%;
+    --nav-active: 240 3.7% 15.9%;
+    --nav-active-foreground: 0 0% 98%;
+    --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-panel-hover: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-mobile-sheet: 0 -4px 16px rgba(0, 0, 0, 0.4);
+
+    /* --- Terminal theme (dark) --- */
     --terminal-bg-start: 223 46% 9%;
     --terminal-bg-end: 224 60% 6%;
     --terminal-glow: 147 62% 50%;
@@ -108,32 +138,15 @@
     --terminal-panel-border: 217 20% 46%;
     --terminal-chip-bg: 219 22% 28%;
     --terminal-chip-foreground: 214 32% 86%;
-    --shadow-panel: 0 22px 50px rgba(2, 8, 23, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    --shadow-panel-hover: 0 28px 58px rgba(2, 8, 23, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    --shadow-mobile-sheet: 0 -14px 40px rgba(2, 6, 23, 0.45);
   }
 
-  *,
-  *::before,
-  *::after {
+  * {
     @apply border-border;
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
-    background-image:
-      radial-gradient(circle at 12% -8%, rgba(196, 163, 125, 0.18), transparent 42%),
-      radial-gradient(circle at 88% -12%, rgba(34, 197, 94, 0.12), transparent 40%),
-      linear-gradient(180deg, hsl(var(--background)), hsl(var(--surface-1)));
-    background-attachment: scroll;
-    font-family: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-
-  .dark body {
-    background-image:
-      radial-gradient(circle at 12% -6%, rgba(180, 137, 92, 0.22), transparent 42%),
-      radial-gradient(circle at 85% 0%, rgba(34, 197, 94, 0.2), transparent 40%),
-      linear-gradient(180deg, hsl(var(--background)), hsl(var(--surface-1)));
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
   }
 
   /* Force disable any animation/transition on Radix popper wrappers to prevent mount geometry transitions from top-left (0,0) */
@@ -144,7 +157,7 @@
   }
 
   html[data-density="compact"] {
-    --radius: 0.65rem;
+    --radius: 0.3rem;
   }
 
   html[data-density="compact"] .filter-panel {
@@ -156,11 +169,6 @@
     border-color: hsl(var(--border) / 0.8);
     background-color: hsl(var(--background) / 0.65);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-  }
-
-  html[data-density="compact"] .interactive-surface,
-  html[data-density="compact"] .glass-card {
-    border-radius: 0.65rem;
   }
 
   html[data-density="compact"] [data-density-gap="compact"] {
@@ -184,11 +192,6 @@
   html[data-power="save"] .pulse-offline {
     animation: none !important;
     box-shadow: none !important;
-  }
-
-  html[data-power="save"] .interactive-surface:hover,
-  html[data-power="save"] .glass-card:hover {
-    transform: none;
   }
 
   html[data-power="save"] .app-shell-bg::before {
@@ -219,65 +222,21 @@
     inset: 0;
     pointer-events: none;
     background:
-      linear-gradient(120deg, rgba(180, 137, 92, 0.04), rgba(34, 197, 94, 0.03) 42%, transparent 76%),
-      radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.08) 1px, transparent 0);
-    background-size: 100% 100%, 24px 24px;
-    opacity: 0.42;
+      radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.04) 1px, transparent 0);
+    background-size: 24px 24px;
+    opacity: 0.3;
     z-index: 0;
   }
 
-  .glass-card {
-    @apply rounded-xl border border-border/80 bg-card/80 backdrop-blur-md;
-    box-shadow: var(--shadow-panel);
-    transition: border-color var(--duration-normal) var(--ease-enter),
-      transform var(--duration-normal) var(--ease-enter),
-      box-shadow var(--duration-normal) var(--ease-enter),
-      background-color var(--duration-normal) var(--ease-enter);
-  }
-
-  .text-gradient {
-    @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(to right, hsl(var(--foreground)), hsl(var(--muted-foreground)));
-  }
-
-  .glass-panel {
-    @apply rounded-xl border border-border/60 bg-background/50 shadow-sm backdrop-blur-md;
-  }
-
-  .glass-panel-heavy {
-    @apply rounded-xl border border-border/40 bg-background/40 shadow-panel backdrop-blur-xl;
-  }
-
-  .glass-card-interactive:hover {
-    @apply border-primary/25;
-    box-shadow: var(--shadow-panel-hover);
-
-  }
-
-  .interactive-surface {
-    @apply rounded-xl border border-border/75 bg-background/65 shadow-sm;
-    transition: border-color var(--duration-normal) var(--ease-enter),
-      transform var(--duration-normal) var(--ease-enter),
-      box-shadow var(--duration-normal) var(--ease-enter),
-      background-color var(--duration-normal) var(--ease-enter);
-  }
-
-  .interactive-surface:hover {
-    @apply border-primary/35;
-    box-shadow: var(--shadow-panel);
-
-  }
-
   .filter-panel {
-    @apply rounded-xl border border-border/60 bg-background/50 p-3 shadow-sm;
+    @apply rounded-lg border border-border bg-background p-3 shadow-sm;
     transition: border-color var(--duration-normal) var(--ease-enter),
       box-shadow var(--duration-normal) var(--ease-enter),
       background-color var(--duration-normal) var(--ease-enter);
   }
 
   .app-select {
-    @apply h-10 appearance-none rounded-lg border border-input/80 bg-background/80 pl-3 pr-9 text-sm text-foreground;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    @apply h-10 appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm text-foreground;
     transition: border-color var(--duration-normal) var(--ease-enter),
       box-shadow var(--duration-normal) var(--ease-enter),
       background-color var(--duration-normal) var(--ease-enter);
@@ -307,17 +266,11 @@
     }
   }
 
-  @media (min-width: 1024px) and (pointer: fine) {
-    body {
-      background-attachment: fixed;
-    }
-  }
-
   @media (pointer: coarse),
   (max-width: 768px) {
     .app-shell-bg::before {
-      opacity: 0.24;
-      background-size: 100% 100%, 30px 30px;
+      opacity: 0.15;
+      background-size: 30px 30px;
     }
   }
 
@@ -351,13 +304,7 @@
     animation: popover-out var(--duration-fast) var(--ease-exit) both;
   }
 
-  .grid-noise {
-    background-image:
-      radial-gradient(circle at 1px 1px, rgba(120, 120, 120, 0.11) 1px, transparent 0),
-      linear-gradient(180deg, rgba(75, 85, 99, 0.06), rgba(17, 24, 39, 0.02));
-    background-size: 16px 16px, 100% 100%;
-  }
-
+  /* --- Terminal classes (preserved — terminal keeps its own aesthetic) --- */
   .terminal-surface {
     background:
       linear-gradient(180deg,
@@ -400,6 +347,7 @@
     background-color: hsl(var(--terminal-panel-bg) / 0.55);
   }
 
+  /* --- Status pulse animations --- */
   .pulse-online {
     background-color: hsl(var(--success));
     box-shadow: 0 0 0 hsl(var(--success) / 0.55);
@@ -454,6 +402,7 @@
   }
 }
 
+/* --- Pulse keyframes --- */
 @keyframes pulse-online {
   0% {
     box-shadow: 0 0 0 0 hsl(var(--success) / 0.52);
@@ -496,6 +445,7 @@
   }
 }
 
+/* --- Motion keyframes (kept for new design) --- */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -563,26 +513,5 @@
   to {
     opacity: 0;
     scale: 0.94;
-  }
-}
-
-
-@layer utilities {
-  .animate-float {
-    animation: float 4s ease-in-out infinite;
-  }
-}
-
-@keyframes float {
-  0% {
-    transform: translateY(0);
-  }
-
-  50% {
-    transform: translateY(-6px);
-  }
-
-  100% {
-    transform: translateY(0);
   }
 }
