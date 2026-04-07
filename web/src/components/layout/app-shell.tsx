@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useOutlet } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
@@ -32,6 +33,35 @@ import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
 
 export type ConsoleOutletContext = ReturnType<typeof useConsoleData>;
+
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function AnimatedOutlet({ context }: { context: ConsoleOutletContext }) {
+  const location = useLocation();
+  // useOutlet() captures the current outlet element so AnimatePresence can
+  // hold on to the exiting page while the entering page mounts.
+  const outlet = useOutlet(context);
+
+  if (prefersReducedMotion) {
+    return <>{outlet}</>;
+  }
+
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={location.pathname}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2, ease: [0, 0, 0.2, 1] }}
+      >
+        {outlet}
+      </motion.div>
+    </AnimatePresence>
+  );
+}
 
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -251,7 +281,7 @@ export function AppShell() {
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
             <ErrorBoundary>
-              <Outlet context={consoleData as ConsoleOutletContext} />
+              <AnimatedOutlet context={consoleData as ConsoleOutletContext} />
             </ErrorBoundary>
           </main>
         </div>
