@@ -125,7 +125,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
     <>
       {/* ---------- 移动端列表 ---------- */}
       <div className="space-y-3 p-2 md:hidden">
-        <div className="flex items-center gap-2 justify-between rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground">
           <div className="inline-flex items-center gap-2">
             <input
               type="checkbox"
@@ -148,7 +148,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
             <div
               key={key.id}
               className={cn(
-                "rounded-xl border border-border/75 bg-background/70 p-3 shadow-sm",
+                "rounded-lg border border-border bg-card p-3 shadow-sm",
                 isUnused && "opacity-60",
               )}
             >
@@ -207,7 +207,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               </div>
 
               {/* 底部：使用状态 + 快捷操作 */}
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                 <Badge variant={nodeCount > 0 ? "success" : "secondary"}>
                   {nodeCount > 0
                     ? t("sshKeys.nodesInUse", { count: nodeCount })
@@ -253,7 +253,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
             <div
               key={key.id}
               className={cn(
-                "interactive-surface p-3",
+                "rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-3",
                 isUnused && "opacity-60",
               )}
             >
@@ -308,7 +308,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               </div>
 
               {/* 底部：使用状态 + 快捷操作 */}
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                 <Badge variant={nodeCount > 0 ? "success" : "secondary"}>
                   {nodeCount > 0
                     ? t("sshKeys.nodesInUse", { count: nodeCount })

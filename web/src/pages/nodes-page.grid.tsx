@@ -45,7 +45,7 @@ export const NodesGrid = React.memo(function NodesGrid({
   return (
     <>
       <div className="space-y-3 p-2 md:hidden">
-        <div className="flex items-center gap-2 justify-between rounded-xl border border-border/75 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground">
           <div className="inline-flex items-center gap-2">
             <input
               type="checkbox"
@@ -93,7 +93,7 @@ export const NodesGrid = React.memo(function NodesGrid({
           return (
             <div
               key={node.id}
-              className="rounded-xl border border-border/75 bg-background/70 p-3 shadow-sm"
+              className="rounded-lg border border-border bg-card p-3 shadow-sm"
             >
               <div className="flex items-start justify-between gap-2">
                 <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -129,7 +129,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <p className="break-words">{t("nodes.tagsLabel", { tags: node.tags.join(" / ") || "-" })}</p>
               </div>
 
-              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
                 <div className="flex flex-wrap items-center gap-1">
                   <Button
                     variant="ghost"
@@ -241,7 +241,7 @@ export const NodesGrid = React.memo(function NodesGrid({
               tabIndex={0}
               aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
               className={cn(
-                "interactive-surface p-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
+                "rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-3 outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
                 isSelected && "border-primary/45 ring-1 ring-primary/40"
               )}
               onClick={(e) => {
@@ -307,7 +307,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                 </p>
               </div>
 
-              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
                 <div className="flex flex-wrap items-center gap-1">
                   <Button
                     variant="ghost"

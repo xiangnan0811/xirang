@@ -192,7 +192,7 @@ export function SSHKeysPage() {
       />
 
       {/* ── 主内容区 ── */}
-      <Card className="overflow-hidden glass-panel border-border/70">
+      <Card className="overflow-hidden rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           {/* 工具栏 */}
           <SSHKeysToolbar

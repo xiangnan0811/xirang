@@ -136,7 +136,7 @@ export function NodesPageToolbar({
         }}
       />
       {/* 分隔线：区分操作与视图/工具 */}
-      <div className="hidden h-6 w-px bg-border/60 md:block" aria-hidden="true" />
+      <div className="hidden h-6 w-px bg-border md:block" aria-hidden="true" />
       <ViewModeToggle
         className="hidden md:inline-flex"
         value={viewMode}
