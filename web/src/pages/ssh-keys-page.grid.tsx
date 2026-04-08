@@ -35,7 +35,7 @@ export interface SSHKeysGridProps {
 }
 
 // ---------------------------------------------------------------------------
-// 密钥类型 → Badge variant 映射
+// 密钥类型 -> Badge variant 映射
 // ---------------------------------------------------------------------------
 
 function keyTypeBadgeVariant(keyType: string): "default" | "warning" | "secondary" {

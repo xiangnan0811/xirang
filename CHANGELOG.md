@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/xiangnan0811/xirang/compare/v0.2.1...v0.3.0) (2026-04-06)
+
+
+### Features
+
+* redesign SSH Keys page with full management capabilities ([#10](https://github.com/xiangnan0811/xirang/issues/10)) ([31f98d8](https://github.com/xiangnan0811/xirang/commit/31f98d804ce9b5abe8cd1d60b30b67e80921bba4))
+
 ## [0.2.1](https://github.com/xiangnan0811/xirang/compare/v0.2.0...v0.2.1) (2026-04-05)
 
 
