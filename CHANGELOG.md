@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/xiangnan0811/xirang/compare/v0.3.0...v0.4.0) (2026-04-10)
+
+
+### Features
+
+* **web:** Vercel-inspired frontend UI/UX redesign ([#12](https://github.com/xiangnan0811/xirang/issues/12)) ([1ad28d6](https://github.com/xiangnan0811/xirang/commit/1ad28d6d6ba004ad86df2f3d502205c268405120))
+
 ## [0.3.0](https://github.com/xiangnan0811/xirang/compare/v0.2.1...v0.3.0) (2026-04-06)
 
 
