@@ -35,10 +35,10 @@ export const NodesTable = React.memo(function NodesTable({
   const navigate = useNavigate();
 
   return (
-    <div className="hidden glass-panel overflow-x-auto md:block">
+    <div className="hidden rounded-lg border border-border bg-card overflow-x-auto md:block">
       <table className="min-w-[1280px] text-left text-sm">
         <thead>
-          <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-secondary text-[11px] uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="px-3 py-2.5">
               <input
                 type="checkbox"
@@ -89,7 +89,7 @@ export const NodesTable = React.memo(function NodesTable({
                 : t("common.keyUnbound");
 
               return (
-                <tr key={node.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
+                <tr key={node.id} className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent">
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"

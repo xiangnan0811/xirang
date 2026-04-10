@@ -49,7 +49,7 @@ export function StatCardsSection({
             key={item.id ?? item.title}
             data-tone={item.tone ?? "info"}
             className={cn(
-              "glass-panel border-border/70 overflow-hidden relative group",
+              "rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group",
               cardClassName
             )}
           >

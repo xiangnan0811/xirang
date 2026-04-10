@@ -26,7 +26,7 @@ describe("StatCardsSection", () => {
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByText("健康率 92%")).toBeInTheDocument();
 
-    const successCard = screen.getByText("在线节点").closest(".glass-panel");
+    const successCard = screen.getByText("在线节点").closest("[data-tone]");
     expect(successCard).not.toBeNull();
     expect(successCard).toHaveAttribute("data-tone", "success");
 
@@ -42,7 +42,7 @@ describe("StatCardsSection", () => {
     const description = screen.getByText("健康率 92%");
     expect(description).toHaveClass("hidden", "sm:block");
 
-    const infoCard = screen.getByText("失败任务").closest(".glass-panel");
+    const infoCard = screen.getByText("失败任务").closest("[data-tone]");
     expect(infoCard).not.toBeNull();
     expect(infoCard).toHaveAttribute("data-tone", "info");
   });
@@ -88,7 +88,7 @@ describe("StatCardsSection", () => {
     expect(screen.getByTestId("throughput-icon")).toBeInTheDocument();
     expect(screen.getByText("近 5 分钟平均值")).toBeInTheDocument();
 
-    const card = screen.getByText("当前吞吐").closest(".glass-panel");
+    const card = screen.getByText("当前吞吐").closest("[data-tone]");
     expect(card).toHaveAttribute("data-tone", "primary");
   });
 });

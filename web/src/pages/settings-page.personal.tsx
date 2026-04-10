@@ -15,7 +15,7 @@ export function PersonalTab() {
     <div className="space-y-6 max-w-2xl">
       <h2 className="text-lg font-semibold">{t("settings.personal.title")}</h2>
 
-      <div className="glass-panel relative overflow-hidden p-5 space-y-6">
+      <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-6">
         <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
 
         {/* 主题 */}

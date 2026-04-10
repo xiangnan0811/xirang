@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useOutlet } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
@@ -13,7 +14,6 @@ import { NotificationBell } from "@/components/notification-bell";
 import { UserDropdown } from "@/components/user-dropdown";
 import { VersionBanner } from "@/components/version-banner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/error-boundary";
 import {
@@ -33,6 +33,35 @@ import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
 
 export type ConsoleOutletContext = ReturnType<typeof useConsoleData>;
+
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function AnimatedOutlet({ context }: { context: ConsoleOutletContext }) {
+  const location = useLocation();
+  // useOutlet() captures the current outlet element so AnimatePresence can
+  // hold on to the exiting page while the entering page mounts.
+  const outlet = useOutlet(context);
+
+  if (prefersReducedMotion) {
+    return <>{outlet}</>;
+  }
+
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={location.pathname}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2, ease: [0, 0, 0.2, 1] }}
+      >
+        {outlet}
+      </motion.div>
+    </AnimatePresence>
+  );
+}
 
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -135,11 +164,11 @@ export function AppShell() {
       {/* 顶部固定导航栏 */}
       <header
         className={cn(
-          "fixed top-0 left-0 right-0 z-50 border-b border-border/70 bg-background/75 backdrop-blur-xl",
-          hasWarning ? "h-[92px]" : "h-[60px]"
+          "fixed top-0 left-0 right-0 z-50 border-b border-border bg-card",
+          hasWarning ? "h-[84px]" : "h-[52px]"
         )}
       >
-        <div className="flex h-[60px] items-center">
+        <div className="flex h-[52px] items-center">
           <div className="flex items-center md:hidden px-4">
             <img
               src="/xirang-mark.svg"
@@ -151,8 +180,8 @@ export function AppShell() {
 
           <div
             className={cn(
-              "hidden h-full shrink-0 items-center border-r border-border/60 bg-background/35 transition-[width,padding] duration-200 md:flex",
-              sidebarCollapsed ? "w-20 justify-center px-3" : "w-64 px-4"
+              "hidden h-full shrink-0 items-center border-r border-border transition-[width,padding] duration-200 md:flex",
+              sidebarCollapsed ? "w-16 justify-center px-3" : "w-60 px-4"
             )}
           >
             <img
@@ -184,14 +213,6 @@ export function AppShell() {
                   ⌘ K
                 </span>
               </div>
-            </div>
-
-            <div className="hidden min-w-0 md:flex items-center gap-2 mt-0.5 overflow-hidden">
-              <Badge variant="success" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.onlineBadge', { count: consoleData.overview.healthyNodes })}</Badge>
-              <Badge variant="warning" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.runningBadge', { count: consoleData.overview.runningTasks })}</Badge>
-              <Badge variant="danger" className="h-6 shrink-0 px-2 text-[10px]">{t('appShell.failedBadge', { count: consoleData.overview.failedTasks24h })}</Badge>
-              <div className="h-4 w-px shrink-0 bg-border/50 mx-1" />
-              <span className="truncate text-[11px] text-muted-foreground">{t('appShell.totalLabel', { count: consoleData.overview.totalNodes })}</span>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
@@ -246,8 +267,8 @@ export function AppShell() {
       {/* 侧边栏与主区包裹层 */}
       <div className={cn(
         "relative flex w-full transition-[padding,margin] duration-200",
-        hasWarning ? "pt-[92px]" : "pt-[60px]",
-        sidebarCollapsed ? "md:pl-20" : "md:pl-64"
+        hasWarning ? "pt-[84px]" : "pt-[52px]",
+        sidebarCollapsed ? "md:pl-16" : "md:pl-60"
       )}>
         <DesktopSidebar
           role={role}
@@ -256,11 +277,11 @@ export function AppShell() {
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
 
-        <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-92px)]" : "min-h-[calc(100vh-60px)]")}>
+        <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-84px)]" : "min-h-[calc(100vh-52px)]")}>
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
             <ErrorBoundary>
-              <Outlet context={consoleData as ConsoleOutletContext} />
+              <AnimatedOutlet context={consoleData as ConsoleOutletContext} />
             </ErrorBoundary>
           </main>
         </div>

@@ -190,7 +190,7 @@ export function PoliciesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="glass-panel border-border/70">
+      <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -246,7 +246,7 @@ export function PoliciesPage() {
             {pagedPolicies.map((policy) => (
               <div
                 key={policy.id}
-                className="interactive-surface p-4 flex flex-col"
+                className="rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-4 flex flex-col"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -281,7 +281,7 @@ export function PoliciesPage() {
                   <Badge variant="secondary">{t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}</Badge>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                   <Switch
                     checked={policy.enabled}
                     aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
@@ -350,10 +350,10 @@ export function PoliciesPage() {
             />
           </div>
 
-          <div className="glass-panel hidden overflow-x-auto md:block">
+          <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
             <table className="min-w-[980px] text-left text-sm">
               <thead>
-                <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border bg-secondary text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th scope="col" className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"
@@ -382,7 +382,7 @@ export function PoliciesPage() {
               <tbody>
                 {filteredPolicies.length ? (
                   pagedPolicies.map((policy) => (
-                    <tr key={policy.id} className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40">
+                    <tr key={policy.id} className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent">
                       <td className="px-3 py-2.5">
                         <input
                           type="checkbox"

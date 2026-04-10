@@ -33,10 +33,10 @@ export const TasksTable = React.memo(function TasksTable({
   const navigate = useNavigate();
 
   return (
-    <div className="glass-panel overflow-x-auto">
+    <div className="rounded-lg border border-border bg-card overflow-x-auto">
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
-          <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="w-10 px-3 py-2.5">
               <input
                 type="checkbox"
@@ -66,7 +66,7 @@ export const TasksTable = React.memo(function TasksTable({
               const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
               const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
               return (
-                <tr key={task.id} className={cn("border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40", selectedTaskSet.has(task.id) && "bg-primary/5", task.enabled === false && "opacity-50")}>
+                <tr key={task.id} className={cn("border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40", selectedTaskSet.has(task.id) && "bg-primary/5", task.enabled === false && "opacity-50")}>
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"

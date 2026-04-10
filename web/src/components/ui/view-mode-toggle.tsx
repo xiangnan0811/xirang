@@ -51,7 +51,7 @@ export function ViewModeToggle({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1 rounded-lg border border-border/80 bg-background/80 p-1",
+        "inline-flex items-center gap-1 rounded-lg border border-border bg-background p-1",
         className
       )}
       role="radiogroup"

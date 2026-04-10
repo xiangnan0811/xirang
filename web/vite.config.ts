@@ -28,6 +28,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           recharts: ["recharts"],
+          "framer-motion": ["framer-motion"],
         },
       },
     },

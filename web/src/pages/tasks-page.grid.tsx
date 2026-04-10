@@ -45,7 +45,7 @@ export const TasksGrid = React.memo(function TasksGrid({
           <div
             key={task.id}
             className={cn(
-              "interactive-surface flex h-full flex-col gap-2 p-4",
+              "hover:bg-accent transition-colors flex h-full flex-col gap-2 p-4",
               task.status === "failed" && "border-destructive/35 bg-destructive/10",
               task.status === "running" && "border-info/30 bg-info/5",
               task.status === "warning" && "border-warning/35 bg-warning/10",

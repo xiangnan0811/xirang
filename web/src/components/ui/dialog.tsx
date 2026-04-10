@@ -1,7 +1,6 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 const Dialog = DialogPrimitive.Root;
@@ -16,7 +15,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-fade-in",
+      "fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-fade-in",
       className
     )}
     {...props}
@@ -24,83 +23,53 @@ const DialogOverlay = React.forwardRef<
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
+interface DialogContentProps
+  extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  size?: "sm" | "md" | "lg";
+}
+
 const DialogContent = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
-    size?: "sm" | "md" | "lg";
-  }
+  DialogContentProps
 >(({ className, children, size = "md", ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
-    {/* 用 flexbox 居中，避免 translate 与 animation transform 冲突 */}
-    <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center">
-      <DialogPrimitive.Content
-        ref={ref}
-        className={cn(
-          // 移动端：底部抽屉，从底部滑入
-          "relative w-full max-h-[92vh] rounded-t-2xl border-t border-border/60 max-md:bg-background/90 max-md:backdrop-blur-xl md:border md:border-border/60 md:bg-background/50 md:backdrop-blur-md shadow-mobile-sheet will-change-transform",
-          "data-[state=open]:animate-slide-up data-[state=closed]:animate-none",
-          // 桌面端：居中弹窗，缩放淡入
-          "md:max-h-[85vh] md:rounded-xl md:shadow-panel md:data-[state=open]:animate-animate-in",
-          size === "sm" && "md:max-w-[480px]",
-          size === "md" && "md:max-w-[560px]",
-          size === "lg" && "md:max-w-[640px]",
-          className
-        )}
-        {...props}
-      >
-        {/* 移动端顶部拖拽指示条 */}
-        <div className="flex justify-center pt-2 md:hidden">
-          <div className="h-1 w-10 rounded-full bg-muted-foreground/30" />
-        </div>
-        {children}
-      </DialogPrimitive.Content>
-    </div>
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed left-[50%] top-[50%] z-50 w-full translate-x-[-50%] translate-y-[-50%] rounded-lg border border-border bg-card shadow-lg data-[state=open]:animate-animate-in",
+        {
+          "max-w-[480px]": size === "sm",
+          "max-w-[560px]": size === "md",
+          "max-w-[640px]": size === "lg",
+        },
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </DialogPrimitive.Content>
   </DialogPortal>
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
-function DialogHeader({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn("space-y-1.5 border-b border-border/40 px-6 pb-4 pt-4 relative z-10", className)}
-      {...props}
-    />
-  );
-}
+const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={cn("flex flex-col space-y-1.5 px-6 pt-6", className)} {...props} />
+);
+DialogHeader.displayName = "DialogHeader";
 
-function DialogBody({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "max-h-[calc(85vh-8rem)] overflow-y-auto px-6 py-4 thin-scrollbar relative z-10",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+const DialogBody = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={cn("px-6 py-4", className)} {...props} />
+);
+DialogBody.displayName = "DialogBody";
 
-function DialogFooter({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "flex justify-end gap-2 border-t px-6 pb-6 pt-4",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn("flex items-center justify-end gap-2 border-t bg-secondary/50 px-6 py-3", className)}
+    {...props}
+  />
+);
+DialogFooter.displayName = "DialogFooter";
 
 const DialogTitle = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Title>,
@@ -108,7 +77,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-lg font-semibold", className)}
+    className={cn("text-base font-semibold leading-none tracking-tight", className)}
     {...props}
   />
 ));
@@ -126,12 +95,17 @@ const DialogDescription = React.forwardRef<
 ));
 DialogDescription.displayName = DialogPrimitive.Description.displayName;
 
-function DialogCloseButton({ className }: React.HTMLAttributes<HTMLButtonElement>) {
-  const { t } = useTranslation();
+function DialogCloseButton({ className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <DialogPrimitive.Close className={cn("absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none", className)}>
+    <DialogPrimitive.Close
+      className={cn(
+        "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-ring disabled:pointer-events-none",
+        className
+      )}
+      {...props}
+    >
       <X className="size-4" />
-      <span className="sr-only">{t('common.close')}</span>
+      <span className="sr-only">Close</span>
     </DialogPrimitive.Close>
   );
 }

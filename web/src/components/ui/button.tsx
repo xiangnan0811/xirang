@@ -1,30 +1,27 @@
 import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "touch-target touch-manipulation inline-flex select-none items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium transition-[color,background-color,border-color,opacity,box-shadow,transform] duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 active:scale-[0.97] active:transition-transform active:duration-100",
   {
     variants: {
       variant: {
-        default:
-          "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
-        secondary:
-          "border border-border/70 bg-secondary/85 text-secondary-foreground shadow-sm hover:border-primary/25 hover:bg-secondary/70",
-        ghost: "hover:bg-accent/70 hover:text-accent-foreground",
-        outline:
-          "border border-input/90 bg-background/70 backdrop-blur hover:border-primary/35 hover:bg-accent/65 hover:text-accent-foreground",
-        destructive:
-          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
-        danger:
-          "border border-destructive/45 bg-destructive/10 text-destructive shadow-sm hover:border-destructive/65 hover:bg-destructive/15"
+        default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+        secondary: "border border-border bg-card text-foreground shadow-sm hover:bg-accent",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        outline: "border border-border bg-transparent hover:bg-accent hover:text-accent-foreground",
+        destructive: "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        danger: "bg-destructive/10 text-destructive border border-destructive/30 hover:bg-destructive/20",
+        link: "text-foreground underline-offset-4 hover:underline"
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-10 px-3.5",
-        lg: "h-11 px-8",
-        icon: "h-11 w-11"
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9"
       }
     },
     defaultVariants: {
@@ -37,13 +34,15 @@ const buttonVariants = cva(
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
   loading?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, loading, disabled, children, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, loading, disabled, children, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button";
     return (
-      <button
+      <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         disabled={disabled || loading}
@@ -51,7 +50,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       >
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
         {children}
-      </button>
+      </Comp>
     );
   }
 );

@@ -110,7 +110,7 @@ describe("NodeMetricsPanel 放大交互", () => {
     expect(node1Toggle).toHaveAttribute("aria-pressed", "false");
 
     // 关闭 Dialog（点击关闭按钮）
-    const closeButton = within(dialog).getByRole("button", { name: /关闭/ });
+    const closeButton = within(dialog).getByRole("button", { name: /Close/i });
     await user.click(closeButton);
 
     // Dialog 应关闭
@@ -140,7 +140,7 @@ describe("NodeMetricsPanel 放大交互", () => {
     expect(within(screen.getByRole("dialog")).getByText("CPU (%)")).toBeInTheDocument();
 
     // 关闭
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: /关闭/ }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Close/i }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });

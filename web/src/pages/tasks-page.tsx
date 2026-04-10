@@ -377,7 +377,7 @@ export function TasksPage() {
         ]}
       />
 
-      <Card className="glass-panel border-border/70">
+      <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">

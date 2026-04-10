@@ -9,7 +9,7 @@ const AppTextarea = React.forwardRef<HTMLTextAreaElement, AppTextareaProps>(
     <textarea
       ref={ref}
       className={cn(
-        "w-full rounded-lg border border-input/80 bg-background/80 p-3 text-sm leading-relaxed text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-[border-color,box-shadow,background-color] ring-offset-background placeholder:text-muted-foreground/80 focus-visible:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 aria-[invalid=true]:border-destructive/70 aria-[invalid=true]:ring-destructive/35 disabled:cursor-not-allowed disabled:opacity-60",
+        "w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
@@ -19,4 +19,6 @@ const AppTextarea = React.forwardRef<HTMLTextAreaElement, AppTextareaProps>(
 
 AppTextarea.displayName = "AppTextarea";
 
-export { AppTextarea };
+const Textarea = AppTextarea;
+
+export { AppTextarea, Textarea };

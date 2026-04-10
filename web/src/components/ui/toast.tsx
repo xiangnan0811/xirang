@@ -13,7 +13,7 @@ function Toaster() {
         duration: 4200,
         classNames: {
           toast:
-            "group rounded-xl border border-border/75 bg-background/85 text-foreground shadow-panel backdrop-blur-xl",
+            "group rounded-xl border border-border bg-foreground text-background shadow-md",
           title: "text-sm font-semibold tracking-wide",
           description: "text-xs text-muted-foreground",
           actionButton: "bg-primary text-primary-foreground",

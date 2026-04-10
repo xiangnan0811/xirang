@@ -109,7 +109,7 @@ export function SystemTab() {
       <h2 className="text-lg font-semibold">{t("settings.system.title")}</h2>
 
       {grouped.map(({ category, items }) => (
-        <div key={category} className="glass-panel relative overflow-hidden p-5 space-y-4">
+        <div key={category} className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4">
           <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
           <h3 className="text-sm font-semibold">{categoryLabels[category] || category}</h3>
           {items.map((def) => {

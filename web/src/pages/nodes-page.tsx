@@ -153,7 +153,7 @@ export function NodesPage() {
         ]}
       />
 
-      <Card className="overflow-hidden glass-panel border-border/70">
+      <Card className="overflow-hidden rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
           <NodesPageToolbar

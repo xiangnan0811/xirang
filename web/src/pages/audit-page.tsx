@@ -179,7 +179,7 @@ export function AuditPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="glass-panel border-border/70">
+      <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -273,7 +273,7 @@ export function AuditPage() {
           {/* 小屏卡片，大屏表格 */}
           <div className="grid gap-3 sm:grid-cols-2 md:hidden lg:grid-cols-3">
             {rows.map((row) => (
-              <div key={row.id} className="interactive-surface p-3">
+              <div key={row.id} className="hover:bg-accent transition-colors p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{row.username || "-"}</p>
                   <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
@@ -303,10 +303,10 @@ export function AuditPage() {
             ) : null}
           </div>
 
-          <div className="glass-panel hidden overflow-x-auto md:block">
+          <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
             <table className="min-w-[1080px] text-left text-sm">
               <thead>
-                <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th scope="col" className="px-3 py-2.5">{t("audit.colTime")}</th>
                   <th scope="col" className="px-3 py-2.5">{t("audit.colUser")}</th>
                   <th scope="col" className="px-3 py-2.5">{t("audit.colRole")}</th>
@@ -320,7 +320,7 @@ export function AuditPage() {
                 {rows.map((row) => (
                   <tr
                     key={row.id}
-                    className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40"
+                    className="border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40"
                   >
                     <td className="px-3 py-2.5">{row.createdAt}</td>
                     <td className="px-3 py-2.5">{row.username || "-"}</td>

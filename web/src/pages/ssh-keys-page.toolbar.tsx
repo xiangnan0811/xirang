@@ -91,7 +91,7 @@ export function SSHKeysToolbar({
         {/* 选中项操作 */}
         {selectedCount > 0 && (
           <>
-            <div className="hidden h-6 w-px bg-border/60 md:block" aria-hidden="true" />
+            <div className="hidden h-6 w-px bg-border md:block" aria-hidden="true" />
             <Button
               variant="destructive"
               size="sm"
@@ -110,7 +110,7 @@ export function SSHKeysToolbar({
 
       {/* ---------- 右侧视图切换 ---------- */}
       <div
-        className="hidden items-center gap-1 rounded-lg border border-border/80 bg-background/80 p-1 md:inline-flex"
+        className="hidden items-center gap-1 rounded-lg border border-border bg-background p-1 md:inline-flex"
         role="radiogroup"
         aria-label={t("sshKeys.viewToggleGroup")}
       >

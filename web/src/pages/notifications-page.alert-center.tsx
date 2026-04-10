@@ -334,7 +334,7 @@ export function AlertCenter({
         role="region"
         aria-label={t("notifications.deliveryPanelAriaLabel", { code: alert.errorCode })}
         aria-busy={deliveryLoadingAlertId === alert.id}
-        className="mt-3 rounded-md border border-border/70 bg-muted/25 p-2"
+        className="mt-3 rounded-md border border-border bg-muted/25 p-2"
       >
         {deliveryLoadingAlertId === alert.id ? (
           <p className="text-xs text-muted-foreground">{t("notifications.deliveryLoading")}</p>
@@ -352,7 +352,7 @@ export function AlertCenter({
               </Button>
             ) : null}
             {(deliveryMap[alert.id] ?? []).map((delivery) => (
-              <div key={delivery.id} className="rounded border border-border/70 bg-background/80 px-2 py-1.5 text-xs">
+              <div key={delivery.id} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">
                     {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
@@ -433,7 +433,7 @@ export function AlertCenter({
           <div
             key={alert.id}
             ref={alert.id === highlightedAlert?.id ? (el) => highlightRef(alert.id, el) : undefined}
-            className="glass-panel overflow-hidden relative group p-4 transition-colors hover:bg-muted/10"
+            className="rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group p-4 transition-colors hover:bg-muted/10"
           >
             <div className={`absolute top-0 left-0 w-1.5 h-full ${toneClass} opacity-60 group-hover:opacity-100 transition-opacity`} />
             <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
@@ -469,10 +469,10 @@ export function AlertCenter({
 
   // --- 渲染：表格视图 ---
   const renderTableView = (items: AlertRecord[]) => (
-    <div className="glass-panel overflow-x-auto">
+    <div className="rounded-lg border border-border bg-card overflow-x-auto">
       <table className="min-w-[960px] text-left text-sm w-full">
         <thead>
-          <tr className="border-b border-border/70 bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
             <th scope="col" {...sortableThProps("severity")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
               {t("notifications.colSeverity")} {sortIndicator("severity")}
             </th>
@@ -537,7 +537,7 @@ export function AlertCenter({
   }, [alerts, highlightedAlert]);
 
   return (
-    <Card className="glass-panel border-border/70">
+    <Card className="rounded-lg border border-border bg-card">
       <CardContent className="space-y-4 pt-6">
         {/* 标题栏 */}
         <div className="flex flex-wrap items-center justify-between gap-4">

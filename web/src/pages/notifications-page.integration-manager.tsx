@@ -74,7 +74,7 @@ export function IntegrationManager({
 
   return (
     <>
-      <Card className="glass-panel border-border/70">
+      <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2 font-medium">
@@ -93,7 +93,7 @@ export function IntegrationManager({
               const busy = isUpdating || isTesting;
 
               return (
-                <div key={integration.id} className="glass-panel overflow-hidden relative group p-3 transition-colors hover:bg-muted/10">
+                <div key={integration.id} className="rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group p-3 transition-colors hover:bg-muted/10">
                   <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-60 group-hover:opacity-100 transition-opacity" />
                   <div className="flex flex-wrap items-center justify-between gap-2 pl-2">
                     <div className="flex items-center gap-3">
