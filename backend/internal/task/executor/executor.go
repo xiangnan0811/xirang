@@ -116,10 +116,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		if port == 0 {
 			port = 22
 		}
-		user := strings.TrimSpace(task.Node.Username)
-		if user == "" {
-			user = "root"
-		}
+		user := ResolveSSHUser(task.Node)
 
 		authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
 		if authType == "password" {
@@ -264,58 +261,7 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 // runRemoteRestore 在远程节点上执行 rsync 恢复操作。
 // 与标准备份不同，恢复需要在远程节点上执行 rsync source target（两个路径都是节点本地路径）。
 func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	port := task.Node.Port
-	if port == 0 {
-		port = 22
-	}
-	user := strings.TrimSpace(task.Node.Username)
-	if user == "" {
-		user = "root"
-	}
-
-	authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
-	if authType == "password" {
-		return -1, fmt.Errorf("恢复操作暂不支持密码认证，请为节点配置 SSH key")
-	}
-	if authType != "key" {
-		return -1, fmt.Errorf("不支持的认证方式")
-	}
-
-	keyContent, _, keyResolveErr := resolveNodePrivateKey(task.Node)
-	if keyResolveErr != nil {
-		return -1, keyResolveErr
-	}
-	if keyContent == "" {
-		return -1, fmt.Errorf("密钥认证未配置，请为节点设置密钥")
-	}
-
-	normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-	if err != nil {
-		return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
-	}
-
-	// 建立 SSH 连接
-	signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-	if err != nil {
-		return -1, fmt.Errorf("解析私钥失败: %w", err)
-	}
-
-	config := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
-		Timeout: 30 * time.Second,
-	}
-
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		return -1, fmt.Errorf("配置 SSH 主机密钥校验失败: %w", err)
-	}
-	config.HostKeyCallback = hostKeyCallback
-
-	addr := fmt.Sprintf("%s:%d", task.Node.Host, port)
-	client, err := ssh.Dial("tcp", addr, config)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
