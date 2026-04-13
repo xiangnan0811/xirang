@@ -603,53 +603,7 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 		return fmt.Errorf("节点地址不能为空")
 	}
 
-	port := node.Port
-	if port == 0 {
-		port = 22
-	}
-	user := strings.TrimSpace(node.Username)
-	if user == "" {
-		user = "root"
-	}
-
-	// 构建 SSH 认证（复用 CommandExecutor 的逻辑）
-	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
-	var authMethods []ssh.AuthMethod
-
-	switch authType {
-	case "key":
-		keyContent, _, err := resolveNodePrivateKey(node)
-		if err != nil {
-			return err
-		}
-		if keyContent == "" {
-			return fmt.Errorf("密钥认证未配置")
-		}
-		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
-			return fmt.Errorf("私钥校验失败")
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-		if err != nil {
-			return fmt.Errorf("解析私钥失败: %w", err)
-		}
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
-	case "password":
-		if node.Password == "" {
-			return fmt.Errorf("密码认证未配置密码")
-		}
-		authMethods = append(authMethods, ssh.Password(node.Password))
-	default:
-		return fmt.Errorf("不支持的认证方式: %s", authType)
-	}
-
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		return fmt.Errorf("主机密钥配置异常: %w", err)
-	}
-
-	addr := fmt.Sprintf("%s:%d", node.Host, port)
-	client, err := sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
+	client, err := DialSSHForNode(ctx, node)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
