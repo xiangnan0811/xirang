@@ -55,7 +55,7 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "SSH 连接失败"})
 		return
 	}
-	defer sshClient.Close()
+	defer sshClient.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	volumes, warning, err := listDockerVolumes(sshClient)
 	if err != nil {
@@ -104,7 +104,7 @@ func listDockerVolumes(client *ssh.Client) ([]DockerVolume, string, error) {
 		return nil, "", fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
 	output, err := session.CombinedOutput("docker volume ls --format '{{json .}}'")
-	session.Close()
+	_ = session.Close()
 
 	if err != nil {
 		outStr := strings.TrimSpace(string(output))
@@ -164,7 +164,7 @@ func inspectVolumeMountpoint(client *ssh.Client, volumeName string) string {
 	if err != nil {
 		return ""
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	// 使用 Go template 格式直接输出 Mountpoint
 	output, err := session.Output(fmt.Sprintf("docker volume inspect '%s' --format '{{.Mountpoint}}'", volumeName))

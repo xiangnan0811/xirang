@@ -190,7 +190,7 @@ func DialSSH(ctx context.Context, addr, user string, auth []ssh.AuthMethod, host
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
-		conn.Close()
+		conn.Close() //nolint:errcheck
 		return nil, fmt.Errorf("SSH 握手失败: %w", err)
 	}
 
@@ -232,7 +232,7 @@ func AppendKnownHost(path, hostname string, key ssh.PublicKey) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	_, err = file.WriteString(prefix + entry + "\n")
 	return err
 }

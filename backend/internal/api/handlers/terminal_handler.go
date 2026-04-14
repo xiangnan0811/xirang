@@ -158,7 +158,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	session, err := sshClient.NewSession()
 	if err != nil {
 		cancel()
-		sshClient.Close()
+		_ = sshClient.Close()
 		log.Printf("warn: terminal: SSH 会话创建失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 会话创建失败"))
@@ -174,8 +174,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
 		cancel()
-		session.Close()
-		sshClient.Close()
+		_ = session.Close()
+		_ = sshClient.Close()
 		log.Printf("warn: terminal: 请求 PTY 失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "终端初始化失败"))
@@ -187,16 +187,16 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	sshStdin, err := session.StdinPipe()
 	if err != nil {
 		cancel()
-		session.Close()
-		sshClient.Close()
+		_ = session.Close()
+		_ = sshClient.Close()
 		_ = conn.Close()
 		return
 	}
 	sshStdout, err := session.StdoutPipe()
 	if err != nil {
 		cancel()
-		session.Close()
-		sshClient.Close()
+		_ = session.Close()
+		_ = sshClient.Close()
 		_ = conn.Close()
 		return
 	}
@@ -204,8 +204,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 启动 shell
 	if err := session.Shell(); err != nil {
 		cancel()
-		session.Close()
-		sshClient.Close()
+		_ = session.Close()
+		_ = sshClient.Close()
 		log.Printf("warn: terminal: 启动 Shell 失败 (node=%d): %v", node.ID, err)
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Shell 启动失败"))
@@ -246,7 +246,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 			}
 			h.mu.Unlock()
 			_ = session.Close()
-			sshClient.Close()
+			_ = sshClient.Close()
 			// 发送正常关闭帧，让前端收到 code 1000 以便自动关闭弹窗
 			_ = conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))

@@ -76,7 +76,7 @@ func TestSystemHandlerBackupDBUsesSQLiteByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("获取底层 sqlite 连接失败: %v", err)
 	}
-	defer sqlDB.Close()
+	defer sqlDB.Close() //nolint:errcheck
 	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
 		t.Fatalf("启用 WAL 模式失败: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestSystemHandlerBackupDBUsesSQLiteByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("获取备份 sqlite 连接失败: %v", err)
 	}
-	defer backupSQLDB.Close()
+	defer backupSQLDB.Close() //nolint:errcheck
 
 	var value string
 	if err := backupDB.Raw("SELECT value FROM backup_test LIMIT 1").Scan(&value).Error; err != nil {

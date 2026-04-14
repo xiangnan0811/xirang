@@ -59,7 +59,7 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 完整性检查: SSH 连接失败")
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" {
@@ -106,7 +106,7 @@ func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("rclone 完整性检查: SSH 连接失败")
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	source := strings.TrimSpace(task.RsyncSource)
 	target := strings.TrimSpace(task.RsyncTarget)

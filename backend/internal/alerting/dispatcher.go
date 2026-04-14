@@ -480,7 +480,7 @@ func postJSON(client *http.Client, targetURL string, body interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return buildNotificationHTTPError(resp.StatusCode, resp.Body)
 	}
@@ -507,7 +507,7 @@ func postTelegram(client *http.Client, endpoint, text string) error {
 	if err != nil {
 		return fmt.Errorf("telegram 请求失败: %s", util.SanitizeTelegramError(err))
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return buildNotificationHTTPError(resp.StatusCode, resp.Body)
 	}
@@ -634,12 +634,12 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 		if err != nil {
 			return fmt.Errorf("TLS 连接失败: %w", err)
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 		c, err := smtp.NewClient(conn, host)
 		if err != nil {
 			return fmt.Errorf("创建 SMTP 客户端失败: %w", err)
 		}
-		defer c.Close()
+		defer c.Close() //nolint:errcheck
 		return smtpSend(c, auth, from, to, msg)
 	}
 
@@ -648,7 +648,7 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 	if err != nil {
 		return fmt.Errorf("SMTP 连接失败: %w", err)
 	}
-	defer c.Close()
+	defer c.Close() //nolint:errcheck
 	if ok, _ := c.Extension("STARTTLS"); !ok {
 		return fmt.Errorf("SMTP 服务器不支持 STARTTLS，拒绝发送（设置 SMTP_REQUIRE_TLS=false 可关闭此检查）")
 	}

@@ -674,7 +674,7 @@ func buildEndpointFromFields(channelType, botToken, chatID, accessToken, hookID,
 		}
 		// 校验 hookID 仅含字母数字和连字符（UUID 格式）
 		for _, c := range hookID {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 				return "", fmt.Errorf("feishu hook_id 格式不正确，仅允许字母、数字、连字符")
 			}
 		}

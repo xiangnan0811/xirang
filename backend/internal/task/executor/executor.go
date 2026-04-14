@@ -136,9 +136,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 
 		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
 		if err != nil {
-			if strings.TrimSpace(keySource) == "" {
-				keySource = "unknown"
-			}
+			_ = keySource // resolved from node or SSH key record
 			return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
 		}
 
@@ -265,13 +263,13 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	session, err := client.NewSession()
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	// 构造在远程节点上执行的 rsync 命令
 	// 注意：source 和 target 都是节点本地路径
@@ -553,7 +551,7 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	// 检查目标路径是否存在，不存在则创建
 	quoted := ShellEscape(targetPath)

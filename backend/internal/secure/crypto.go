@@ -85,11 +85,6 @@ func getLegacyKey() ([]byte, error) {
 	return legacyKey, nil
 }
 
-// getKey 返回主密钥（兼容旧调用方）。
-func getKey() ([]byte, error) {
-	return getPrimaryKey()
-}
-
 func IsEncrypted(raw string) bool {
 	return strings.HasPrefix(raw, encryptedPrefixV1) || strings.HasPrefix(raw, encryptedPrefixV2)
 }

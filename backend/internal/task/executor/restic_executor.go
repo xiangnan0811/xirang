@@ -53,7 +53,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	bin := e.resticBinary()
 
@@ -117,7 +117,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	repoArg := ShellEscape(repo)
 	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
@@ -143,7 +143,7 @@ func (e *ResticExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {
@@ -271,7 +271,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
@@ -299,7 +299,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
 	lsPath := "/"
@@ -342,7 +342,7 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
 	includeArgs := ""

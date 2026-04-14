@@ -62,7 +62,7 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 		logf("warn", fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err))
 		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
 	}
-	defer sshClient.Close()
+	defer sshClient.Close() //nolint:errcheck
 
 	result := Result{Status: "passed"}
 
@@ -154,7 +154,7 @@ func VerifyRemoteToRemote(ctx context.Context, task model.Task, sampleRate int, 
 		logf("warn", fmt.Sprintf("恢复校验阶段建立 SSH 连接失败: %v", err))
 		return Result{Status: "warning", Message: fmt.Sprintf("恢复校验阶段建立 SSH 连接失败: %v", err)}
 	}
-	defer sshClient.Close()
+	defer sshClient.Close() //nolint:errcheck
 
 	result := Result{Status: "passed"}
 
@@ -264,7 +264,7 @@ func runRemoteCommand(ctx context.Context, sshClient *ssh.Client, command string
 	if err != nil {
 		return "", fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	// context 取消时关闭 session，使正在执行的远程命令立即中断
 	done := make(chan struct{})
@@ -272,7 +272,7 @@ func runRemoteCommand(ctx context.Context, sshClient *ssh.Client, command string
 	go func() {
 		select {
 		case <-ctx.Done():
-			session.Close()
+			session.Close() //nolint:errcheck // best-effort cancel in goroutine
 		case <-done:
 		}
 	}()
@@ -478,7 +478,7 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 		logf("warn", fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
 		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
 	}
-	defer sshClient.Close()
+	defer sshClient.Close() //nolint:errcheck
 
 	repo := task.RsyncTarget // 备份时 RsyncTarget = 仓库路径
 	if repo == "" {
@@ -508,7 +508,7 @@ func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 		logf("warn", fmt.Sprintf("rclone 校验阶段建立 SSH 连接失败: %v", err))
 		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
 	}
-	defer sshClient.Close()
+	defer sshClient.Close() //nolint:errcheck
 
 	source := task.RsyncSource
 	remote := task.RsyncTarget

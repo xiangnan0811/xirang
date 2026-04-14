@@ -72,8 +72,8 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	})
 
 	// 触发锁定
-	service.Login("locktest", "wrong1", "10.0.0.1")
-	service.Login("locktest", "wrong2", "10.0.0.1")
+	_, _ = service.Login("locktest", "wrong1", "10.0.0.1")
+	_, _ = service.Login("locktest", "wrong2", "10.0.0.1")
 
 	// 锁定中
 	_, err := service.Login("locktest", "Correct1!", "10.0.0.1")

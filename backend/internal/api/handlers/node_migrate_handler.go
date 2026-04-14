@@ -300,15 +300,6 @@ func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeB
 	return results
 }
 
-// truncateOutput 截断输出到指定长度（UTF-8 安全）
-func truncateOutput(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max]) + "..."
-}
-
 // replaceLastOccurrence 替换字符串中最后一次出现的 old 为 new。
 func replaceLastOccurrence(s, old, new string) string {
 	idx := strings.LastIndex(s, old)

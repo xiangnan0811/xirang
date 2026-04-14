@@ -54,7 +54,7 @@ func (h *VersionHandler) Check(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "请求版本检查地址失败"})
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "版本检查地址返回异常"})

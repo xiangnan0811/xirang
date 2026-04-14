@@ -96,8 +96,8 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 				return dbFiles[i].Name() < dbFiles[j].Name()
 			})
 			for _, f := range dbFiles[:len(dbFiles)-maxBackups] {
-				os.Remove(filepath.Join(backupDir, f.Name()))
-				os.Remove(filepath.Join(backupDir, f.Name()+".sha256"))
+				os.Remove(filepath.Join(backupDir, f.Name()))           //nolint:errcheck
+				os.Remove(filepath.Join(backupDir, f.Name()+".sha256")) //nolint:errcheck
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func checksumFile(path string) (checksum string, size int64, err error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("打开备份文件失败: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {

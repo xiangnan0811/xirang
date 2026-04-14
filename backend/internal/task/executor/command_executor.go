@@ -29,7 +29,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 	if err != nil {
 		return -1, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	user := ResolveSSHUser(task.Node)
 	addr := fmt.Sprintf("%s:%d", task.Node.Host, task.Node.Port)
@@ -42,7 +42,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	// 设置标准输出和标准错误管道
 	stdout, err := session.StdoutPipe()

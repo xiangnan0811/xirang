@@ -41,6 +41,12 @@ jobs:
           go-version-file: backend/go.mod
           cache: true
 
+      - name: Lint backend
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+          working-directory: backend
+
       - name: Download modules
         run: go mod download
 

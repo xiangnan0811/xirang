@@ -91,14 +91,14 @@ func RunSSHCommandOutput(ctx context.Context, client *ssh.Client, cmd string) (s
 	if err != nil {
 		return "", fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			session.Close()
+			session.Close() //nolint:errcheck // best-effort cancel in goroutine
 		case <-done:
 		}
 	}()

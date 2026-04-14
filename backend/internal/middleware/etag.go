@@ -36,7 +36,7 @@ func ETag() gin.HandlerFunc {
 		if status != http.StatusOK {
 			bw.ResponseWriter.WriteHeader(status)
 			if len(body) > 0 {
-				bw.ResponseWriter.Write(body)
+				_, _ = bw.ResponseWriter.Write(body)
 			}
 			return
 		}
@@ -54,7 +54,7 @@ func ETag() gin.HandlerFunc {
 
 		// Send full response with ETag
 		bw.ResponseWriter.WriteHeader(status)
-		bw.ResponseWriter.Write(body)
+		_, _ = bw.ResponseWriter.Write(body)
 	}
 }
 

@@ -75,7 +75,7 @@ func (h *AuditHandler) ExportCSV(c *gin.Context) {
 	c.Status(http.StatusOK)
 
 	// 写入 UTF-8 BOM 以便 Excel 正确识别编码
-	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
+	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 
 	writer := csv.NewWriter(c.Writer)
 	defer writer.Flush()
