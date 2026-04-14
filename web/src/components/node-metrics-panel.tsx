@@ -65,6 +65,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
   // 初始化：默认全部开启
   useEffect(() => {
     if (onlineNodes.length > 0 && !initRef.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEnabledNodes(new Set(onlineNodes.map((n) => n.id)));
       initRef.current = true;
     }
@@ -74,6 +75,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
   useEffect(() => {
     if (onlineNodes.length === 0) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
     Promise.all(

@@ -79,6 +79,7 @@ export function useSSHKeysPageState() {
   // 当密钥列表变化时，移除已不存在的 id
   const keyIdSet = useMemo(() => new Set(sshKeys.map((k) => k.id)), [sshKeys]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIds((prev) => {
       const next = new Set<string>();
       for (const id of prev) {

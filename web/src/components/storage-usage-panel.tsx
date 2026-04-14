@@ -41,7 +41,9 @@ export function StorageUsagePanel() {
     if (!token) return;
     const controller = new AbortController();
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(null);
     apiClient
       .getStorageUsage(token, { signal: controller.signal })

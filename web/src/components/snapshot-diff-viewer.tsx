@@ -33,6 +33,7 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
       .catch((err) => { if (!controller.signal.aborted) toast.error(getErrorMessage(err, t('snapshots.loadFailed'))); })
       .finally(() => { if (!controller.signal.aborted) setSnapshotsLoading(false); });
     return () => controller.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [token, taskId]);
 
   const handleCompare = async () => {

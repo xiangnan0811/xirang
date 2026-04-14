@@ -158,6 +158,7 @@ export function AlertCenter({
       setHighlightedAlert(null);
       void fetchAlerts(page);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAlerts and page intentionally excluded to avoid loop
   }, [refreshVersion]);
 
   useEffect(() => {

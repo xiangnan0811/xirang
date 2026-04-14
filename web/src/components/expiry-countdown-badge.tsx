@@ -20,6 +20,7 @@ export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBa
     return null;
   }
 
+  // eslint-disable-next-line react-hooks/purity -- Date.now() is intentional for expiry calculation
   const now = Date.now();
   const expiry = new Date(expiryDate).getTime();
   if (Number.isNaN(expiry)) {

@@ -46,6 +46,7 @@ export function RestoreConfirmDialog({
     } finally {
       setSaving(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [token, taskId, targetPath, onOpenChange, onSuccess]);
 
   return (

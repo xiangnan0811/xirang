@@ -59,6 +59,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   const [previewOpen, setPreviewOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const fetchDirRef = useRef(fetchDir);
+  // eslint-disable-next-line react-hooks/refs -- stable callback ref pattern
   fetchDirRef.current = fetchDir;
 
   const loadDir = useCallback(
@@ -84,6 +85,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
           setLoading(false);
         });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
     []
   );
 

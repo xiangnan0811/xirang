@@ -420,6 +420,7 @@ export function NodeEditorDialog({
             {t('nodeEditor.backupDirChangeWarning')}
           </p>
         )}
+        {/* eslint-disable-next-line no-control-regex -- intentional: detect non-ASCII chars in node name */}
         {!backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name) && (
           <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400">
             {t('nodeEditor.backupDirNonAsciiWarning')}

@@ -76,6 +76,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [token, taskId]);
 
   useEffect(() => {

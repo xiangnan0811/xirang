@@ -10,6 +10,7 @@ export function useClientPagination<T>(items: T[], defaultPageSize = 20) {
   // 当 items 变化导致当前页超出范围时，自动回退到最后一页
   useEffect(() => {
     if (page > totalPages) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPage(totalPages);
     }
   }, [page, totalPages]);

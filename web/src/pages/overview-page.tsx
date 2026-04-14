@@ -99,6 +99,7 @@ export function OverviewPage() {
     return () => {
       controller.abort();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [fetchOverviewTraffic, refreshVersion, trafficWindow]);
 
   const recentTasks = useMemo(

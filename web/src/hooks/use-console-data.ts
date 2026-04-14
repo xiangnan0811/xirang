@@ -286,6 +286,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   }, [token]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadData();
     return () => {
       loadAbortRef.current?.abort();

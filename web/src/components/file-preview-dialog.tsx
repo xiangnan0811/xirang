@@ -48,6 +48,7 @@ export function FilePreviewDialog({
         setError(err instanceof Error ? err.message : t('fileBrowser.loadFileFailed'));
       })
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [open, fetchContent]);
 
   const fileName = filePath.split("/").pop() ?? filePath;
