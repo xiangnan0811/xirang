@@ -80,8 +80,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 
 	var nodes []model.Node
 	if err := query.Order("id asc").Find(&nodes).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -90,7 +89,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 		safeNodes = append(safeNodes, node.Sanitized())
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": safeNodes})
+	respondOK(c, safeNodes)
 }
 
 func (h *NodeHandler) Get(c *gin.Context) {
@@ -100,10 +99,10 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	}
 	var node model.Node
 	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": node.Sanitized()})
+	respondOK(c, node.Sanitized())
 }
 
 func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
@@ -132,7 +131,7 @@ func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
 func (h *NodeHandler) Create(c *gin.Context) {
 	var req nodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if req.Port == 0 {
@@ -146,15 +145,15 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	}
 	// BasePath 不设置默认值 "/"，避免文件浏览器白名单开放整台机器
 	if err := validateNodeName(req.Name); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := h.validateSSHRef(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -217,29 +216,28 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		req.BackupDir = sanitizeBackupDir(req.Name)
 	}
 	if strings.TrimSpace(req.BackupDir) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "节点名称无法自动生成备份目录标识，请手动指定 backup_dir（仅允许英文字母、数字、连字符、下划线）"})
+		respondBadRequest(c, "节点名称无法自动生成备份目录标识，请手动指定 backup_dir（仅允许英文字母、数字、连字符、下划线）")
 		return
 	}
 	if err := validateBackupDir(req.BackupDir); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	node.BackupDir = req.BackupDir
 	if err := h.db.Create(&node).Error; err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir)})
+			respondBadRequest(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": node.Sanitized()})
+	respondCreated(c, node.Sanitized())
 }
 
 func (h *NodeHandler) Update(c *gin.Context) {
@@ -249,12 +247,12 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 	var req nodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	var node model.Node
 	if err := h.db.First(&node, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
@@ -275,11 +273,11 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		req.BackupDir = node.BackupDir
 	}
 	if err := validateBackupDir(req.BackupDir); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := validateNodeName(req.Name); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if req.SSHKeyID == nil {
@@ -293,11 +291,11 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 
 	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := h.validateSSHRef(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -354,23 +352,22 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 	if err := h.db.Save(&node).Error; err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir)})
+			respondBadRequest(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	resp := gin.H{"data": node.Sanitized()}
 	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
 		resp["warning"] = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
 	}
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, resp)
 }
 
 func uniqueNodeIDs(ids []uint) []uint {
@@ -406,24 +403,24 @@ func diffNodeIDs(source []uint, existing []uint) []uint {
 func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var req nodeBatchDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	nodeIDs := uniqueNodeIDs(req.IDs)
 	if len(nodeIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
+		respondBadRequest(c, "ids 不能为空")
 		return
 	}
 	if len(nodeIDs) > 200 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "单次最多删除 200 个节点"})
+		respondBadRequest(c, "单次最多删除 200 个节点")
 		return
 	}
 
 	// operator 只能删除自己拥有的节点
 	ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	if needFilter {
@@ -439,15 +436,14 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		}
 		nodeIDs = filtered
 		if len(nodeIDs) == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权删除这些节点"})
+			respondForbidden(c, "无权删除这些节点")
 			return
 		}
 	}
 
 	tx := h.db.Begin()
 	if tx.Error != nil {
-		log.Printf("服务器内部错误: %v", tx.Error)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, tx.Error)
 		return
 	}
 	defer func() {
@@ -459,15 +455,14 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var existingIDs []uint
 	if err := tx.Model(&model.Node{}).Where("id IN ?", nodeIDs).Pluck("id", &existingIDs).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	notFoundIDs := diffNodeIDs(nodeIDs, existingIDs)
 	if len(existingIDs) == 0 {
 		tx.Rollback()
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"deleted":       0,
 			"not_found_ids": notFoundIDs,
 			"message":       "no nodes deleted",
@@ -477,40 +472,35 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.PolicyNode{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Task{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Alert{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	deleteResult := tx.Where("id IN ?", existingIDs).Delete(&model.Node{})
 	if deleteResult.Error != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", deleteResult.Error)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, deleteResult.Error)
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"deleted":       deleteResult.RowsAffected,
 		"not_found_ids": notFoundIDs,
 		"message":       "deleted",
@@ -525,8 +515,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 
 	tx := h.db.Begin()
 	if tx.Error != nil {
-		log.Printf("服务器内部错误: %v", tx.Error)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, tx.Error)
 		return
 	}
 	defer func() {
@@ -538,45 +527,40 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	var node model.Node
 	if err := tx.First(&node, id).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
 	if err := tx.Where("node_id = ?", id).Delete(&model.PolicyNode{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Where("node_id = ?", id).Delete(&model.Task{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Where("node_id = ?", id).Delete(&model.Alert{}).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Delete(&model.Node{}, id).Error; err != nil {
 		tx.Rollback()
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	respondMessage(c, "deleted")
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
@@ -594,7 +578,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 
 	var node model.Node
 	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
@@ -611,7 +595,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
@@ -632,7 +616,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
@@ -658,7 +642,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
 		})
@@ -697,8 +681,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.DiskUsedGB = 0
 	}
 	if err := h.db.Save(&node).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	if resolveErr := alerting.ResolveNodeAlerts(h.db, node.ID, "节点探测恢复正常"); resolveErr != nil {
@@ -712,7 +695,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"ok":            true,
 		"message":       "SSH 连通性检测成功",
 		"latency_ms":    latency,
@@ -751,10 +734,10 @@ func (h *NodeHandler) Metrics(c *gin.Context) {
 		Order("sampled_at asc").
 		Limit(limit).
 		Find(&samples).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询节点指标失败"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": samples})
+	respondOK(c, gin.H{"items": samples})
 }
 
 // validateNodeName 校验节点名称，防止路径遍历攻击。
@@ -837,7 +820,7 @@ func (h *NodeHandler) ListOwners(c *gin.Context) {
 	}
 	var owners []model.NodeOwner
 	if err := h.db.Preload("User").Where("node_id = ?", nodeID).Find(&owners).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		respondInternalError(c, err)
 		return
 	}
 	type item struct {
@@ -848,7 +831,7 @@ func (h *NodeHandler) ListOwners(c *gin.Context) {
 	for _, o := range owners {
 		result = append(result, item{UserID: o.UserID, Username: o.User.Username})
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }
 
 // AddOwner 为节点添加负责人（admin only）。
@@ -862,15 +845,15 @@ func (h *NodeHandler) AddOwner(c *gin.Context) {
 		UserID uint `json:"user_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	owner := model.NodeOwner{NodeID: nodeID, UserID: req.UserID}
 	if err := h.db.Where(owner).FirstOrCreate(&owner).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "已添加负责人"})
+	respondMessage(c, "已添加负责人")
 }
 
 // RemoveOwner 移除节点负责人（admin only）。
@@ -891,7 +874,7 @@ func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
 	}
 
 	if len(tasks) == 0 {
-		c.JSON(http.StatusOK, gin.H{"triggered": 0, "task_ids": []uint{}, "errors": []string{}})
+		respondOK(c, gin.H{"triggered": 0, "task_ids": []uint{}, "errors": []string{}})
 		return
 	}
 
@@ -909,7 +892,7 @@ func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
 		taskIDs = append(taskIDs, runID)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"triggered": triggered,
 		"task_ids":  taskIDs,
 		"errors":    errors,
@@ -924,13 +907,13 @@ func (h *NodeHandler) RemoveOwner(c *gin.Context) {
 	userIDStr := c.Param("user_id")
 	userID, err := strconv.ParseUint(userIDStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID"})
+		respondBadRequest(c, "无效的用户 ID")
 		return
 	}
 	if err := h.db.Where("node_id = ? AND user_id = ?", nodeID, uint(userID)).
 		Delete(&model.NodeOwner{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "已移除负责人"})
+	respondMessage(c, "已移除负责人")
 }
