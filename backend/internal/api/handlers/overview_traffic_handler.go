@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"math"
-	"net/http"
 	"strings"
 	"time"
 
@@ -58,7 +57,7 @@ func NewOverviewTrafficHandler(db *gorm.DB, nowFn func() time.Time) *OverviewTra
 func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 	cfg, ok := parseOverviewTrafficWindow(strings.TrimSpace(c.Query("window")))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的时间窗口，允许值: 1h、24h、7d"})
+		respondBadRequest(c, "不支持的时间窗口，允许值: 1h、24h、7d")
 		return
 	}
 
@@ -165,13 +164,13 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": overviewTrafficResponse{
+	respondOK(c, overviewTrafficResponse{
 		Window:         cfg.Window,
 		BucketMinutes:  int(cfg.Bucket / time.Minute),
 		HasRealSamples: len(samples) > 0,
 		GeneratedAt:    localNow.Format(time.RFC3339),
 		Points:         points,
-	}})
+	})
 }
 
 func parseOverviewTrafficWindow(raw string) (overviewTrafficWindowConfig, bool) {

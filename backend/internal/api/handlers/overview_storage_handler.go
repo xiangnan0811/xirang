@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +46,7 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 	// 收集所有策略的目标路径
 	var policies []model.Policy
 	if err := h.db.Select("id, name, target_path").Find(&policies).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询策略失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -142,7 +141,7 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"mount_points": mountPoints,
 		"per_node":     perNode,
 	})

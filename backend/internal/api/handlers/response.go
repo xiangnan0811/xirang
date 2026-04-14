@@ -68,6 +68,10 @@ func respondConflict(c *gin.Context, msg string) {
 	c.JSON(http.StatusConflict, Response{Code: http.StatusConflict, Message: msg, Data: nil})
 }
 
+func respondBadGateway(c *gin.Context, msg string) {
+	c.JSON(http.StatusBadGateway, Response{Code: http.StatusBadGateway, Message: msg, Data: nil})
+}
+
 func respondInternalError(c *gin.Context, err error) {
 	if err != nil {
 		logger.Module("api").Error().Err(err).Str("path", c.FullPath()).Msg("服务器内部错误")

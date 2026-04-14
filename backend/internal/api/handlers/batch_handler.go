@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -128,7 +127,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		retain = *req.Retain
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"batch_id": batchID,
 		"task_ids": taskIDs,
 		"run_ids":  runIDs,
@@ -186,7 +185,7 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"batch_id":      batchID,
 		"tasks":         tasks,
 		"total":         len(tasks),
@@ -263,7 +262,7 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+	respondOK(c, gin.H{"deleted": deleted})
 }
 
 // generateBatchID 生成 8 字符的随机批次 ID。

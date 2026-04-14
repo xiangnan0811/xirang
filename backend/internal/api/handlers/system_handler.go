@@ -52,7 +52,7 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	// 确保备份目录存在
 	if err := os.MkdirAll(backupDir, 0750); err != nil {
 		logger.Log.Error().Err(err).Msg("创建备份目录失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建备份目录失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -64,7 +64,7 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	checksum, size, err := createSQLiteBackup(h.db, backupPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("备份数据库文件失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份数据库文件失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -73,7 +73,7 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	checksumContent := fmt.Sprintf("%s  %s\n", checksum, backupFilename)
 	if err := os.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
 		logger.Log.Error().Err(err).Msg("写入校验和文件失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入校验和文件失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -102,12 +102,10 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"filename": backupFilename,
-			"size":     size,
-			"sha256":   checksum,
-		},
+	respondOK(c, gin.H{
+		"filename": backupFilename,
+		"size":     size,
+		"sha256":   checksum,
 	})
 }
 
@@ -131,11 +129,11 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, gin.H{"data": []gin.H{}})
+			respondOK(c, []gin.H{})
 			return
 		}
 		logger.Log.Error().Err(err).Msg("读取备份目录失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取备份目录失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -172,7 +170,7 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 		return backups[i]["filename"].(string) > backups[j]["filename"].(string)
 	})
 
-	c.JSON(http.StatusOK, gin.H{"data": backups})
+	respondOK(c, backups)
 }
 
 func createSQLiteBackup(db *gorm.DB, backupPath string) (checksum string, size int64, err error) {

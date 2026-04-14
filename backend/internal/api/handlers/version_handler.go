@@ -25,7 +25,7 @@ func NewVersionHandler() *VersionHandler {
 
 // Info 返回当前版本信息（无需认证）
 func (h *VersionHandler) Info(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"version":    version.Version,
 		"build_time": version.BuildTime,
 		"git_commit": version.GitCommit,
@@ -36,7 +36,7 @@ func (h *VersionHandler) Info(c *gin.Context) {
 func (h *VersionHandler) Check(c *gin.Context) {
 	checkURL := os.Getenv("VERSION_CHECK_URL")
 	if checkURL == "" {
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"update_available": false,
 			"message":          "未配置版本检查地址",
 		})
@@ -44,20 +44,20 @@ func (h *VersionHandler) Check(c *gin.Context) {
 	}
 
 	if err := validateCheckURL(checkURL); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "版本检查地址配置不合法"})
+		respondBadRequest(c, "版本检查地址配置不合法")
 		return
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(checkURL)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "请求版本检查地址失败"})
+		respondBadGateway(c, "请求版本检查地址失败")
 		return
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "版本检查地址返回异常"})
+		respondBadGateway(c, "版本检查地址返回异常")
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *VersionHandler) Check(c *gin.Context) {
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "解析版本检查响应失败"})
+		respondBadGateway(c, "解析版本检查响应失败")
 		return
 	}
 
@@ -80,7 +80,7 @@ func (h *VersionHandler) Check(c *gin.Context) {
 	currentVersion := strings.TrimPrefix(version.Version, "v")
 	updateAvailable := compareSemver(currentVersion, latestVersion) < 0
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"update_available": updateAvailable,
 		"current_version":  version.Version,
 		"latest_version":   latestVersion,

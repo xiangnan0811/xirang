@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"net/http"
-
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/settings"
@@ -26,14 +24,12 @@ func NewSettingsHandler(db *gorm.DB, svc *settings.Service) *SettingsHandler {
 func (h *SettingsHandler) GetAll(c *gin.Context) {
 	result, err := h.svc.GetAll()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询设置失败"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"definitions": h.svc.Registry(),
-			"values":      result,
-		},
+	respondOK(c, gin.H{
+		"definitions": h.svc.Registry(),
+		"values":      result,
 	})
 }
 
@@ -41,14 +37,14 @@ func (h *SettingsHandler) GetAll(c *gin.Context) {
 func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 	var req map[string]string
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	// 预检：校验全部 key/value，不写入
 	for key, value := range req {
 		if err := h.svc.Validate(key, value); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -70,7 +66,7 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存设置失败"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -86,7 +82,7 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 			Msg("系统设置变更")
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "设置已更新"})
+	respondMessage(c, "设置已更新")
 }
 
 // Delete DELETE /settings/:key — 删除 DB 覆盖值（恢复默认），含审计日志
@@ -94,7 +90,7 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 	key := c.Param("key")
 	oldVal := h.svc.GetEffective(key)
 	if err := h.svc.Delete(key); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	newVal := h.svc.GetEffective(key)
@@ -106,5 +102,5 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 		Str("new_value", newVal).
 		Uint("user_id", userID).
 		Msg("系统设置重置为默认值")
-	c.JSON(http.StatusOK, gin.H{"message": "设置已重置"})
+	respondMessage(c, "设置已重置")
 }

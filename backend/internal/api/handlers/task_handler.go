@@ -460,7 +460,7 @@ func (h *TaskHandler) Restore(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"message": "restore triggered",
 		"run_id":  runID,
 	})
@@ -520,7 +520,7 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		successCount++
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"results":       results,
 		"total":         len(req.TaskIDs),
 		"success_count": successCount,

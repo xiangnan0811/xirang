@@ -545,7 +545,7 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "ok", "count": len(req.PolicyIDs)})
+	respondOK(c, gin.H{"count": len(req.PolicyIDs)})
 }
 
 // CloneFromTemplate 从模板策略克隆一个新策略。

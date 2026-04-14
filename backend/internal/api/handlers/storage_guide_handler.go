@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +37,7 @@ var forbiddenPaths = []string{"/", "/etc", "/usr", "/var", "/boot", "/sys", "/pr
 func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	var req verifyMountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请提供要验证的路径"})
+		respondBadRequest(c, "请提供要验证的路径")
 		return
 	}
 
@@ -46,20 +45,20 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 
 	// 安全校验：必须是绝对路径
 	if !filepath.IsAbs(mountPath) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "路径必须是绝对路径"})
+		respondBadRequest(c, "路径必须是绝对路径")
 		return
 	}
 
 	// 安全校验：禁止路径遍历
 	if strings.Contains(req.Path, "..") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "路径不能包含 .."})
+		respondBadRequest(c, "路径不能包含 ..")
 		return
 	}
 
 	// 安全校验：禁止系统关键路径
 	for _, forbidden := range forbiddenPaths {
 		if mountPath == forbidden || strings.HasPrefix(mountPath, forbidden+"/") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("不允许验证系统路径: %s", mountPath)})
+			respondBadRequest(c, fmt.Sprintf("不允许验证系统路径: %s", mountPath))
 			return
 		}
 	}
@@ -69,11 +68,11 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	// 1. 检查路径是否存在
 	info, err := os.Stat(mountPath)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": result})
+		respondOK(c, result)
 		return
 	}
 	if !info.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "指定路径不是目录"})
+		respondBadRequest(c, "指定路径不是目录")
 		return
 	}
 	result.Exists = true
@@ -98,5 +97,5 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	// 4. 获取磁盘空间信息（平台相关，见 storage_guide_*_.go）
 	fillDiskInfo(mountPath, &result)
 
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -162,7 +161,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		degradedPolicies = []degradedPolicy{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+	respondOK(c, gin.H{
 		"stale_nodes":       staleNodes,
 		"stale_node_count":  len(staleNodes),
 		"degraded_policies": degradedPolicies,
@@ -174,5 +173,5 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 			"healthy_nodes":  totalNodes - int64(len(staleNodes)),
 		},
 		"generated_at": now.Format(time.RFC3339),
-	}})
+	})
 }

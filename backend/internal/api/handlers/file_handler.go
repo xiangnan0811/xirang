@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +73,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 
 	var node model.Node
 	if err := h.db.Preload("SSHKey").First(&node, nodeID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
@@ -82,14 +81,14 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	cleanPath, err := validateNodePath(rawPath, node, h.db)
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
-		c.JSON(http.StatusForbidden, gin.H{"error": "路径不在允许的访问范围内"})
+		respondForbidden(c, "路径不在允许的访问范围内")
 		return
 	}
 
 	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "SFTP 连接失败，请检查节点连接配置"})
+		respondBadGateway(c, "SFTP 连接失败，请检查节点连接配置")
 		return
 	}
 	defer sftpClient.Close() //nolint:errcheck
@@ -98,15 +97,15 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 读取目录失败")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "读取目录失败"})
+		respondBadGateway(c, "读取目录失败")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": FileListResponse{
+	respondOK(c, FileListResponse{
 		Path:      cleanPath,
 		Entries:   entries,
 		Truncated: truncated,
-	}})
+	})
 }
 
 // GetNodeFileContent 通过 SFTP 读取远端节点文件内容（选项 A）。
@@ -119,27 +118,27 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 
 	rawPath := strings.TrimSpace(c.Query("path"))
 	if rawPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请指定文件路径"})
+		respondBadRequest(c, "请指定文件路径")
 		return
 	}
 
 	var node model.Node
 	if err := h.db.Preload("SSHKey").First(&node, nodeID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
 	cleanPath, err := validateNodePath(rawPath, node, h.db)
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
-		c.JSON(http.StatusForbidden, gin.H{"error": "路径不在允许的访问范围内"})
+		respondForbidden(c, "路径不在允许的访问范围内")
 		return
 	}
 
 	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "SFTP 连接失败，请检查节点连接配置"})
+		respondBadGateway(c, "SFTP 连接失败，请检查节点连接配置")
 		return
 	}
 	defer sftpClient.Close() //nolint:errcheck
@@ -147,18 +146,18 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 
 	stat, err := sftpClient.Stat(cleanPath)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		respondNotFound(c, "文件不存在")
 		return
 	}
 	if stat.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "目标路径是目录，无法预览"})
+		respondBadRequest(c, "目标路径是目录，无法预览")
 		return
 	}
 
 	f, err := sftpClient.Open(cleanPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 打开文件失败")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "打开文件失败"})
+		respondBadGateway(c, "打开文件失败")
 		return
 	}
 	defer f.Close() //nolint:errcheck
@@ -167,7 +166,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	n, err := io.ReadFull(f, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		logger.Log.Error().Err(err).Msg("SFTP 读取文件失败")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "读取文件失败"})
+		respondBadGateway(c, "读取文件失败")
 		return
 	}
 
@@ -176,12 +175,12 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		n = filePreviewMaxBytes
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": FileContentResponse{
+	respondOK(c, FileContentResponse{
 		Path:      cleanPath,
 		Content:   string(buf[:n]),
 		Size:      stat.Size(),
 		Truncated: truncated,
-	}})
+	})
 }
 
 // ListTaskBackupFiles 列举任务备份目标目录内容（选项 B，仅 admin）。
@@ -199,13 +198,13 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 
 	var taskEntity model.Task
 	if err := h.db.First(&taskEntity, taskID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		respondNotFound(c, "任务不存在")
 		return
 	}
 
 	base := strings.TrimSpace(taskEntity.RsyncTarget)
 	if base == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "该任务未设置备份目标路径"})
+		respondBadRequest(c, "该任务未设置备份目标路径")
 		return
 	}
 
@@ -213,27 +212,27 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 	fullPath, err := validateLocalPath(rawPath, base)
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("本地路径校验拒绝")
-		c.JSON(http.StatusForbidden, gin.H{"error": "路径不在允许的访问范围内"})
+		respondForbidden(c, "路径不在允许的访问范围内")
 		return
 	}
 
 	entries, truncated, err := listLocalDir(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "目录不存在"})
+			respondNotFound(c, "目录不存在")
 		} else {
 			logger.Log.Error().Err(err).Msg("读取本地目录失败")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取目录失败"})
+			respondInternalError(c, err)
 		}
 		return
 	}
 
 	// 响应中的 path 用相对于 RsyncTarget 的视角
-	c.JSON(http.StatusOK, gin.H{"data": FileListResponse{
+	respondOK(c, FileListResponse{
 		Path:      fullPath,
 		Entries:   entries,
 		Truncated: truncated,
-	}})
+	})
 }
 
 // --- 内部辅助函数 ---

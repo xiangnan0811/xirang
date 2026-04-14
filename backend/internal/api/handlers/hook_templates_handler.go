@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -62,5 +60,5 @@ func NewHookTemplatesHandler() *HookTemplatesHandler {
 
 // List 返回所有内置 hook 模板
 func (h *HookTemplatesHandler) List(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"data": builtinHookTemplates})
+	respondOK(c, builtinHookTemplates)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -265,7 +264,7 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
 	if !req.SkipEndpointHint {
 		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
-			c.JSON(http.StatusOK, gin.H{"hint": hint, "created": false})
+			respondOK(c, gin.H{"hint": hint, "created": false})
 			return
 		}
 	}
@@ -366,7 +365,7 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
 	if !req.SkipEndpointHint {
 		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
-			c.JSON(http.StatusOK, gin.H{"hint": hint, "updated": false})
+			respondOK(c, gin.H{"hint": hint, "updated": false})
 			return
 		}
 	}
@@ -471,7 +470,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	// 域名建议提示（仅当 endpoint 变化且未跳过时）
 	if endpointChanged && !req.SkipEndpointHint {
 		if hint := checkChannelDomainHint(item.Type, item.Endpoint); hint != "" {
-			c.JSON(http.StatusOK, gin.H{"hint": hint, "updated": false})
+			respondOK(c, gin.H{"hint": hint, "updated": false})
 			return
 		}
 	}
