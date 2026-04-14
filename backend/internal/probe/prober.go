@@ -239,13 +239,13 @@ func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetr
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	// CPU: 用 /proc/stat 两次采样（间隔 0.5s）计算实时使用率，兼容所有 Linux 发行版
 	// mem/disk/load 保持原有方式

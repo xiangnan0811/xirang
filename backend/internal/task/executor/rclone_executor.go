@@ -59,7 +59,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	bin := e.rcloneBinary()
 
@@ -101,7 +101,7 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	bin := e.rcloneBinary()
 	syncCmd := buildRcloneSyncCmd(bin, remote, targetPath, cfg, true, NeedsSudo(task.Node))
@@ -124,7 +124,7 @@ func (e *RcloneExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {

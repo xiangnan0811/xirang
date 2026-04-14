@@ -37,6 +37,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
       .catch((err) => { if (!controller.signal.aborted) setError(getErrorMessage(err, t('snapshots.loadFailed'))); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [token, taskId]);
 
   const browseSnapshot = (snapshot: ResticSnapshot, path = "/") => {

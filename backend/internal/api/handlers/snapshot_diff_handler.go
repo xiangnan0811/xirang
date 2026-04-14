@@ -101,7 +101,7 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSH 连接失败: " + err.Error()})
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	envPrefix := buildDiffEnvPrefix(cfg.repositoryPassword)
 	resticBin := "restic"

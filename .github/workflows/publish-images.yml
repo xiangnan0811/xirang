@@ -114,6 +114,15 @@ jobs:
           cache-from: type=gha,scope=xirang
           cache-to: type=gha,scope=xirang,mode=max
 
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: docker.io/${{ env.IMAGE_NAMESPACE }}/xirang:v${{ steps.version.outputs.version }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:

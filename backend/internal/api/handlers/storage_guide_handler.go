@@ -90,8 +90,8 @@ func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	// 3. 检查是否可写（创建并删除临时文件）
 	if f, err := os.CreateTemp(mountPath, ".xirang_write_test_*"); err == nil {
 		tmpName := f.Name()
-		f.Close()
-		os.Remove(tmpName)
+		f.Close()          //nolint:errcheck
+		os.Remove(tmpName) //nolint:errcheck
 		result.Writable = true
 	}
 

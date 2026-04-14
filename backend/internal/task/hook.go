@@ -17,7 +17,7 @@ func (m *Manager) runSSHHook(ctx context.Context, task model.Task, command strin
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, command)
 	if err != nil {

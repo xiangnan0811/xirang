@@ -18,6 +18,7 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
 
   const cursorRef = useRef<number>(0);
   const tokenRef = useRef(token);
+  // eslint-disable-next-line react-hooks/refs -- stable token ref pattern avoids stale closure
   tokenRef.current = token;
 
   const pendingRef = useRef<LogEvent[]>([]);

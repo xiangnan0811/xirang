@@ -213,7 +213,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 				resp.CanProceed = false
 			}
 		} else {
-			defer client.Close()
+			defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 			for tool := range toolSet {
 				cmd := fmt.Sprintf("which %s 2>/dev/null || command -v %s 2>/dev/null", tool, tool)
 				if _, err := executor.RunSSHCommandOutput(ctx, client, cmd); err != nil {

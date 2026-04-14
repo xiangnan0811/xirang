@@ -122,7 +122,7 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	updated := 0
 	for rows.Next() {
@@ -140,10 +140,6 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 		}
 
 		updates := map[string]interface{}{}
-		colNames := make([]string, 0, len(columns))
-		for col := range columns {
-			colNames = append(colNames, col)
-		}
 		// 按 cols 顺序（跳过 id）匹配
 		i := 0
 		for _, col := range cols[1:] {

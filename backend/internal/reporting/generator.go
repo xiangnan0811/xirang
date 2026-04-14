@@ -37,12 +37,6 @@ func Generate(db *gorm.DB, cfg model.ReportConfig, start, end time.Time) (*model
 	}
 
 	// 2. 聚合 TaskRun 数据
-	type runStats struct {
-		Total   int
-		Success int
-		Failed  int
-		AvgMs   int64
-	}
 	stats, err := aggregateRuns(db, nodeIDs, start, end)
 	if err != nil {
 		return nil, err
@@ -180,12 +174,7 @@ func buildTopFailures(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]Fail
 	}
 	entries := make([]FailureEntry, 0, len(rows))
 	for _, r := range rows {
-		entries = append(entries, FailureEntry{
-			NodeName: r.NodeName,
-			TaskName: r.TaskName,
-			Count:    r.Count,
-			LastErr:  r.LastErr,
-		})
+		entries = append(entries, FailureEntry(r))
 	}
 	return entries, nil
 }
@@ -211,10 +200,7 @@ func buildDiskTrend(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]DiskTr
 	}
 	entries := make([]DiskTrendEntry, 0, len(rows))
 	for _, r := range rows {
-		entries = append(entries, DiskTrendEntry{
-			Date:    r.Date,
-			AvgFree: r.AvgFree,
-		})
+		entries = append(entries, DiskTrendEntry(r))
 	}
 	return entries, nil
 }

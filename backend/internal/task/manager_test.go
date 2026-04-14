@@ -667,7 +667,7 @@ func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	}
 
 	// 取消恢复任务并释放 semaphore
-	m.Cancel(t1.ID)
+	_ = m.Cancel(t1.ID)
 	for i := 0; i < cap(m.semaphore); i++ {
 		<-m.semaphore
 	}

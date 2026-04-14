@@ -42,7 +42,7 @@ func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	latency := int(time.Since(start).Milliseconds())
 	if latency <= 0 {

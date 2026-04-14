@@ -175,6 +175,7 @@ export function AuditPage() {
     }
     autoLoadKeyRef.current = loadKey;
     void load(1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load is intentionally excluded to prevent loop
   }, [keyword, method, timeRange, token]);
 
   return (

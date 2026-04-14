@@ -52,7 +52,7 @@ const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
-function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
+function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) { // eslint-disable-line @typescript-eslint/no-unused-vars
   const nodes = createNodes(nodeCount);
   const base: ConsoleOutletContext = {
     overview: {

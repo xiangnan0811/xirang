@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/sshutil"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -25,67 +24,25 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 		return -1, fmt.Errorf("节点地址不能为空")
 	}
 
-	port := node.Port
-	if port == 0 {
-		port = 22
-	}
-	user := strings.TrimSpace(node.Username)
-	if user == "" {
-		user = "root"
-	}
-
-	// 构建 SSH 认证方式（复用 sshutil 已有逻辑）
-	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
-	var authMethods []ssh.AuthMethod
-
-	switch authType {
-	case "key":
-		keyContent, _, err := resolveNodePrivateKey(node)
-		if err != nil {
-			return -1, err
-		}
-		if keyContent == "" {
-			return -1, fmt.Errorf("密钥认证未配置")
-		}
-		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
-			return -1, fmt.Errorf("私钥校验失败")
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-		if err != nil {
-			return -1, fmt.Errorf("解析私钥失败: %w", err)
-		}
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
-	case "password":
-		if node.Password == "" {
-			return -1, fmt.Errorf("密码认证未配置密码")
-		}
-		authMethods = append(authMethods, ssh.Password(node.Password))
-	default:
-		return -1, fmt.Errorf("不支持的认证方式: %s", authType)
-	}
-
-	// 解析主机密钥校验策略
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		return -1, fmt.Errorf("主机密钥配置异常: %w", err)
-	}
-
-	addr := fmt.Sprintf("%s:%d", node.Host, port)
-	logf("info", fmt.Sprintf("连接节点 %s@%s", user, addr))
-
-	// 使用 sshutil.DialSSH 建立连接（支持 context 取消）
-	client, err := sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
+	// 使用共享 SSH 连接逻辑
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
+
+	user := ResolveSSHUser(task.Node)
+	addr := fmt.Sprintf("%s:%d", task.Node.Host, task.Node.Port)
+	if task.Node.Port == 0 {
+		addr = fmt.Sprintf("%s:22", task.Node.Host)
+	}
+	logf("info", fmt.Sprintf("连接节点 %s@%s", user, addr))
 
 	session, err := client.NewSession()
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	// 设置标准输出和标准错误管道
 	stdout, err := session.StdoutPipe()

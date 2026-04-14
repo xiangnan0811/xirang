@@ -276,7 +276,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				"last_error":  errorMsg,
 			})
 			runCompleted = true
-			m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
+			m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
 				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  errorMsg,
 			})
@@ -348,7 +348,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
 				m.emitLog(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
-				m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
+				m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
 					"next_run_at": nextCronRun(taskEntity.CronSpec),
 					"last_error":  "任务已取消",
 				})
@@ -365,7 +365,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			verifyStatus = result.Status
 
 			if result.Status == "warning" || result.Status == "failed" {
-				m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{
+				m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
 					"retry_count":   0,
 					"next_run_at":   nextCronRun(taskEntity.CronSpec),
 					"last_error":    result.Message,
@@ -383,7 +383,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				})
 				runCompleted = true
 				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
-				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, result.Message)
+				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, result.Message) //nolint:errcheck // best-effort alert during verification failure
 				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
@@ -430,7 +430,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
-	errorMsg := "任务执行失败"
+	var errorMsg string
 	if err != nil {
 		errorMsg = err.Error()
 	} else {
@@ -610,7 +610,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
-		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
+		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复前检查通过", "")
@@ -668,13 +668,13 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
-		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg)
+		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 
 	// 恢复成功后强制执行完整性校验（不再依赖 Policy.VerifyEnabled）
-	verifyStatus := "none"
-	sampleRate := 100 // 默认全量校验
+	verifyStatus := "none" //nolint:ineffassign
+	sampleRate := 100     // 默认全量校验
 	if restoreTask.Policy != nil && restoreTask.Policy.VerifySampleRate > 0 {
 		sampleRate = restoreTask.Policy.VerifySampleRate
 	}
@@ -712,7 +712,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "warning")
-		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, result.Message)
+		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, result.Message) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")

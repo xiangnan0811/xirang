@@ -80,15 +80,6 @@ func generateFingerprint(privateKey string) string {
 	return fmt.Sprintf("SHA256:%s", encoded)
 }
 
-func sanitizeSSHKey(item model.SSHKey) model.SSHKey {
-	copyItem := item
-	if strings.TrimSpace(copyItem.KeyType) == "" {
-		copyItem.KeyType = sshutil.SSHKeyTypeAuto
-	}
-	copyItem.PrivateKey = ""
-	return copyItem
-}
-
 func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, string, string, string, error) {
 	normalizedName := strings.TrimSpace(name)
 	normalizedUsername := strings.TrimSpace(username)
@@ -338,7 +329,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 			})
 			continue
 		}
-		client.Close()
+		_ = client.Close()
 
 		results = append(results, testResult{
 			NodeID:    node.ID,

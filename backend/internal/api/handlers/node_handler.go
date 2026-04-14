@@ -675,7 +675,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		})
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	latency := int(time.Since(start).Milliseconds())
 	if latency <= 0 {

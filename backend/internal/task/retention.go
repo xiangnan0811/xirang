@@ -171,7 +171,7 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 保留清理: SSH 连接失败")
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" {
@@ -221,7 +221,7 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("rclone 保留清理: SSH 连接失败")
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	target := strings.TrimSpace(task.RsyncTarget)
 	if target == "" {

@@ -116,10 +116,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		if port == 0 {
 			port = 22
 		}
-		user := strings.TrimSpace(task.Node.Username)
-		if user == "" {
-			user = "root"
-		}
+		user := ResolveSSHUser(task.Node)
 
 		authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
 		if authType == "password" {
@@ -139,9 +136,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 
 		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
 		if err != nil {
-			if strings.TrimSpace(keySource) == "" {
-				keySource = "unknown"
-			}
+			_ = keySource // resolved from node or SSH key record
 			return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
 		}
 
@@ -264,68 +259,17 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 // runRemoteRestore 在远程节点上执行 rsync 恢复操作。
 // 与标准备份不同，恢复需要在远程节点上执行 rsync source target（两个路径都是节点本地路径）。
 func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	port := task.Node.Port
-	if port == 0 {
-		port = 22
-	}
-	user := strings.TrimSpace(task.Node.Username)
-	if user == "" {
-		user = "root"
-	}
-
-	authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
-	if authType == "password" {
-		return -1, fmt.Errorf("恢复操作暂不支持密码认证，请为节点配置 SSH key")
-	}
-	if authType != "key" {
-		return -1, fmt.Errorf("不支持的认证方式")
-	}
-
-	keyContent, _, keyResolveErr := resolveNodePrivateKey(task.Node)
-	if keyResolveErr != nil {
-		return -1, keyResolveErr
-	}
-	if keyContent == "" {
-		return -1, fmt.Errorf("密钥认证未配置，请为节点设置密钥")
-	}
-
-	normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-	if err != nil {
-		return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
-	}
-
-	// 建立 SSH 连接
-	signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-	if err != nil {
-		return -1, fmt.Errorf("解析私钥失败: %w", err)
-	}
-
-	config := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
-		Timeout: 30 * time.Second,
-	}
-
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		return -1, fmt.Errorf("配置 SSH 主机密钥校验失败: %w", err)
-	}
-	config.HostKeyCallback = hostKeyCallback
-
-	addr := fmt.Sprintf("%s:%d", task.Node.Host, port)
-	client, err := ssh.Dial("tcp", addr, config)
+	client, err := DialSSHForNode(ctx, task.Node)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	session, err := client.NewSession()
 	if err != nil {
 		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	// 构造在远程节点上执行的 rsync 命令
 	// 注意：source 和 target 都是节点本地路径
@@ -603,57 +547,11 @@ func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath st
 		return fmt.Errorf("节点地址不能为空")
 	}
 
-	port := node.Port
-	if port == 0 {
-		port = 22
-	}
-	user := strings.TrimSpace(node.Username)
-	if user == "" {
-		user = "root"
-	}
-
-	// 构建 SSH 认证（复用 CommandExecutor 的逻辑）
-	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
-	var authMethods []ssh.AuthMethod
-
-	switch authType {
-	case "key":
-		keyContent, _, err := resolveNodePrivateKey(node)
-		if err != nil {
-			return err
-		}
-		if keyContent == "" {
-			return fmt.Errorf("密钥认证未配置")
-		}
-		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
-			return fmt.Errorf("私钥校验失败")
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-		if err != nil {
-			return fmt.Errorf("解析私钥失败: %w", err)
-		}
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
-	case "password":
-		if node.Password == "" {
-			return fmt.Errorf("密码认证未配置密码")
-		}
-		authMethods = append(authMethods, ssh.Password(node.Password))
-	default:
-		return fmt.Errorf("不支持的认证方式: %s", authType)
-	}
-
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		return fmt.Errorf("主机密钥配置异常: %w", err)
-	}
-
-	addr := fmt.Sprintf("%s:%d", node.Host, port)
-	client, err := sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
+	client, err := DialSSHForNode(ctx, node)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	// 检查目标路径是否存在，不存在则创建
 	quoted := ShellEscape(targetPath)

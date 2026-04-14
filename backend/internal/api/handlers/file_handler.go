@@ -92,8 +92,8 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "SFTP 连接失败，请检查节点连接配置"})
 		return
 	}
-	defer sftpClient.Close()
-	defer client.Close()
+	defer sftpClient.Close() //nolint:errcheck
+	defer client.Close()    //nolint:errcheck
 
 	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
 	if err != nil {
@@ -142,8 +142,8 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "SFTP 连接失败，请检查节点连接配置"})
 		return
 	}
-	defer sftpClient.Close()
-	defer client.Close()
+	defer sftpClient.Close() //nolint:errcheck
+	defer client.Close()    //nolint:errcheck
 
 	stat, err := sftpClient.Stat(cleanPath)
 	if err != nil {
@@ -161,7 +161,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "打开文件失败"})
 		return
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	buf := make([]byte, filePreviewMaxBytes+1)
 	n, err := io.ReadFull(f, buf)
@@ -260,7 +260,7 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Clo
 
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
-		sshClient.Close()
+		_ = sshClient.Close()
 		return nil, nil, fmt.Errorf("SFTP 子系统初始化失败: %w", err)
 	}
 	return sshClient, sftpClient, nil

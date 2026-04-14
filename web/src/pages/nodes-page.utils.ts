@@ -23,6 +23,7 @@ export function escapeCSVValue(value: string): string {
   // Prevent spreadsheet formula injection: detect formula prefixes (=, +, -, @, tab, CR)
   // even after leading whitespace or control characters that spreadsheets may strip.
   let safe = value;
+  // eslint-disable-next-line no-control-regex -- intentional: detect spreadsheet formula injection via control chars
   if (/^[\s\x00-\x1f]*[=+\-@\t\r]/.test(safe)) {
     safe = `'${safe}`;
   }

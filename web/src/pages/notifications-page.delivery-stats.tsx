@@ -55,6 +55,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
   }, [fetchAlertDeliveryStats]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDeliveryStats(statsWindow);
   }, [loadDeliveryStats, statsWindow]);
 

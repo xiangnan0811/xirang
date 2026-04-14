@@ -1,7 +1,6 @@
 package task
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,12 +71,9 @@ func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 	triggerThreshold := int(freeGB) + 1
 
 	// 通过提升最小剩余空间阈值来稳定触发告警，避免依赖宿主机实际使用率。
-	os.Setenv("BACKUP_STORAGE_MIN_FREE_GB", strconv.Itoa(triggerThreshold))
-	defer os.Unsetenv("BACKUP_STORAGE_MIN_FREE_GB")
-	os.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
-	defer os.Unsetenv("BACKUP_STORAGE_MAX_USAGE_PCT")
-	os.Setenv("ALERT_DEDUP_WINDOW", "0")
-	defer os.Unsetenv("ALERT_DEDUP_WINDOW")
+	t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", strconv.Itoa(triggerThreshold))
+	t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 
 	m.checkLocalStorageSpace()
 
@@ -109,12 +105,9 @@ func TestCheckLocalStorageSpace_HighThresholdNoAlert(t *testing.T) {
 	}
 
 	// minFreeGB=0 不触发空间不足；maxUsagePct=100 永远不触发
-	os.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
-	defer os.Unsetenv("BACKUP_STORAGE_MIN_FREE_GB")
-	os.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
-	defer os.Unsetenv("BACKUP_STORAGE_MAX_USAGE_PCT")
-	os.Setenv("ALERT_DEDUP_WINDOW", "0")
-	defer os.Unsetenv("ALERT_DEDUP_WINDOW")
+	t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+	t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 
 	m.checkLocalStorageSpace()
 
@@ -171,12 +164,9 @@ func TestCheckLocalStorageSpace_DisabledPolicySkipped(t *testing.T) {
 	}
 
 	// 低阈值（1%）本应触发告警，但因策略已禁用所以不会
-	os.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
-	defer os.Unsetenv("BACKUP_STORAGE_MIN_FREE_GB")
-	os.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "1")
-	defer os.Unsetenv("BACKUP_STORAGE_MAX_USAGE_PCT")
-	os.Setenv("ALERT_DEDUP_WINDOW", "0")
-	defer os.Unsetenv("ALERT_DEDUP_WINDOW")
+	t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+	t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "1")
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 
 	var beforeCount int64
 	db.Model(&model.Alert{}).Count(&beforeCount)
