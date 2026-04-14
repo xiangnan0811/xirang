@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -157,15 +156,6 @@ func applyPagination(query *gorm.DB, p paginationParams) *gorm.DB {
 	return query.Order(p.SortBy + " " + p.SortOrder).Offset(offset).Limit(p.PageSize)
 }
 
-// paginatedResponse 统一分页响应。
-func paginatedResponse(c *gin.Context, data interface{}, total int64, p paginationParams) {
-	c.JSON(http.StatusOK, gin.H{
-		"data":      data,
-		"total":     total,
-		"page":      p.Page,
-		"page_size": p.PageSize,
-	})
-}
 
 var standardCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
@@ -173,7 +163,7 @@ func parseID(c *gin.Context, field string) (uint, bool) {
 	raw := c.Param(field)
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		respondBadRequest(c, "ID 格式错误")
 		return 0, false
 	}
 	return uint(id), true

@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -70,31 +69,31 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	var req MigratePreflightRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		respondBadRequest(c, "请求参数无效")
 		return
 	}
 
 	if sourceID == req.TargetNodeID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "源节点和目标节点不能相同"})
+		respondBadRequest(c, "源节点和目标节点不能相同")
 		return
 	}
 
 	// 加载源节点和目标节点
 	var sourceNode, targetNode model.Node
 	if err := h.db.Preload("SSHKey").First(&sourceNode, sourceID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "源节点不存在"})
+		respondNotFound(c, "源节点不存在")
 		return
 	}
 	if err := h.db.Preload("SSHKey").First(&targetNode, req.TargetNodeID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "目标节点不存在"})
+		respondNotFound(c, "目标节点不存在")
 		return
 	}
 	if targetNode.Archived {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "目标节点已归档"})
+		respondBadRequest(c, "目标节点已归档")
 		return
 	}
 	if sourceNode.Archived {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "源节点已归档"})
+		respondBadRequest(c, "源节点已归档")
 		return
 	}
 
@@ -104,7 +103,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 		var count int64
 		h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count)
 		if count == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该目标节点"})
+			respondForbidden(c, "无权操作该目标节点")
 			return
 		}
 	}
@@ -331,7 +330,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	}
 
 	resp.Checks = checks
-	c.JSON(http.StatusOK, gin.H{"data": resp})
+	respondOK(c, resp)
 }
 
 // estimateDirSizeMB 使用 du -sm 估算目录大小（MB），5 秒超时，失败返回 0。

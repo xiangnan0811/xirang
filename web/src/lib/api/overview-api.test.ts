@@ -25,6 +25,8 @@ describe("overview api", () => {
   it("getOverviewSummary 请求 /overview 并映射 currentThroughputMbps", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
         data: {
           totalNodes: 10,
           healthyNodes: 8,
@@ -49,6 +51,8 @@ describe("overview api", () => {
   it("getOverviewSummary 后端未返回 currentThroughputMbps 时降级为 0", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
         data: {
           totalNodes: 5,
           healthyNodes: 3,
@@ -67,6 +71,8 @@ describe("overview api", () => {
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
         data: {
           window: "24h",
           bucket_minutes: 30,

@@ -2,8 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
-	"net/http"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -62,24 +61,23 @@ type reportConfigRequest struct {
 func (h *ReportHandler) ListConfigs(c *gin.Context) {
 	var configs []model.ReportConfig
 	if err := h.db.Order("id asc").Find(&configs).Error; err != nil {
-		log.Printf("报告配置查询失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	if ownedIDs, needFilter := h.operatorOwnedNodeIDs(c); needFilter {
 		configs = filterConfigsByOwnedNodes(configs, ownedIDs)
 	}
-	c.JSON(http.StatusOK, gin.H{"data": configs})
+	respondOK(c, configs)
 }
 
 func (h *ReportHandler) CreateConfig(c *gin.Context) {
 	var req reportConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if msg := validateReportConfigRequest(&req); msg != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		respondBadRequest(c, msg)
 		return
 	}
 
@@ -108,32 +106,31 @@ func (h *ReportHandler) CreateConfig(c *gin.Context) {
 		Enabled:        enabled,
 	}
 	if err := h.db.Create(&cfg).Error; err != nil {
-		log.Printf("报告配置创建失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": cfg})
+	respondCreated(c, cfg)
 }
 
 func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		respondBadRequest(c, "无效的 ID")
 		return
 	}
 	var cfg model.ReportConfig
 	if err := h.db.First(&cfg, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "报告配置不存在"})
+		respondNotFound(c, "报告配置不存在")
 		return
 	}
 
 	var req reportConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if msg := validateReportConfigRequest(&req); msg != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		respondBadRequest(c, msg)
 		return
 	}
 
@@ -153,37 +150,35 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	if err := h.db.Save(&cfg).Error; err != nil {
-		log.Printf("报告配置更新失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": cfg})
+	respondOK(c, cfg)
 }
 
 func (h *ReportHandler) DeleteConfig(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		respondBadRequest(c, "无效的 ID")
 		return
 	}
 	if err := h.db.Delete(&model.ReportConfig{}, id).Error; err != nil {
-		log.Printf("报告配置删除失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+	respondMessage(c, "已删除")
 }
 
 // GenerateNow 立即为指定配置生成一份报告（手动触发）。
 func (h *ReportHandler) GenerateNow(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		respondBadRequest(c, "无效的 ID")
 		return
 	}
 	var cfg model.ReportConfig
 	if err := h.db.First(&cfg, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "报告配置不存在"})
+		respondNotFound(c, "报告配置不存在")
 		return
 	}
 
@@ -197,62 +192,60 @@ func (h *ReportHandler) GenerateNow(c *gin.Context) {
 
 	report, err := reporting.Generate(h.db, cfg, start, now)
 	if err != nil {
-		log.Printf("报告生成失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "报告生成失败: " + err.Error()})
+		respondInternalError(c, fmt.Errorf("报告生成失败: %w", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": report})
+	respondOK(c, report)
 }
 
 // ListReports 列出某配置下已生成的报告。
 func (h *ReportHandler) ListReports(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		respondBadRequest(c, "无效的 ID")
 		return
 	}
 	var cfg model.ReportConfig
 	if err := h.db.First(&cfg, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "报告配置不存在"})
+		respondNotFound(c, "报告配置不存在")
 		return
 	}
 	if !h.checkConfigOwnership(c, cfg) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告配置"})
+		respondForbidden(c, "无权访问该报告配置")
 		return
 	}
 	var reports []model.Report
 	if err := h.db.Where("config_id = ?", id).Order("period_start desc").Limit(50).Find(&reports).Error; err != nil {
-		log.Printf("报告查询失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": reports})
+	respondOK(c, reports)
 }
 
 // GetReport 获取单份报告详情。
 func (h *ReportHandler) GetReport(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		respondBadRequest(c, "无效的 ID")
 		return
 	}
 	var report model.Report
 	if err := h.db.Preload("Config").First(&report, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "报告不存在"})
+		respondNotFound(c, "报告不存在")
 		return
 	}
 	role := middleware.CurrentRole(c)
 	if role != "admin" && role != "viewer" {
 		if report.Config == nil || report.Config.ID == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
+			respondForbidden(c, "无权访问该报告")
 			return
 		}
 		if !h.checkConfigOwnership(c, *report.Config) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该报告"})
+			respondForbidden(c, "无权访问该报告")
 			return
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": report})
+	respondOK(c, report)
 }
 
 // operatorOwnedNodeIDs 返回 operator 拥有的节点 ID 集合。

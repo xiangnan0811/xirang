@@ -23,9 +23,9 @@ export type RequestOptions = {
 };
 
 export type Envelope<T> = {
-  data?: T;
-  message?: string;
-  error?: string;
+  code: number;
+  message: string;
+  data: T;
 };
 
 type LocationLike = {
@@ -140,11 +140,25 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   if (!response.ok) {
+    // Try to extract message from the new envelope format
+    if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
+      const envelope = payload as { code: number; message: string };
+      throw new ApiError(response.status, envelope.message || i18n.t("common.requestFailed", { status: response.status }), payload);
+    }
     throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload);
   }
 
-  if (payload && typeof payload === "object") {
-    return payload as T;
+  // Auto-unwrap unified {code, message, data} envelope
+  if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
+    const envelope = payload as { code: number; message: string; data: unknown };
+    if (envelope.code !== 0) {
+      throw new ApiError(envelope.code, envelope.message, payload);
+    }
+    // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)
+    if ("total" in (payload as Record<string, unknown>)) {
+      return payload as T;
+    }
+    return envelope.data as T;
   }
 
   return payload as T;
@@ -173,12 +187,12 @@ export async function fetchWithFallback(url: string, options: RequestInit): Prom
 }
 
 export type PaginatedEnvelope<T> = {
-  data?: T;
-  total?: number;
-  page?: number;
-  page_size?: number;
-  message?: string;
-  error?: string;
+  code: number;
+  message: string;
+  data: T;
+  total: number;
+  page: number;
+  page_size: number;
 };
 
 export function unwrapPaginated<T>(payload: PaginatedEnvelope<T[]>): {
@@ -195,6 +209,7 @@ export function unwrapPaginated<T>(payload: PaginatedEnvelope<T[]>): {
   };
 }
 
+/** @deprecated request() now auto-unwraps the envelope. This is kept for backward compat during migration. */
 export function unwrapData<T>(payload: Envelope<T> | T): T {
   if (payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)) {
     return ((payload as Envelope<T>).data ?? null) as T;

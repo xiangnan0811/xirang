@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -46,13 +45,13 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 
 	var node model.Node
 	if err := h.db.Preload("SSHKey").First(&node, nodeID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
+		respondNotFound(c, "节点不存在")
 		return
 	}
 
 	sshClient, err := dialSSHForDocker(c.Request.Context(), node, h.db)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "SSH 连接失败"})
+		respondBadGateway(c, "SSH 连接失败")
 		return
 	}
 	defer sshClient.Close() //nolint:errcheck // close error not actionable on deferred cleanup
@@ -60,7 +59,7 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	volumes, warning, err := listDockerVolumes(sshClient)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
-		c.JSON(http.StatusOK, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
+		respondOK(c, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
 		return
 	}
 
@@ -68,7 +67,7 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	if warning != "" {
 		resp["warning"] = warning
 	}
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, resp)
 }
 
 // dialSSHForDocker 建立 SSH 连接，用于执行 Docker 命令。

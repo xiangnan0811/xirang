@@ -3,13 +3,12 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
@@ -46,31 +45,31 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 	var req NodeMigrateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		respondBadRequest(c, "请求参数无效")
 		return
 	}
 
 	if sourceID == req.TargetNodeID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "源节点和目标节点不能相同"})
+		respondBadRequest(c, "源节点和目标节点不能相同")
 		return
 	}
 
 	// 加载源节点和目标节点
 	var sourceNode, targetNode model.Node
 	if err := h.db.First(&sourceNode, sourceID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "源节点不存在"})
+		respondNotFound(c, "源节点不存在")
 		return
 	}
 	if sourceNode.Archived {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "源节点已归档"})
+		respondBadRequest(c, "源节点已归档")
 		return
 	}
 	if err := h.db.First(&targetNode, req.TargetNodeID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "目标节点不存在"})
+		respondNotFound(c, "目标节点不存在")
 		return
 	}
 	if targetNode.Archived {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "目标节点已归档"})
+		respondBadRequest(c, "目标节点已归档")
 		return
 	}
 
@@ -80,7 +79,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		var count int64
 		h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count)
 		if count == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权迁移到该目标节点"})
+			respondForbidden(c, "无权迁移到该目标节点")
 			return
 		}
 	}
@@ -89,9 +88,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	var policyIDs []uint
 	h.db.Model(&model.PolicyNode{}).Where("node_id = ?", sourceID).Pluck("policy_id", &policyIDs)
 	if len(policyIDs) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"data": gin.H{"migratedPolicies": 0, "migratedTasks": 0, "archivedSource": false, "dataMigration": nil},
-		})
+		respondOK(c, gin.H{"migratedPolicies": 0, "migratedTasks": 0, "archivedSource": false, "dataMigration": nil})
 		return
 	}
 
@@ -113,7 +110,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		for _, t := range allTasks {
 			if t.Status == "running" || t.Status == "retrying" {
 				if err := h.trigger.Cancel(t.ID); err != nil {
-					log.Printf("warn: cancel task %d: %v", t.ID, err)
+					logger.Module("migrate").Warn().Err(err).Uint("task_id", t.ID).Msg("取消任务失败")
 				}
 			}
 		}
@@ -206,13 +203,11 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		dataMigration = migrateLocalBackupData(migrateCtx, allTasks, targetNode.BackupDir)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"migratedPolicies": len(policyIDs),
-			"migratedTasks":    migratedTasks,
-			"archivedSource":   req.ArchiveSource,
-			"dataMigration":    dataMigration,
-		},
+	respondOK(c, gin.H{
+		"migratedPolicies": len(policyIDs),
+		"migratedTasks":    migratedTasks,
+		"archivedSource":   req.ArchiveSource,
+		"dataMigration":    dataMigration,
 	})
 }
 
@@ -284,7 +279,7 @@ func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeB
 		cancel()
 
 		if copyErr != nil {
-			log.Printf("rsync copy failed [task=%d]: %s — %s", t.ID, copyErr.Error(), string(output))
+			logger.Module("migrate").Error().Err(copyErr).Uint("task_id", t.ID).Str("output", string(output)).Msg("rsync 数据复制失败")
 			results = append(results, DataMigrateItem{
 				PolicyID: policyID, PolicyName: policyName,
 				Status: "error", Message: fmt.Sprintf("复制失败: %s", copyErr.Error()),

@@ -49,6 +49,8 @@ describe("config api", () => {
   it("importConfig 可兼容后端分项统计响应并汇总 imported", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
         data: {
           nodes: 1,
           ssh_keys: 2,

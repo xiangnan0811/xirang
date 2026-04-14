@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export interface ResticSnapshot {
   id: string;
@@ -20,18 +20,16 @@ export interface ResticEntry {
 export function createSnapshotsApi() {
   return {
     async listSnapshots(token: string, taskId: number): Promise<ResticSnapshot[]> {
-      const payload = await request<Envelope<ResticSnapshot[]>>(`/tasks/${taskId}/snapshots`, { token });
-      return unwrapData(payload) ?? [];
+      return (await request<ResticSnapshot[]>(`/tasks/${taskId}/snapshots`, { token })) ?? [];
     },
 
     async listSnapshotFiles(token: string, taskId: number, snapshotId: string, path: string = "/"): Promise<ResticEntry[]> {
       const query = new URLSearchParams({ path });
-      const payload = await request<Envelope<ResticEntry[]>>(`/tasks/${taskId}/snapshots/${snapshotId}/files?${query}`, { token });
-      return unwrapData(payload) ?? [];
+      return (await request<ResticEntry[]>(`/tasks/${taskId}/snapshots/${snapshotId}/files?${query}`, { token })) ?? [];
     },
 
     async restoreSnapshot(token: string, taskId: number, snapshotId: string, includes: string[], targetPath: string): Promise<void> {
-      await request<Envelope<unknown>>(`/tasks/${taskId}/snapshots/${snapshotId}/restore`, {
+      await request<unknown>(`/tasks/${taskId}/snapshots/${snapshotId}/restore`, {
         method: "POST",
         token,
         body: { includes, targetPath },

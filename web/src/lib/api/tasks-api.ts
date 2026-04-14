@@ -1,6 +1,6 @@
 import type { LogEvent, NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
 import i18n from "@/i18n";
-import { extractErrorCode, formatTime, request, type Envelope, unwrapData } from "./core";
+import { extractErrorCode, formatTime, request } from "./core";
 
 type TaskResponse = {
   id: number;
@@ -158,18 +158,17 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
 export function createTasksApi() {
   return {
     async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
-      const payload = await request<Envelope<TaskResponse[]>>("/tasks", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<TaskResponse[]>("/tasks", { token, signal: options?.signal })) ?? [];
       return rows.map((row, index) => mapTask(row, index));
     },
 
     async getTask(token: string, taskId: number): Promise<TaskRecord> {
-      const payload = await request<Envelope<TaskResponse>>(`/tasks/${taskId}`, { token });
-      return mapTask(unwrapData(payload), 0);
+      const row = await request<TaskResponse>(`/tasks/${taskId}`, { token });
+      return mapTask(row, 0);
     },
 
     async createTask(token: string, input: NewTaskInput): Promise<TaskRecord> {
-      const payload = await request<Envelope<TaskResponse>>("/tasks", {
+      const row = await request<TaskResponse>("/tasks", {
         method: "POST",
         token,
         body: {
@@ -185,11 +184,11 @@ export function createTasksApi() {
           cron_spec: input.cronSpec
         }
       });
-      return mapTask(unwrapData(payload), 0);
+      return mapTask(row, 0);
     },
 
     async updateTask(token: string, taskId: number, input: NewTaskInput): Promise<TaskRecord> {
-      const payload = await request<Envelope<TaskResponse>>(`/tasks/${taskId}`, {
+      const row = await request<TaskResponse>(`/tasks/${taskId}`, {
         method: "PUT",
         token,
         body: {
@@ -205,7 +204,7 @@ export function createTasksApi() {
           cron_spec: input.cronSpec
         }
       });
-      return mapTask(unwrapData(payload), 0);
+      return mapTask(row, 0);
     },
 
     async deleteTask(token: string, taskId: number): Promise<void> {
@@ -235,8 +234,7 @@ export function createTasksApi() {
         query.set("level", options.level);
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<TaskLogResponse[]>>(`/tasks/${taskId}/logs${suffix}`, { token });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<TaskLogResponse[]>(`/tasks/${taskId}/logs${suffix}`, { token })) ?? [];
       return rows.map((row) => mapTaskLog(row));
     },
 

@@ -1,5 +1,5 @@
 import type { LogEvent, TaskRunRecord, TaskStatus } from "@/types/domain";
-import { extractErrorCode, formatTime, request, type Envelope, unwrapData } from "./core";
+import { extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 
 type TaskRunResponse = {
   id: number;
@@ -126,16 +126,16 @@ export function createTaskRunsApi() {
         query.set("status", options.status);
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<TaskRunResponse[]> & { total?: number; page?: number; page_size?: number }>(
+      const payload = await request<PaginatedEnvelope<TaskRunResponse[]>>(
         `/tasks/${taskId}/runs${suffix}`,
         { token, signal: options?.signal }
       );
-      const rows = unwrapData(payload) ?? [];
+      const result = unwrapPaginated(payload);
       return {
-        items: rows.map(mapTaskRun),
-        total: payload.total ?? 0,
-        page: payload.page ?? 1,
-        pageSize: payload.page_size ?? (options?.pageSize ?? 20),
+        items: result.items.map(mapTaskRun),
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
       };
     },
 
@@ -160,11 +160,10 @@ export function createTaskRunsApi() {
         query.set("level", options.level);
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<TaskRunLogResponse[]>>(
+      const rows = (await request<TaskRunLogResponse[]>(
         `/task-runs/${runId}/logs${suffix}`,
         { token }
-      );
-      const rows = unwrapData(payload) ?? [];
+      )) ?? [];
       return rows.map(mapTaskRunLog);
     },
   };

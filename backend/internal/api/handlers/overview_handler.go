@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"log"
 	"math"
-	"net/http"
 	"time"
 
 	"xirang/backend/internal/task"
@@ -42,8 +40,7 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 	`, string(task.StatusRunning), string(task.StatusFailed), since24h).Row()
 
 	if err := row.Scan(&counts.TotalNodes, &counts.HealthyNodes, &counts.ActivePolicies, &counts.RunningTasks, &counts.FailedTasks); err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -65,18 +62,16 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 		) latest ON t.id = latest.max_id
 	`, string(task.StatusRunning), cutoff).Row()
 	if throughputRow != nil {
-		if err := throughputRow.Scan(&currentThroughput); err != nil {
-			log.Printf("聚合当前吞吐失败（降级为0）: %v", err)
-		}
+		_ = throughputRow.Scan(&currentThroughput)
 	}
 
 	c.Header("Cache-Control", "public, max-age=30")
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+	respondOK(c, gin.H{
 		"totalNodes":            counts.TotalNodes,
 		"healthyNodes":          counts.HealthyNodes,
 		"activePolicies":        counts.ActivePolicies,
 		"runningTasks":          counts.RunningTasks,
 		"failedTasks24h":        counts.FailedTasks,
 		"currentThroughputMbps": math.Round(currentThroughput*10) / 10,
-	}})
+	})
 }

@@ -50,7 +50,7 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	if includeSecrets {
 		role, _ := c.Get("role")
 		if role != "admin" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可导出敏感数据"})
+			respondForbidden(c, "仅管理员可导出敏感数据")
 			return
 		}
 		// H3: 审计日志 — 记录敏感数据导出
@@ -63,13 +63,25 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	}
 
 	var nodes []model.Node
-	h.db.Find(&nodes)
+	if err := h.db.Find(&nodes).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var sshKeys []model.SSHKey
-	h.db.Find(&sshKeys)
+	if err := h.db.Find(&sshKeys).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var policies []model.Policy
-	h.db.Preload("Nodes").Find(&policies)
+	if err := h.db.Preload("Nodes").Find(&policies).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var tasks []model.Task
-	h.db.Preload("Node").Preload("Policy").Find(&tasks)
+	if err := h.db.Preload("Node").Preload("Policy").Find(&tasks).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	taskLookup := make(map[uint]model.Task, len(tasks))
 	for _, task := range tasks {
 		taskLookup[task.ID] = task
@@ -179,7 +191,7 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"version":     "1.0",
 		"exported_at": time.Now().Format(time.RFC3339),
 		"data": gin.H{
@@ -197,7 +209,7 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 func (h *ConfigHandler) Import(c *gin.Context) {
 	conflict := c.DefaultQuery("conflict", "skip")
 	if conflict != "skip" && conflict != "overwrite" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "conflict 参数仅支持 skip 或 overwrite"})
+		respondBadRequest(c, "conflict 参数仅支持 skip 或 overwrite")
 		return
 	}
 
@@ -207,16 +219,16 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "导入文件超过 10MB 限制"})
+			respondBadRequest(c, "导入文件超过 10MB 限制")
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "读取导入数据失败"})
+		respondBadRequest(c, "读取导入数据失败")
 		return
 	}
 
 	data, err := decodeConfigImportData(body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的导入数据"})
+		respondBadRequest(c, "无效的导入数据")
 		return
 	}
 
@@ -594,20 +606,18 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return nil
 	})
 	if importErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "导入失败"})
+		respondInternalError(c, importErr)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"nodes":           importedNodes,
-			"ssh_keys":        importedKeys,
-			"policies":        importedPolicies,
-			"tasks":           importedTasks,
-			"system_settings": importedSettings,
-			"imported":        importedNodes + importedKeys + importedPolicies + importedTasks + importedSettings,
-			"skipped":         0,
-		},
+	respondOK(c, gin.H{
+		"nodes":           importedNodes,
+		"ssh_keys":        importedKeys,
+		"policies":        importedPolicies,
+		"tasks":           importedTasks,
+		"system_settings": importedSettings,
+		"imported":        importedNodes + importedKeys + importedPolicies + importedTasks + importedSettings,
+		"skipped":         0,
 	})
 }
 

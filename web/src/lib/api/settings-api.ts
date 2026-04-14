@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export type SettingDef = {
   key: string;
@@ -26,8 +26,7 @@ export type SettingsResponse = {
 export function createSettingsApi() {
   return {
     async getSettings(token: string): Promise<SettingsResponse> {
-      const payload = await request<Envelope<SettingsResponse>>("/settings", { token });
-      return unwrapData(payload) ?? { definitions: [], values: {} };
+      return (await request<SettingsResponse>("/settings", { token })) ?? { definitions: [], values: {} };
     },
 
     async updateSettings(token: string, settings: Record<string, string>): Promise<void> {

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -106,7 +105,7 @@ func (h *SSHKeyHandler) List(c *gin.Context) {
 	for _, one := range items {
 		result = append(result, toSSHKeyResponse(one))
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }
 
 func (h *SSHKeyHandler) Get(c *gin.Context) {
@@ -116,16 +115,16 @@ func (h *SSHKeyHandler) Get(c *gin.Context) {
 	}
 	var item model.SSHKey
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "ssh key 不存在"})
+		respondNotFound(c, "ssh key 不存在")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": toSSHKeyResponse(item)})
+	respondOK(c, toSSHKeyResponse(item))
 }
 
 func (h *SSHKeyHandler) Create(c *gin.Context) {
 	var req sshKeyCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -136,7 +135,7 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 		req.PrivateKey,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -148,10 +147,10 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 		Fingerprint: generateFingerprint(preparedKey),
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": toSSHKeyResponse(item)})
+	respondCreated(c, toSSHKeyResponse(item))
 }
 
 func (h *SSHKeyHandler) Update(c *gin.Context) {
@@ -162,13 +161,13 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 
 	var req sshKeyUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	var item model.SSHKey
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "ssh key 不存在"})
+		respondNotFound(c, "ssh key 不存在")
 		return
 	}
 
@@ -190,7 +189,7 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 			req.PrivateKey,
 		)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 		item.KeyType = storedType
@@ -203,7 +202,7 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 		if normalizedType != sshutil.SSHKeyTypeAuto {
 			preparedKey, storedType, err := sshutil.ValidateAndPreparePrivateKey(item.PrivateKey, normalizedType)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				respondBadRequest(c, err.Error())
 				return
 			}
 			item.KeyType = storedType
@@ -212,10 +211,10 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 		}
 	}
 	if err := h.db.Save(&item).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": toSSHKeyResponse(item)})
+	respondOK(c, toSSHKeyResponse(item))
 }
 
 func (h *SSHKeyHandler) Delete(c *gin.Context) {
@@ -230,7 +229,7 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 		return
 	}
 	if count > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "该 ssh key 正在被节点使用，无法删除"})
+		respondBadRequest(c, "该 ssh key 正在被节点使用，无法删除")
 		return
 	}
 
@@ -238,7 +237,7 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "deleted", "deleted_at": time.Now()})
+	respondOK(c, gin.H{"message": "deleted", "deleted_at": time.Now()})
 }
 
 // TestConnection 使用指定 SSH Key 对一组节点进行连通性测试。
@@ -252,17 +251,17 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 		NodeIDs []uint `json:"node_ids" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if len(req.NodeIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "node_ids 不能为空"})
+		respondBadRequest(c, "node_ids 不能为空")
 		return
 	}
 
 	var sshKey model.SSHKey
 	if err := h.db.First(&sshKey, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "ssh key 不存在"})
+		respondNotFound(c, "ssh key 不存在")
 		return
 	}
 
@@ -274,8 +273,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 
 	hostKeyCallback, hkErr := sshutil.ResolveSSHHostKeyCallback()
 	if hkErr != nil {
-		log.Printf("解析 host key callback 失败: %v", hkErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法初始化 SSH 主机密钥校验"})
+		respondInternalError(c, hkErr)
 		return
 	}
 
@@ -341,7 +339,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": results})
+	respondOK(c, results)
 }
 
 // BatchCreate 批量创建 SSH Key（单次最多 50 条）。
@@ -350,15 +348,15 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 		Keys []sshKeyCreateRequest `json:"keys" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if len(req.Keys) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "keys 不能为空"})
+		respondBadRequest(c, "keys 不能为空")
 		return
 	}
 	if len(req.Keys) > 50 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "单次批量创建不能超过 50 条"})
+		respondBadRequest(c, "单次批量创建不能超过 50 条")
 		return
 	}
 
@@ -400,7 +398,7 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 		results = append(results, batchResult{Name: normalizedName, Status: "created"})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": results})
+	respondOK(c, results)
 }
 
 // Export 导出 SSH Key 列表，支持 authorized_keys / json / csv 格式。
@@ -483,7 +481,7 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 		w.Flush()
 
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的导出格式，可选：authorized_keys / json / csv"})
+		respondBadRequest(c, "不支持的导出格式，可选：authorized_keys / json / csv")
 	}
 }
 
@@ -493,11 +491,11 @@ func (h *SSHKeyHandler) BatchDelete(c *gin.Context) {
 		IDs []uint `json:"ids" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
+		respondBadRequest(c, "ids 不能为空")
 		return
 	}
 
@@ -543,7 +541,7 @@ func (h *SSHKeyHandler) BatchDelete(c *gin.Context) {
 		deleted = int(result.RowsAffected)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"deleted":        deleted,
 		"skipped_in_use": skippedNames,
 	})

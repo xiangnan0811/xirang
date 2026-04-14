@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"net/http"
 	"strings"
 
 	"xirang/backend/internal/auth"
@@ -39,7 +38,7 @@ type updateUserRequest struct {
 func (h *UserHandler) List(c *gin.Context) {
 	users, err := h.authService.ListUsers()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 
@@ -52,28 +51,28 @@ func (h *UserHandler) List(c *gin.Context) {
 			TOTPEnabled: item.TOTPEnabled,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }
 
 func (h *UserHandler) Create(c *gin.Context) {
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	user, err := h.authService.CreateUser(req.Username, req.Password, req.Role)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"data": userResponse{
+	respondCreated(c, userResponse{
 		ID:          user.ID,
 		Username:    user.Username,
 		Role:        user.Role,
 		TOTPEnabled: user.TOTPEnabled,
-	}})
+	})
 }
 
 func (h *UserHandler) Update(c *gin.Context) {
@@ -84,7 +83,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	var req updateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -99,16 +98,16 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	user, err := h.authService.UpdateUser(id, req.Role, req.Password)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": userResponse{
+	respondOK(c, userResponse{
 		ID:          user.ID,
 		Username:    user.Username,
 		Role:        user.Role,
 		TOTPEnabled: user.TOTPEnabled,
-	}})
+	})
 }
 
 func (h *UserHandler) Delete(c *gin.Context) {
@@ -119,9 +118,9 @@ func (h *UserHandler) Delete(c *gin.Context) {
 
 	actorID := c.GetUint(middleware.CtxUserID)
 	if err := h.authService.DeleteUser(id, actorID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	respondMessage(c, "删除成功")
 }

@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export type MountVerifyResult = {
   exists: boolean;
@@ -12,12 +12,11 @@ export type MountVerifyResult = {
 export function createStorageGuideApi() {
   return {
     async verifyMount(token: string, path: string): Promise<MountVerifyResult> {
-      const payload = await request<Envelope<MountVerifyResult>>("/system/verify-mount", {
+      return (await request<MountVerifyResult>("/system/verify-mount", {
         token,
         method: "POST",
         body: { path },
-      });
-      return unwrapData(payload) ?? {
+      })) ?? {
         exists: false,
         is_mount_point: false,
         writable: false,

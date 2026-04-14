@@ -1,6 +1,6 @@
 import type { IntegrationChannel, IntegrationProbeResult, NewIntegrationInput } from "@/types/domain";
 import i18n from "@/i18n";
-import { parseNumericId, request, type Envelope, unwrapData } from "./core";
+import { parseNumericId, request } from "./core";
 
 type IntegrationResponse = {
   id: number;
@@ -52,13 +52,12 @@ function mapIntegration(row: IntegrationResponse): IntegrationChannel {
 export function createIntegrationsApi() {
   return {
     async getIntegrations(token: string, options?: { signal?: AbortSignal }): Promise<IntegrationChannel[]> {
-      const payload = await request<Envelope<IntegrationResponse[]>>("/integrations", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<IntegrationResponse[]>("/integrations", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapIntegration(row));
     },
 
     async createIntegration(token: string, input: NewIntegrationInput): Promise<IntegrationChannel> {
-      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>("/integrations", {
+      const raw = await request<IntegrationResponse | IntegrationHintResponse>("/integrations", {
         method: "POST",
         token,
         body: {
@@ -82,7 +81,7 @@ export function createIntegrationsApi() {
       if (raw && typeof raw === "object" && "created" in raw && raw.created === false) {
         throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
       }
-      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
+      return mapIntegration(raw as IntegrationResponse);
     },
 
     async updateIntegration(
@@ -91,7 +90,7 @@ export function createIntegrationsApi() {
       patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }
     ): Promise<IntegrationChannel> {
       const numericId = parseNumericId(integrationId, "int");
-      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>(`/integrations/${numericId}`, {
+      const raw = await request<IntegrationResponse | IntegrationHintResponse>(`/integrations/${numericId}`, {
         method: "PUT",
         token,
         body: {
@@ -110,7 +109,7 @@ export function createIntegrationsApi() {
       if (raw && typeof raw === "object" && "updated" in raw && (raw as Record<string, unknown>).updated === false) {
         throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
       }
-      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
+      return mapIntegration(raw as IntegrationResponse);
     },
 
     async patchIntegration(
@@ -119,7 +118,7 @@ export function createIntegrationsApi() {
       patch: Record<string, unknown>
     ): Promise<IntegrationChannel> {
       const numericId = parseNumericId(integrationId, "int");
-      const raw = await request<Envelope<IntegrationResponse> | IntegrationHintResponse>(`/integrations/${numericId}`, {
+      const raw = await request<IntegrationResponse | IntegrationHintResponse>(`/integrations/${numericId}`, {
         method: "PATCH",
         token,
         body: patch
@@ -128,16 +127,15 @@ export function createIntegrationsApi() {
       if (raw && typeof raw === "object" && "updated" in raw && (raw as Record<string, unknown>).updated === false) {
         throw new EndpointHintWarning((raw as IntegrationHintResponse).hint ?? "");
       }
-      return mapIntegration(unwrapData(raw as Envelope<IntegrationResponse>));
+      return mapIntegration(raw as IntegrationResponse);
     },
 
     async testIntegration(token: string, integrationId: string): Promise<IntegrationProbeResult> {
       const numericId = parseNumericId(integrationId, "int");
-      const payload = await request<Envelope<IntegrationTestResponse>>(`/integrations/${numericId}/test`, {
+      const data = await request<IntegrationTestResponse>(`/integrations/${numericId}/test`, {
         method: "POST",
         token
       });
-      const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
         message: data?.message ?? i18n.t("common.testComplete"),

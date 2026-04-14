@@ -42,7 +42,7 @@ func (h *AuditHandler) List(c *gin.Context) {
 		return
 	}
 
-	paginatedResponse(c, items, total, pg)
+	respondPaginated(c, items, total, pg.Page, pg.PageSize)
 }
 
 func (h *AuditHandler) ExportCSV(c *gin.Context) {

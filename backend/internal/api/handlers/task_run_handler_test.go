@@ -127,12 +127,14 @@ func TestTaskRunHandlerAllowsAdminToReadOrphanedRun(t *testing.T) {
 			t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
 		}
 
-		var runResp model.TaskRun
-		if err := json.Unmarshal(resp.Body.Bytes(), &runResp); err != nil {
+		var envelope struct {
+			Data model.TaskRun `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
 			t.Fatalf("解析响应失败: %v", err)
 		}
-		if runResp.ID != run.ID {
-			t.Fatalf("返回执行记录不符合预期，实际: %+v", runResp)
+		if envelope.Data.ID != run.ID {
+			t.Fatalf("返回执行记录不符合预期，实际: %+v", envelope.Data)
 		}
 	})
 

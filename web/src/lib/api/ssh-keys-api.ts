@@ -1,5 +1,5 @@
 import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
-import { formatTime, parseNumericId, request, type Envelope, unwrapData } from "./core";
+import { formatTime, parseNumericId, request } from "./core";
 
 type SSHKeyResponse = {
   id: number;
@@ -61,14 +61,13 @@ export type BatchCreateResult = {
 export function createSSHKeysApi() {
   return {
     async getSSHKeys(token: string, options?: { signal?: AbortSignal }): Promise<SSHKeyRecord[]> {
-      const payload = await request<Envelope<SSHKeyResponse[]>>("/ssh-keys", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<SSHKeyResponse[]>("/ssh-keys", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapSSHKey(row));
     },
 
     async createSSHKey(token: string, input: NewSSHKeyInput): Promise<SSHKeyRecord> {
       const privateKey = input.privateKey.trim();
-      const payload = await request<Envelope<SSHKeyResponse>>("/ssh-keys", {
+      const row = await request<SSHKeyResponse>("/ssh-keys", {
         method: "POST",
         token,
         body: {
@@ -78,13 +77,13 @@ export function createSSHKeysApi() {
           private_key: privateKey
         }
       });
-      return mapSSHKey(unwrapData(payload));
+      return mapSSHKey(row);
     },
 
     async updateSSHKey(token: string, keyId: string, input: NewSSHKeyInput): Promise<SSHKeyRecord> {
       const numericId = parseNumericId(keyId, "key");
       const privateKey = input.privateKey.trim();
-      const payload = await request<Envelope<SSHKeyResponse>>(`/ssh-keys/${numericId}`, {
+      const row = await request<SSHKeyResponse>(`/ssh-keys/${numericId}`, {
         method: "PUT",
         token,
         body: {
@@ -94,7 +93,7 @@ export function createSSHKeysApi() {
           ...(privateKey ? { private_key: privateKey } : {})
         }
       });
-      return mapSSHKey(unwrapData(payload));
+      return mapSSHKey(row);
     },
 
     async deleteSSHKey(token: string, keyId: string): Promise<void> {
@@ -107,24 +106,23 @@ export function createSSHKeysApi() {
 
     async deleteSSHKeys(token: string, keyIds: string[]): Promise<{ deleted: number; skippedInUse: string[] }> {
       const numericIds = keyIds.map((id) => parseNumericId(id, "key"));
-      const payload = await request<Envelope<{ deleted: number; skipped_in_use: string[] }>>("/ssh-keys/batch-delete", {
+      const data = await request<{ deleted: number; skipped_in_use: string[] }>("/ssh-keys/batch-delete", {
         method: "POST",
         token,
         body: { ids: numericIds },
       });
-      const data = unwrapData(payload);
       return { deleted: data.deleted, skippedInUse: data.skipped_in_use ?? [] };
     },
 
     async testConnection(token: string, keyId: string, nodeIds: string[]): Promise<TestConnectionResult[]> {
       const numericKeyId = parseNumericId(keyId, "key");
       const numericNodeIds = nodeIds.map((id) => parseNumericId(id, "node"));
-      const payload = await request<Envelope<TestConnectionResultRaw[]>>(`/ssh-keys/${numericKeyId}/test-connection`, {
+      const rows = (await request<TestConnectionResultRaw[]>(`/ssh-keys/${numericKeyId}/test-connection`, {
         method: "POST",
         token,
         body: { node_ids: numericNodeIds },
-      });
-      return (unwrapData(payload) ?? []).map((r) => ({
+      })) ?? [];
+      return rows.map((r) => ({
         nodeId: `node-${r.node_id}`,
         name: r.name,
         host: r.host,
@@ -136,7 +134,7 @@ export function createSSHKeysApi() {
     },
 
     async batchCreate(token: string, keys: NewSSHKeyInput[]): Promise<BatchCreateResult[]> {
-      const payload = await request<Envelope<BatchCreateResultRaw[]>>("/ssh-keys/batch", {
+      const rows = (await request<BatchCreateResultRaw[]>("/ssh-keys/batch", {
         method: "POST",
         token,
         body: {
@@ -147,8 +145,8 @@ export function createSSHKeysApi() {
             private_key: k.privateKey,
           })),
         },
-      });
-      return (unwrapData(payload) ?? []).map((r) => ({
+      })) ?? [];
+      return rows.map((r) => ({
         name: r.name,
         status: r.status,
         error: r.error,

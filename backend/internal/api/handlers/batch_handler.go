@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -40,23 +39,23 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		Retain  *bool  `json:"retain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
+		respondBadRequest(c, "请求参数错误")
 		return
 	}
 
 	command := strings.TrimSpace(req.Command)
 	if command == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "命令不能为空"})
+		respondBadRequest(c, "命令不能为空")
 		return
 	}
 	if len(command) > 4096 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "命令长度不能超过 4096 字符"})
+		respondBadRequest(c, "命令长度不能超过 4096 字符")
 		return
 	}
 
 	// 危险命令拦截
 	if isDangerousCommand(command) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "该命令被安全策略拦截，禁止执行"})
+		respondBadRequest(c, "该命令被安全策略拦截，禁止执行")
 		return
 	}
 
@@ -79,11 +78,11 @@ func (h *BatchHandler) Create(c *gin.Context) {
 	for _, nodeID := range req.NodeIDs {
 		var node model.Node
 		if err := h.db.First(&node, nodeID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("节点 %d 不存在", nodeID)})
+			respondBadRequest(c, fmt.Sprintf("节点 %d 不存在", nodeID))
 			return
 		}
 		if _, ok := allowedNodes[nodeID]; !ok {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			respondForbidden(c, "无权访问该节点")
 			return
 		}
 		nodes = append(nodes, batchNode{ID: node.ID, Name: node.Name})
@@ -101,7 +100,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 			BatchID:      batchID,
 		}
 		if err := h.db.Create(&t).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建任务失败"})
+			respondInternalError(c, err)
 			return
 		}
 		taskIDs = append(taskIDs, t.ID)
@@ -128,7 +127,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		retain = *req.Retain
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"batch_id": batchID,
 		"task_ids": taskIDs,
 		"run_ids":  runIDs,
@@ -141,17 +140,17 @@ func (h *BatchHandler) Create(c *gin.Context) {
 func (h *BatchHandler) Get(c *gin.Context) {
 	batchID := c.Param("batch_id")
 	if batchID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_id 不能为空"})
+		respondBadRequest(c, "batch_id 不能为空")
 		return
 	}
 
 	var tasks []model.Task
 	if err := h.db.Preload("Node").Where("batch_id = ?", batchID).Find(&tasks).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		respondInternalError(c, err)
 		return
 	}
 	if len(tasks) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
+		respondNotFound(c, "批次不存在")
 		return
 	}
 	nodeIDs := make([]uint, 0, len(tasks))
@@ -170,7 +169,7 @@ func (h *BatchHandler) Get(c *gin.Context) {
 	}
 	for _, taskEntity := range tasks {
 		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			respondForbidden(c, "无权访问该节点")
 			return
 		}
 	}
@@ -183,10 +182,10 @@ func (h *BatchHandler) Get(c *gin.Context) {
 
 	// 清理节点敏感字段
 	for i := range tasks {
-		tasks[i].Node = sanitizeNode(tasks[i].Node)
+		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"batch_id":      batchID,
 		"tasks":         tasks,
 		"total":         len(tasks),
@@ -199,7 +198,7 @@ func (h *BatchHandler) Get(c *gin.Context) {
 func (h *BatchHandler) Delete(c *gin.Context) {
 	batchID := c.Param("batch_id")
 	if batchID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_id 不能为空"})
+		respondBadRequest(c, "batch_id 不能为空")
 		return
 	}
 
@@ -210,7 +209,7 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		return
 	}
 	if len(taskIDs) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
+		respondNotFound(c, "批次不存在")
 		return
 	}
 	var tasks []model.Task
@@ -234,7 +233,7 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 	}
 	for _, taskEntity := range tasks {
 		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			respondForbidden(c, "无权访问该节点")
 			return
 		}
 	}
@@ -263,7 +262,7 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+	respondOK(c, gin.H{"deleted": deleted})
 }
 
 // generateBatchID 生成 8 字符的随机批次 ID。

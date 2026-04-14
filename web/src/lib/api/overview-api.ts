@@ -1,6 +1,6 @@
 import type { BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 type OverviewSummaryResponse = {
   totalNodes: number;
@@ -158,8 +158,8 @@ function mapStorageUsage(raw: StorageUsageRaw | null | undefined): StorageUsageD
 export function createOverviewApi() {
   return {
     async getOverviewSummary(token: string, options?: { signal?: AbortSignal }): Promise<OverviewSummary> {
-      const payload = await request<Envelope<OverviewSummaryResponse>>("/overview", { token, signal: options?.signal });
-      return mapOverviewSummary(unwrapData(payload));
+      const payload = await request<OverviewSummaryResponse>("/overview", { token, signal: options?.signal });
+      return mapOverviewSummary(payload);
     },
 
     async getOverviewTraffic(token: string, options?: { window?: OverviewTrafficWindow; signal?: AbortSignal }): Promise<OverviewTrafficSeries> {
@@ -168,23 +168,22 @@ export function createOverviewApi() {
         query.set("window", options.window);
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<OverviewTrafficSeriesResponse>>(`/overview/traffic${suffix}`, { token, signal: options?.signal });
-      return mapOverviewTraffic(unwrapData(payload));
+      const payload = await request<OverviewTrafficSeriesResponse>(`/overview/traffic${suffix}`, { token, signal: options?.signal });
+      return mapOverviewTraffic(payload);
     },
 
     async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {
-      const payload = await request<Envelope<BackupHealthRaw>>("/overview/backup-health", { token, signal: options?.signal });
-      return mapBackupHealth(unwrapData(payload));
+      const payload = await request<BackupHealthRaw>("/overview/backup-health", { token, signal: options?.signal });
+      return mapBackupHealth(payload);
     },
 
     async getStorageUsage(token: string, options?: { signal?: AbortSignal }): Promise<StorageUsageData> {
-      const payload = await request<Envelope<StorageUsageRaw>>("/overview/storage-usage", { token, signal: options?.signal });
-      return mapStorageUsage(unwrapData(payload));
+      const payload = await request<StorageUsageRaw>("/overview/storage-usage", { token, signal: options?.signal });
+      return mapStorageUsage(payload);
     },
 
     async getHookTemplates(token: string): Promise<HookTemplate[]> {
-      const payload = await request<Envelope<HookTemplate[]>>("/hook-templates", { token });
-      return unwrapData(payload) ?? [];
+      return (await request<HookTemplate[]>("/hook-templates", { token })) ?? [];
     },
   };
 }
