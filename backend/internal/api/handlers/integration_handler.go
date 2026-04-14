@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -202,14 +201,13 @@ func isPrivateOrLoopback(addr netip.Addr) bool {
 func (h *IntegrationHandler) List(c *gin.Context) {
 	var items []model.Integration
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	for i := range items {
 		maskIntegrationEndpoint(&items[i])
 	}
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	respondOK(c, items)
 }
 
 func (h *IntegrationHandler) Get(c *gin.Context) {
@@ -219,17 +217,17 @@ func (h *IntegrationHandler) Get(c *gin.Context) {
 	}
 	var item model.Integration
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
+		respondNotFound(c, "通知通道不存在")
 		return
 	}
 	maskIntegrationEndpoint(&item)
-	c.JSON(http.StatusOK, gin.H{"data": item})
+	respondOK(c, item)
 }
 
 func (h *IntegrationHandler) Create(c *gin.Context) {
 	var req integrationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -238,29 +236,29 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
 	req.Secret = strings.TrimSpace(req.Secret)
 	if req.Type == "" || req.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if !knownIntegrationTypes[req.Type] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的通知通道类型"})
+		respondBadRequest(c, "不支持的通知通道类型")
 		return
 	}
 
 	// 优先从结构化字段构建 endpoint
 	if built, err := buildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	} else if built != "" {
 		req.Endpoint = built
 	}
 
 	if req.Endpoint == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint 或通道特定字段必填"})
+		respondBadRequest(c, "endpoint 或通道特定字段必填")
 		return
 	}
 
 	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -276,7 +274,7 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	if req.ProxyURL != "" {
 		if err := validateProxyURL(req.ProxyURL); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -303,13 +301,12 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 		ProxyURL:        req.ProxyURL,
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		log.Printf("创建通知通道失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	item.HasSecret = req.Secret != ""
 	maskIntegrationEndpoint(&item)
-	c.JSON(http.StatusCreated, gin.H{"data": item})
+	respondCreated(c, item)
 }
 
 func (h *IntegrationHandler) Update(c *gin.Context) {
@@ -319,7 +316,7 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	}
 	var req integrationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -328,35 +325,35 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
 	req.Secret = strings.TrimSpace(req.Secret)
 	if req.Type == "" || req.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if !knownIntegrationTypes[req.Type] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的通知通道类型"})
+		respondBadRequest(c, "不支持的通知通道类型")
 		return
 	}
 
 	// 优先从结构化字段构建 endpoint
 	if built, err := buildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	} else if built != "" {
 		req.Endpoint = built
 	}
 
 	if req.Endpoint == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint 或通道特定字段必填"})
+		respondBadRequest(c, "endpoint 或通道特定字段必填")
 		return
 	}
 
 	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	var item model.Integration
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
+		respondNotFound(c, "通知通道不存在")
 		return
 	}
 	if req.FailThreshold <= 0 {
@@ -378,7 +375,7 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	if req.ProxyURL != "" {
 		if err := validateProxyURL(req.ProxyURL); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -405,13 +402,12 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.db.Save(&item).Error; err != nil {
-		log.Printf("更新通知通道失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	item.HasSecret = hadSecret || req.Secret != ""
 	maskIntegrationEndpoint(&item)
-	c.JSON(http.StatusOK, gin.H{"data": item})
+	respondOK(c, item)
 }
 
 func (h *IntegrationHandler) Patch(c *gin.Context) {
@@ -422,13 +418,13 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 
 	var req integrationPatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	var item model.Integration
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
+		respondNotFound(c, "通知通道不存在")
 		return
 	}
 
@@ -438,7 +434,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "名称不能为空"})
+			respondBadRequest(c, "名称不能为空")
 			return
 		}
 		item.Name = name
@@ -449,7 +445,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	if req.BotToken != nil || req.ChatID != nil || req.AccessToken != nil || req.HookID != nil || req.WebhookKey != nil {
 		built, err := buildEndpointFromPatch(item.Type, item.Endpoint, req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 		if built != "" {
@@ -461,11 +457,11 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	if req.Endpoint != nil {
 		endpoint := strings.TrimSpace(*req.Endpoint)
 		if endpoint == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint 不能为空"})
+			respondBadRequest(c, "endpoint 不能为空")
 			return
 		}
 		if err := validateIntegrationEndpoint(item.Type, endpoint); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 		item.Endpoint = endpoint
@@ -485,14 +481,14 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	}
 	if req.FailThreshold != nil {
 		if *req.FailThreshold <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "fail_threshold 必须大于 0"})
+			respondBadRequest(c, "fail_threshold 必须大于 0")
 			return
 		}
 		item.FailThreshold = *req.FailThreshold
 	}
 	if req.CooldownMinutes != nil {
 		if *req.CooldownMinutes <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "cooldown_minutes 必须大于 0"})
+			respondBadRequest(c, "cooldown_minutes 必须大于 0")
 			return
 		}
 		item.CooldownMinutes = *req.CooldownMinutes
@@ -504,22 +500,20 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 		proxyURL := strings.TrimSpace(*req.ProxyURL)
 		if proxyURL != "" {
 			if err := validateProxyURL(proxyURL); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				respondBadRequest(c, err.Error())
 				return
 			}
 		}
 		item.ProxyURL = proxyURL
 	}
 
-
 	if err := h.db.Save(&item).Error; err != nil {
-		log.Printf("更新通知通道失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
 	item.HasSecret = hadSecret || (req.Secret != nil && *req.Secret != "")
 	maskIntegrationEndpoint(&item)
-	c.JSON(http.StatusOK, gin.H{"data": item})
+	respondOK(c, item)
 }
 
 // validateProxyURL 验证代理 URL 格式
@@ -604,11 +598,10 @@ func (h *IntegrationHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := h.db.Delete(&model.Integration{}, id).Error; err != nil {
-		log.Printf("服务器内部错误: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	respondMessage(c, "deleted")
 }
 
 func (h *IntegrationHandler) Test(c *gin.Context) {
@@ -619,7 +612,7 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 
 	var item model.Integration
 	if err := h.db.First(&item, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
+		respondNotFound(c, "通知通道不存在")
 		return
 	}
 
@@ -631,19 +624,19 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 		if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
 			errMsg = util.SanitizeTelegramError(err)
 		}
-		c.JSON(http.StatusOK, gin.H{"data": integrationTestResponse{
+		respondOK(c, integrationTestResponse{
 			OK:        false,
 			Message:   "测试发送失败: " + errMsg,
 			LatencyMS: latency,
-		}})
+		})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": integrationTestResponse{
+	respondOK(c, integrationTestResponse{
 		OK:        true,
 		Message:   "测试发送成功",
 		LatencyMS: latency,
-	}})
+	})
 }
 
 // buildEndpointFromFields 根据通道类型和结构化字段构建完整 endpoint URL

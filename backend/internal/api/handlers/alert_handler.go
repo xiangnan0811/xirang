@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -112,7 +111,7 @@ func (h *AlertHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	paginatedResponse(c, alerts, total, pg)
+	respondPaginated(c, alerts, total, pg.Page, pg.PageSize)
 }
 
 func (h *AlertHandler) Get(c *gin.Context) {
@@ -122,17 +121,17 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	}
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警"})
+		respondForbidden(c, "无权访问该告警")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": alert})
+	respondOK(c, alert)
 }
 
 func (h *AlertHandler) Ack(c *gin.Context) {
@@ -142,18 +141,18 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 	}
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
+		respondForbidden(c, "无权操作该告警")
 		return
 	}
 	if alert.Status == "resolved" {
-		c.JSON(http.StatusOK, gin.H{"data": alert})
+		respondOK(c, alert)
 		return
 	}
 	alert.Status = "acked"
@@ -161,7 +160,7 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": alert})
+	respondOK(c, alert)
 }
 
 func (h *AlertHandler) Resolve(c *gin.Context) {
@@ -171,14 +170,14 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 	}
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
+		respondForbidden(c, "无权操作该告警")
 		return
 	}
 	alert.Status = "resolved"
@@ -187,7 +186,7 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": alert})
+	respondOK(c, alert)
 }
 
 func (h *AlertHandler) Deliveries(c *gin.Context) {
@@ -198,14 +197,14 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 
 	var alert model.Alert
 	if err := h.db.Select("id", "node_id").First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该告警投递记录"})
+		respondForbidden(c, "无权访问该告警投递记录")
 		return
 	}
 
@@ -215,7 +214,7 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": deliveries})
+	respondOK(c, deliveries)
 }
 
 func (h *AlertHandler) RetryDelivery(c *gin.Context) {
@@ -226,26 +225,26 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 
 	var req retryDeliveryRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.IntegrationID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
+		respondForbidden(c, "无权操作该告警")
 		return
 	}
 
 	var integration model.Integration
 	if err := h.db.First(&integration, req.IntegrationID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "通知通道不存在"})
+		respondNotFound(c, "通知通道不存在")
 		return
 	}
 
@@ -260,11 +259,11 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 			respondInternalError(c, saveErr)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"data": retryDeliveryResponse{
+		respondOK(c, retryDeliveryResponse{
 			OK:       false,
 			Message:  "重发失败: " + delivery.Error,
 			Delivery: delivery,
-		}})
+		})
 		return
 	}
 
@@ -274,11 +273,11 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": retryDeliveryResponse{
+	respondOK(c, retryDeliveryResponse{
 		OK:       true,
 		Message:  "重发成功",
 		Delivery: delivery,
-	}})
+	})
 }
 
 func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
@@ -289,14 +288,14 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 
 	var alert model.Alert
 	if err := h.db.First(&alert, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "告警不存在"})
+		respondNotFound(c, "告警不存在")
 		return
 	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该告警"})
+		respondForbidden(c, "无权操作该告警")
 		return
 	}
 
@@ -307,14 +306,14 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	}
 
 	if len(failedRecords) == 0 {
-		c.JSON(http.StatusOK, gin.H{"data": retryFailedDeliveriesResponse{
+		respondOK(c, retryFailedDeliveriesResponse{
 			OK:            true,
 			Message:       "当前告警没有失败投递记录",
 			TotalFailed:   0,
 			SuccessCount:  0,
 			FailedCount:   0,
 			NewDeliveries: []model.AlertDelivery{},
-		}})
+		})
 		return
 	}
 
@@ -360,14 +359,14 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	}
 
 	message := fmt.Sprintf("批量重发完成：成功 %d，失败 %d", successCount, failedCount)
-	c.JSON(http.StatusOK, gin.H{"data": retryFailedDeliveriesResponse{
+	respondOK(c, retryFailedDeliveriesResponse{
 		OK:            failedCount == 0,
 		Message:       message,
 		TotalFailed:   len(uniqueIntegrationIDs),
 		SuccessCount:  successCount,
 		FailedCount:   failedCount,
 		NewDeliveries: newDeliveries,
-	}})
+	})
 }
 
 func (h *AlertHandler) DeliveryStats(c *gin.Context) {
@@ -426,13 +425,13 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 		successRate = math.Round((float64(totals.Sent)/float64(total))*1000) / 10
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": deliveryStatsResponse{
+	respondOK(c, deliveryStatsResponse{
 		WindowHours:   hours,
 		TotalSent:     totals.Sent,
 		TotalFailed:   totals.Failed,
 		SuccessRate:   successRate,
 		ByIntegration: byIntegration,
-	}})
+	})
 }
 
 func (h *AlertHandler) UnreadCount(c *gin.Context) {
@@ -456,11 +455,11 @@ func (h *AlertHandler) UnreadCount(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+	respondOK(c, gin.H{
 		"total":    counts.Total,
 		"critical": counts.Critical,
 		"warning":  counts.Warning,
-	}})
+	})
 }
 
 func parseDeliveryStatsHours(raw string) int {
