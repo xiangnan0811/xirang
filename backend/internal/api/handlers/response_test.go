@@ -47,7 +47,7 @@ func TestRespondMessage(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
 
 	var resp Response
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	if resp.Code != 0 || resp.Message != "删除成功" || resp.Data != nil {
 		t.Fatalf("响应不符合预期: %+v", resp)
 	}
@@ -64,7 +64,7 @@ func TestRespondBadRequest(t *testing.T) {
 		t.Fatalf("期望状态码 400，实际 %d", w.Code)
 	}
 	var resp Response
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	if resp.Code != 400 || resp.Message != "参数不合法" {
 		t.Fatalf("响应不符合预期: %+v", resp)
 	}
@@ -81,7 +81,7 @@ func TestRespondInternalError(t *testing.T) {
 		t.Fatalf("期望状态码 500，实际 %d", w.Code)
 	}
 	var resp Response
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	if resp.Code != 500 {
 		t.Fatalf("期望 code=500，实际 %d", resp.Code)
 	}
@@ -98,7 +98,7 @@ func TestRespondPaginated(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
 
 	var resp PaginatedResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	if resp.Code != 0 || resp.Total != 10 || resp.Page != 1 || resp.PageSize != 20 {
 		t.Fatalf("分页响应不符合预期: %+v", resp)
 	}
