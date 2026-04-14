@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/xiangnan0811/xirang/compare/v0.5.0...v0.6.0) (2026-04-14)
+
+
+### Features
+
+* P1 security hardening & CI quality gates ([#15](https://github.com/xiangnan0811/xirang/issues/15)) ([fc8cb77](https://github.com/xiangnan0811/xirang/commit/fc8cb77d35a148be1898c41f15b43dc14abbc389))
+
 ## [0.5.0](https://github.com/xiangnan0811/xirang/compare/v0.4.0...v0.5.0) (2026-04-10)
 
 
