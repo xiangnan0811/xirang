@@ -64,6 +64,7 @@ jobs:
 
       - name: Upload backend coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           files: backend/coverage.out
@@ -102,6 +103,7 @@ jobs:
 
       - name: Upload frontend coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           files: web/coverage/lcov.info
