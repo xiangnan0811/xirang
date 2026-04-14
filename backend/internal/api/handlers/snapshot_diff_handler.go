@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,33 +62,33 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	snap1 := strings.TrimSpace(c.Query("snap1"))
 	snap2 := strings.TrimSpace(c.Query("snap2"))
 	if snap1 == "" || snap2 == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 snap1 或 snap2 参数"})
+		respondBadRequest(c, "缺少 snap1 或 snap2 参数")
 		return
 	}
 	if !snapshotIDPattern.MatchString(snap1) || !snapshotIDPattern.MatchString(snap2) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "快照 ID 格式无效"})
+		respondBadRequest(c, "快照 ID 格式无效")
 		return
 	}
 
 	var task model.Task
 	if err := h.db.Preload("Node").Preload("Node.SSHKey").First(&task, taskID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		respondNotFound(c, "任务不存在")
 		return
 	}
 	if task.ExecutorType != "restic" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "仅 restic 类型任务支持快照比较"})
+		respondBadRequest(c, "仅 restic 类型任务支持快照比较")
 		return
 	}
 
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "restic 仓库路径为空"})
+		respondBadRequest(c, "restic 仓库路径为空")
 		return
 	}
 
 	cfg, err := parseResticConfigForDiff(task.ExecutorConfig)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "解析 restic 配置失败"})
+		respondInternalError(c, fmt.Errorf("解析 restic 配置失败: %w", err))
 		return
 	}
 
@@ -98,7 +97,7 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 
 	client, err := executor.DialSSHForNode(ctx, task.Node)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSH 连接失败: " + err.Error()})
+		respondInternalError(c, fmt.Errorf("SSH 连接失败: %w", err))
 		return
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
@@ -112,12 +111,12 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	cmd := fmt.Sprintf("%s %s diff %s %s -r %s 2>&1", envPrefix, resticBin, snap1Arg, snap2Arg, repoArg)
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "执行 restic diff 失败: " + err.Error()})
+		respondInternalError(c, fmt.Errorf("执行 restic diff 失败: %w", err))
 		return
 	}
 
 	result := parseDiffOutput(output, snap1, snap2)
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }
 
 // parseDiffOutput 解析 restic diff 的文本输出。

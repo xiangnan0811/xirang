@@ -65,7 +65,7 @@ func (h *PolicyHandler) List(c *gin.Context) {
 	for i, p := range policies {
 		result[i] = buildPolicyResponse(p)
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	respondOK(c, result)
 }
 
 func (h *PolicyHandler) Get(c *gin.Context) {
@@ -75,23 +75,23 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 	}
 	var p model.Policy
 	if err := h.db.Preload("Nodes").First(&p, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "策略不存在"})
+		respondNotFound(c, "策略不存在")
 		return
 	}
 	if allowed, err := authorizePolicyOwnership(c, h.db, p); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该策略"})
+		respondForbidden(c, "无权访问该策略")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": buildPolicyResponse(p)})
+	respondOK(c, buildPolicyResponse(p))
 }
 
 func (h *PolicyHandler) Create(c *gin.Context) {
 	var req policyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -102,11 +102,11 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	req.TargetPath = config.BackupRoot
 
 	if req.Name == "" || req.SourcePath == "" || req.CronSpec == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if err := validateCronSpec(req.CronSpec); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -114,19 +114,19 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	if req.PreHook != "" || req.PostHook != "" {
 		role, _ := c.Get("role")
 		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可配置 hook 命令"})
+			respondForbidden(c, "仅管理员可配置 hook 命令")
 			return
 		}
 	}
 	if req.PreHook != "" {
 		if err := validateHookCommand(req.PreHook); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
 	if req.PostHook != "" {
 		if err := validateHookCommand(req.PostHook); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -175,7 +175,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "hook 超时时间必须在 0-3600 秒之间"})
+			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
 			return
 		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
@@ -217,13 +217,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	// 重新加载以获取关联节点
 	h.db.Preload("Nodes").First(&p, p.ID)
-	c.JSON(http.StatusCreated, gin.H{"data": buildPolicyResponse(p)})
+	respondCreated(c, buildPolicyResponse(p))
 }
 
 func (h *PolicyHandler) Update(c *gin.Context) {
@@ -233,13 +233,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 	var req policyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	var p model.Policy
 	if err := h.db.First(&p, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "策略不存在"})
+		respondNotFound(c, "策略不存在")
 		return
 	}
 
@@ -264,7 +264,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	if err := validateCronSpec(req.CronSpec); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -272,19 +272,19 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.PreHook != "" || req.PostHook != "" {
 		role, _ := c.Get("role")
 		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可配置 hook 命令"})
+			respondForbidden(c, "仅管理员可配置 hook 命令")
 			return
 		}
 	}
 	if req.PreHook != "" {
 		if err := validateHookCommand(req.PreHook); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
 	if req.PostHook != "" {
 		if err := validateHookCommand(req.PostHook); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -330,7 +330,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "hook 超时时间必须在 0-3600 秒之间"})
+			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
 			return
 		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
@@ -389,16 +389,19 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	h.db.Preload("Nodes").First(&p, p.ID)
-	resp := gin.H{"data": buildPolicyResponse(p)}
 	if oldTargetPath != "" && oldTargetPath != config.BackupRoot {
-		resp["warning"] = fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath)
+		c.JSON(http.StatusOK, gin.H{
+			"data":    buildPolicyResponse(p),
+			"warning": fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
+		})
+		return
 	}
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, buildPolicyResponse(p))
 }
 
 func (h *PolicyHandler) Delete(c *gin.Context) {
@@ -409,7 +412,7 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 
 	var p model.Policy
 	if err := h.db.First(&p, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "策略不存在"})
+		respondNotFound(c, "策略不存在")
 		return
 	}
 
@@ -434,7 +437,7 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	respondMessage(c, "deleted")
 }
 
 // validateHookCommand 校验 hook 命令的安全性（白名单：禁止 shell 元字符 + 危险程序名）。
@@ -508,7 +511,7 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 		Enabled   bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -539,7 +542,7 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "ok", "count": len(req.PolicyIDs)})
@@ -555,11 +558,11 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 
 	var tmpl model.Policy
 	if err := h.db.Preload("Nodes").First(&tmpl, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "模板策略不存在"})
+		respondNotFound(c, "模板策略不存在")
 		return
 	}
 	if !tmpl.IsTemplate {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "该策略不是模板"})
+		respondBadRequest(c, "该策略不是模板")
 		return
 	}
 
@@ -594,10 +597,10 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	h.db.Preload("Nodes").First(&newPolicy, newPolicy.ID)
-	c.JSON(http.StatusCreated, gin.H{"data": buildPolicyResponse(newPolicy)})
+	respondCreated(c, buildPolicyResponse(newPolicy))
 }
