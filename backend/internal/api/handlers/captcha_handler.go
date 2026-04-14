@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
-	"net/http"
 	"sync"
 	"time"
 
@@ -78,12 +77,12 @@ func NewCaptchaHandler(store *CaptchaStore) *CaptchaHandler {
 func (h *CaptchaHandler) GenerateCaptcha(c *gin.Context) {
 	a, err := rand.Int(rand.Reader, big.NewInt(20))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成验证码失败"})
+		respondInternalError(c, fmt.Errorf("生成验证码失败: %w", err))
 		return
 	}
 	b, err := rand.Int(rand.Reader, big.NewInt(20))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成验证码失败"})
+		respondInternalError(c, fmt.Errorf("生成验证码失败: %w", err))
 		return
 	}
 
@@ -95,7 +94,7 @@ func (h *CaptchaHandler) GenerateCaptcha(c *gin.Context) {
 	id := generateCaptchaID()
 	h.captchaStore.Set(id, answer)
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"id":       id,
 		"question": fmt.Sprintf("%d + %d = ?", numA, numB),
 	})

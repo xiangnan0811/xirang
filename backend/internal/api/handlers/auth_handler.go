@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -67,7 +68,7 @@ type changePasswordRequest struct {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -78,23 +79,23 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码不能为空"})
+		respondBadRequest(c, "验证码不能为空")
 		return
 	}
 	if h.secondCaptchaEnabled && strings.TrimSpace(req.SecondCaptcha) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "二次验证码不能为空"})
+		respondBadRequest(c, "二次验证码不能为空")
 		return
 	}
 	if captchaEnabled && h.captchaStore != nil {
 		answerRaw := strings.TrimSpace(req.CaptchaAnswer)
 		id := strings.TrimSpace(req.CaptchaID)
 		if id == "" || answerRaw == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误或已过期"})
+			respondBadRequest(c, "验证码错误或已过期")
 			return
 		}
 		answerInt, err := strconv.Atoi(answerRaw)
 		if err != nil || !h.captchaStore.Verify(id, answerInt) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误或已过期"})
+			respondBadRequest(c, "验证码错误或已过期")
 			return
 		}
 	}
@@ -104,20 +105,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		if lockedErr, ok := auth.IsLoginLocked(err); ok {
 			retryAfter := lockedErr.RetryAfterSeconds(time.Now())
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			c.JSON(http.StatusLocked, gin.H{"error": err.Error()})
+			c.JSON(http.StatusLocked, Response{Code: http.StatusLocked, Message: err.Error(), Data: gin.H{"retry_after": retryAfter}})
 			return
 		}
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		respondUnauthorized(c, err.Error())
 		return
 	}
 	if result.Requires2FA {
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"requires_2fa": true,
 			"login_token":  result.LoginToken,
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"token": result.Token,
 		"user": gin.H{
 			"id":           result.User.ID,
@@ -139,7 +140,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 			onboarded = user.Onboarded
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"user": gin.H{
 			"id":           userID,
 			"username":     c.GetString(middleware.CtxUsername),
@@ -155,71 +156,71 @@ func (h *AuthHandler) Me(c *gin.Context) {
 func (h *AuthHandler) CompleteOnboarding(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+		respondUnauthorized(c, "未登录")
 		return
 	}
 	if h.db == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "服务不可用"})
+		c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: "服务不可用", Data: nil})
 		return
 	}
 	if err := h.db.Model(&model.User{}).Where("id = ?", userID).Update("onboarded", true).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+		respondInternalError(c, fmt.Errorf("更新 onboarded 失败: %w", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "引导完成"})
+	respondMessage(c, "引导完成")
 }
 
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	var req changePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	userID := c.GetUint(middleware.CtxUserID)
 	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+		respondUnauthorized(c, "未登录")
 		return
 	}
 
 	if err := h.authService.ChangePassword(userID, req.CurrentPassword, req.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+	respondMessage(c, "密码修改成功")
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
 	if h.jwtManager == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "认证服务不可用"})
+		c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: "认证服务不可用", Data: nil})
 		return
 	}
 
 	token := c.GetString(middleware.CtxToken)
 	if strings.TrimSpace(token) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 token"})
+		respondBadRequest(c, "缺少 token")
 		return
 	}
 
 	if err := h.jwtManager.RevokeToken(token); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "注销失败"})
+		respondBadRequest(c, "注销失败")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "已安全退出"})
+	respondMessage(c, "已安全退出")
 }
 
 // TOTPSetup POST /auth/2fa/setup — 生成 TOTP 密钥并暂存到用户记录（TOTPEnabled 保持 false），返回二维码 URL 和密钥。
 func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 	if h.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		respondInternalError(c, fmt.Errorf("db 未注入"))
 		return
 	}
 	username := c.GetString(middleware.CtxUsername)
 	key, err := auth.GenerateTOTPSecret("息壤 XiRang", username)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 TOTP 密钥失败"})
+		respondInternalError(c, fmt.Errorf("生成 TOTP 密钥失败: %w", err))
 		return
 	}
 
@@ -227,11 +228,11 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	if err := h.db.Model(&model.User{}).Where("id = ?", userID).
 		Update("totp_secret", key.Secret()).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存密钥失败"})
+		respondInternalError(c, fmt.Errorf("保存密钥失败: %w", err))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"secret": key.Secret(),
 		"qr_url": key.URL(),
 		"issuer": "息壤 XiRang",
@@ -245,50 +246,50 @@ type totpVerifyRequest struct {
 // TOTPVerify POST /auth/2fa/verify — 使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码。
 func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 	if h.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		respondInternalError(c, fmt.Errorf("db 未注入"))
 		return
 	}
 	var req totpVerifyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	userID := c.GetUint(middleware.CtxUserID)
 	var user model.User
 	if err := h.db.First(&user, userID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		respondNotFound(c, "用户不存在")
 		return
 	}
 	// 使用服务端暂存的 pending secret 校验，拒绝客户端提供的 secret
 	if strings.TrimSpace(user.TOTPSecret) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先调用 setup 接口生成密钥"})
+		respondBadRequest(c, "请先调用 setup 接口生成密钥")
 		return
 	}
 	if user.TOTPEnabled {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "两步验证已启用"})
+		respondBadRequest(c, "两步验证已启用")
 		return
 	}
 	if !auth.ValidateTOTP(user.TOTPSecret, req.Code) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
+		respondBadRequest(c, "验证码错误")
 		return
 	}
 	recoveryCodes, err := auth.GenerateRecoveryCodes()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成恢复码失败"})
+		respondInternalError(c, fmt.Errorf("生成恢复码失败: %w", err))
 		return
 	}
 	recoveryJSON, err := json.Marshal(recoveryCodes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成恢复码失败"})
+		respondInternalError(c, fmt.Errorf("序列化恢复码失败: %w", err))
 		return
 	}
 	user.TOTPEnabled = true
 	user.RecoveryCodes = string(recoveryJSON)
 	if err := h.db.Save(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存 2FA 配置失败"})
+		respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"recovery_codes": recoveryCodes})
+	respondOK(c, gin.H{"recovery_codes": recoveryCodes})
 }
 
 type totpDisableRequest struct {
@@ -299,26 +300,26 @@ type totpDisableRequest struct {
 // TOTPDisable POST /auth/2fa/disable — 验证密码和 TOTP 码后禁用 2FA。
 func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 	if h.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		respondInternalError(c, fmt.Errorf("db 未注入"))
 		return
 	}
 	var req totpDisableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	userID := c.GetUint(middleware.CtxUserID)
 	var user model.User
 	if err := h.db.First(&user, userID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		respondNotFound(c, "用户不存在")
 		return
 	}
 	if err := auth.CheckPassword(user.PasswordHash, req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "密码错误"})
+		respondBadRequest(c, "密码错误")
 		return
 	}
 	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误"})
+		respondBadRequest(c, "验证码错误")
 		return
 	}
 	if err := h.db.Model(&user).Updates(map[string]any{
@@ -327,10 +328,10 @@ func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 		"recovery_codes": "",
 		"token_version":  gorm.Expr("token_version + 1"),
 	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "禁用 2FA 失败"})
+		respondInternalError(c, fmt.Errorf("禁用 2FA 失败: %w", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "两步验证已禁用"})
+	respondMessage(c, "两步验证已禁用")
 }
 
 type totpLoginRequest struct {
@@ -341,37 +342,37 @@ type totpLoginRequest struct {
 // TOTPLogin POST /auth/2fa/login — 验证 TOTP 码或恢复码后返回完整 JWT。
 func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 	if h.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务不可用"})
+		respondInternalError(c, fmt.Errorf("db 未注入"))
 		return
 	}
 	var req totpLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	claims, err := h.jwtManager.ParseToken(req.LoginToken)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录令牌无效或已过期"})
+		respondUnauthorized(c, "登录令牌无效或已过期")
 		return
 	}
 	if claims.Purpose != "2fa_pending" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录令牌无效"})
+		respondUnauthorized(c, "登录令牌无效")
 		return
 	}
 	var user model.User
 	if err := h.db.First(&user, claims.UserID).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+		respondUnauthorized(c, "用户不存在")
 		return
 	}
 	// 先尝试 TOTP 验证码，再尝试恢复码。
 	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
 		if user.RecoveryCodes == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误"})
+			respondUnauthorized(c, "验证码错误")
 			return
 		}
 		remaining, ok := auth.ValidateAndConsumeRecoveryCode(user.RecoveryCodes, req.TOTPCode)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误"})
+			respondUnauthorized(c, "验证码错误")
 			return
 		}
 		newJSON, _ := json.Marshal(remaining)
@@ -380,10 +381,10 @@ func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 	}
 	token, err := h.jwtManager.GenerateToken(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 token 失败"})
+		respondInternalError(c, fmt.Errorf("生成 token 失败: %w", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"token": token,
 		"user": gin.H{
 			"id":           user.ID,
