@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"net/http"
 	"strconv"
 
 	"xirang/backend/internal/middleware"
@@ -46,17 +45,17 @@ func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询执行记录总数失败"})
+		respondInternalError(c, err)
 		return
 	}
 
 	var runs []model.TaskRun
 	if err := applyPagination(query, pg).Find(&runs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询执行记录失败"})
+		respondInternalError(c, err)
 		return
 	}
 
-	paginatedResponse(c, runs, total, pg)
+	respondPaginated(c, runs, total, pg.Page, pg.PageSize)
 }
 
 // Get 返回单次执行详情，含关联的 Task 基本信息
@@ -72,12 +71,12 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 	if err := h.db.Preload("Task", func(db *gorm.DB) *gorm.DB {
 		return db.Select("id", "name", "node_id", "rsync_source", "rsync_target", "executor_type")
 	}).First(&run, runID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "执行记录不存在"})
+		respondNotFound(c, "执行记录不存在")
 		return
 	}
 	if run.Task.ID == 0 {
 		if !canReadOrphanedTaskRun(role) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+			respondForbidden(c, "无权访问该执行记录")
 			return
 		}
 	} else {
@@ -87,12 +86,12 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 			return
 		}
 		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+			respondForbidden(c, "无权访问该执行记录")
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, run)
+	respondOK(c, run)
 }
 
 // Logs 返回单次执行的日志
@@ -106,7 +105,7 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 	// ownership 校验：通过 task_run → task → node 链查
 	var taskRun model.TaskRun
 	if err := h.db.Select("id", "task_id").First(&taskRun, runID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "执行记录不存在"})
+		respondNotFound(c, "执行记录不存在")
 		return
 	}
 	var taskEntity model.Task
@@ -117,14 +116,14 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 			return
 		}
 		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+			respondForbidden(c, "无权访问该执行记录")
 			return
 		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		respondInternalError(c, err)
 		return
 	} else if !canReadOrphanedTaskRun(role) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该执行记录"})
+		respondForbidden(c, "无权访问该执行记录")
 		return
 	}
 
@@ -151,9 +150,9 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 
 	var logs []model.TaskLog
 	if err := query.Order("id desc").Limit(limit).Find(&logs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询执行日志失败"})
+		respondInternalError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": logs})
+	respondOK(c, logs)
 }

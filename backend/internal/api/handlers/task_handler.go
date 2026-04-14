@@ -143,7 +143,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 			}
 		}
 	}
-	paginatedResponse(c, tasks, total, pg)
+	respondPaginated(c, tasks, total, pg.Page, pg.PageSize)
 }
 
 func (h *TaskHandler) Get(c *gin.Context) {
@@ -153,7 +153,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 	}
 	var taskEntity model.Task
 	if err := h.db.Preload("Node").Preload("Policy").First(&taskEntity, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		respondNotFound(c, "任务不存在")
 		return
 	}
 	taskEntity.Node = taskEntity.Node.Sanitized()
@@ -165,13 +165,13 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
 		taskEntity.Progress = &runProgress[0]
 	}
-	c.JSON(http.StatusOK, gin.H{"data": taskEntity})
+	respondOK(c, taskEntity)
 }
 
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req taskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -188,12 +188,12 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 
 	if err := validateTaskRequest(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := h.validateTaskRefs(req); err != nil {
 		if isTaskRefValidationError(err) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 		} else {
 			respondInternalError(c, err)
 		}
@@ -203,7 +203,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+		respondForbidden(c, "无权访问该节点")
 		return
 	}
 
@@ -231,11 +231,11 @@ func (h *TaskHandler) Create(c *gin.Context) {
 				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿删除失败: %v", rollbackErr))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "任务调度失败，请检查 Cron 表达式是否正确"})
+			respondBadRequest(c, "任务调度失败，请检查 Cron 表达式是否正确")
 			return
 		}
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": taskEntity})
+	respondCreated(c, taskEntity)
 }
 
 func (h *TaskHandler) Update(c *gin.Context) {
@@ -245,13 +245,13 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 	var req taskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
 	var taskEntity model.Task
 	if err := h.db.First(&taskEntity, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		respondNotFound(c, "任务不存在")
 		return
 	}
 	// 值拷贝用于补偿回滚；安全前提：后续仅替换指针字段（如 PolicyID），
@@ -295,12 +295,12 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	if err := validateTaskRequest(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if err := h.validateTaskRefsWithID(req, id); err != nil {
 		if isTaskRefValidationError(err) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, err.Error())
 		} else {
 			respondInternalError(c, err)
 		}
@@ -310,7 +310,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+		respondForbidden(c, "无权访问该节点")
 		return
 	}
 
@@ -341,11 +341,11 @@ func (h *TaskHandler) Update(c *gin.Context) {
 				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿调度失败: %v", restoreScheduleErr))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "任务调度失败，请检查 Cron 表达式是否正确"})
+			respondBadRequest(c, "任务调度失败，请检查 Cron 表达式是否正确")
 			return
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": taskEntity})
+	respondOK(c, taskEntity)
 }
 
 func (h *TaskHandler) Delete(c *gin.Context) {
@@ -360,7 +360,7 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 	if depCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "该任务被其他任务依赖，请先解除依赖关系再删除"})
+		respondConflict(c, "该任务被其他任务依赖，请先解除依赖关系再删除")
 		return
 	}
 	if err := h.db.Delete(&model.Task{}, id).Error; err != nil {
@@ -370,7 +370,7 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 	if h.runner != nil {
 		h.runner.RemoveSchedule(id)
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	respondMessage(c, "deleted")
 }
 
 func (h *TaskHandler) Trigger(c *gin.Context) {
@@ -380,7 +380,7 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	}
 	runID, err := h.runner.TriggerManual(id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"message": "triggered", "run_id": runID})
@@ -392,10 +392,10 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 		return
 	}
 	if err := h.runner.Cancel(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "canceled"})
+	respondMessage(c, "canceled")
 }
 
 // Pause 暂停任务调度。
@@ -409,10 +409,10 @@ func (h *TaskHandler) Pause(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req) // optional body
 	if err := h.runner.Pause(id, req.CancelRunning); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "paused"})
+	respondMessage(c, "paused")
 }
 
 // Resume 恢复任务调度。
@@ -422,10 +422,10 @@ func (h *TaskHandler) Resume(c *gin.Context) {
 		return
 	}
 	if err := h.runner.Resume(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "resumed"})
+	respondMessage(c, "resumed")
 }
 
 // SkipNext 跳过 cron 任务的下一次执行。
@@ -435,10 +435,10 @@ func (h *TaskHandler) SkipNext(c *gin.Context) {
 		return
 	}
 	if err := h.runner.SetSkipNext(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "skip_next set"})
+	respondMessage(c, "skip_next set")
 }
 
 // Restore 触发备份恢复，将备份数据反向同步回源路径或指定的自定义路径。
@@ -456,7 +456,7 @@ func (h *TaskHandler) Restore(c *gin.Context) {
 
 	runID, err := h.runner.TriggerRestore(id, req.TargetPath)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -473,7 +473,7 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		TaskIDs []uint `json:"task_ids" binding:"required,min=1"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 
@@ -555,7 +555,7 @@ func (h *TaskHandler) Logs(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": logs})
+	respondOK(c, logs)
 }
 
 func trimTaskRequest(req *taskRequest) {
