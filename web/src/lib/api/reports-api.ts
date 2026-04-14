@@ -1,4 +1,4 @@
-import { request, unwrapData, type Envelope } from "./core";
+import { request } from "./core";
 
 export type ReportConfig = {
   id: number;
@@ -43,32 +43,32 @@ export type NewReportConfigInput = {
 export function createReportsApi() {
   return {
     listConfigs: (token: string) =>
-      request<Envelope<ReportConfig[]>>("/report-configs", { method: "GET", token }).then(unwrapData),
+      request<ReportConfig[]>("/report-configs", { method: "GET", token }),
 
     createConfig: (token: string, input: NewReportConfigInput) =>
-      request<Envelope<ReportConfig>>("/report-configs", {
+      request<ReportConfig>("/report-configs", {
         method: "POST",
         token,
         body: input,
-      }).then(unwrapData),
+      }),
 
     updateConfig: (token: string, id: number, input: Partial<NewReportConfigInput>) =>
-      request<Envelope<ReportConfig>>(`/report-configs/${id}`, {
+      request<ReportConfig>(`/report-configs/${id}`, {
         method: "PUT",
         token,
         body: input,
-      }).then(unwrapData),
+      }),
 
     deleteConfig: (token: string, id: number) =>
-      request<Envelope<unknown>>(`/report-configs/${id}`, { method: "DELETE", token }),
+      request<unknown>(`/report-configs/${id}`, { method: "DELETE", token }),
 
     generateNow: (token: string, id: number) =>
-      request<Envelope<Report>>(`/report-configs/${id}/generate`, { method: "POST", token }).then(unwrapData),
+      request<Report>(`/report-configs/${id}/generate`, { method: "POST", token }),
 
     listReports: (token: string, configId: number) =>
-      request<Envelope<Report[]>>(`/report-configs/${configId}/reports`, { method: "GET", token }).then(unwrapData),
+      request<Report[]>(`/report-configs/${configId}/reports`, { method: "GET", token }),
 
     getReport: (token: string, id: number) =>
-      request<Envelope<Report>>(`/reports/${id}`, { method: "GET", token }).then(unwrapData),
+      request<Report>(`/reports/${id}`, { method: "GET", token }),
   };
 }

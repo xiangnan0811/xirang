@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export type VersionInfo = {
   version: string;
@@ -29,23 +29,19 @@ export type BackupEntry = {
 export function createSystemApi() {
   return {
     async getVersion(signal?: AbortSignal): Promise<VersionInfo> {
-      const payload = await request<Envelope<VersionInfo>>("/version", { signal });
-      return unwrapData(payload) ?? { version: "", build_time: "", git_commit: "" };
+      return (await request<VersionInfo>("/version", { signal })) ?? { version: "", build_time: "", git_commit: "" };
     },
 
     async checkVersion(token: string, signal?: AbortSignal): Promise<VersionCheck> {
-      const payload = await request<Envelope<VersionCheck>>("/version/check", { token, signal });
-      return unwrapData(payload) ?? { update_available: false, current_version: "", latest_version: "", release_url: "" };
+      return (await request<VersionCheck>("/version/check", { token, signal })) ?? { update_available: false, current_version: "", latest_version: "", release_url: "" };
     },
 
     async backupDB(token: string): Promise<BackupResult> {
-      const payload = await request<Envelope<BackupResult>>("/system/backup-db", { token, method: "POST" });
-      return unwrapData(payload) ?? { path: "", size: 0, sha256: "" };
+      return (await request<BackupResult>("/system/backup-db", { token, method: "POST" })) ?? { path: "", size: 0, sha256: "" };
     },
 
     async listBackups(token: string, signal?: AbortSignal): Promise<BackupEntry[]> {
-      const payload = await request<Envelope<BackupEntry[]>>("/system/backups", { token, signal });
-      return unwrapData(payload) ?? [];
+      return (await request<BackupEntry[]>("/system/backups", { token, signal })) ?? [];
     },
   };
 }

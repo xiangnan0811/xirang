@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export interface DiffChange {
   path: string;
@@ -29,11 +29,10 @@ export function createSnapshotDiffApi() {
       snap2: string,
     ): Promise<SnapshotDiff> {
       const query = new URLSearchParams({ snap1, snap2 });
-      const payload = await request<Envelope<SnapshotDiff>>(
+      return request<SnapshotDiff>(
         `/tasks/${taskId}/snapshots/diff?${query}`,
         { token },
       );
-      return unwrapData(payload);
     },
   };
 }

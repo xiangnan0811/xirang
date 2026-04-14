@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 export type FileEntry = {
   name: string;
@@ -31,11 +31,10 @@ export function createFilesApi() {
       options?: { signal?: AbortSignal }
     ): Promise<FileListResult> {
       const query = new URLSearchParams({ path });
-      const payload = await request<Envelope<FileListResult>>(
+      return request<FileListResult>(
         `/nodes/${nodeId}/files?${query.toString()}`,
         { token, signal: options?.signal }
       );
-      return unwrapData(payload);
     },
 
     async getNodeFileContent(
@@ -45,11 +44,10 @@ export function createFilesApi() {
       options?: { signal?: AbortSignal }
     ): Promise<FileContentResult> {
       const query = new URLSearchParams({ path });
-      const payload = await request<Envelope<FileContentResult>>(
+      return request<FileContentResult>(
         `/nodes/${nodeId}/files/content?${query.toString()}`,
         { token, signal: options?.signal }
       );
-      return unwrapData(payload);
     },
 
     async listTaskBackupFiles(
@@ -59,11 +57,10 @@ export function createFilesApi() {
       options?: { signal?: AbortSignal }
     ): Promise<FileListResult> {
       const query = new URLSearchParams({ path });
-      const payload = await request<Envelope<FileListResult>>(
+      return request<FileListResult>(
         `/tasks/${taskId}/backup-files?${query.toString()}`,
         { token, signal: options?.signal }
       );
-      return unwrapData(payload);
     },
   };
 }

@@ -6,7 +6,7 @@ import type {
   AlertRecord
 } from "@/types/domain";
 import i18n from "@/i18n";
-import { formatTime, parseNumericId, request, type Envelope, type PaginatedEnvelope, unwrapData, unwrapPaginated } from "./core";
+import { formatTime, parseNumericId, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 
 type AlertResponse = {
   id: number;
@@ -129,8 +129,7 @@ function mapDeliveryStats(payload?: DeliveryStatsResponse | null): AlertDelivery
 export function createAlertsApi() {
   return {
     async getAlerts(token: string, options?: { signal?: AbortSignal }): Promise<AlertRecord[]> {
-      const payload = await request<Envelope<AlertResponse[]>>("/alerts", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<AlertResponse[]>("/alerts", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapAlert(row));
     },
 
@@ -166,14 +165,13 @@ export function createAlertsApi() {
 
     async getAlert(token: string, alertId: string, options?: { signal?: AbortSignal }): Promise<AlertRecord> {
       const numericId = parseNumericId(alertId, "alert");
-      const payload = await request<Envelope<AlertResponse>>(`/alerts/${numericId}`, { token, signal: options?.signal });
-      return mapAlert(unwrapData(payload));
+      const row = await request<AlertResponse>(`/alerts/${numericId}`, { token, signal: options?.signal });
+      return mapAlert(row);
     },
 
     async getAlertDeliveries(token: string, alertId: string): Promise<AlertDeliveryRecord[]> {
       const numericId = parseNumericId(alertId, "alert");
-      const payload = await request<Envelope<AlertDeliveryResponse[]>>(`/alerts/${numericId}/deliveries`, { token });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<AlertDeliveryResponse[]>(`/alerts/${numericId}/deliveries`, { token })) ?? [];
       return rows.map((row) => mapAlertDelivery(row));
     },
 
@@ -183,39 +181,38 @@ export function createAlertsApi() {
         query.set("hours", String(Math.floor(options.hours)));
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<DeliveryStatsResponse>>(`/alerts/delivery-stats${suffix}`, { token });
-      return mapDeliveryStats(unwrapData(payload));
+      const data = await request<DeliveryStatsResponse>(`/alerts/delivery-stats${suffix}`, { token });
+      return mapDeliveryStats(data);
     },
 
     async ackAlert(token: string, alertId: string): Promise<AlertRecord> {
       const numericId = parseNumericId(alertId, "alert");
-      const payload = await request<Envelope<AlertResponse>>(`/alerts/${numericId}/ack`, {
+      const row = await request<AlertResponse>(`/alerts/${numericId}/ack`, {
         method: "POST",
         token
       });
-      return mapAlert(unwrapData(payload));
+      return mapAlert(row);
     },
 
     async resolveAlert(token: string, alertId: string): Promise<AlertRecord> {
       const numericId = parseNumericId(alertId, "alert");
-      const payload = await request<Envelope<AlertResponse>>(`/alerts/${numericId}/resolve`, {
+      const row = await request<AlertResponse>(`/alerts/${numericId}/resolve`, {
         method: "POST",
         token
       });
-      return mapAlert(unwrapData(payload));
+      return mapAlert(row);
     },
 
     async retryAlertDelivery(token: string, alertId: string, integrationId: string): Promise<AlertDeliveryRetryResult> {
       const numericAlertID = parseNumericId(alertId, "alert");
       const numericIntegrationID = parseNumericId(integrationId, "int");
-      const payload = await request<Envelope<RetryAlertDeliveryResponse>>(`/alerts/${numericAlertID}/retry-delivery`, {
+      const data = await request<RetryAlertDeliveryResponse>(`/alerts/${numericAlertID}/retry-delivery`, {
         method: "POST",
         token,
         body: {
           integration_id: numericIntegrationID
         }
       });
-      const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
         message: data?.message ?? i18n.t("common.resendComplete"),
@@ -224,8 +221,7 @@ export function createAlertsApi() {
     },
 
     async getAlertUnreadCount(token: string): Promise<{ total: number; critical: number; warning: number }> {
-      const payload = await request<Envelope<{ total: number; critical: number; warning: number }>>("/alerts/unread-count", { token });
-      const data = unwrapData(payload);
+      const data = await request<{ total: number; critical: number; warning: number }>("/alerts/unread-count", { token });
       return {
         total: Number(data?.total ?? 0),
         critical: Number(data?.critical ?? 0),
@@ -239,18 +235,16 @@ export function createAlertsApi() {
       if (options?.limit) {
         query.set("limit", String(options.limit));
       }
-      const payload = await request<Envelope<AlertResponse[]>>(`/alerts?${query.toString()}`, { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<AlertResponse[]>(`/alerts?${query.toString()}`, { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapAlert(row));
     },
 
     async retryFailedDeliveries(token: string, alertId: string): Promise<AlertBulkRetryResult> {
       const numericAlertID = parseNumericId(alertId, "alert");
-      const payload = await request<Envelope<RetryFailedDeliveriesResponse>>(`/alerts/${numericAlertID}/retry-failed-deliveries`, {
+      const data = await request<RetryFailedDeliveriesResponse>(`/alerts/${numericAlertID}/retry-failed-deliveries`, {
         method: "POST",
         token
       });
-      const data = unwrapData(payload);
       return {
         ok: Boolean(data?.ok),
         message: data?.message ?? i18n.t("common.batchResendComplete"),

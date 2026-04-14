@@ -1,6 +1,6 @@
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 import i18n from "@/i18n";
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 type PolicyResponse = {
   id: number;
@@ -47,13 +47,12 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
 export function createPoliciesApi() {
   return {
     async getPolicies(token: string, options?: { signal?: AbortSignal }): Promise<PolicyRecord[]> {
-      const payload = await request<Envelope<PolicyResponse[]>>("/policies", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<PolicyResponse[]>("/policies", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapPolicy(row));
     },
 
     async createPolicy(token: string, input: NewPolicyInput): Promise<PolicyRecord> {
-      const payload = await request<Envelope<PolicyResponse>>("/policies", {
+      const row = await request<PolicyResponse>("/policies", {
         method: "POST",
         token,
         body: {
@@ -73,11 +72,11 @@ export function createPoliciesApi() {
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
         }
       });
-      return mapPolicy(unwrapData(payload));
+      return mapPolicy(row);
     },
 
     async updatePolicy(token: string, policyId: number, input: NewPolicyInput): Promise<PolicyRecord> {
-      const payload = await request<Envelope<PolicyResponse>>(`/policies/${policyId}`, {
+      const row = await request<PolicyResponse>(`/policies/${policyId}`, {
         method: "PUT",
         token,
         body: {
@@ -97,7 +96,7 @@ export function createPoliciesApi() {
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
         }
       });
-      return mapPolicy(unwrapData(payload));
+      return mapPolicy(row);
     },
 
     async deletePolicy(token: string, policyId: number): Promise<void> {
@@ -116,11 +115,11 @@ export function createPoliciesApi() {
     },
 
     async clonePolicyFromTemplate(token: string, templateId: number): Promise<PolicyRecord> {
-      const payload = await request<Envelope<PolicyResponse>>(`/policies/from-template/${templateId}`, {
+      const row = await request<PolicyResponse>(`/policies/from-template/${templateId}`, {
         method: "POST",
         token
       });
-      return mapPolicy(unwrapData(payload));
+      return mapPolicy(row);
     }
   };
 }

@@ -1,5 +1,5 @@
 import type { NewNodeInput, NodeRecord, NodeStatus } from "@/types/domain";
-import { parseNumericId, request, type Envelope, formatTime, unwrapData } from "./core";
+import { parseNumericId, request, formatTime } from "./core";
 
 type NodeResponse = {
   id: number;
@@ -90,13 +90,12 @@ function mapNode(row: NodeResponse): NodeRecord {
 export function createNodesApi() {
   return {
     async getNodes(token: string, options?: { signal?: AbortSignal }): Promise<NodeRecord[]> {
-      const payload = await request<Envelope<NodeResponse[]>>("/nodes", { token, signal: options?.signal });
-      const rows = unwrapData(payload) ?? [];
+      const rows = (await request<NodeResponse[]>("/nodes", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapNode(row));
     },
 
     async createNode(token: string, input: NewNodeInput): Promise<NodeRecord> {
-      const payload = await request<Envelope<NodeResponse>>("/nodes", {
+      const row = await request<NodeResponse>("/nodes", {
         method: "POST",
         token,
         body: {
@@ -118,12 +117,11 @@ export function createNodesApi() {
           expiry_date: input.expiryDate ?? undefined,
         }
       });
-      const row = unwrapData(payload);
       return mapNode(row);
     },
 
     async updateNode(token: string, nodeId: number, input: NewNodeInput): Promise<NodeRecord> {
-      const payload = await request<Envelope<NodeResponse>>(`/nodes/${nodeId}`, {
+      const row = await request<NodeResponse>(`/nodes/${nodeId}`, {
         method: "PUT",
         token,
         body: {
@@ -145,7 +143,6 @@ export function createNodesApi() {
           expiry_date: input.expiryDate ?? undefined,
         }
       });
-      const row = unwrapData(payload);
       return mapNode(row);
     },
 
@@ -179,11 +176,10 @@ export function createNodesApi() {
     },
 
     async emergencyBackup(token: string, nodeId: number): Promise<{ triggered: number; task_ids: number[]; errors: string[] }> {
-      const payload = await request<Envelope<{ triggered: number; task_ids: number[]; errors: string[] }>>(
+      return request<{ triggered: number; task_ids: number[]; errors: string[] }>(
         `/nodes/${nodeId}/emergency-backup`,
         { token, method: "POST" }
       );
-      return unwrapData(payload);
     },
 
     async migrateNode(
@@ -192,7 +188,7 @@ export function createNodesApi() {
       targetNodeId: number,
       options?: { archiveSource?: boolean; pausePolicies?: boolean; migrateData?: boolean },
     ): Promise<MigrateNodeResult> {
-      const payload = await request<Envelope<MigrateNodeResult>>(
+      return request<MigrateNodeResult>(
         `/nodes/${sourceNodeId}/migrate`,
         {
           token, method: "POST",
@@ -204,7 +200,6 @@ export function createNodesApi() {
           },
         }
       );
-      return unwrapData(payload);
     },
 
     async migrateNodePreflight(
@@ -212,11 +207,10 @@ export function createNodesApi() {
       sourceNodeId: number,
       targetNodeId: number,
     ): Promise<MigratePreflightResult> {
-      const payload = await request<Envelope<MigratePreflightResult>>(
+      return request<MigratePreflightResult>(
         `/nodes/${sourceNodeId}/migrate/preflight`,
         { token, method: "POST", body: { targetNodeId } }
       );
-      return unwrapData(payload);
     },
   };
 }

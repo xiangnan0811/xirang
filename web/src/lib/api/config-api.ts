@@ -1,4 +1,4 @@
-import { request, type Envelope, unwrapData } from "./core";
+import { request } from "./core";
 
 type ConfigImportBreakdown = {
   nodes?: number;
@@ -16,8 +16,8 @@ export type ConfigExportPayload = {
   data?: Record<string, unknown>;
 };
 
-function summarizeImportResult(payload: Envelope<ConfigImportBreakdown> | ConfigImportBreakdown): { imported: number; skipped: number } {
-  const data = unwrapData(payload) ?? {};
+function summarizeImportResult(data: ConfigImportBreakdown): { imported: number; skipped: number } {
+  data = data ?? {};
   if (typeof data.imported === "number") {
     return {
       imported: data.imported,
@@ -40,7 +40,7 @@ export function createConfigApi() {
 
     async importConfig(token: string, data: Record<string, unknown>, conflict: "skip" | "overwrite" = "skip"): Promise<{ imported: number; skipped: number }> {
       const query = `?conflict=${conflict}`;
-      const payload = await request<Envelope<ConfigImportBreakdown>>(`/config/import${query}`, {
+      const payload = await request<ConfigImportBreakdown>(`/config/import${query}`, {
         method: "POST",
         token,
         body: data,

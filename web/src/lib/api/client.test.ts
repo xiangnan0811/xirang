@@ -114,6 +114,8 @@ describe("apiClient 任务请求约束", () => {
       createMockResponse(
         200,
         JSON.stringify({
+          code: 0,
+          message: "ok",
           data: [],
         })
       )

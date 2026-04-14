@@ -1,6 +1,6 @@
 import type { AuditLogRecord } from "@/types/domain";
 import i18n from "@/i18n";
-import { ApiError, fetchWithFallback, formatTime, request, type Envelope, unwrapData } from "./core";
+import { ApiError, fetchWithFallback, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 
 type AuditLogResponse = {
   id: number;
@@ -82,18 +82,18 @@ export function createAuditApi() {
     ): Promise<{ items: AuditLogRecord[]; total: number; page: number; pageSize: number }> {
       const query = buildAuditQuery(options);
       const suffix = query.toString() ? `?${query.toString()}` : "";
-      const payload = await request<Envelope<AuditLogResponse[]> & { total?: number; page?: number; page_size?: number }>(
+      const payload = await request<PaginatedEnvelope<AuditLogResponse[]>>(
         `/audit-logs${suffix}`,
         {
           token
         }
       );
-      const rows = unwrapData(payload) ?? [];
+      const result = unwrapPaginated(payload);
       return {
-        items: rows.map((row) => mapAuditLog(row)),
-        total: typeof payload.total === "number" ? payload.total : rows.length,
-        page: typeof payload.page === "number" ? payload.page : 1,
-        pageSize: typeof payload.page_size === "number" ? payload.page_size : rows.length,
+        items: result.items.map((row) => mapAuditLog(row)),
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
       };
     },
 
