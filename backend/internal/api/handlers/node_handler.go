@@ -65,17 +65,6 @@ const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
 var consecutiveDashRegexp = regexp.MustCompile(`-{2,}`)
 
-func sanitizeNode(node model.Node) model.Node {
-	copyNode := node
-	copyNode.Password = ""
-	copyNode.PrivateKey = ""
-	if copyNode.SSHKey != nil {
-		copyKey := *copyNode.SSHKey
-		copyKey.PrivateKey = ""
-		copyNode.SSHKey = &copyKey
-	}
-	return copyNode
-}
 
 func (h *NodeHandler) List(c *gin.Context) {
 	query := h.db.Preload("SSHKey")
@@ -98,7 +87,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 
 	safeNodes := make([]model.Node, 0, len(nodes))
 	for _, node := range nodes {
-		safeNodes = append(safeNodes, sanitizeNode(node))
+		safeNodes = append(safeNodes, node.Sanitized())
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": safeNodes})
@@ -114,7 +103,7 @@ func (h *NodeHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": sanitizeNode(node)})
+	c.JSON(http.StatusOK, gin.H{"data": node.Sanitized()})
 }
 
 func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
@@ -250,7 +239,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": sanitizeNode(node)})
+	c.JSON(http.StatusCreated, gin.H{"data": node.Sanitized()})
 }
 
 func (h *NodeHandler) Update(c *gin.Context) {
@@ -377,7 +366,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	resp := gin.H{"data": sanitizeNode(node)}
+	resp := gin.H{"data": node.Sanitized()}
 	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
 		resp["warning"] = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
 	}

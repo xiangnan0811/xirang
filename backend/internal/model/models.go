@@ -35,6 +35,19 @@ type SSHKey struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
+// Sanitized 返回去除敏感字段（密码、私钥）的节点副本，用于 API 响应。
+func (n Node) Sanitized() Node {
+	safe := n
+	safe.Password = ""
+	safe.PrivateKey = ""
+	if safe.SSHKey != nil {
+		keyCopy := *safe.SSHKey
+		keyCopy.PrivateKey = ""
+		safe.SSHKey = &keyCopy
+	}
+	return safe
+}
+
 type Node struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
 	Name                string     `gorm:"size:128;not null;uniqueIndex" json:"name"`

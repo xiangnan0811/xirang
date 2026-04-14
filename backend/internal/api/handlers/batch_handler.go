@@ -183,7 +183,7 @@ func (h *BatchHandler) Get(c *gin.Context) {
 
 	// 清理节点敏感字段
 	for i := range tasks {
-		tasks[i].Node = sanitizeNode(tasks[i].Node)
+		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 
 	c.JSON(http.StatusOK, gin.H{

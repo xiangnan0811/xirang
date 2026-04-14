@@ -112,7 +112,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 		return
 	}
 	for i := range tasks {
-		tasks[i].Node = sanitizeNode(tasks[i].Node)
+		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 	// 为有 running TaskRun 的任务填充实时进度（覆盖备份和恢复场景）
 	taskIDs := make([]uint, len(tasks))
@@ -156,7 +156,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
 		return
 	}
-	taskEntity.Node = sanitizeNode(taskEntity.Node)
+	taskEntity.Node = taskEntity.Node.Sanitized()
 	// 查询最新 running TaskRun 的进度（覆盖备份和恢复场景）
 	var runProgress []int
 	if err := h.db.Model(&model.TaskRun{}).
