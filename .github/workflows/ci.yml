@@ -51,10 +51,24 @@ jobs:
         run: go mod download
 
       - name: Run backend tests
-        run: go test ./...
+        run: go test -coverprofile=coverage.out ./...
 
       - name: Build backend
         run: go build ./...
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Check Go vulnerabilities
+        run: govulncheck ./...
+
+      - name: Upload backend coverage
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: backend/coverage.out
+          flags: backend
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   frontend:
     name: Frontend Test & Build
@@ -76,12 +90,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check npm vulnerabilities
+        run: npm audit --audit-level=moderate
+
       - name: Run frontend check
         run: npm run check
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
         run: node scripts/check-bundle-budget.mjs
+
+      - name: Upload frontend coverage
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: web/coverage/lcov.info
+          flags: frontend
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   doc-freshness:
     name: Doc Freshness Check
