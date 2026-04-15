@@ -41,17 +41,15 @@ import { SSHKeysContextProvider } from "@/context/ssh-keys-context";
 import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
 
-export type ConsoleOutletContext = ReturnType<typeof useConsoleData>;
-
 const prefersReducedMotion =
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function AnimatedOutlet({ context }: { context: ConsoleOutletContext }) {
+function AnimatedOutlet() {
   const location = useLocation();
   // useOutlet() captures the current outlet element so AnimatePresence can
   // hold on to the exiting page while the entering page mounts.
-  const outlet = useOutlet(context);
+  const outlet = useOutlet();
 
   if (prefersReducedMotion) {
     return <>{outlet}</>;
@@ -362,7 +360,7 @@ export function AppShell() {
               deleteSSHKey: consoleData.deleteSSHKey,
             }}>
               <ErrorBoundary>
-                <AnimatedOutlet context={consoleData as ConsoleOutletContext} />
+                <AnimatedOutlet />
               </ErrorBoundary>
             </SSHKeysContextProvider>
             </IntegrationsContextProvider>
