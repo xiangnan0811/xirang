@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
-import { AlertCenter } from "@/pages/notifications-page.alert-center";
+import { AlertCenter } from "@/pages/notifications/alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
