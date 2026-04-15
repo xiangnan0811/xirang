@@ -45,6 +45,15 @@ type policyRequest struct {
 	NodeIDs            []uint `json:"node_ids"`
 }
 
+// List godoc
+// @Summary      列出备份策略
+// @Description  返回所有备份策略列表
+// @Tags         policies
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response{data=[]object}
+// @Failure      401  {object}  handlers.Response
+// @Router       /policies [get]
 func (h *PolicyHandler) List(c *gin.Context) {
 	query := h.db.Preload("Nodes").Order("id asc")
 
@@ -68,6 +77,18 @@ func (h *PolicyHandler) List(c *gin.Context) {
 	respondOK(c, result)
 }
 
+// Get godoc
+// @Summary      获取备份策略详情
+// @Description  返回单个备份策略的详细信息
+// @Tags         policies
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "策略 ID"
+// @Success      200  {object}  handlers.Response{data=object}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /policies/{id} [get]
 func (h *PolicyHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -88,6 +109,19 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 	respondOK(c, buildPolicyResponse(p))
 }
 
+// Create godoc
+// @Summary      创建备份策略
+// @Description  创建新的备份策略
+// @Tags         policies
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      policyRequest  true  "创建策略请求"
+// @Success      201   {object}  handlers.Response{data=object}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /policies [post]
 func (h *PolicyHandler) Create(c *gin.Context) {
 	var req policyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -226,6 +260,20 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	respondCreated(c, buildPolicyResponse(p))
 }
 
+// Update godoc
+// @Summary      更新备份策略
+// @Description  更新备份策略配置
+// @Tags         policies
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int            true  "策略 ID"
+// @Param        body  body      policyRequest  true  "更新策略请求"
+// @Success      200   {object}  handlers.Response{data=object}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /policies/{id} [put]
 func (h *PolicyHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -404,6 +452,17 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	respondOK(c, buildPolicyResponse(p))
 }
 
+// Delete godoc
+// @Summary      删除备份策略
+// @Description  删除指定备份策略及关联的节点绑定
+// @Tags         policies
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "策略 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /policies/{id} [delete]
 func (h *PolicyHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -504,7 +563,17 @@ func buildPolicyResponse(p model.Policy) gin.H {
 }
 
 // BatchToggle 批量启用/停用策略。
-// POST /policies/batch-toggle
+// @Summary      批量启用/停用策略
+// @Description  批量启用或停用多个备份策略
+// @Tags         policies
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "policy_ids 数组 + enabled 布尔值"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /policies/batch-toggle [post]
 func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 	var req struct {
 		PolicyIDs []uint `json:"policy_ids" binding:"required,min=1"`
@@ -549,7 +618,17 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 }
 
 // CloneFromTemplate 从模板策略克隆一个新策略。
-// POST /policies/from-template/:id
+// @Summary      从模板克隆策略
+// @Description  从指定模板策略克隆一个新的备份策略
+// @Tags         policies
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "模板策略 ID"
+// @Success      201  {object}  handlers.Response{data=object}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /policies/from-template/{id} [post]
 func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {

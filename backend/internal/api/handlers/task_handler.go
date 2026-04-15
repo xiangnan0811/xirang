@@ -58,6 +58,21 @@ type taskRequest struct {
 	CronSpec        string `json:"cron_spec"`
 }
 
+// List godoc
+// @Summary      列出任务
+// @Description  返回任务列表（分页），支持按状态、节点、策略、关键字过滤
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        page       query     int     false  "页码（默认 1）"
+// @Param        page_size  query     int     false  "每页条数（默认 20，最大 100）"
+// @Param        status     query     string  false  "任务状态过滤"
+// @Param        node_id    query     int     false  "节点 ID 过滤"
+// @Param        policy_id  query     int     false  "策略 ID 过滤"
+// @Param        keyword    query     string  false  "关键字模糊搜索"
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.Task}
+// @Failure      401  {object}  handlers.Response
+// @Router       /tasks [get]
 func (h *TaskHandler) List(c *gin.Context) {
 	query := h.db.Model(&model.Task{})
 
@@ -146,6 +161,17 @@ func (h *TaskHandler) List(c *gin.Context) {
 	respondPaginated(c, tasks, total, pg.Page, pg.PageSize)
 }
 
+// Get godoc
+// @Summary      获取任务详情
+// @Description  返回单个任务的详细信息
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response{data=model.Task}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id} [get]
 func (h *TaskHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -168,6 +194,19 @@ func (h *TaskHandler) Get(c *gin.Context) {
 	respondOK(c, taskEntity)
 }
 
+// Create godoc
+// @Summary      创建任务
+// @Description  创建新的运维任务
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      taskRequest  true  "创建任务请求"
+// @Success      201   {object}  handlers.Response{data=model.Task}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /tasks [post]
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req taskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -238,6 +277,20 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	respondCreated(c, taskEntity)
 }
 
+// Update godoc
+// @Summary      更新任务
+// @Description  更新任务配置
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int          true  "任务 ID"
+// @Param        body  body      taskRequest  true  "更新任务请求"
+// @Success      200   {object}  handlers.Response{data=model.Task}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /tasks/{id} [put]
 func (h *TaskHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -348,6 +401,19 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	respondOK(c, taskEntity)
 }
 
+// Delete godoc
+// @Summary      删除任务
+// @Description  删除指定任务（有依赖关系时拒绝）
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
+// @Router       /tasks/{id} [delete]
 func (h *TaskHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -373,6 +439,17 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 	respondMessage(c, "deleted")
 }
 
+// Trigger godoc
+// @Summary      手动触发任务
+// @Description  立即手动触发任务执行，返回新创建的 run_id
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      202  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /tasks/{id}/trigger [post]
 func (h *TaskHandler) Trigger(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -386,6 +463,17 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"message": "triggered", "run_id": runID})
 }
 
+// Cancel godoc
+// @Summary      取消任务
+// @Description  取消正在运行的任务
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /tasks/{id}/cancel [post]
 func (h *TaskHandler) Cancel(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -399,6 +487,18 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 }
 
 // Pause 暂停任务调度。
+// @Summary      暂停任务
+// @Description  暂停任务的定时调度，可选是否取消当前运行
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int  true  "任务 ID"
+// @Param        body  body      object  false  "可选：cancel_running=true 取消当前运行"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /tasks/{id}/pause [post]
 func (h *TaskHandler) Pause(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -416,6 +516,16 @@ func (h *TaskHandler) Pause(c *gin.Context) {
 }
 
 // Resume 恢复任务调度。
+// @Summary      恢复任务
+// @Description  恢复已暂停任务的定时调度
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /tasks/{id}/resume [post]
 func (h *TaskHandler) Resume(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -429,6 +539,16 @@ func (h *TaskHandler) Resume(c *gin.Context) {
 }
 
 // SkipNext 跳过 cron 任务的下一次执行。
+// @Summary      跳过下次执行
+// @Description  标记跳过 cron 任务的下一次定时执行
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /tasks/{id}/skip-next [post]
 func (h *TaskHandler) SkipNext(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -442,6 +562,18 @@ func (h *TaskHandler) SkipNext(c *gin.Context) {
 }
 
 // Restore 触发备份恢复，将备份数据反向同步回源路径或指定的自定义路径。
+// @Summary      触发备份恢复
+// @Description  将备份数据反向同步回源路径或指定的自定义路径
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int     true   "任务 ID"
+// @Param        body  body      object  false  "可选：target_path 自定义恢复路径"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /tasks/{id}/restore [post]
 func (h *TaskHandler) Restore(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -467,7 +599,17 @@ func (h *TaskHandler) Restore(c *gin.Context) {
 }
 
 // BatchTrigger 批量触发任务执行。
-// POST /tasks/batch-trigger
+// @Summary      批量触发任务
+// @Description  批量手动触发多个任务执行
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "task_ids 数组"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /tasks/batch-trigger [post]
 func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	var req struct {
 		TaskIDs []uint `json:"task_ids" binding:"required,min=1"`
@@ -527,6 +669,20 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	})
 }
 
+// Logs godoc
+// @Summary      获取任务日志
+// @Description  返回任务的执行日志列表
+// @Tags         tasks
+// @Security     Bearer
+// @Produce      json
+// @Param        id        path      int     true   "任务 ID"
+// @Param        level     query     string  false  "日志级别过滤"
+// @Param        before_id query     int     false  "游标：返回此 ID 之前的日志"
+// @Param        limit     query     int     false  "返回条数（默认 200，最大 500）"
+// @Success      200  {object}  handlers.Response{data=[]model.TaskLog}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/logs [get]
 func (h *TaskHandler) Logs(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {

@@ -23,8 +23,20 @@ func canReadOrphanedTaskRun(role string) bool {
 	return role == "" || role == "admin"
 }
 
-// ListByTask 返回某任务的执行历史，按 created_at DESC 分页
-// GET /tasks/:id/runs?page=1&page_size=20&status=success
+// ListByTask godoc
+// @Summary      列出任务执行历史
+// @Description  返回某任务的执行历史，按 created_at DESC 分页
+// @Tags         task-runs
+// @Security     Bearer
+// @Produce      json
+// @Param        id         path      int     true   "任务 ID"
+// @Param        page       query     int     false  "页码（默认 1）"
+// @Param        page_size  query     int     false  "每页条数（默认 20，最大 100）"
+// @Param        status     query     string  false  "状态过滤"
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.TaskRun}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/runs [get]
 func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {
@@ -58,8 +70,18 @@ func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 	respondPaginated(c, runs, total, pg.Page, pg.PageSize)
 }
 
-// Get 返回单次执行详情，含关联的 Task 基本信息
-// GET /task-runs/:id
+// Get godoc
+// @Summary      获取执行记录详情
+// @Description  返回单次任务执行详情，含关联的 Task 基本信息
+// @Tags         task-runs
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "执行记录 ID"
+// @Success      200  {object}  handlers.Response{data=model.TaskRun}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /task-runs/{id} [get]
 func (h *TaskRunHandler) Get(c *gin.Context) {
 	runID, ok := parseID(c, "id")
 	if !ok {
@@ -94,8 +116,21 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 	respondOK(c, run)
 }
 
-// Logs 返回单次执行的日志
-// GET /task-runs/:id/logs?limit=200&before_id=0&level=error
+// Logs godoc
+// @Summary      获取执行记录日志
+// @Description  返回单次任务执行的日志列表
+// @Tags         task-runs
+// @Security     Bearer
+// @Produce      json
+// @Param        id        path      int     true   "执行记录 ID"
+// @Param        limit     query     int     false  "返回条数（默认 200，最大 1000）"
+// @Param        before_id query     int     false  "游标：返回此 ID 之前的日志"
+// @Param        level     query     string  false  "日志级别过滤"
+// @Success      200  {object}  handlers.Response{data=[]model.TaskLog}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /task-runs/{id}/logs [get]
 func (h *TaskRunHandler) Logs(c *gin.Context) {
 	runID, ok := parseID(c, "id")
 	if !ok {
