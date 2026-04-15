@@ -1,4 +1,4 @@
-.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks
+.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -52,6 +52,34 @@ e2e-check:
 setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "✅ Git hooks 已配置为 .githooks/ 目录"
+
+# ── Quality & Testing ──
+.PHONY: lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean
+
+lint: lint-backend lint-frontend ## Run all linters
+
+lint-backend: ## Run golangci-lint
+	cd backend && golangci-lint run ./...
+
+lint-frontend: ## Run ESLint
+	cd web && npm run lint
+
+coverage: coverage-backend coverage-frontend ## Generate coverage reports
+
+coverage-backend: ## Run backend tests with coverage
+	cd backend && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+
+coverage-frontend: ## Run frontend tests with coverage
+	cd web && npx vitest run --coverage
+
+check: lint test build ## Full pre-commit quality gate
+
+test: backend-test web-test ## Run all tests
+
+build: backend-build web-build ## Build all
+
+clean: ## Remove build artifacts
+	rm -rf backend/xirang-server backend/coverage.out web/dist web/coverage
 
 # ── Docker 镜像 ──
 DOCKER_REGISTRY ?= docker.io
