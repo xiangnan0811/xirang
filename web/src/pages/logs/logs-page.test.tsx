@@ -2,16 +2,14 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { LogsPage } from "./logs-page";
 import type { LogEvent } from "@/types/domain";
 
 const setSearchParamsMock = vi.fn();
 const searchParamsRef = { current: new URLSearchParams() };
 const refreshTaskMock = vi.fn().mockResolvedValue(undefined);
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const tasksRef: { current: Record<string, unknown> } = { current: {} };
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -59,34 +57,19 @@ vi.mock("react-router-dom", async () => {
   );
   return {
     ...actual,
-    useOutletContext: () => contextRef.current,
     useSearchParams: () => [searchParamsRef.current, setSearchParamsMock] as const,
   };
 });
 
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/tasks-context", () => ({
+  useTasksContext: () => tasksRef.current,
+}));
+
 function createContext(tasks: Array<{ id: number; progress: number; status: string }>) {
-  const base: Partial<ConsoleOutletContext> = {
-    tasks: tasks.map((task) => ({
-      id: task.id,
-      policyId: 1,
-      policyName: "每日备份",
-      nodeId: 1,
-      nodeName: "node-1",
-      status: task.status as
-        | "pending"
-        | "running"
-        | "retrying"
-        | "failed"
-        | "success"
-        | "canceled",
-      progress: task.progress,
-      startedAt: "2026-02-24 10:00:00",
-      nextRunAt: undefined,
-      errorCode: undefined,
-      lastError: undefined,
-      speedMbps: 120,
-      enabled: true,
-    })),
+  nodesRef.current = {
     nodes: [
       {
         id: 1,
@@ -109,12 +92,49 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
         connectionLatencyMs: 12,
       },
     ],
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn(),
+    updateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    triggerNodeBackup: vi.fn(),
+  };
+  tasksRef.current = {
+    tasks: tasks.map((task) => ({
+      id: task.id,
+      policyId: 1,
+      policyName: "每日备份",
+      nodeId: 1,
+      nodeName: "node-1",
+      status: task.status as
+        | "pending"
+        | "running"
+        | "retrying"
+        | "failed"
+        | "success"
+        | "canceled",
+      progress: task.progress,
+      startedAt: "2026-02-24 10:00:00",
+      nextRunAt: undefined,
+      errorCode: undefined,
+      lastError: undefined,
+      speedMbps: 120,
+      enabled: true,
+    })),
     fetchTaskLogs: vi.fn().mockResolvedValue([]),
     refreshTask: refreshTaskMock,
-    refreshNodes: vi.fn().mockResolvedValue(undefined),
     refreshTasks: vi.fn().mockResolvedValue(undefined),
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn(),
+    triggerTask: vi.fn(),
+    cancelTask: vi.fn(),
+    retryTask: vi.fn(),
+    pauseTask: vi.fn(),
+    resumeTask: vi.fn(),
+    skipNextTask: vi.fn(),
   };
-  contextRef.current = base as ConsoleOutletContext;
 }
 
 describe("LogsPage", () => {

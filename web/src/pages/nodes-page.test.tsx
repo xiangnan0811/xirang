@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { NodesPage } from "./nodes-page";
 
 const { toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
@@ -25,9 +24,6 @@ function createMemoryStorage() {
   } satisfies Storage;
 }
 
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
 const searchParamsRef = { current: new URLSearchParams() };
 const setSearchParamsMock = vi.fn();
 const confirmMock = vi.fn().mockResolvedValue(true);
@@ -39,11 +35,24 @@ vi.mock("react-router-dom", async () => {
   );
   return {
     ...actual,
-    useOutletContext: () => contextRef.current,
     useSearchParams: () => [searchParamsRef.current, setSearchParamsMock] as const,
     useNavigate: () => navigateMock,
   };
 });
+
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const sshKeysRef: { current: Record<string, unknown> } = { current: {} };
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/ssh-keys-context", () => ({
+  useSSHKeysContext: () => sshKeysRef.current,
+}));
 
 vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
@@ -75,79 +84,91 @@ vi.mock("@/context/auth-context", () => ({
   }),
 }));
 
-function createContext(overrides?: Partial<ConsoleOutletContext>) {
-  const base = {
-    nodes: [
-      {
-        id: 1,
-        name: "node-prod-1",
-        host: "node-prod-1.example.com",
-        address: "10.0.0.1",
-        ip: "10.0.0.1",
-        port: 22,
-        username: "root",
-        authType: "key",
-        keyId: "key-1",
-        tags: ["prod"],
-        status: "online" as const,
-        lastSeenAt: "2026-02-24 12:00:00",
-        lastBackupAt: "2026-02-24 11:50:00",
-        diskFreePercent: 60,
-        diskUsedGb: 40,
-        diskTotalGb: 100,
-        diskProbeAt: "2026-02-24 11:55:00",
-        connectionLatencyMs: 12,
-      },
-      {
-        id: 2,
-        name: "node-dr-2",
-        host: "node-dr-2.example.com",
-        address: "10.0.0.2",
-        ip: "10.0.0.2",
-        port: 22,
-        username: "backup",
-        authType: "key",
-        keyId: "key-1",
-        tags: ["dr"],
-        status: "warning" as const,
-        lastSeenAt: "2026-02-24 12:00:00",
-        lastBackupAt: "2026-02-24 11:40:00",
-        diskFreePercent: 42,
-        diskUsedGb: 210,
-        diskTotalGb: 500,
-        diskProbeAt: "2026-02-24 11:56:00",
-        connectionLatencyMs: 20,
-      },
-    ],
-    sshKeys: [
-      {
-        id: "key-1",
-        name: "主机密钥",
-      },
-    ],
+function createContext(overrides?: Record<string, unknown>) {
+  const defaultNodes = [
+    {
+      id: 1,
+      name: "node-prod-1",
+      host: "node-prod-1.example.com",
+      address: "10.0.0.1",
+      ip: "10.0.0.1",
+      port: 22,
+      username: "root",
+      authType: "key",
+      keyId: "key-1",
+      tags: ["prod"],
+      status: "online" as const,
+      lastSeenAt: "2026-02-24 12:00:00",
+      lastBackupAt: "2026-02-24 11:50:00",
+      diskFreePercent: 60,
+      diskUsedGb: 40,
+      diskTotalGb: 100,
+      diskProbeAt: "2026-02-24 11:55:00",
+      connectionLatencyMs: 12,
+    },
+    {
+      id: 2,
+      name: "node-dr-2",
+      host: "node-dr-2.example.com",
+      address: "10.0.0.2",
+      ip: "10.0.0.2",
+      port: 22,
+      username: "backup",
+      authType: "key",
+      keyId: "key-1",
+      tags: ["dr"],
+      status: "warning" as const,
+      lastSeenAt: "2026-02-24 12:00:00",
+      lastBackupAt: "2026-02-24 11:40:00",
+      diskFreePercent: 42,
+      diskUsedGb: 210,
+      diskTotalGb: 500,
+      diskProbeAt: "2026-02-24 11:56:00",
+      connectionLatencyMs: 20,
+    },
+  ];
+
+  sharedRef.current = {
     loading: false,
     globalSearch: "",
     setGlobalSearch: vi.fn(),
+    warning: null,
+    lastSyncedAt: "",
+    refreshVersion: 0,
+    refresh: vi.fn(),
+    overview: {},
+    fetchOverviewTraffic: vi.fn(),
+    ...(overrides?.globalSearch !== undefined ? { globalSearch: overrides.globalSearch } : {}),
+    ...(overrides?.setGlobalSearch !== undefined ? { setGlobalSearch: overrides.setGlobalSearch } : {}),
+    ...(overrides?.loading !== undefined ? { loading: overrides.loading } : {}),
+  };
+  nodesRef.current = {
+    nodes: defaultNodes,
     createNode: vi.fn().mockResolvedValue(3),
     updateNode: vi.fn().mockResolvedValue(undefined),
     deleteNode: vi.fn().mockResolvedValue(undefined),
-    deleteNodes: vi.fn().mockResolvedValue({
-      deleted: 0,
-      notFoundIds: [],
-    }),
-    testNodeConnection: vi.fn().mockResolvedValue({
-      ok: true,
-      message: "连接成功",
-    }),
+    deleteNodes: vi.fn().mockResolvedValue({ deleted: 0, notFoundIds: [] }),
+    testNodeConnection: vi.fn().mockResolvedValue({ ok: true, message: "连接成功" }),
     triggerNodeBackup: vi.fn().mockResolvedValue(undefined),
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    ...(overrides?.nodes !== undefined ? { nodes: overrides.nodes } : {}),
+    ...(overrides?.testNodeConnection !== undefined ? { testNodeConnection: overrides.testNodeConnection } : {}),
+    ...(overrides?.createNode !== undefined ? { createNode: overrides.createNode } : {}),
+    ...(overrides?.updateNode !== undefined ? { updateNode: overrides.updateNode } : {}),
+    ...(overrides?.deleteNode !== undefined ? { deleteNode: overrides.deleteNode } : {}),
+    ...(overrides?.deleteNodes !== undefined ? { deleteNodes: overrides.deleteNodes } : {}),
+    ...(overrides?.triggerNodeBackup !== undefined ? { triggerNodeBackup: overrides.triggerNodeBackup } : {}),
+    ...(overrides?.refreshNodes !== undefined ? { refreshNodes: overrides.refreshNodes } : {}),
+  };
+  sshKeysRef.current = {
+    sshKeys: [{ id: "key-1", name: "主机密钥" }],
     refreshSSHKeys: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ConsoleOutletContext;
-
-  contextRef.current = {
-    ...base,
-    ...overrides,
-  } as ConsoleOutletContext;
+    createSSHKey: vi.fn(),
+    updateSSHKey: vi.fn(),
+    deleteSSHKey: vi.fn(),
+    ...(overrides?.sshKeys !== undefined ? { sshKeys: overrides.sshKeys } : {}),
+    ...(overrides?.refreshSSHKeys !== undefined ? { refreshSSHKeys: overrides.refreshSSHKeys } : {}),
+  };
 }
 
 describe("NodesPage", () => {

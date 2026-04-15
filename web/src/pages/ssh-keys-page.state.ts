@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useSSHKeysContext } from "@/context/ssh-keys-context";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
@@ -33,18 +34,15 @@ const FILTER_CONFIG = {
 
 export function useSSHKeysPageState() {
   const { t } = useTranslation();
+  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
   const {
     sshKeys,
-    nodes,
-    loading,
-    globalSearch,
-    setGlobalSearch,
     createSSHKey,
     updateSSHKey,
     deleteSSHKey,
     refreshSSHKeys,
-    refreshNodes,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = useSSHKeysContext();
 
   // 首次挂载时刷新数据
   useEffect(() => {

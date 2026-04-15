@@ -2,23 +2,32 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { OverviewPage } from "./overview-page";
 
 const mockNavigate = vi.fn();
-const mockContextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext
-};
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useOutletContext: () => mockContextRef.current,
     Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>,
   };
 });
+
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const tasksRef: { current: Record<string, unknown> } = { current: {} };
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/tasks-context", () => ({
+  useTasksContext: () => tasksRef.current,
+}));
 
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" })
@@ -54,7 +63,7 @@ const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
 function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) { // eslint-disable-line @typescript-eslint/no-unused-vars
   const nodes = createNodes(nodeCount);
-  const base: ConsoleOutletContext = {
+  sharedRef.current = {
     overview: {
       totalNodes: nodeCount,
       healthyNodes: nodes.filter((node) => node.status === "online").length,
@@ -62,9 +71,28 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
       runningTasks: 2,
       failedTasks24h: 1,
       overallSuccessRate: 97.3,
-      avgSyncMbps: 318
+      avgSyncMbps: 318,
     },
+    refreshVersion,
+    fetchOverviewTraffic: fetchOverviewTrafficMock,
+    loading: false,
+    warning: null,
+    lastSyncedAt: "",
+    globalSearch: "",
+    setGlobalSearch: vi.fn(),
+    refresh: vi.fn(),
+  };
+  nodesRef.current = {
     nodes,
+    refreshNodes: refreshNodesMock,
+    createNode: vi.fn(),
+    updateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    triggerNodeBackup: vi.fn(),
+  };
+  tasksRef.current = {
     tasks: [
       {
         id: 1,
@@ -91,17 +119,21 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
         createdAt: "2026-03-01 09:45:00",
         updatedAt: "2026-03-01 10:05:00",
         speedMbps: 0,
-      }
+      },
     ],
-    policies: [],
-    sshKeys: [],
-    refreshVersion,
-    fetchOverviewTraffic: fetchOverviewTrafficMock,
-    refreshNodes: refreshNodesMock,
     refreshTasks: refreshTasksMock,
-    loading: false
-  } as unknown as ConsoleOutletContext;
-  mockContextRef.current = base;
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn(),
+    triggerTask: vi.fn(),
+    cancelTask: vi.fn(),
+    retryTask: vi.fn(),
+    pauseTask: vi.fn(),
+    resumeTask: vi.fn(),
+    skipNextTask: vi.fn(),
+    refreshTask: vi.fn(),
+    fetchTaskLogs: vi.fn(),
+  };
 }
 
 describe("OverviewPage", () => {
@@ -346,7 +378,8 @@ describe("OverviewPage", () => {
 
   it("最近同步任务按创建时间倒序展示最近 5 条", async () => {
     const nodes = createNodes(2);
-    mockContextRef.current = {
+    sharedRef.current = {
+      ...sharedRef.current,
       overview: {
         totalNodes: nodes.length,
         healthyNodes: nodes.length,
@@ -356,7 +389,17 @@ describe("OverviewPage", () => {
         overallSuccessRate: 99,
         avgSyncMbps: 256,
       },
+      refreshVersion: 0,
+      fetchOverviewTraffic: fetchOverviewTrafficMock,
+      loading: false,
+    };
+    nodesRef.current = {
+      ...nodesRef.current,
       nodes,
+      refreshNodes: refreshNodesMock,
+    };
+    tasksRef.current = {
+      ...tasksRef.current,
       tasks: [
         { id: 1, name: "最早任务", policyName: "最早任务", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:00:00", updatedAt: "2026-03-01 09:10:00", speedMbps: 8 },
         { id: 2, name: "第二条", policyName: "第二条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:10:00", updatedAt: "2026-03-01 09:20:00", speedMbps: 8 },
@@ -365,14 +408,8 @@ describe("OverviewPage", () => {
         { id: 5, name: "第五条", policyName: "第五条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:40:00", updatedAt: "2026-03-01 09:50:00", speedMbps: 8 },
         { id: 6, name: "最新任务", policyName: "最新任务", nodeName: "Node-002", nodeId: 2, status: "running", progress: 60, startedAt: "2026-03-01", createdAt: "2026-03-01 09:50:00", updatedAt: "2026-03-01 10:00:00", speedMbps: 16 },
       ],
-      policies: [],
-      sshKeys: [],
-      refreshVersion: 0,
-      fetchOverviewTraffic: fetchOverviewTrafficMock,
-      refreshNodes: refreshNodesMock,
       refreshTasks: refreshTasksMock,
-      loading: false,
-    } as unknown as ConsoleOutletContext;
+    };
 
     render(<OverviewPage />);
 

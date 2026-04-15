@@ -1,18 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useOutletContext } from "react-router-dom";
-import { TrendingUp, Clock, AlertTriangle, CheckCircle2, Maximize2 } from "lucide-react";
-import {
-  Area,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ComposedChart,
-} from "recharts";
-import { getChartTheme } from "@/lib/chart-theme";
+import { useNavigate } from "react-router-dom";
+import { Maximize2, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
@@ -26,11 +15,14 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
-import { InlineAlert } from "@/components/ui/inline-alert";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useTasksContext } from "@/context/tasks-context";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
 import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
+import { OverviewTrafficChart } from "@/pages/overview-page.traffic";
+import { OverviewRecentTasks } from "@/pages/overview-page.recent-tasks";
 
 const MATRIX_PREVIEW_LIMIT = 80;
 
@@ -48,7 +40,9 @@ export function OverviewPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { token } = useAuth();
-  const { overview, nodes, tasks, loading, refreshVersion, fetchOverviewTraffic, refreshNodes, refreshTasks } = useOutletContext<ConsoleOutletContext>();
+  const { overview, loading, refreshVersion, fetchOverviewTraffic } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
+  const { tasks, refreshTasks } = useTasksContext();
 
   useEffect(() => {
     void refreshNodes();
@@ -136,8 +130,6 @@ export function OverviewPage() {
       totalFailedCount,
     };
   }, [trafficData]);
-
-  const chartTheme = useMemo(() => getChartTheme(), []);
 
   const { yMaxLeft, yMaxRight } = useMemo(() => {
     const points = chartMetrics.chartData;
@@ -273,142 +265,17 @@ export function OverviewPage() {
           </Card>
         </div>
 
-        <div className="flex flex-col w-full min-w-0">
-          <Card className="rounded-lg border border-border bg-card flex-1 flex flex-col min-h-0">
-            <CardHeader className="pb-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="text-base">{t(`overview.trafficTitle`, { window: t(`overview.trafficWindow${trafficWindow}`) })}</CardTitle>
-                <div className="flex items-center gap-2">
-                  {(["1h", "24h", "7d"] as OverviewTrafficWindow[]).map((window) => (
-                    <Button
-                      key={window}
-                      size="sm"
-                      variant={trafficWindow === window ? "default" : "outline"}
-                      aria-pressed={trafficWindow === window}
-                      onClick={() => setTrafficWindow(window)}
-                    >
-                      {window}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col min-h-0 pt-2">
-              {trafficLoading ? (
-                <LoadingState className="py-6" rows={3} title={t("overview.trafficLoading")} />
-              ) : trafficError ? (
-                <InlineAlert tone="warning" className="mb-2">
-                  {trafficError}
-                </InlineAlert>
-              ) : (
-                <>
-                  <div
-                    role="img"
-                    aria-label={
-                      chartMetrics.hasRealSamples
-                        ? t("overview.trafficAriaLabel", { window: t(`overview.trafficWindow${trafficWindow}`), peak: chartMetrics.peakThroughput, started: chartMetrics.totalStartedCount, failed: chartMetrics.totalFailedCount })
-                        : t("overview.trafficAriaLabelEmpty", { window: t(`overview.trafficWindow${trafficWindow}`) })
-                    }
-                  >
-                    <ResponsiveContainer width="100%" height={208}>
-                      <ComposedChart
-                        data={chartMetrics.chartData}
-                        margin={{ top: 6, right: 8, left: -12, bottom: 4 }}
-                      >
-<CartesianGrid strokeDasharray="none" stroke={chartTheme.grid} vertical={false} />
-                        <XAxis
-                          dataKey="label"
-                          tick={{ fontSize: 10, fill: chartTheme.axis }}
-                          stroke="transparent"
-                          interval="preserveStartEnd"
-                          tickLine={false}
-                        />
-                        <YAxis
-                          yAxisId="left"
-                          domain={[0, yMaxLeft]}
-                          tick={{ fontSize: 10, fill: chartTheme.axis }}
-                          stroke="transparent"
-                          tickLine={false}
-                          axisLine={false}
-                          hide={!visibleLayers.throughput}
-                        />
-                        <YAxis
-                          yAxisId="right"
-                          orientation="right"
-                          domain={[0, yMaxRight]}
-                          allowDecimals={false}
-                          tick={{ fontSize: 10, fill: chartTheme.axis }}
-                          stroke="transparent"
-                          tickLine={false}
-                          axisLine={false}
-                          hide={!visibleLayers.activity && !visibleLayers.failures}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: chartTheme.tooltip.bg,
-                            color: chartTheme.tooltip.text,
-                            border: chartTheme.tooltip.border,
-                            fontSize: 11,
-                            borderRadius: 6,
-                          }}
-                          labelStyle={{ color: chartTheme.axis }}
-                          formatter={(value, name) => {
-                            if (name === t("overview.chartThroughput")) return [`${value} Mbps`, name];
-                            return [value, name];
-                          }}
-                        />
-                        {visibleLayers.activity && (
-                          <Bar dataKey="activity" yAxisId="right" name={t("overview.chartActivity")}
-                            fill={chartTheme.series[1]} opacity={0.22}
-                            maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
-                        )}
-                        {visibleLayers.failures && (
-                          <Bar dataKey="failed" yAxisId="right" name={t("overview.chartFailures")}
-                            fill={chartTheme.error} opacity={0.7}
-                            maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
-                        )}
-                        {visibleLayers.throughput && (
-                          <Area
-                            type="monotone"
-                            dataKey="throughput"
-                            yAxisId="left"
-                            name={t("overview.chartThroughput")}
-                            stroke={chartTheme.series[0]}
-                            strokeWidth={1.5}
-                            fill={chartTheme.series[0]}
-                            fillOpacity={0.06}
-                            dot={false}
-                            activeDot={{ r: 3 }}
-                            isAnimationActive={false}
-                          />
-                        )}
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  {/* Legend — matching matrix style (border-t, inline dots) */}
-                  <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border">
-                    {[
-                      { key: "throughput", label: t("overview.legendThroughput"), dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
-                      { key: "activity", label: t("overview.legendActivity"), dotClass: "size-1.5 rounded-sm bg-[hsl(var(--chart-egress))]" },
-                      { key: "failures", label: t("overview.legendFailures"), dotClass: "size-1.5 rounded-full bg-destructive" },
-                    ].map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        className={`inline-flex items-center gap-1.5 transition-opacity ${visibleLayers[item.key as keyof typeof visibleLayers] ? "" : "opacity-35"}`}
-                        aria-pressed={visibleLayers[item.key as keyof typeof visibleLayers]}
-                        onClick={() => setVisibleLayers((current) => ({ ...current, [item.key]: !current[item.key as keyof typeof current] }))}
-                      >
-                        <span className={item.dotClass} />{item.label}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <OverviewTrafficChart
+          trafficWindow={trafficWindow}
+          setTrafficWindow={setTrafficWindow}
+          trafficLoading={trafficLoading}
+          trafficError={trafficError}
+          chartMetrics={chartMetrics}
+          visibleLayers={visibleLayers}
+          setVisibleLayers={setVisibleLayers}
+          yMaxLeft={yMaxLeft}
+          yMaxRight={yMaxRight}
+        />
       </section>
 
       {/* 节点资源概览 */}
@@ -472,93 +339,7 @@ export function OverviewPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 最近同步任务框 */}
-      <section className="animate-slide-up [animation-delay:250ms]">
-        <Card className="rounded-lg border border-border bg-card">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Clock className="size-4 text-primary" />
-              {t("overview.recentTasks")}
-            </CardTitle>
-            <Link to="/app/tasks" className="inline-flex items-center text-xs px-2 py-1 rounded-md text-muted-foreground hover:text-foreground transition-colors">
-              {t("overview.viewMore")} &rarr;
-            </Link>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <LoadingState className="py-6" rows={3} title={t("overview.recentTasksLoading")} />
-            ) : tasks.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">{t("overview.noTaskData")}</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-border text-xs text-muted-foreground uppercase bg-secondary">
-                    <tr>
-                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableNodeName")}</th>
-                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableTaskName")}</th>
-                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableSyncStatus")}</th>
-                      <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableTransfer")}</th>
-                      <th scope="col" className="px-4 py-2 font-medium text-right">{t("overview.tableCompletedAt")}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {recentTasks.map((task) => {
-                      // Estimate transfer size if speed exists and it's not pending/retrying
-                      let transferData = "-";
-                      if (task.speedMbps > 0) {
-                        // Rough estimation for display purposes during active transfer
-                        transferData = `≈ ${(task.speedMbps / 8).toFixed(1)} MB/s`;
-                      }
-
-                      let StatusIcon = Clock;
-                      let statusColor = "text-muted-foreground";
-                      let statusLabel = t("overview.taskStatusQueued");
-
-                      switch (task.status) {
-                        case "success":
-                          StatusIcon = CheckCircle2;
-                          statusColor = "text-success";
-                          statusLabel = t("overview.taskStatusSuccess");
-                          break;
-                        case "failed":
-                          StatusIcon = AlertTriangle;
-                          statusColor = "text-destructive";
-                          statusLabel = t("overview.taskStatusFailed");
-                          break;
-                        case "running":
-                          StatusIcon = TrendingUp;
-                          statusColor = "text-info";
-                          statusLabel = t("overview.taskStatusRunning");
-                          break;
-                        case "retrying":
-                          StatusIcon = AlertTriangle;
-                          statusColor = "text-warning";
-                          statusLabel = t("overview.taskStatusRetrying");
-                          break;
-                      }
-
-                      return (
-                        <tr key={task.id} className="hover:bg-accent transition-colors">
-                          <td className="px-4 py-2.5 font-medium">{task.nodeName}</td>
-                          <td className="px-4 py-2.5 text-muted-foreground">{task.name || task.policyName}</td>
-                          <td className="px-4 py-2.5">
-                            <span className={`inline-flex items-center gap-1.5 ${statusColor}`}>
-                              <StatusIcon className="size-3.5" />
-                              {statusLabel}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 font-mono text-xs">{transferData}</td>
-                          <td className="px-4 py-2.5 text-right text-muted-foreground text-xs">{task.updatedAt || "-"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
+      <OverviewRecentTasks tasks={tasks} recentTasks={recentTasks} loading={loading} />
     </div>
   );
 }

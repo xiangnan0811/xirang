@@ -1,3 +1,4 @@
+import React, { Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { useSSHKeysPageState } from "@/pages/ssh-keys-page.state";
 import { SSHKeysToolbar } from "@/pages/ssh-keys-page.toolbar";
@@ -6,9 +7,14 @@ import { SSHKeysGrid } from "@/pages/ssh-keys-page.grid";
 import { SSHKeyEditorDialog, type SSHKeyDraft } from "@/components/ssh-key-editor-dialog";
 import { SSHKeyTestConnectionDialog } from "@/components/ssh-key-test-connection-dialog";
 import { SSHKeyAssociatedNodesSheet } from "@/components/ssh-key-associated-nodes-sheet";
-import { SSHKeyBatchImportDialog } from "@/components/ssh-key-batch-import-dialog";
 import { SSHKeyExportDialog } from "@/components/ssh-key-export-dialog";
-import { SSHKeyRotationWizard } from "@/components/ssh-key-rotation-wizard";
+
+const SSHKeyBatchImportDialog = React.lazy(() =>
+  import("@/components/ssh-key-batch-import-dialog").then(m => ({ default: m.SSHKeyBatchImportDialog }))
+);
+const SSHKeyRotationWizard = React.lazy(() =>
+  import("@/components/ssh-key-rotation/ssh-key-rotation-wizard").then(m => ({ default: m.SSHKeyRotationWizard }))
+);
 import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
@@ -307,13 +313,15 @@ export function SSHKeysPage() {
         nodes={nodes}
       />
 
-      <SSHKeyBatchImportDialog
-        open={batchImportOpen}
-        onOpenChange={setBatchImportOpen}
-        existingKeyNames={sshKeys.map((k) => k.name)}
-        token={token ?? ""}
-        onImportComplete={() => void refreshSSHKeys()}
-      />
+      <Suspense fallback={null}>
+        <SSHKeyBatchImportDialog
+          open={batchImportOpen}
+          onOpenChange={setBatchImportOpen}
+          existingKeyNames={sshKeys.map((k) => k.name)}
+          token={token ?? ""}
+          onImportComplete={() => void refreshSSHKeys()}
+        />
+      </Suspense>
 
       <SSHKeyExportDialog
         open={exportOpen}
@@ -324,15 +332,17 @@ export function SSHKeysPage() {
         token={token ?? ""}
       />
 
-      <SSHKeyRotationWizard
-        open={rotationOpen}
-        onOpenChange={setRotationOpen}
-        sshKeys={sshKeys}
-        keyUsageMap={keyUsageMap}
-        preselectedKey={rotationKey}
-        token={token ?? ""}
-        onComplete={() => void refreshSSHKeys()}
-      />
+      <Suspense fallback={null}>
+        <SSHKeyRotationWizard
+          open={rotationOpen}
+          onOpenChange={setRotationOpen}
+          sshKeys={sshKeys}
+          keyUsageMap={keyUsageMap}
+          preselectedKey={rotationKey}
+          token={token ?? ""}
+          onComplete={() => void refreshSSHKeys()}
+        />
+      </Suspense>
 
       {/* 确认对话框（useConfirm） */}
       {dialog}

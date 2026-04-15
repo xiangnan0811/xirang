@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Plus, Trash2, Wrench } from "lucide-react";
-import { useOutletContext } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { usePoliciesContext } from "@/context/policies-context";
 import {
   PolicyEditorDialog,
   type PolicyDraft,
@@ -11,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
@@ -23,25 +23,24 @@ import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context";
+import { PolicyCard } from "@/pages/policies-page.card";
+import { PoliciesFilters } from "@/pages/policies-page.filters";
 
 const keywordStorageKey = "xirang.policies.keyword";
 
 export function PoliciesPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
+  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
   const {
     policies,
-    nodes,
-    loading,
-    globalSearch,
-    setGlobalSearch,
     createPolicy,
     updatePolicy,
     deletePolicy,
     togglePolicy,
     refreshPolicies,
-    refreshNodes,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = usePoliciesContext();
 
   useEffect(() => {
     void refreshPolicies();
@@ -218,20 +217,13 @@ export function PoliciesPage() {
               <Badge variant="secondary" className="hidden lg:inline-flex">{t('policies.filteredCount', { count: filteredPolicies.length })}</Badge>
             </div>
           </div>
-          <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
-            <Input
-              placeholder={t('policies.searchPlaceholder')}
-              aria-label={t('policies.searchAriaLabel')}
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-            />
-            <Badge variant="secondary" className="hidden lg:inline-flex">
-              {t('policies.enabledRatio', { active: activeCount, total: policies.length })}
-            </Badge>
-            <Button size="sm" variant="outline" onClick={resetFilters}>
-              {t('common.resetFilter')}
-            </Button>
-          </div>
+          <PoliciesFilters
+            keyword={keyword}
+            setKeyword={setKeyword}
+            activeCount={activeCount}
+            totalCount={policies.length}
+            resetFilters={resetFilters}
+          />
 
           {loading ? (
             <LoadingState
@@ -244,82 +236,17 @@ export function PoliciesPage() {
           {/* 小屏卡片，大屏表格 */}
           <div className="grid gap-3 sm:grid-cols-2 md:hidden">
             {pagedPolicies.map((policy) => (
-              <div
+              <PolicyCard
                 key={policy.id}
-                className="rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-4 flex flex-col"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-primary rounded-sm"
-                      checked={selectedPolicyIds.includes(policy.id)}
-                      onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
-                      aria-label={t('policies.selectAriaLabel', { name: policy.name })}
-                    />
-                    <div>
-                      <h3 className="font-medium">{policy.name}</h3>
-                      <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
-                    <Badge variant={policy.enabled ? "success" : "outline"}>
-                      {policy.enabled ? t('common.enabled') : t('common.disabled')}
-                    </Badge>
-                  </div>
-                </div>
-
-                <div className="mt-3 grid gap-2 text-sm text-muted-foreground flex-1">
-                  <p className="break-all">{t('policies.sourcePath', { path: policy.sourcePath })}</p>
-                  <p className="break-all">{t('policies.targetPath', { path: policy.targetPath })}</p>
-                </div>
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge variant="outline">Cron: {policy.cron}</Badge>
-                  <Badge variant="outline">{t('policies.failureThreshold', { value: policy.criticalThreshold })}</Badge>
-                  <Badge variant="secondary">{t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}</Badge>
-                </div>
-
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                  <Switch
-                    checked={policy.enabled}
-                    aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
-                    onCheckedChange={() => void onTogglePolicy(policy)}
-                  />
-                  <div className="flex items-center gap-1">
-                    {policy.isTemplate && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        onClick={() => void onCloneFromTemplate(policy)}
-                        aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
-                      >
-                        <Copy className="size-4" />
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      onClick={() => openEditDialog(policy)}
-                      aria-label={t('policies.editAriaLabel')}
-                    >
-                      <Wrench className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
-                      onClick={() => onDelete(policy)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
+                policy={policy}
+                nodes={nodes}
+                selected={selectedPolicyIds.includes(policy.id)}
+                onToggleSelect={togglePolicySelection}
+                onEdit={openEditDialog}
+                onDelete={onDelete}
+                onToggle={onTogglePolicy}
+                onCloneFromTemplate={onCloneFromTemplate}
+              />
             ))}
 
             {!filteredPolicies.length ? (

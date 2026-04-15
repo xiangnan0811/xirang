@@ -1,10 +1,13 @@
-import { useState } from "react";
+import React, { Suspense, useState } from "react";
 import { HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/auth-context";
-import { NasMountWizard } from "@/components/nas-mount-wizard";
+
+const NasMountWizard = React.lazy(() =>
+  import("@/components/nas-mount-wizard").then(m => ({ default: m.NasMountWizard }))
+);
 
 export function StorageGuideCard() {
   const { t } = useTranslation();
@@ -29,7 +32,9 @@ export function StorageGuideCard() {
           </Button>
         </CardContent>
       </Card>
-      <NasMountWizard open={wizardOpen} onOpenChange={setWizardOpen} />
+      <Suspense fallback={null}>
+        <NasMountWizard open={wizardOpen} onOpenChange={setWizardOpen} />
+      </Suspense>
     </>
   );
 }

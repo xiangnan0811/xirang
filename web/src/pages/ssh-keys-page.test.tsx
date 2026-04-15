@@ -2,13 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { SSHKeysPage } from "./ssh-keys-page";
 
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
 const confirmMock = vi.fn().mockResolvedValue(true);
+
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const sshKeysRef: { current: Record<string, unknown> } = { current: {} };
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -28,11 +28,18 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
   );
-  return {
-    ...actual,
-    useOutletContext: () => contextRef.current,
-  };
+  return { ...actual };
 });
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/ssh-keys-context", () => ({
+  useSSHKeysContext: () => sshKeysRef.current,
+}));
 
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),
@@ -58,7 +65,7 @@ vi.mock("@/components/ssh-key-export-dialog", () => ({
   SSHKeyExportDialog: () => null,
 }));
 
-vi.mock("@/components/ssh-key-rotation-wizard", () => ({
+vi.mock("@/components/ssh-key-rotation/ssh-key-rotation-wizard", () => ({
   SSHKeyRotationWizard: () => null,
 }));
 
@@ -79,28 +86,19 @@ vi.mock("@/components/ui/toast", () => ({
 const refreshSSHKeysMock = vi.fn().mockResolvedValue(undefined);
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 
-function createContext(overrides?: Partial<ConsoleOutletContext>) {
-  const base = {
-    sshKeys: [
-      {
-        id: "key-1",
-        name: "生产密钥",
-        username: "root",
-        keyType: "ed25519",
-        fingerprint: "SHA256:abc123",
-        createdAt: "2026-01-01 00:00:00",
-        lastUsedAt: "2026-03-20 10:00:00",
-      },
-      {
-        id: "key-2",
-        name: "测试密钥",
-        username: "deploy",
-        keyType: "rsa",
-        fingerprint: "SHA256:def456",
-        createdAt: "2026-02-01 00:00:00",
-        lastUsedAt: null,
-      },
-    ],
+function createContext(overrides?: Record<string, unknown>) {
+  sharedRef.current = {
+    loading: false,
+    globalSearch: "",
+    setGlobalSearch: vi.fn(),
+    warning: null,
+    lastSyncedAt: "",
+    refreshVersion: 0,
+    refresh: vi.fn(),
+    overview: {},
+    fetchOverviewTraffic: vi.fn(),
+  };
+  nodesRef.current = {
     nodes: [
       {
         id: 1,
@@ -122,17 +120,41 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         connectionLatencyMs: 10,
       },
     ],
+    refreshNodes: refreshNodesMock,
+    createNode: vi.fn(),
+    updateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    triggerNodeBackup: vi.fn(),
+  };
+  sshKeysRef.current = {
+    sshKeys: [
+      {
+        id: "key-1",
+        name: "生产密钥",
+        username: "root",
+        keyType: "ed25519",
+        fingerprint: "SHA256:abc123",
+        createdAt: "2026-01-01 00:00:00",
+        lastUsedAt: "2026-03-20 10:00:00",
+      },
+      {
+        id: "key-2",
+        name: "测试密钥",
+        username: "deploy",
+        keyType: "rsa",
+        fingerprint: "SHA256:def456",
+        createdAt: "2026-02-01 00:00:00",
+        lastUsedAt: null,
+      },
+    ],
     createSSHKey: vi.fn().mockResolvedValue(undefined),
     updateSSHKey: vi.fn().mockResolvedValue(undefined),
     deleteSSHKey: vi.fn().mockResolvedValue(true),
     refreshSSHKeys: refreshSSHKeysMock,
-    refreshNodes: refreshNodesMock,
-  } as unknown as ConsoleOutletContext;
-
-  contextRef.current = {
-    ...base,
-    ...overrides,
-  } as ConsoleOutletContext;
+    ...(overrides?.sshKeys !== undefined ? { sshKeys: overrides.sshKeys } : {}),
+  };
 }
 
 describe("SSHKeysPage", () => {
@@ -172,7 +194,7 @@ describe("SSHKeysPage", () => {
   });
 
   it("无密钥时显示空态", () => {
-    createContext({ sshKeys: [] as unknown as ConsoleOutletContext["sshKeys"] });
+    createContext({ sshKeys: [] as unknown as Record<string, unknown>[] });
 
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>

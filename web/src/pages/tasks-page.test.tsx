@@ -3,14 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { TasksPage } from "./tasks-page";
 
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
+
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const tasksRef: { current: Record<string, unknown> } = { current: {} };
+const policiesRef: { current: Record<string, unknown> } = { current: {} };
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -32,10 +33,22 @@ vi.mock("react-router-dom", async () => {
   );
   return {
     ...actual,
-    useOutletContext: () => contextRef.current,
     useNavigate: () => navigateMock,
   };
 });
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/tasks-context", () => ({
+  useTasksContext: () => tasksRef.current,
+}));
+vi.mock("@/context/policies-context", () => ({
+  usePoliciesContext: () => policiesRef.current,
+}));
 
 vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
@@ -118,8 +131,34 @@ vi.mock("@/context/auth-context", () => ({
   }),
 }));
 
-function createContext(overrides?: Partial<ConsoleOutletContext>) {
-  const base = {
+function createContext(overrides?: Record<string, unknown>) {
+  sharedRef.current = {
+    loading: false,
+    globalSearch: "",
+    setGlobalSearch: vi.fn(),
+    warning: null,
+    lastSyncedAt: "",
+    refreshVersion: 0,
+    refresh: vi.fn(),
+    overview: {},
+    fetchOverviewTraffic: vi.fn(),
+    ...(overrides?.globalSearch !== undefined ? { globalSearch: overrides.globalSearch } : {}),
+    ...(overrides?.setGlobalSearch !== undefined ? { setGlobalSearch: overrides.setGlobalSearch } : {}),
+    ...(overrides?.loading !== undefined ? { loading: overrides.loading } : {}),
+  };
+  nodesRef.current = {
+    nodes: [{ id: 1, name: "node-prod-1" }, { id: 2, name: "node-dr-2" }],
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn(),
+    updateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    triggerNodeBackup: vi.fn(),
+    ...(overrides?.nodes !== undefined ? { nodes: overrides.nodes } : {}),
+    ...(overrides?.refreshNodes !== undefined ? { refreshNodes: overrides.refreshNodes } : {}),
+  };
+  tasksRef.current = {
     tasks: [
       {
         id: 101,
@@ -151,20 +190,6 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         speedMbps: 64,
       },
     ],
-    nodes: [
-      {
-        id: 1,
-        name: "node-prod-1",
-      },
-      {
-        id: 2,
-        name: "node-dr-2",
-      },
-    ],
-    policies: [],
-    loading: false,
-    globalSearch: "",
-    setGlobalSearch: vi.fn(),
     createTask: vi.fn().mockResolvedValue(201),
     updateTask: vi.fn().mockResolvedValue(undefined),
     deleteTask: vi.fn().mockResolvedValue(undefined),
@@ -172,14 +197,31 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
     cancelTask: vi.fn().mockResolvedValue(undefined),
     retryTask: vi.fn().mockResolvedValue(undefined),
     refreshTasks: vi.fn().mockResolvedValue(undefined),
-    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    pauseTask: vi.fn().mockResolvedValue(undefined),
+    resumeTask: vi.fn().mockResolvedValue(undefined),
+    skipNextTask: vi.fn().mockResolvedValue(undefined),
+    refreshTask: vi.fn().mockResolvedValue(undefined),
+    fetchTaskLogs: vi.fn().mockResolvedValue([]),
+    ...(overrides?.tasks !== undefined ? { tasks: overrides.tasks } : {}),
+    ...(overrides?.createTask !== undefined ? { createTask: overrides.createTask } : {}),
+    ...(overrides?.updateTask !== undefined ? { updateTask: overrides.updateTask } : {}),
+    ...(overrides?.deleteTask !== undefined ? { deleteTask: overrides.deleteTask } : {}),
+    ...(overrides?.triggerTask !== undefined ? { triggerTask: overrides.triggerTask } : {}),
+    ...(overrides?.cancelTask !== undefined ? { cancelTask: overrides.cancelTask } : {}),
+    ...(overrides?.retryTask !== undefined ? { retryTask: overrides.retryTask } : {}),
+    ...(overrides?.refreshTasks !== undefined ? { refreshTasks: overrides.refreshTasks } : {}),
+  };
+  policiesRef.current = {
+    policies: [],
     refreshPolicies: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ConsoleOutletContext;
-
-  contextRef.current = {
-    ...base,
-    ...overrides,
-  } as ConsoleOutletContext;
+    createPolicy: vi.fn(),
+    updatePolicy: vi.fn(),
+    deletePolicy: vi.fn(),
+    togglePolicy: vi.fn(),
+    updatePolicySchedule: vi.fn(),
+    ...(overrides?.policies !== undefined ? { policies: overrides.policies } : {}),
+    ...(overrides?.refreshPolicies !== undefined ? { refreshPolicies: overrides.refreshPolicies } : {}),
+  };
 }
 
 describe("TasksPage", () => {
@@ -318,7 +360,7 @@ describe("TasksPage", () => {
           cronSpec: "0 */2 * * *",
           speedMbps: 0,
         },
-      ] as unknown as ConsoleOutletContext["tasks"],
+      ] as unknown as Record<string, unknown>[],
     });
 
     render(
@@ -335,7 +377,7 @@ describe("TasksPage", () => {
 
   it("点击编辑按钮打开编辑弹窗，保存成功后调用 updateTask", async () => {
     const updateTaskMock = vi.fn().mockResolvedValue(undefined);
-    createContext({ updateTask: updateTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    createContext({ updateTask: updateTaskMock });
     const user = userEvent.setup();
 
     render(
@@ -359,7 +401,7 @@ describe("TasksPage", () => {
 
   it("点击新建任务按钮打开创建弹窗，保存成功后调用 createTask", async () => {
     const createTaskMock = vi.fn().mockResolvedValue(201);
-    createContext({ createTask: createTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    createContext({ createTask: createTaskMock });
     const user = userEvent.setup();
 
     render(
@@ -384,7 +426,7 @@ describe("TasksPage", () => {
 
   it("点击触发按钮调用 triggerTask", async () => {
     const triggerTaskMock = vi.fn().mockResolvedValue(undefined);
-    createContext({ triggerTask: triggerTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    createContext({ triggerTask: triggerTaskMock });
     const user = userEvent.setup();
 
     render(
@@ -417,9 +459,9 @@ describe("TasksPage", () => {
           startedAt: "2026-02-24 10:00:00",
           speedMbps: 0,
         },
-      ] as unknown as ConsoleOutletContext["tasks"],
+      ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
-    } as unknown as Partial<ConsoleOutletContext>);
+    });
 
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -454,9 +496,9 @@ describe("TasksPage", () => {
           startedAt: "2026-02-24 10:00:00",
           speedMbps: 0,
         },
-      ] as unknown as ConsoleOutletContext["tasks"],
+      ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
-    } as unknown as Partial<ConsoleOutletContext>);
+    });
 
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -491,9 +533,9 @@ describe("TasksPage", () => {
           rsyncTarget: "/backup/data",
           speedMbps: 0,
         },
-      ] as unknown as ConsoleOutletContext["tasks"],
+      ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
-    } as unknown as Partial<ConsoleOutletContext>);
+    });
     const user = userEvent.setup();
 
     render(
@@ -523,7 +565,7 @@ describe("TasksPage", () => {
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
     const updateTaskMock = vi.fn().mockRejectedValue(new Error("更新任务失败"));
-    createContext({ updateTask: updateTaskMock } as unknown as Partial<ConsoleOutletContext>);
+    createContext({ updateTask: updateTaskMock });
     const user = userEvent.setup();
 
     render(

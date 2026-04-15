@@ -2,7 +2,6 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { NotificationsPage } from "./notifications-page";
 
 /* ---------- hoisted mocks (referenced in vi.mock factories) ---------- */
@@ -35,9 +34,10 @@ const {
 
 /* ---------- context ref ---------- */
 
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const tasksRef: { current: Record<string, unknown> } = { current: {} };
+const alertsRef: { current: Record<string, unknown> } = { current: {} };
+const integrationsRef: { current: Record<string, unknown> } = { current: {} };
 function createMemoryStorage() {
   const store = new Map<string, string>();
   return {
@@ -61,10 +61,22 @@ vi.mock("react-router-dom", async () => {
   const searchParams = new URLSearchParams();
   return {
     ...actual,
-    useOutletContext: () => contextRef.current,
     useSearchParams: () => [searchParams, vi.fn()] as const,
   };
 });
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/tasks-context", () => ({
+  useTasksContext: () => tasksRef.current,
+}));
+vi.mock("@/context/alerts-context", () => ({
+  useAlertsContext: () => alertsRef.current,
+}));
+vi.mock("@/context/integrations-context", () => ({
+  useIntegrationsContext: () => integrationsRef.current,
+}));
 
 vi.mock("@/components/ui/toast", () => ({
   toast: {
@@ -187,21 +199,22 @@ function setupDefaultMocks() {
 
 /* ---------- context builder ---------- */
 
-function createContext(overrides?: Partial<ConsoleOutletContext>) {
-  const base = {
-    integrations: [
-      {
-        id: "int-1",
-        type: "email",
-        name: "\u8FD0\u7EF4\u90AE\u7BB1",
-        endpoint: "ops@example.com",
-        hasSecret: false,
-        enabled: true,
-        failThreshold: 2,
-        cooldownMinutes: 5,
-        proxyUrl: "",
-      },
-    ],
+function createContext(overrides?: Record<string, unknown>) {
+  sharedRef.current = {
+    globalSearch: "",
+    setGlobalSearch: vi.fn(),
+    refreshVersion: 0,
+    loading: false,
+    warning: null,
+    lastSyncedAt: "",
+    refresh: vi.fn(),
+    overview: {},
+    fetchOverviewTraffic: vi.fn(),
+    ...(overrides?.globalSearch !== undefined ? { globalSearch: overrides.globalSearch } : {}),
+    ...(overrides?.setGlobalSearch !== undefined ? { setGlobalSearch: overrides.setGlobalSearch } : {}),
+    ...(overrides?.refreshVersion !== undefined ? { refreshVersion: overrides.refreshVersion } : {}),
+  };
+  tasksRef.current = {
     tasks: [
       {
         id: 101,
@@ -215,18 +228,27 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         speedMbps: 50,
       },
     ],
-    globalSearch: "",
-    setGlobalSearch: vi.fn(),
-    addIntegration: vi.fn().mockResolvedValue(undefined),
-    removeIntegration: vi.fn().mockResolvedValue(undefined),
-    toggleIntegration: vi.fn().mockResolvedValue(undefined),
-    updateIntegration: vi.fn().mockResolvedValue(undefined),
-    patchIntegration: vi.fn().mockResolvedValue(undefined),
-    testIntegration: vi.fn().mockResolvedValue({
-      ok: true,
-      message: "\u6D4B\u8BD5\u6210\u529F",
-      latencyMs: 20,
-    }),
+    refreshTasks: vi.fn().mockResolvedValue(undefined),
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn(),
+    triggerTask: vi.fn(),
+    cancelTask: vi.fn(),
+    retryTask: vi.fn(),
+    pauseTask: vi.fn(),
+    resumeTask: vi.fn(),
+    skipNextTask: vi.fn(),
+    refreshTask: vi.fn(),
+    fetchTaskLogs: vi.fn(),
+    ...(overrides?.tasks !== undefined ? { tasks: overrides.tasks } : {}),
+    ...(overrides?.refreshTasks !== undefined ? { refreshTasks: overrides.refreshTasks } : {}),
+  };
+  alertsRef.current = {
+    alerts: [],
+    retryAlert: vi.fn(),
+    acknowledgeAlert: vi.fn(),
+    resolveAlert: vi.fn(),
+    fetchAlertDeliveries: vi.fn(),
     fetchAlertDeliveryStats: vi.fn().mockResolvedValue({
       windowHours: 24,
       totalSent: 12,
@@ -243,16 +265,38 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         },
       ],
     }),
+    retryAlertDelivery: vi.fn(),
+    retryFailedAlertDeliveries: vi.fn(),
+    ...(overrides?.fetchAlertDeliveryStats !== undefined ? { fetchAlertDeliveryStats: overrides.fetchAlertDeliveryStats } : {}),
+  };
+  integrationsRef.current = {
+    integrations: [
+      {
+        id: "int-1",
+        type: "email",
+        name: "\u8FD0\u7EF4\u90AE\u7BB1",
+        endpoint: "ops@example.com",
+        hasSecret: false,
+        enabled: true,
+        failThreshold: 2,
+        cooldownMinutes: 5,
+        proxyUrl: "",
+      },
+    ],
     refreshIntegrations: vi.fn().mockResolvedValue(undefined),
-    refreshTasks: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ConsoleOutletContext;
-
-  contextRef.current = {
-    ...base,
-    ...overrides,
-  } as ConsoleOutletContext;
-
-  return contextRef.current;
+    addIntegration: vi.fn().mockResolvedValue(undefined),
+    removeIntegration: vi.fn().mockResolvedValue(undefined),
+    toggleIntegration: vi.fn().mockResolvedValue(undefined),
+    updateIntegration: vi.fn().mockResolvedValue(undefined),
+    patchIntegration: vi.fn().mockResolvedValue(undefined),
+    testIntegration: vi.fn().mockResolvedValue({
+      ok: true,
+      message: "\u6D4B\u8BD5\u6210\u529F",
+      latencyMs: 20,
+    }),
+    ...(overrides?.integrations !== undefined ? { integrations: overrides.integrations } : {}),
+    ...(overrides?.refreshIntegrations !== undefined ? { refreshIntegrations: overrides.refreshIntegrations } : {}),
+  };
 }
 
 /* ---------- tests ---------- */
