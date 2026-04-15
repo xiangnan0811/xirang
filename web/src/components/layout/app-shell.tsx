@@ -31,6 +31,13 @@ import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
+import { SharedContextProvider } from "@/context/shared-context";
+import { NodesContextProvider } from "@/context/nodes-context";
+import { TasksContextProvider } from "@/context/tasks-context";
+import { PoliciesContextProvider } from "@/context/policies-context";
+import { AlertsContextProvider } from "@/context/alerts-context";
+import { IntegrationsContextProvider } from "@/context/integrations-context";
+import { SSHKeysContextProvider } from "@/context/ssh-keys-context";
 import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
 
@@ -282,9 +289,88 @@ export function AppShell() {
         <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-84px)]" : "min-h-[calc(100vh-52px)]")}>
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
-            <ErrorBoundary>
-              <AnimatedOutlet context={consoleData as ConsoleOutletContext} />
-            </ErrorBoundary>
+            <SharedContextProvider value={{
+              loading: consoleData.loading,
+              warning: consoleData.warning,
+              lastSyncedAt: consoleData.lastSyncedAt,
+              refreshVersion: consoleData.refreshVersion,
+              globalSearch: consoleData.globalSearch,
+              setGlobalSearch: consoleData.setGlobalSearch,
+              refresh: consoleData.refresh,
+              overview: consoleData.overview,
+              fetchOverviewTraffic: consoleData.fetchOverviewTraffic,
+            }}>
+            <NodesContextProvider value={{
+              nodes: consoleData.nodes,
+              refreshNodes: consoleData.refreshNodes,
+              createNode: consoleData.createNode,
+              updateNode: consoleData.updateNode,
+              deleteNode: consoleData.deleteNode,
+              deleteNodes: consoleData.deleteNodes,
+              testNodeConnection: consoleData.testNodeConnection,
+              triggerNodeBackup: consoleData.triggerNodeBackup,
+            }}>
+            <TasksContextProvider value={{
+              tasks: consoleData.tasks,
+              refreshTasks: consoleData.refreshTasks,
+              createTask: consoleData.createTask,
+              updateTask: consoleData.updateTask,
+              deleteTask: consoleData.deleteTask,
+              triggerTask: consoleData.triggerTask,
+              cancelTask: consoleData.cancelTask,
+              retryTask: consoleData.retryTask,
+              pauseTask: consoleData.pauseTask,
+              resumeTask: consoleData.resumeTask,
+              skipNextTask: consoleData.skipNextTask,
+              refreshTask: consoleData.refreshTask,
+              fetchTaskLogs: consoleData.fetchTaskLogs,
+            }}>
+            <PoliciesContextProvider value={{
+              policies: consoleData.policies,
+              refreshPolicies: consoleData.refreshPolicies,
+              createPolicy: consoleData.createPolicy,
+              updatePolicy: consoleData.updatePolicy,
+              deletePolicy: consoleData.deletePolicy,
+              togglePolicy: consoleData.togglePolicy,
+              updatePolicySchedule: consoleData.updatePolicySchedule,
+            }}>
+            <AlertsContextProvider value={{
+              alerts: consoleData.alerts,
+              retryAlert: consoleData.retryAlert,
+              acknowledgeAlert: consoleData.acknowledgeAlert,
+              resolveAlert: consoleData.resolveAlert,
+              fetchAlertDeliveries: consoleData.fetchAlertDeliveries,
+              fetchAlertDeliveryStats: consoleData.fetchAlertDeliveryStats,
+              retryAlertDelivery: consoleData.retryAlertDelivery,
+              retryFailedAlertDeliveries: consoleData.retryFailedAlertDeliveries,
+            }}>
+            <IntegrationsContextProvider value={{
+              integrations: consoleData.integrations,
+              refreshIntegrations: consoleData.refreshIntegrations,
+              addIntegration: consoleData.addIntegration,
+              removeIntegration: consoleData.removeIntegration,
+              toggleIntegration: consoleData.toggleIntegration,
+              updateIntegration: consoleData.updateIntegration,
+              patchIntegration: consoleData.patchIntegration,
+              testIntegration: consoleData.testIntegration,
+            }}>
+            <SSHKeysContextProvider value={{
+              sshKeys: consoleData.sshKeys,
+              refreshSSHKeys: consoleData.refreshSSHKeys,
+              createSSHKey: consoleData.createSSHKey,
+              updateSSHKey: consoleData.updateSSHKey,
+              deleteSSHKey: consoleData.deleteSSHKey,
+            }}>
+              <ErrorBoundary>
+                <AnimatedOutlet context={consoleData as ConsoleOutletContext} />
+              </ErrorBoundary>
+            </SSHKeysContextProvider>
+            </IntegrationsContextProvider>
+            </AlertsContextProvider>
+            </PoliciesContextProvider>
+            </TasksContextProvider>
+            </NodesContextProvider>
+            </SharedContextProvider>
           </main>
         </div>
       </div>
