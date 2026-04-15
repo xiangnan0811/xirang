@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useSSHKeysContext } from "@/context/ssh-keys-context";
 import {
   escapeCSVValue,
   nodeStatusPriority,
@@ -32,12 +34,9 @@ export function useNodesPageState() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
+  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
   const {
     nodes,
-    sshKeys,
-    loading,
-    globalSearch,
-    setGlobalSearch,
     createNode,
     updateNode,
     deleteNode,
@@ -45,8 +44,8 @@ export function useNodesPageState() {
     testNodeConnection,
     triggerNodeBackup,
     refreshNodes,
-    refreshSSHKeys,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = useNodesContext();
+  const { sshKeys, refreshSSHKeys } = useSSHKeysContext();
 
   useEffect(() => {
     void refreshNodes();

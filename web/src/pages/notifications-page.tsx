@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext, useSearchParams } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSearchParams } from "react-router-dom";
+import { useSharedContext } from "@/context/shared-context";
+import { useTasksContext } from "@/context/tasks-context";
+import { useAlertsContext } from "@/context/alerts-context";
+import { useIntegrationsContext } from "@/context/integrations-context";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications/alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -11,16 +14,10 @@ import { apiClient } from "@/lib/api/client";
 export function NotificationsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const {
-    integrations,
-    tasks,
-    globalSearch,
-    setGlobalSearch,
-    fetchAlertDeliveryStats,
-    refreshIntegrations,
-    refreshTasks,
-    refreshVersion,
-  } = useOutletContext<ConsoleOutletContext>();
+  const { globalSearch, setGlobalSearch, refreshVersion } = useSharedContext();
+  const { tasks, refreshTasks } = useTasksContext();
+  const { fetchAlertDeliveryStats } = useAlertsContext();
+  const { integrations, refreshIntegrations } = useIntegrationsContext();
 
   useEffect(() => {
     void refreshIntegrations();

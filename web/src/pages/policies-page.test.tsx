@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { PoliciesPage } from "./policies-page";
 
-const contextRef: { current: ConsoleOutletContext } = {
-  current: {} as ConsoleOutletContext,
-};
 const confirmMock = vi.fn().mockResolvedValue(true);
+
+const sharedRef: { current: Record<string, unknown> } = { current: {} };
+const nodesRef: { current: Record<string, unknown> } = { current: {} };
+const policiesRef: { current: Record<string, unknown> } = { current: {} };
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -29,11 +29,18 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
   );
-  return {
-    ...actual,
-    useOutletContext: () => contextRef.current,
-  };
+  return { ...actual };
 });
+
+vi.mock("@/context/shared-context", () => ({
+  useSharedContext: () => sharedRef.current,
+}));
+vi.mock("@/context/nodes-context", () => ({
+  useNodesContext: () => nodesRef.current,
+}));
+vi.mock("@/context/policies-context", () => ({
+  usePoliciesContext: () => policiesRef.current,
+}));
 
 vi.mock("@/components/policy-editor-dialog", () => ({
   PolicyEditorDialog: () => null,
@@ -57,8 +64,32 @@ vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
-function createContext(overrides?: Partial<ConsoleOutletContext>) {
-  const base = {
+function createContext(overrides?: Record<string, unknown>) {
+  sharedRef.current = {
+    loading: false,
+    globalSearch: "",
+    setGlobalSearch: vi.fn(),
+    warning: null,
+    lastSyncedAt: "",
+    refreshVersion: 0,
+    refresh: vi.fn(),
+    overview: {},
+    fetchOverviewTraffic: vi.fn(),
+    ...(overrides?.globalSearch !== undefined ? { globalSearch: overrides.globalSearch } : {}),
+    ...(overrides?.setGlobalSearch !== undefined ? { setGlobalSearch: overrides.setGlobalSearch } : {}),
+    ...(overrides?.loading !== undefined ? { loading: overrides.loading } : {}),
+  };
+  nodesRef.current = {
+    nodes: [],
+    refreshNodes: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn(),
+    updateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    triggerNodeBackup: vi.fn(),
+  };
+  policiesRef.current = {
     policies: [
       {
         id: 1,
@@ -81,21 +112,19 @@ function createContext(overrides?: Partial<ConsoleOutletContext>) {
         enabled: false,
       },
     ],
-    loading: false,
-    globalSearch: "",
-    setGlobalSearch: vi.fn(),
     createPolicy: vi.fn().mockResolvedValue(undefined),
     updatePolicy: vi.fn().mockResolvedValue(undefined),
     deletePolicy: vi.fn().mockResolvedValue(undefined),
     togglePolicy: vi.fn().mockResolvedValue(undefined),
     refreshPolicies: vi.fn().mockResolvedValue(undefined),
-    refreshNodes: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ConsoleOutletContext;
-
-  contextRef.current = {
-    ...base,
-    ...overrides,
-  } as ConsoleOutletContext;
+    updatePolicySchedule: vi.fn(),
+    ...(overrides?.policies !== undefined ? { policies: overrides.policies } : {}),
+    ...(overrides?.createPolicy !== undefined ? { createPolicy: overrides.createPolicy } : {}),
+    ...(overrides?.updatePolicy !== undefined ? { updatePolicy: overrides.updatePolicy } : {}),
+    ...(overrides?.deletePolicy !== undefined ? { deletePolicy: overrides.deletePolicy } : {}),
+    ...(overrides?.togglePolicy !== undefined ? { togglePolicy: overrides.togglePolicy } : {}),
+    ...(overrides?.refreshPolicies !== undefined ? { refreshPolicies: overrides.refreshPolicies } : {}),
+  };
 }
 
 describe("PoliciesPage", () => {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext } from "react-router-dom";
 import { Plus, Terminal, Play } from "lucide-react";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useTasksContext } from "@/context/tasks-context";
+import { usePoliciesContext } from "@/context/policies-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -34,13 +36,10 @@ type TasksViewMode = "cards" | "list";
 
 export function TasksPage() {
   const { t } = useTranslation();
+  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
   const {
     tasks,
-    nodes,
-    policies,
-    loading,
-    globalSearch,
-    setGlobalSearch,
     createTask,
     updateTask,
     deleteTask,
@@ -51,9 +50,8 @@ export function TasksPage() {
     resumeTask,
     skipNextTask,
     refreshTasks,
-    refreshNodes,
-    refreshPolicies,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = useTasksContext();
+  const { policies, refreshPolicies } = usePoliciesContext();
 
   useEffect(() => {
     void refreshTasks();

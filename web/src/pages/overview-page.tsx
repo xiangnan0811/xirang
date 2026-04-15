@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Maximize2, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -15,7 +15,9 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useTasksContext } from "@/context/tasks-context";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/utils";
 import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
@@ -38,7 +40,9 @@ export function OverviewPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { token } = useAuth();
-  const { overview, nodes, tasks, loading, refreshVersion, fetchOverviewTraffic, refreshNodes, refreshTasks } = useOutletContext<ConsoleOutletContext>();
+  const { overview, loading, refreshVersion, fetchOverviewTraffic } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
+  const { tasks, refreshTasks } = useTasksContext();
 
   useEffect(() => {
     void refreshNodes();

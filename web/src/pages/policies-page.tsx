@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Plus, Trash2, Wrench } from "lucide-react";
-import { useOutletContext } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useSharedContext } from "@/context/shared-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { usePoliciesContext } from "@/context/policies-context";
 import {
   PolicyEditorDialog,
   type PolicyDraft,
@@ -30,19 +31,16 @@ const keywordStorageKey = "xirang.policies.keyword";
 export function PoliciesPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
+  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { nodes, refreshNodes } = useNodesContext();
   const {
     policies,
-    nodes,
-    loading,
-    globalSearch,
-    setGlobalSearch,
     createPolicy,
     updatePolicy,
     deletePolicy,
     togglePolicy,
     refreshPolicies,
-    refreshNodes,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = usePoliciesContext();
 
   useEffect(() => {
     void refreshPolicies();

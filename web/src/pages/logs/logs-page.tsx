@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/auth-context";
+import { useNodesContext } from "@/context/nodes-context";
+import { useTasksContext } from "@/context/tasks-context";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
@@ -29,8 +30,8 @@ const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
 export function LogsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const { tasks, nodes, fetchTaskLogs, refreshTask, refreshNodes, refreshTasks } =
-    useOutletContext<ConsoleOutletContext>();
+  const { nodes, refreshNodes } = useNodesContext();
+  const { tasks, fetchTaskLogs, refreshTask, refreshTasks } = useTasksContext();
 
   useEffect(() => {
     void refreshNodes();

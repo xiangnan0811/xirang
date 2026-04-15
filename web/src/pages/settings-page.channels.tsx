@@ -1,7 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext } from "react-router-dom";
-import type { ConsoleOutletContext } from "@/components/layout/app-shell";
+import { useIntegrationsContext } from "@/context/integrations-context";
 import type { IntegrationEditorDraft } from "@/components/integration-editor-dialog";
 
 const IntegrationCreateDialog = React.lazy(() =>
@@ -24,7 +23,7 @@ export function ChannelsTab() {
     patchIntegration,
     testIntegration,
     refreshIntegrations,
-  } = useOutletContext<ConsoleOutletContext>();
+  } = useIntegrationsContext();
 
   useEffect(() => {
     void refreshIntegrations();
