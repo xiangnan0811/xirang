@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/xiangnan0811/xirang/compare/v0.6.0...v0.7.0) (2026-04-15)
+
+
+### Features
+
+* P4 observability & infrastructure — metrics, indexes, DX, OpenAPI ([#19](https://github.com/xiangnan0811/xirang/issues/19)) ([cb1e36e](https://github.com/xiangnan0811/xirang/commit/cb1e36ed6b8b29a4d753d4b86aa219f4bf4cea72))
+
 ## [0.6.0](https://github.com/xiangnan0811/xirang/compare/v0.5.0...v0.6.0) (2026-04-14)
 
 
