@@ -16,7 +16,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
+
+	_ "xirang/backend/internal/api/docs"
 )
 
 type Dependencies struct {
@@ -248,6 +252,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	return router
 }

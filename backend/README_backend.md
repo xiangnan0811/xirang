@@ -220,6 +220,7 @@ go run ./cmd/server
 |------|------|------|
 | GET | /healthz | 健康检查（无需认证） |
 | GET | /metrics | Prometheus 指标（无需认证） |
+| GET | /swagger/*any | Swagger UI（无需认证） |
 
 ## 执行器
 
