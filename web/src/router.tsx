@@ -20,7 +20,7 @@ const PoliciesPage = lazy(() =>
   import("@/pages/policies-page").then((m) => ({ default: m.PoliciesPage }))
 );
 const LogsPage = lazy(() =>
-  import("@/pages/logs-page").then((m) => ({ default: m.LogsPage }))
+  import("@/pages/logs/logs-page").then((m) => ({ default: m.LogsPage }))
 );
 const NotificationsPage = lazy(() =>
   import("@/pages/notifications-page").then((m) => ({
