@@ -21,6 +21,15 @@ func NewBackupHealthHandler(db *gorm.DB) *BackupHealthHandler {
 	return &BackupHealthHandler{db: db}
 }
 
+// Get godoc
+// @Summary      获取备份健康状态
+// @Description  返回过期节点、降级策略、7 天趋势及汇总统计
+// @Tags         overview
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /overview/backup-health [get]
 func (h *BackupHealthHandler) Get(c *gin.Context) {
 	now := time.Now()
 	staleHours := 48

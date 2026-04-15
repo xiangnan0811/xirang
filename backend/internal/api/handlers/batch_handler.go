@@ -29,8 +29,19 @@ func NewBatchHandler(db *gorm.DB, manager BatchTaskRunner) *BatchHandler {
 	return &BatchHandler{db: db, manager: manager}
 }
 
-// Create 批量创建命令任务并触发执行。
-// POST /batch-commands
+// Create godoc
+// @Summary      创建批量命令
+// @Description  在多个节点上批量创建并触发命令执行任务
+// @Tags         batch
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "批量命令请求"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /batch-commands [post]
 func (h *BatchHandler) Create(c *gin.Context) {
 	var req struct {
 		NodeIDs []uint `json:"node_ids" binding:"required,min=1"`
@@ -135,8 +146,18 @@ func (h *BatchHandler) Create(c *gin.Context) {
 	})
 }
 
-// Get 查询批次状态。
-// GET /batch-commands/:batch_id
+// Get godoc
+// @Summary      获取批次状态
+// @Description  查询指定批次的所有任务状态和统计信息
+// @Tags         batch
+// @Security     Bearer
+// @Produce      json
+// @Param        batch_id  path      string  true  "批次 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /batch-commands/{batch_id} [get]
 func (h *BatchHandler) Get(c *gin.Context) {
 	batchID := c.Param("batch_id")
 	if batchID == "" {
@@ -193,8 +214,18 @@ func (h *BatchHandler) Get(c *gin.Context) {
 	})
 }
 
-// Delete 删除整个批次的任务及关联记录。
-// DELETE /batch-commands/:batch_id
+// Delete godoc
+// @Summary      删除批次
+// @Description  删除整个批次的任务及所有关联记录
+// @Tags         batch
+// @Security     Bearer
+// @Produce      json
+// @Param        batch_id  path      string  true  "批次 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /batch-commands/{batch_id} [delete]
 func (h *BatchHandler) Delete(c *gin.Context) {
 	batchID := c.Param("batch_id")
 	if batchID == "" {

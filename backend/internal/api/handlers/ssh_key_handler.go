@@ -94,6 +94,15 @@ func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, s
 	return normalizedName, normalizedUsername, storedType, preparedKey, nil
 }
 
+// List godoc
+// @Summary      列出 SSH Key
+// @Description  返回所有 SSH Key 列表（不含私钥，含派生公钥）
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response{data=[]handlers.sshKeyResponseItem}
+// @Failure      401  {object}  handlers.Response
+// @Router       /ssh-keys [get]
 func (h *SSHKeyHandler) List(c *gin.Context) {
 	var items []model.SSHKey
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
@@ -108,6 +117,17 @@ func (h *SSHKeyHandler) List(c *gin.Context) {
 	respondOK(c, result)
 }
 
+// Get godoc
+// @Summary      获取 SSH Key 详情
+// @Description  返回单个 SSH Key（不含私钥，含派生公钥）
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "SSH Key ID"
+// @Success      200  {object}  handlers.Response{data=handlers.sshKeyResponseItem}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /ssh-keys/{id} [get]
 func (h *SSHKeyHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -121,6 +141,18 @@ func (h *SSHKeyHandler) Get(c *gin.Context) {
 	respondOK(c, toSSHKeyResponse(item))
 }
 
+// Create godoc
+// @Summary      创建 SSH Key
+// @Description  创建新的 SSH Key
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      handlers.sshKeyCreateRequest  true  "SSH Key 信息"
+// @Success      201  {object}  handlers.Response{data=handlers.sshKeyResponseItem}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /ssh-keys [post]
 func (h *SSHKeyHandler) Create(c *gin.Context) {
 	var req sshKeyCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -153,6 +185,20 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 	respondCreated(c, toSSHKeyResponse(item))
 }
 
+// Update godoc
+// @Summary      更新 SSH Key
+// @Description  更新指定 SSH Key 的名称、用户名或私钥
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                           true  "SSH Key ID"
+// @Param        body  body      handlers.sshKeyUpdateRequest  true  "更新信息"
+// @Success      200  {object}  handlers.Response{data=handlers.sshKeyResponseItem}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /ssh-keys/{id} [put]
 func (h *SSHKeyHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -217,6 +263,18 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 	respondOK(c, toSSHKeyResponse(item))
 }
 
+// Delete godoc
+// @Summary      删除 SSH Key
+// @Description  删除指定 SSH Key（正在被节点使用时拒绝）
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "SSH Key ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /ssh-keys/{id} [delete]
 func (h *SSHKeyHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -240,7 +298,20 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 	respondOK(c, gin.H{"message": "deleted", "deleted_at": time.Now()})
 }
 
-// TestConnection 使用指定 SSH Key 对一组节点进行连通性测试。
+// TestConnection godoc
+// @Summary      测试 SSH Key 连通性
+// @Description  使用指定 SSH Key 对一组节点进行连通性测试
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int   true  "SSH Key ID"
+// @Param        body  body      object  true  "节点 ID 列表"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /ssh-keys/{id}/test-connection [post]
 func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -342,7 +413,18 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 	respondOK(c, results)
 }
 
-// BatchCreate 批量创建 SSH Key（单次最多 50 条）。
+// BatchCreate godoc
+// @Summary      批量创建 SSH Key
+// @Description  批量创建 SSH Key，单次最多 50 条
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "SSH Key 列表"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /ssh-keys/batch [post]
 func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 	var req struct {
 		Keys []sshKeyCreateRequest `json:"keys" binding:"required"`
@@ -401,7 +483,19 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 	respondOK(c, results)
 }
 
-// Export 导出 SSH Key 列表，支持 authorized_keys / json / csv 格式。
+// Export godoc
+// @Summary      导出 SSH Key
+// @Description  导出 SSH Key 列表，支持 authorized_keys / json / csv 格式
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Produce      json
+// @Param        format  query     string  false  "导出格式（authorized_keys/json/csv）"
+// @Param        scope   query     string  false  "范围（all/in_use）"
+// @Param        ids     query     string  false  "逗号分隔的 ID 列表"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /ssh-keys/export [get]
 func (h *SSHKeyHandler) Export(c *gin.Context) {
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "authorized_keys")))
 	scope := strings.ToLower(strings.TrimSpace(c.DefaultQuery("scope", "all")))
@@ -485,7 +579,18 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 	}
 }
 
-// BatchDelete 批量删除 SSH Key，正在被节点使用的密钥会被跳过。
+// BatchDelete godoc
+// @Summary      批量删除 SSH Key
+// @Description  批量删除 SSH Key，正在被节点使用的密钥会被跳过
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "要删除的 ID 列表"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /ssh-keys/batch-delete [post]
 func (h *SSHKeyHandler) BatchDelete(c *gin.Context) {
 	var req struct {
 		IDs []uint `json:"ids" binding:"required"`

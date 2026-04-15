@@ -21,6 +21,15 @@ func NewWSHandler(hub *ws.Hub, jwtManager *auth.JWTManager, db *gorm.DB) *WSHand
 	return &WSHandler{hub: hub, jwtManager: jwtManager, db: db}
 }
 
+// ServeWS godoc
+// @Summary      WebSocket 日志推送
+// @Description  建立 WebSocket 连接，实时推送任务日志（JWT 通过首条消息认证）
+// @Tags         websocket
+// @Produce      json
+// @Success      101
+// @Failure      401  {object}  handlers.Response
+// @Failure      503  {object}  handlers.Response
+// @Router       /ws/logs [get]
 func (h *WSHandler) ServeWS(c *gin.Context) {
 	if h.hub == nil || h.jwtManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "websocket 服务不可用"})

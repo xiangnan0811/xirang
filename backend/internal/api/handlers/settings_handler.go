@@ -20,7 +20,15 @@ func NewSettingsHandler(db *gorm.DB, svc *settings.Service) *SettingsHandler {
 	return &SettingsHandler{db: db, svc: svc}
 }
 
-// GetAll GET /settings — 返回设置定义 + 当前值
+// GetAll godoc
+// @Summary      获取所有系统设置
+// @Description  返回设置定义列表和当前有效值
+// @Tags         settings
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /settings [get]
 func (h *SettingsHandler) GetAll(c *gin.Context) {
 	result, err := h.svc.GetAll()
 	if err != nil {
@@ -33,7 +41,18 @@ func (h *SettingsHandler) GetAll(c *gin.Context) {
 	})
 }
 
-// BatchUpdate PUT /settings — 批量更新设置（原子操作：先校验全部，再统一写入）
+// BatchUpdate godoc
+// @Summary      批量更新系统设置
+// @Description  批量更新系统设置（原子操作：先校验全部，再统一写入）
+// @Tags         settings
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "键值对 map"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /settings [put]
 func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 	var req map[string]string
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -85,7 +104,17 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 	respondMessage(c, "设置已更新")
 }
 
-// Delete DELETE /settings/:key — 删除 DB 覆盖值（恢复默认），含审计日志
+// Delete godoc
+// @Summary      重置系统设置
+// @Description  删除指定 key 的 DB 覆盖值，恢复为环境变量或默认值
+// @Tags         settings
+// @Security     Bearer
+// @Produce      json
+// @Param        key  path      string  true  "设置 Key"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /settings/{key} [delete]
 func (h *SettingsHandler) Delete(c *gin.Context) {
 	key := c.Param("key")
 	oldVal := h.svc.GetEffective(key)

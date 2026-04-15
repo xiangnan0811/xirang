@@ -18,6 +18,15 @@ func NewOverviewHandler(db *gorm.DB) *OverviewHandler {
 	return &OverviewHandler{db: db}
 }
 
+// Get godoc
+// @Summary      获取总览数据
+// @Description  返回节点数、活跃策略数、运行中/失败任务数及当前吞吐量
+// @Tags         overview
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /overview [get]
 func (h *OverviewHandler) Get(c *gin.Context) {
 	since24h := time.Now().UTC().Add(-24 * time.Hour)
 

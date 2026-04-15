@@ -58,6 +58,15 @@ type reportConfigRequest struct {
 	Enabled        *bool  `json:"enabled"`
 }
 
+// ListConfigs godoc
+// @Summary      列出报告配置
+// @Description  返回所有 SLA 报告配置（operator 仅返回关联自身节点的配置）
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response{data=[]model.ReportConfig}
+// @Failure      401  {object}  handlers.Response
+// @Router       /report-configs [get]
 func (h *ReportHandler) ListConfigs(c *gin.Context) {
 	var configs []model.ReportConfig
 	if err := h.db.Order("id asc").Find(&configs).Error; err != nil {
@@ -70,6 +79,18 @@ func (h *ReportHandler) ListConfigs(c *gin.Context) {
 	respondOK(c, configs)
 }
 
+// CreateConfig godoc
+// @Summary      创建报告配置
+// @Description  创建新的 SLA 报告配置
+// @Tags         reports
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "报告配置"
+// @Success      201  {object}  handlers.Response{data=model.ReportConfig}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /report-configs [post]
 func (h *ReportHandler) CreateConfig(c *gin.Context) {
 	var req reportConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -112,6 +133,20 @@ func (h *ReportHandler) CreateConfig(c *gin.Context) {
 	respondCreated(c, cfg)
 }
 
+// UpdateConfig godoc
+// @Summary      更新报告配置
+// @Description  更新指定 SLA 报告配置
+// @Tags         reports
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int     true  "配置 ID"
+// @Param        body  body      object  true  "报告配置"
+// @Success      200  {object}  handlers.Response{data=model.ReportConfig}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /report-configs/{id} [put]
 func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -156,6 +191,17 @@ func (h *ReportHandler) UpdateConfig(c *gin.Context) {
 	respondOK(c, cfg)
 }
 
+// DeleteConfig godoc
+// @Summary      删除报告配置
+// @Description  删除指定 SLA 报告配置
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "配置 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /report-configs/{id} [delete]
 func (h *ReportHandler) DeleteConfig(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -169,7 +215,17 @@ func (h *ReportHandler) DeleteConfig(c *gin.Context) {
 	respondMessage(c, "已删除")
 }
 
-// GenerateNow 立即为指定配置生成一份报告（手动触发）。
+// GenerateNow godoc
+// @Summary      立即生成报告
+// @Description  立即为指定报告配置手动触发生成一份 SLA 报告
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "配置 ID"
+// @Success      200  {object}  handlers.Response{data=model.Report}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /report-configs/{id}/generate [post]
 func (h *ReportHandler) GenerateNow(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -198,7 +254,18 @@ func (h *ReportHandler) GenerateNow(c *gin.Context) {
 	respondOK(c, report)
 }
 
-// ListReports 列出某配置下已生成的报告。
+// ListReports godoc
+// @Summary      列出报告
+// @Description  列出指定报告配置下已生成的报告（最多 50 条）
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "配置 ID"
+// @Success      200  {object}  handlers.Response{data=[]model.Report}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /report-configs/{id}/reports [get]
 func (h *ReportHandler) ListReports(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -222,7 +289,18 @@ func (h *ReportHandler) ListReports(c *gin.Context) {
 	respondOK(c, reports)
 }
 
-// GetReport 获取单份报告详情。
+// GetReport godoc
+// @Summary      获取报告详情
+// @Description  获取单份 SLA 报告的详细内容
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "报告 ID"
+// @Success      200  {object}  handlers.Response{data=model.Report}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /reports/{id} [get]
 func (h *ReportHandler) GetReport(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

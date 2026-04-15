@@ -54,6 +54,17 @@ func NewOverviewTrafficHandler(db *gorm.DB, nowFn func() time.Time) *OverviewTra
 	return &OverviewTrafficHandler{db: db, nowFn: nowFn}
 }
 
+// Get godoc
+// @Summary      获取流量趋势
+// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量趋势数据
+// @Tags         overview
+// @Security     Bearer
+// @Produce      json
+// @Param        window  query     string  false  "时间窗口（1h/24h/7d，默认 1h）"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /overview/traffic [get]
 func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 	cfg, ok := parseOverviewTrafficWindow(strings.TrimSpace(c.Query("window")))
 	if !ok {

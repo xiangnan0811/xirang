@@ -60,7 +60,21 @@ type MigratePreflightResponse struct {
 	DataSizeMB     int64                `json:"dataSizeMb"`     // 可迁移数据的估算大小(MB)
 }
 
-// MigratePreflight 执行迁移前的预检查
+// MigratePreflight godoc
+// @Summary      迁移预检
+// @Description  执行节点迁移前的预检查，包括 SSH 连通性、工具安装、磁盘空间等
+// @Tags         node-migration
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                                true  "源节点 ID"
+// @Param        body  body      handlers.MigratePreflightRequest   true  "预检请求"
+// @Success      200  {object}  handlers.Response{data=handlers.MigratePreflightResponse}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id}/migrate-preflight [post]
 func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	sourceID, ok := parseID(c, "id")
 	if !ok {

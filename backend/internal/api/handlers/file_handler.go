@@ -58,8 +58,20 @@ func NewFileHandler(db *gorm.DB) *FileHandler {
 	return &FileHandler{db: db}
 }
 
-// ListNodeFiles 通过 SFTP 列举远端节点目录（选项 A）。
-// GET /nodes/:id/files?path=/var/backup
+// ListNodeFiles godoc
+// @Summary      列出节点文件
+// @Description  通过 SFTP 列举远端节点目录内容
+// @Tags         files
+// @Security     Bearer
+// @Produce      json
+// @Param        id    path      int     true   "节点 ID"
+// @Param        path  query     string  false  "目录路径（默认 /）"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Failure      502  {object}  handlers.Response
+// @Router       /nodes/{id}/files [get]
 func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {
@@ -108,8 +120,21 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	})
 }
 
-// GetNodeFileContent 通过 SFTP 读取远端节点文件内容（选项 A）。
-// GET /nodes/:id/files/content?path=/var/backup/log.txt
+// GetNodeFileContent godoc
+// @Summary      获取节点文件内容
+// @Description  通过 SFTP 读取远端节点指定文件内容（最大 1MB，超出截断）
+// @Tags         files
+// @Security     Bearer
+// @Produce      json
+// @Param        id    path      int     true  "节点 ID"
+// @Param        path  query     string  true  "文件路径"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Failure      502  {object}  handlers.Response
+// @Router       /nodes/{id}/files/content [get]
 func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {
@@ -183,8 +208,20 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	})
 }
 
-// ListTaskBackupFiles 列举任务备份目标目录内容（选项 B，仅 admin）。
-// GET /tasks/:id/backup-files?path=/
+// ListTaskBackupFiles godoc
+// @Summary      列出任务备份文件
+// @Description  列举任务备份目标目录内容（本地路径，仅 admin）
+// @Tags         files
+// @Security     Bearer
+// @Produce      json
+// @Param        id    path      int     true   "任务 ID"
+// @Param        path  query     string  false  "子路径（默认 /）"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/backup-files [get]
 func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {

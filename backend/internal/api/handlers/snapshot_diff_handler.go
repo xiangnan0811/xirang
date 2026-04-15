@@ -51,8 +51,20 @@ func NewSnapshotDiffHandler(db *gorm.DB) *SnapshotDiffHandler {
 // snapshotIDPattern 校验快照 ID 格式（十六进制字符串，4-64 位）。
 var snapshotIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{4,64}$`)
 
-// Diff 比较两个 restic 快照之间的差异。
-// GET /api/v1/tasks/:id/snapshots/diff?snap1=abc123&snap2=def456
+// Diff godoc
+// @Summary      比较快照差异
+// @Description  比较两个 restic 快照之间的文件变更差异
+// @Tags         snapshots
+// @Security     Bearer
+// @Produce      json
+// @Param        id     path      int     true  "任务 ID"
+// @Param        snap1  query     string  true  "快照 ID 1"
+// @Param        snap2  query     string  true  "快照 ID 2"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/snapshots/diff [get]
 func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {

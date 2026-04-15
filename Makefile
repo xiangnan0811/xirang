@@ -1,4 +1,4 @@
-.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean
+.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean swag-init
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -80,6 +80,9 @@ build: backend-build web-build ## Build all
 
 clean: ## Remove build artifacts
 	rm -rf backend/xirang-server backend/coverage.out web/dist web/coverage
+
+swag-init: ## Regenerate OpenAPI docs from handler annotations
+	cd backend && swag init -g cmd/server/main.go -o internal/api/docs --parseDependency
 
 # ── Docker 镜像 ──
 DOCKER_REGISTRY ?= docker.io

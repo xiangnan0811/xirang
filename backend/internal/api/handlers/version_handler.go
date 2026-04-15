@@ -23,7 +23,13 @@ func NewVersionHandler() *VersionHandler {
 	return &VersionHandler{}
 }
 
-// Info 返回当前版本信息（无需认证）
+// Info godoc
+// @Summary      获取版本信息
+// @Description  返回当前服务版本、构建时间和 Git 提交（无需认证）
+// @Tags         version
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Router       /version [get]
 func (h *VersionHandler) Info(c *gin.Context) {
 	respondOK(c, gin.H{
 		"version":    version.Version,
@@ -32,7 +38,17 @@ func (h *VersionHandler) Info(c *gin.Context) {
 	})
 }
 
-// Check 检查是否有新版本可用（需 admin 权限）
+// Check godoc
+// @Summary      检查新版本
+// @Description  检查是否有新版本可用（需配置 VERSION_CHECK_URL 环境变量）
+// @Tags         version
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      502  {object}  handlers.Response
+// @Router       /version/check [get]
 func (h *VersionHandler) Check(c *gin.Context) {
 	checkURL := os.Getenv("VERSION_CHECK_URL")
 	if checkURL == "" {

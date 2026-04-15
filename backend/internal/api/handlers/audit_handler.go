@@ -23,6 +23,25 @@ func NewAuditHandler(db *gorm.DB) *AuditHandler {
 	return &AuditHandler{db: db}
 }
 
+// List godoc
+// @Summary      列出审计日志
+// @Description  返回分页的审计日志，支持多字段过滤
+// @Tags         audit
+// @Security     Bearer
+// @Produce      json
+// @Param        page        query     int     false  "页码（默认 1）"
+// @Param        page_size   query     int     false  "每页条数（默认 50）"
+// @Param        username    query     string  false  "按用户名过滤"
+// @Param        role        query     string  false  "按角色过滤"
+// @Param        method      query     string  false  "按 HTTP 方法过滤"
+// @Param        path        query     string  false  "按路径关键字过滤"
+// @Param        status_code query     int     false  "按状态码过滤"
+// @Param        user_id     query     int     false  "按用户 ID 过滤"
+// @Param        from        query     string  false  "开始时间（RFC3339）"
+// @Param        to          query     string  false  "结束时间（RFC3339）"
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.AuditLog}
+// @Failure      401  {object}  handlers.Response
+// @Router       /audit-logs [get]
 func (h *AuditHandler) List(c *gin.Context) {
 	query := h.buildQuery(c)
 
@@ -45,6 +64,23 @@ func (h *AuditHandler) List(c *gin.Context) {
 	respondPaginated(c, items, total, pg.Page, pg.PageSize)
 }
 
+// ExportCSV godoc
+// @Summary      导出审计日志 CSV
+// @Description  导出审计日志为 CSV 文件，支持与 List 相同的过滤参数
+// @Tags         audit
+// @Security     Bearer
+// @Produce      text/csv
+// @Param        page_size   query     int     false  "最大条数（默认 1000，最大 5000）"
+// @Param        username    query     string  false  "按用户名过滤"
+// @Param        role        query     string  false  "按角色过滤"
+// @Param        method      query     string  false  "按 HTTP 方法过滤"
+// @Param        path        query     string  false  "按路径关键字过滤"
+// @Param        status_code query     int     false  "按状态码过滤"
+// @Param        from        query     string  false  "开始时间（RFC3339）"
+// @Param        to          query     string  false  "结束时间（RFC3339）"
+// @Success      200
+// @Failure      401  {object}  handlers.Response
+// @Router       /audit-logs/export [get]
 func (h *AuditHandler) ExportCSV(c *gin.Context) {
 	query := h.buildQuery(c)
 

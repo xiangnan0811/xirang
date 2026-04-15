@@ -33,7 +33,18 @@ type verifyMountResult struct {
 // 禁止验证的系统关键路径
 var forbiddenPaths = []string{"/", "/etc", "/usr", "/var", "/boot", "/sys", "/proc", "/dev", "/bin", "/sbin", "/lib"}
 
-// VerifyMount 验证指定路径是否为有效的挂载点
+// VerifyMount godoc
+// @Summary      验证挂载点
+// @Description  验证指定路径是否为有效的挂载点，并返回磁盘空间信息
+// @Tags         storage
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      object  true  "包含 path 字段的请求"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /system/verify-mount [post]
 func (h *StorageGuideHandler) VerifyMount(c *gin.Context) {
 	var req verifyMountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
