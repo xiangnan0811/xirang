@@ -17,8 +17,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
-
 type AuthHandler struct {
 	authService          *auth.Service
 	jwtManager           *auth.JWTManager
@@ -52,12 +50,12 @@ func (h *AuthHandler) WithCaptchaStore(store *CaptchaStore) *AuthHandler {
 }
 
 type loginRequest struct {
-	Username       string `json:"username" binding:"required"`
-	Password       string `json:"password" binding:"required"`
-	Captcha        string `json:"captcha"`
-	SecondCaptcha  string `json:"second_captcha"`
-	CaptchaID      string `json:"captcha_id"`
-	CaptchaAnswer  string `json:"captcha_answer"`
+	Username      string `json:"username" binding:"required"`
+	Password      string `json:"password" binding:"required"`
+	Captcha       string `json:"captcha"`
+	SecondCaptcha string `json:"second_captcha"`
+	CaptchaID     string `json:"captcha_id"`
+	CaptchaAnswer string `json:"captcha_answer"`
 }
 
 type changePasswordRequest struct {
@@ -65,6 +63,17 @@ type changePasswordRequest struct {
 	NewPassword     string `json:"new_password" binding:"required"`
 }
 
+// Login godoc
+// @Summary      用户登录
+// @Description  使用用户名和密码登录，支持验证码和 2FA 预登录流程
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      loginRequest  true  "登录请求"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /auth/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -129,6 +138,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+// Me godoc
+// @Summary      获取当前用户信息
+// @Description  返回当前已认证用户的基本信息
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /auth/me [get]
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	totpEnabled := false
@@ -151,8 +169,15 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	})
 }
 
-// CompleteOnboarding 标记当前用户完成引导向导。
-// POST /me/onboarded
+// CompleteOnboarding godoc
+// @Summary      完成引导向导
+// @Description  标记当前用户已完成新手引导向导
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /me/onboarded [post]
 func (h *AuthHandler) CompleteOnboarding(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	if userID == 0 {
@@ -170,6 +195,18 @@ func (h *AuthHandler) CompleteOnboarding(c *gin.Context) {
 	respondMessage(c, "引导完成")
 }
 
+// ChangePassword godoc
+// @Summary      修改密码
+// @Description  修改当前用户的密码
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      changePasswordRequest  true  "修改密码请求"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /auth/change-password [post]
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	var req changePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -191,6 +228,16 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	respondMessage(c, "密码修改成功")
 }
 
+// Logout godoc
+// @Summary      退出登录
+// @Description  撤销当前 JWT 令牌，安全退出
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /auth/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
 	if h.jwtManager == nil {
 		c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: "认证服务不可用", Data: nil})
@@ -211,7 +258,15 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	respondMessage(c, "已安全退出")
 }
 
-// TOTPSetup POST /auth/2fa/setup — 生成 TOTP 密钥并暂存到用户记录（TOTPEnabled 保持 false），返回二维码 URL 和密钥。
+// TOTPSetup godoc
+// @Summary      初始化 2FA 密钥
+// @Description  生成 TOTP 密钥并暂存，返回二维码 URL 和密钥（需调用 verify 激活）
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /auth/2fa/setup [post]
 func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("db 未注入"))
@@ -243,7 +298,18 @@ type totpVerifyRequest struct {
 	Code string `json:"code" binding:"required"`
 }
 
-// TOTPVerify POST /auth/2fa/verify — 使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码。
+// TOTPVerify godoc
+// @Summary      验证并激活 2FA
+// @Description  使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      totpVerifyRequest  true  "TOTP 验证码"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /auth/2fa/verify [post]
 func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("db 未注入"))
@@ -297,7 +363,18 @@ type totpDisableRequest struct {
 	TOTPCode string `json:"totp_code" binding:"required"`
 }
 
-// TOTPDisable POST /auth/2fa/disable — 验证密码和 TOTP 码后禁用 2FA。
+// TOTPDisable godoc
+// @Summary      禁用 2FA
+// @Description  验证密码和 TOTP 码后禁用两步验证
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      totpDisableRequest  true  "禁用 2FA 请求"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /auth/2fa/disable [post]
 func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("db 未注入"))
@@ -339,7 +416,17 @@ type totpLoginRequest struct {
 	TOTPCode   string `json:"totp_code" binding:"required"`
 }
 
-// TOTPLogin POST /auth/2fa/login — 验证 TOTP 码或恢复码后返回完整 JWT。
+// TOTPLogin godoc
+// @Summary      2FA 二步登录
+// @Description  使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      totpLoginRequest  true  "2FA 登录请求"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /auth/2fa/login [post]
 func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("db 未注入"))

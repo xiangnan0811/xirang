@@ -35,6 +35,16 @@ type updateUserRequest struct {
 	Password *string `json:"password"`
 }
 
+// List godoc
+// @Summary      列出所有用户
+// @Description  返回系统中所有用户列表（admin only）
+// @Tags         users
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response{data=[]handlers.userResponse}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /users [get]
 func (h *UserHandler) List(c *gin.Context) {
 	users, err := h.authService.ListUsers()
 	if err != nil {
@@ -54,6 +64,19 @@ func (h *UserHandler) List(c *gin.Context) {
 	respondOK(c, result)
 }
 
+// Create godoc
+// @Summary      创建用户
+// @Description  创建新用户账号（admin only）
+// @Tags         users
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      createUserRequest  true  "创建用户请求"
+// @Success      201   {object}  handlers.Response{data=handlers.userResponse}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /users [post]
 func (h *UserHandler) Create(c *gin.Context) {
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,6 +98,20 @@ func (h *UserHandler) Create(c *gin.Context) {
 	})
 }
 
+// Update godoc
+// @Summary      更新用户
+// @Description  更新用户角色或密码（admin only）
+// @Tags         users
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                true  "用户 ID"
+// @Param        body  body      updateUserRequest  true  "更新用户请求"
+// @Success      200   {object}  handlers.Response{data=handlers.userResponse}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /users/{id} [put]
 func (h *UserHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -110,6 +147,18 @@ func (h *UserHandler) Update(c *gin.Context) {
 	})
 }
 
+// Delete godoc
+// @Summary      删除用户
+// @Description  删除指定用户账号（admin only，不能删除自己）
+// @Tags         users
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "用户 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /users/{id} [delete]
 func (h *UserHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
