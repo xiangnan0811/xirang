@@ -14,25 +14,25 @@ var dbQueryDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 	Buckets: prometheus.DefBuckets,
 }, []string{"operation"})
 
-func RegisterMetricsCallbacks(db *gorm.DB) {
+func RegisterMetricsCallbacks(db *gorm.DB) { //nolint:errcheck // GORM callback registration is fire-and-forget at init time
 	for _, op := range []string{"create", "query", "update", "delete", "raw"} {
 		callbackName := "metrics:" + op
 		switch op {
 		case "create":
-			db.Callback().Create().Before("gorm:create").Register(callbackName+":before", setStartTime)
-			db.Callback().Create().After("gorm:create").Register(callbackName+":after", recordDuration("create"))
+			_ = db.Callback().Create().Before("gorm:create").Register(callbackName+":before", setStartTime)
+			_ = db.Callback().Create().After("gorm:create").Register(callbackName+":after", recordDuration("create"))
 		case "query":
-			db.Callback().Query().Before("gorm:query").Register(callbackName+":before", setStartTime)
-			db.Callback().Query().After("gorm:query").Register(callbackName+":after", recordDuration("query"))
+			_ = db.Callback().Query().Before("gorm:query").Register(callbackName+":before", setStartTime)
+			_ = db.Callback().Query().After("gorm:query").Register(callbackName+":after", recordDuration("query"))
 		case "update":
-			db.Callback().Update().Before("gorm:update").Register(callbackName+":before", setStartTime)
-			db.Callback().Update().After("gorm:update").Register(callbackName+":after", recordDuration("update"))
+			_ = db.Callback().Update().Before("gorm:update").Register(callbackName+":before", setStartTime)
+			_ = db.Callback().Update().After("gorm:update").Register(callbackName+":after", recordDuration("update"))
 		case "delete":
-			db.Callback().Delete().Before("gorm:delete").Register(callbackName+":before", setStartTime)
-			db.Callback().Delete().After("gorm:delete").Register(callbackName+":after", recordDuration("delete"))
+			_ = db.Callback().Delete().Before("gorm:delete").Register(callbackName+":before", setStartTime)
+			_ = db.Callback().Delete().After("gorm:delete").Register(callbackName+":after", recordDuration("delete"))
 		case "raw":
-			db.Callback().Raw().Before("gorm:raw").Register(callbackName+":before", setStartTime)
-			db.Callback().Raw().After("gorm:raw").Register(callbackName+":after", recordDuration("raw"))
+			_ = db.Callback().Raw().Before("gorm:raw").Register(callbackName+":before", setStartTime)
+			_ = db.Callback().Raw().After("gorm:raw").Register(callbackName+":after", recordDuration("raw"))
 		}
 	}
 }
