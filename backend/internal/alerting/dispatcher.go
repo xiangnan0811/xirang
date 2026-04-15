@@ -22,14 +22,21 @@ import (
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/util"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/net/proxy"
 	"gorm.io/gorm"
 )
 
+var alertsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "xirang_alerts_total",
+	Help: "Total alerts raised by severity",
+}, []string{"severity"})
+
 // settingsSvc 模块级设置服务引用，由 InitSettings 注入（sync.Once 保证并发安全）
 var (
-	settingsSvc     *settings.Service
-	settingsInitMu  sync.Mutex
+	settingsSvc    *settings.Service
+	settingsInitMu sync.Mutex
 )
 
 // InitSettings 注入设置服务（在 main 中调用，sync.Mutex 保证写入可见性）
@@ -257,6 +264,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	if err := db.Create(alert).Error; err != nil {
 		return err
 	}
+	alertsTotal.WithLabelValues(alert.Severity).Inc()
 
 	var integrations []model.Integration
 	if err := db.Where("enabled = ?", true).Find(&integrations).Error; err != nil {

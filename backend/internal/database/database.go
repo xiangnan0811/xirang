@@ -64,6 +64,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		if err := configureSQLitePool(db); err != nil {
 			return nil, fmt.Errorf("配置连接池失败: %w", err)
 		}
+		RegisterMetricsCallbacks(db)
 		return db, nil
 	case "postgres":
 		db, err := gorm.Open(postgres.Open(cfg.PostgresDSN), &gorm.Config{})
@@ -73,6 +74,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		if err := configurePool(db); err != nil {
 			return nil, fmt.Errorf("配置连接池失败: %w", err)
 		}
+		RegisterMetricsCallbacks(db)
 		return db, nil
 	default:
 		return nil, fmt.Errorf("不支持的 DB 类型: %s", cfg.DBType)

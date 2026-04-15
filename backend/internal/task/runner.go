@@ -13,6 +13,20 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/verifier"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	tasksActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "xirang_tasks_active",
+		Help: "Number of currently running tasks",
+	})
+	backupLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "xirang_backup_last_success_timestamp",
+		Help: "Unix timestamp of last successful backup per task",
+	}, []string{"task_name"})
 )
 
 // trigger 是 triggerCore 的包装，负责在重试时恢复链路上下文。
@@ -248,6 +262,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		"started_at": &now,
 	})
 	nLock.Unlock()
+	tasksActive.Inc()
+	defer tasksActive.Dec()
 
 	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
 
@@ -422,6 +438,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			backupAt := time.Now()
 			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &backupAt)
 		}
+		backupLastSuccess.WithLabelValues(taskEntity.Name).SetToCurrentTime()
 		m.emitLog(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
 		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
