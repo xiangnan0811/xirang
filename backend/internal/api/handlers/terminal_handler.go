@@ -59,6 +59,16 @@ type terminalResizeMessage struct {
 	Rows uint32 `json:"rows"`
 }
 
+// ServeTerminal godoc
+// @Summary      WebSocket SSH 终端
+// @Description  建立 WebSocket 连接，通过 SSH PTY 提供交互式终端（JWT 通过首条消息认证，仅 admin）
+// @Tags         terminal
+// @Produce      json
+// @Param        node_id  query     int  true  "节点 ID"
+// @Success      101
+// @Failure      401  {object}  handlers.Response
+// @Failure      503  {object}  handlers.Response
+// @Router       /ws/terminal [get]
 func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	h.mu.Lock()
 	sessionCount := len(h.sessions)

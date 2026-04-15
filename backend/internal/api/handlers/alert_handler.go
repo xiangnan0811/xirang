@@ -58,6 +58,22 @@ func NewAlertHandler(db *gorm.DB) *AlertHandler {
 	return &AlertHandler{db: db}
 }
 
+// List godoc
+// @Summary      列出告警
+// @Description  返回告警列表（分页），支持按状态、节点、任务、严重级别、关键字过滤
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        page       query     int     false  "页码（默认 1）"
+// @Param        page_size  query     int     false  "每页条数（默认 20，最大 200）"
+// @Param        status     query     string  false  "告警状态（open/acked/resolved/unresolved）"
+// @Param        node_id    query     int     false  "节点 ID 过滤"
+// @Param        task_id    query     int     false  "任务 ID 过滤"
+// @Param        severity   query     string  false  "严重级别（critical/warning）"
+// @Param        keyword    query     string  false  "关键字模糊搜索"
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.Alert}
+// @Failure      401  {object}  handlers.Response
+// @Router       /alerts [get]
 func (h *AlertHandler) List(c *gin.Context) {
 	query := h.db.Model(&model.Alert{})
 
@@ -114,6 +130,18 @@ func (h *AlertHandler) List(c *gin.Context) {
 	respondPaginated(c, alerts, total, pg.Page, pg.PageSize)
 }
 
+// Get godoc
+// @Summary      获取告警详情
+// @Description  返回单个告警的详细信息
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=model.Alert}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id} [get]
 func (h *AlertHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -134,6 +162,18 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	respondOK(c, alert)
 }
 
+// Ack godoc
+// @Summary      确认告警
+// @Description  将告警状态标记为已确认（acked）
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=model.Alert}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id}/ack [post]
 func (h *AlertHandler) Ack(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -163,6 +203,18 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 	respondOK(c, alert)
 }
 
+// Resolve godoc
+// @Summary      解决告警
+// @Description  将告警状态标记为已解决（resolved）
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=model.Alert}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id}/resolve [post]
 func (h *AlertHandler) Resolve(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -189,6 +241,18 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 	respondOK(c, alert)
 }
 
+// Deliveries godoc
+// @Summary      获取告警投递记录
+// @Description  返回指定告警的所有通知投递记录
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=[]model.AlertDelivery}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id}/deliveries [get]
 func (h *AlertHandler) Deliveries(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -217,6 +281,21 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 	respondOK(c, deliveries)
 }
 
+// RetryDelivery godoc
+// @Summary      重发告警通知
+// @Description  向指定通知通道重新发送告警
+// @Tags         alerts
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                   true  "告警 ID"
+// @Param        body  body      retryDeliveryRequest  true  "重发请求（integration_id）"
+// @Success      200   {object}  handlers.Response{data=retryDeliveryResponse}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /alerts/{id}/retry [post]
 func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -280,6 +359,18 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	})
 }
 
+// RetryFailedDeliveries godoc
+// @Summary      批量重发失败的告警通知
+// @Description  对指定告警的所有失败投递记录进行批量重发
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=retryFailedDeliveriesResponse}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id}/retry-all [post]
 func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -369,6 +460,16 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	})
 }
 
+// DeliveryStats godoc
+// @Summary      获取投递统计
+// @Description  返回指定时间窗口内的通知投递统计数据
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        hours  query     int  false  "统计时间窗口（小时，默认 24，最大 720）"
+// @Success      200  {object}  handlers.Response{data=deliveryStatsResponse}
+// @Failure      401  {object}  handlers.Response
+// @Router       /alerts/delivery-stats [get]
 func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 	hours := parseDeliveryStatsHours(c.Query("hours"))
 	from := time.Now().Add(-time.Duration(hours) * time.Hour)
@@ -434,6 +535,15 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 	})
 }
 
+// UnreadCount godoc
+// @Summary      获取未读告警数量
+// @Description  返回当前未读（open 状态）告警的数量统计，按严重级别分组
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /alerts/unread-count [get]
 func (h *AlertHandler) UnreadCount(c *gin.Context) {
 	query := h.db.Model(&model.Alert{}).Where("status = ?", "open")
 

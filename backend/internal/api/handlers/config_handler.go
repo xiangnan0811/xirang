@@ -42,8 +42,17 @@ func NewConfigHandler(db *gorm.DB, settingsSvc *settings.Service) *ConfigHandler
 	return &ConfigHandler{db: db, settingsSvc: settingsSvc}
 }
 
-// Export 导出节点、密钥、策略、任务配置为 JSON。
-// 默认不导出敏感字段（私钥、密码），需 include_secrets=true 且 admin 权限。
+// Export godoc
+// @Summary      导出配置
+// @Description  导出节点、SSH 密钥、策略、任务配置为 JSON；默认不含敏感字段，include_secrets=true 且 admin 权限时可导出
+// @Tags         config
+// @Security     Bearer
+// @Produce      json
+// @Param        include_secrets  query     bool    false  "是否包含敏感字段（仅 admin）"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /config/export [get]
 func (h *ConfigHandler) Export(c *gin.Context) {
 	includeSecrets := c.Query("include_secrets") == "true"
 
@@ -204,8 +213,19 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	})
 }
 
-// Import 从 JSON 导入配置。
-// conflict 参数控制冲突策略：skip（默认）跳过已存在项，overwrite 覆盖。
+// Import godoc
+// @Summary      导入配置
+// @Description  从 JSON 文件导入节点、SSH 密钥、策略、任务配置；conflict 参数控制冲突策略
+// @Tags         config
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        conflict  query     string  false  "冲突策略（skip 默认/overwrite）"
+// @Param        body      body      object  true   "配置 JSON 数据"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /config/import [post]
 func (h *ConfigHandler) Import(c *gin.Context) {
 	conflict := c.DefaultQuery("conflict", "skip")
 	if conflict != "skip" && conflict != "overwrite" {

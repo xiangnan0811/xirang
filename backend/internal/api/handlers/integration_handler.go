@@ -197,6 +197,15 @@ func isPrivateOrLoopback(addr netip.Addr) bool {
 	return addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified()
 }
 
+// List godoc
+// @Summary      列出通知通道
+// @Description  返回所有通知通道列表
+// @Tags         integrations
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response{data=[]model.Integration}
+// @Failure      401  {object}  handlers.Response
+// @Router       /integrations [get]
 func (h *IntegrationHandler) List(c *gin.Context) {
 	var items []model.Integration
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
@@ -209,6 +218,17 @@ func (h *IntegrationHandler) List(c *gin.Context) {
 	respondOK(c, items)
 }
 
+// Get godoc
+// @Summary      获取通知通道详情
+// @Description  返回单个通知通道的详细信息
+// @Tags         integrations
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "通知通道 ID"
+// @Success      200  {object}  handlers.Response{data=model.Integration}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /integrations/{id} [get]
 func (h *IntegrationHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -223,6 +243,18 @@ func (h *IntegrationHandler) Get(c *gin.Context) {
 	respondOK(c, item)
 }
 
+// Create godoc
+// @Summary      创建通知通道
+// @Description  创建新的通知通道（Webhook/Slack/Telegram/Email/飞书/钉钉/企业微信）
+// @Tags         integrations
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      integrationRequest  true  "创建通知通道请求"
+// @Success      201   {object}  handlers.Response{data=model.Integration}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /integrations [post]
 func (h *IntegrationHandler) Create(c *gin.Context) {
 	var req integrationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -308,6 +340,20 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	respondCreated(c, item)
 }
 
+// Update godoc
+// @Summary      更新通知通道
+// @Description  完整更新通知通道配置
+// @Tags         integrations
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                 true  "通知通道 ID"
+// @Param        body  body      integrationRequest  true  "更新通知通道请求"
+// @Success      200   {object}  handlers.Response{data=model.Integration}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /integrations/{id} [put]
 func (h *IntegrationHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -409,6 +455,20 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	respondOK(c, item)
 }
 
+// Patch godoc
+// @Summary      部分更新通知通道
+// @Description  部分更新通知通道配置（仅更新提供的字段）
+// @Tags         integrations
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                      true  "通知通道 ID"
+// @Param        body  body      integrationPatchRequest  true  "部分更新请求"
+// @Success      200   {object}  handlers.Response{data=model.Integration}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /integrations/{id} [patch]
 func (h *IntegrationHandler) Patch(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -515,6 +575,75 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	respondOK(c, item)
 }
 
+// Delete godoc
+// @Summary      删除通知通道
+// @Description  删除指定通知通道
+// @Tags         integrations
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "通知通道 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /integrations/{id} [delete]
+func (h *IntegrationHandler) Delete(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.db.Delete(&model.Integration{}, id).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondMessage(c, "deleted")
+}
+
+// Test godoc
+// @Summary      测试通知通道
+// @Description  向通知通道发送测试消息，验证配置是否正确
+// @Tags         integrations
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "通知通道 ID"
+// @Success      200  {object}  handlers.Response{data=integrationTestResponse}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /integrations/{id}/test [post]
+func (h *IntegrationHandler) Test(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var item model.Integration
+	if err := h.db.First(&item, id).Error; err != nil {
+		respondNotFound(c, "通知通道不存在")
+		return
+	}
+
+	startedAt := time.Now()
+	err := alerting.SendProbe(item)
+	latency := time.Since(startedAt).Milliseconds()
+	if err != nil {
+		errMsg := err.Error()
+		if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
+			errMsg = util.SanitizeTelegramError(err)
+		}
+		respondOK(c, integrationTestResponse{
+			OK:        false,
+			Message:   "测试发送失败: " + errMsg,
+			LatencyMS: latency,
+		})
+		return
+	}
+
+	respondOK(c, integrationTestResponse{
+		OK:        true,
+		Message:   "测试发送成功",
+		LatencyMS: latency,
+	})
+}
+
 // validateProxyURL 验证代理 URL 格式
 // 注意：代理地址允许 localhost/内网地址（代理通常部署在本机或 VPC 内），
 // 不复用通知 endpoint 的 SSRF 校验。该字段受 RBAC("integrations:write") 保护。
@@ -589,53 +718,6 @@ func buildEndpointFromPatch(channelType, existingEndpoint string, req integratio
 	default:
 		return "", nil
 	}
-}
-
-func (h *IntegrationHandler) Delete(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	if err := h.db.Delete(&model.Integration{}, id).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondMessage(c, "deleted")
-}
-
-func (h *IntegrationHandler) Test(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var item model.Integration
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "通知通道不存在")
-		return
-	}
-
-	startedAt := time.Now()
-	err := alerting.SendProbe(item)
-	latency := time.Since(startedAt).Milliseconds()
-	if err != nil {
-		errMsg := err.Error()
-		if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
-			errMsg = util.SanitizeTelegramError(err)
-		}
-		respondOK(c, integrationTestResponse{
-			OK:        false,
-			Message:   "测试发送失败: " + errMsg,
-			LatencyMS: latency,
-		})
-		return
-	}
-
-	respondOK(c, integrationTestResponse{
-		OK:        true,
-		Message:   "测试发送成功",
-		LatencyMS: latency,
-	})
 }
 
 // buildEndpointFromFields 根据通道类型和结构化字段构建完整 endpoint URL

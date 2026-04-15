@@ -37,8 +37,15 @@ type perNodeUsage struct {
 	UsedGB   float64 `json:"used_gb"`
 }
 
-// Get 收集本地备份目标路径的存储用量。
-// GET /overview/storage-usage
+// Get godoc
+// @Summary      获取存储用量
+// @Description  收集本地备份目标路径的挂载点用量和按节点分布统计
+// @Tags         overview
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /overview/storage-usage [get]
 func (h *StorageUsageHandler) Get(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -176,4 +183,3 @@ func dirSizeGB(ctx context.Context, path string) float64 {
 func round2(v float64) float64 {
 	return float64(int(v*100)) / 100
 }
-

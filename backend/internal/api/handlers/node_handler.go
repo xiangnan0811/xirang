@@ -65,7 +65,16 @@ const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
 var consecutiveDashRegexp = regexp.MustCompile(`-{2,}`)
 
-
+// List godoc
+// @Summary      列出节点
+// @Description  返回所有节点列表，operator 仅返回自己负责的节点
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        include_archived  query     bool  false  "是否包含已归档节点"
+// @Success      200               {object}  handlers.Response{data=[]model.Node}
+// @Failure      401               {object}  handlers.Response
+// @Router       /nodes [get]
 func (h *NodeHandler) List(c *gin.Context) {
 	query := h.db.Preload("SSHKey")
 	if c.Query("include_archived") != "true" {
@@ -92,6 +101,17 @@ func (h *NodeHandler) List(c *gin.Context) {
 	respondOK(c, safeNodes)
 }
 
+// Get godoc
+// @Summary      获取节点详情
+// @Description  返回单个节点的详细信息
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response{data=model.Node}
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id} [get]
 func (h *NodeHandler) Get(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -128,6 +148,18 @@ func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
 	}
 }
 
+// Create godoc
+// @Summary      创建节点
+// @Description  添加新的服务器节点
+// @Tags         nodes
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      nodeRequest  true  "创建节点请求"
+// @Success      201   {object}  handlers.Response{data=model.Node}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /nodes [post]
 func (h *NodeHandler) Create(c *gin.Context) {
 	var req nodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -240,6 +272,20 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	respondCreated(c, node.Sanitized())
 }
 
+// Update godoc
+// @Summary      更新节点
+// @Description  更新节点配置信息
+// @Tags         nodes
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int          true  "节点 ID"
+// @Param        body  body      nodeRequest  true  "更新节点请求"
+// @Success      200   {object}  handlers.Response{data=model.Node}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Router       /nodes/{id} [put]
 func (h *NodeHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -400,6 +446,18 @@ func diffNodeIDs(source []uint, existing []uint) []uint {
 	return diff
 }
 
+// BatchDelete godoc
+// @Summary      批量删除节点
+// @Description  批量删除多个节点及其关联的策略关联、任务、告警
+// @Tags         nodes
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      nodeBatchDeleteRequest  true  "节点 ID 列表"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Router       /nodes/batch-delete [post]
 func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var req nodeBatchDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -507,6 +565,17 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	})
 }
 
+// Delete godoc
+// @Summary      删除节点
+// @Description  删除指定节点及其关联的策略关联、任务、告警
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id} [delete]
 func (h *NodeHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -570,6 +639,17 @@ func (h *NodeHandler) Exec(c *gin.Context) {
 	})
 }
 
+// TestConnection godoc
+// @Summary      测试节点 SSH 连接
+// @Description  测试节点的 SSH 连通性，成功时更新延迟和磁盘信息
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id}/test [post]
 func (h *NodeHandler) TestConnection(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -705,8 +785,19 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	})
 }
 
-// Metrics 返回节点最近资源采样（用于趋势图）
-// GET /nodes/:id/metrics?limit=288&since=24h
+// Metrics godoc
+// @Summary      获取节点资源采样
+// @Description  返回节点最近的 CPU/内存/磁盘/负载资源采样数据，用于趋势图
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id     path      int     true   "节点 ID"
+// @Param        limit  query     int     false  "返回条数（默认 288，最大 2016）"
+// @Param        since  query     string  false  "时间范围，如 24h、7d（默认 24h）"
+// @Success      200    {object}  handlers.Response
+// @Failure      401    {object}  handlers.Response
+// @Failure      404    {object}  handlers.Response
+// @Router       /nodes/{id}/metrics [get]
 func (h *NodeHandler) Metrics(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {
@@ -811,8 +902,17 @@ func validateBackupDir(dir string) error {
 	return nil
 }
 
-// ListOwners 列出节点的所有负责人（admin only）。
-// GET /nodes/:id/owners
+// ListOwners godoc
+// @Summary      列出节点负责人
+// @Description  返回节点的所有负责人列表（admin only）
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /nodes/{id}/owners [get]
 func (h *NodeHandler) ListOwners(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {
@@ -834,8 +934,20 @@ func (h *NodeHandler) ListOwners(c *gin.Context) {
 	respondOK(c, result)
 }
 
-// AddOwner 为节点添加负责人（admin only）。
-// POST /nodes/:id/owners  {"user_id": 2}
+// AddOwner godoc
+// @Summary      添加节点负责人
+// @Description  为节点添加一个负责人（admin only）
+// @Tags         nodes
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int   true  "节点 ID"
+// @Param        body  body      object  true  "user_id"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /nodes/{id}/owners [post]
 func (h *NodeHandler) AddOwner(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {
@@ -856,10 +968,49 @@ func (h *NodeHandler) AddOwner(c *gin.Context) {
 	respondMessage(c, "已添加负责人")
 }
 
-// RemoveOwner 移除节点负责人（admin only）。
-// DELETE /nodes/:id/owners/:user_id
-// EmergencyBackup 触发节点所有备份任务的紧急执行。
-// POST /nodes/:id/emergency-backup
+// RemoveOwner godoc
+// @Summary      移除节点负责人
+// @Description  移除节点的指定负责人（admin only）
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id       path      int  true  "节点 ID"
+// @Param        user_id  path      int  true  "用户 ID"
+// @Success      200      {object}  handlers.Response
+// @Failure      400      {object}  handlers.Response
+// @Failure      401      {object}  handlers.Response
+// @Failure      403      {object}  handlers.Response
+// @Router       /nodes/{id}/owners/{user_id} [delete]
+func (h *NodeHandler) RemoveOwner(c *gin.Context) {
+	nodeID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	userIDStr := c.Param("user_id")
+	userID, err := strconv.ParseUint(userIDStr, 10, 64)
+	if err != nil {
+		respondBadRequest(c, "无效的用户 ID")
+		return
+	}
+	if err := h.db.Where("node_id = ? AND user_id = ?", nodeID, uint(userID)).
+		Delete(&model.NodeOwner{}).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondMessage(c, "已移除负责人")
+}
+
+// EmergencyBackup godoc
+// @Summary      紧急备份
+// @Description  触发节点上所有备份任务的立即执行
+// @Tags         nodes
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id}/emergency-backup [post]
 func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -897,23 +1048,4 @@ func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
 		"task_ids":  taskIDs,
 		"errors":    errors,
 	})
-}
-
-func (h *NodeHandler) RemoveOwner(c *gin.Context) {
-	nodeID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	userIDStr := c.Param("user_id")
-	userID, err := strconv.ParseUint(userIDStr, 10, 64)
-	if err != nil {
-		respondBadRequest(c, "无效的用户 ID")
-		return
-	}
-	if err := h.db.Where("node_id = ? AND user_id = ?", nodeID, uint(userID)).
-		Delete(&model.NodeOwner{}).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondMessage(c, "已移除负责人")
 }

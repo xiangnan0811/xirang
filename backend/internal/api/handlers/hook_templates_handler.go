@@ -58,7 +58,15 @@ func NewHookTemplatesHandler() *HookTemplatesHandler {
 	return &HookTemplatesHandler{}
 }
 
-// List 返回所有内置 hook 模板
+// List godoc
+// @Summary      列出 Hook 模板
+// @Description  返回所有内置备份前/后脚本 hook 模板（MySQL/PostgreSQL/MongoDB/Redis/Docker 等）
+// @Tags         templates
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Router       /hook-templates [get]
 func (h *HookTemplatesHandler) List(c *gin.Context) {
 	respondOK(c, builtinHookTemplates)
 }

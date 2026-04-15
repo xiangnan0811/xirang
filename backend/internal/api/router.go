@@ -15,7 +15,12 @@ import (
 	"xirang/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
+
+	_ "xirang/backend/internal/api/docs"
 )
 
 type Dependencies struct {
@@ -41,6 +46,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router := gin.New()
 	router.MaxMultipartMemory = 10 << 20 // 10 MB
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
+	router.Use(middleware.PrometheusMetrics())
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		allowedOrigin := resolveAllowedOrigin(origin, c.Request.Host, dep.AllowedOrigins)
@@ -245,6 +251,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	return router
 }

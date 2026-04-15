@@ -73,7 +73,13 @@ func NewCaptchaHandler(store *CaptchaStore) *CaptchaHandler {
 	return &CaptchaHandler{captchaStore: store}
 }
 
-// GenerateCaptcha 生成一道加法题并返回 {id, question}。
+// GenerateCaptcha godoc
+// @Summary      生成数学验证码
+// @Description  生成一道加法题并返回验证码 ID 和题目，答案在登录时提交校验
+// @Tags         auth
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Router       /auth/captcha [get]
 func (h *CaptchaHandler) GenerateCaptcha(c *gin.Context) {
 	a, err := rand.Int(rand.Reader, big.NewInt(20))
 	if err != nil {

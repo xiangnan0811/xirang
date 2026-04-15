@@ -35,8 +35,18 @@ func NewDockerHandler(db *gorm.DB) *DockerHandler {
 	return &DockerHandler{db: db}
 }
 
-// ListVolumes 列举远端节点上的 Docker 卷。
-// GET /nodes/:id/docker-volumes
+// ListVolumes godoc
+// @Summary      列出 Docker 卷
+// @Description  通过 SSH 列举远端节点上的 Docker 卷
+// @Tags         docker
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "节点 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Failure      502  {object}  handlers.Response
+// @Router       /nodes/{id}/docker-volumes [get]
 func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	nodeID, ok := parseID(c, "id")
 	if !ok {

@@ -44,7 +44,18 @@ func NewSnapshotHandler(db *gorm.DB) *SnapshotHandler {
 	return &SnapshotHandler{db: db}
 }
 
-// ListSnapshots 列出 restic 任务的所有快照
+// ListSnapshots godoc
+// @Summary      列出快照
+// @Description  列出 restic 类型任务的所有备份快照
+// @Tags         snapshots
+// @Security     Bearer
+// @Produce      json
+// @Param        id  path      int  true  "任务 ID"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/snapshots [get]
 func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {
@@ -69,7 +80,20 @@ func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 	respondOK(c, snapshots)
 }
 
-// ListFiles 列出指定快照中的文件
+// ListFiles godoc
+// @Summary      列出快照文件
+// @Description  列出指定 restic 快照中的文件和目录
+// @Tags         snapshots
+// @Security     Bearer
+// @Produce      json
+// @Param        id    path      int     true   "任务 ID"
+// @Param        sid   path      string  true   "快照 ID"
+// @Param        path  query     string  false  "目录路径（默认 /）"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/snapshots/{sid}/files [get]
 func (h *SnapshotHandler) ListFiles(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {
@@ -110,7 +134,21 @@ type restoreRequest struct {
 	TargetPath string   `json:"targetPath" binding:"required"`
 }
 
-// Restore 从快照恢复指定文件
+// Restore godoc
+// @Summary      恢复快照文件
+// @Description  从指定 restic 快照恢复选定的文件到目标路径
+// @Tags         snapshots
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int     true  "任务 ID"
+// @Param        sid   path      string  true  "快照 ID"
+// @Param        body  body      object  true  "恢复请求（includes 列表 + targetPath）"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /tasks/{id}/snapshots/{sid}/restore [post]
 func (h *SnapshotHandler) Restore(c *gin.Context) {
 	taskID, ok := parseID(c, "id")
 	if !ok {

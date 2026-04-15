@@ -32,7 +32,16 @@ func isSQLiteRuntime() bool {
 	return dbType == "" || strings.EqualFold(dbType, "sqlite")
 }
 
-// BackupDB 创建 SQLite 数据库的时间戳备份
+// BackupDB godoc
+// @Summary      备份数据库
+// @Description  创建 SQLite 数据库的时间戳一致性备份（仅 SQLite）
+// @Tags         system
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      501  {object}  handlers.Response
+// @Router       /system/backup-db [post]
 func (h *SystemHandler) BackupDB(c *gin.Context) {
 	if !isSQLiteRuntime() {
 		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})
@@ -109,7 +118,16 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 	})
 }
 
-// ListBackups 列出已有的数据库备份文件
+// ListBackups godoc
+// @Summary      列出数据库备份
+// @Description  列出已有的 SQLite 数据库备份文件（仅 SQLite）
+// @Tags         system
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      501  {object}  handlers.Response
+// @Router       /system/backups [get]
 func (h *SystemHandler) ListBackups(c *gin.Context) {
 	if !isSQLiteRuntime() {
 		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})

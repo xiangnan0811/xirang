@@ -25,6 +25,15 @@ import (
 	"xirang/backend/internal/ws"
 )
 
+// @title           Xirang API
+// @version         1.0
+// @description     息壤 — 服务器运维管理平台 API
+// @host            localhost:8080
+// @BasePath        /api/v1
+// @securityDefinitions.apikey Bearer
+// @in header
+// @name Authorization
+// @description JWT Bearer token (格式: Bearer <token>)
 func main() {
 	logger.Init(os.Getenv("LOG_LEVEL"))
 	log := logger.Module("main")

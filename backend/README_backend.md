@@ -214,11 +214,13 @@ go run ./cmd/server
 | /ws/logs | 实时日志推送（协议内认证） |
 | /ws/terminal | Web SSH 终端（协议内认证） |
 
-### 健康检查
+### 健康检查与监控
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /healthz | 健康检查（无需认证） |
+| GET | /metrics | Prometheus 指标（无需认证） |
+| GET | /swagger/*any | Swagger UI（无需认证） |
 
 ## 执行器
 

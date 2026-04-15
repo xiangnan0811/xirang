@@ -35,6 +35,21 @@ type DataMigrateItem struct {
 	Message    string `json:"message"`
 }
 
+// Migrate godoc
+// @Summary      迁移节点
+// @Description  将源节点的策略和任务安全迁移到目标节点，保留 TaskRun 历史和依赖链
+// @Tags         node-migration
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                          true  "源节点 ID"
+// @Param        body  body      handlers.NodeMigrateRequest  true  "迁移请求"
+// @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /nodes/{id}/migrate [post]
 // Migrate 将源节点的策略和任务安全迁移到目标节点。
 // 保留原有 Task 记录（保持 TaskRun 历史、executor_type、依赖链完整）。
 func (h *NodeHandler) Migrate(c *gin.Context) {

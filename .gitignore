@@ -51,3 +51,7 @@ deploy-kit/
 backend/.env.production
 web/*.tsbuildinfo
 docs/superpowers/
+
+# swaggo generated files (docs.go is committed; json/yaml are regenerated)
+backend/internal/api/docs/swagger.json
+backend/internal/api/docs/swagger.yaml
