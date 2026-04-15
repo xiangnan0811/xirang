@@ -58,7 +58,7 @@ vi.mock("@/components/ssh-key-export-dialog", () => ({
   SSHKeyExportDialog: () => null,
 }));
 
-vi.mock("@/components/ssh-key-rotation-wizard", () => ({
+vi.mock("@/components/ssh-key-rotation/ssh-key-rotation-wizard", () => ({
   SSHKeyRotationWizard: () => null,
 }));
 

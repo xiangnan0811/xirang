@@ -13,7 +13,7 @@ const SSHKeyBatchImportDialog = React.lazy(() =>
   import("@/components/ssh-key-batch-import-dialog").then(m => ({ default: m.SSHKeyBatchImportDialog }))
 );
 const SSHKeyRotationWizard = React.lazy(() =>
-  import("@/components/ssh-key-rotation-wizard").then(m => ({ default: m.SSHKeyRotationWizard }))
+  import("@/components/ssh-key-rotation/ssh-key-rotation-wizard").then(m => ({ default: m.SSHKeyRotationWizard }))
 );
 import { Card, CardContent } from "@/components/ui/card";
 import { AppSelect } from "@/components/ui/app-select";
