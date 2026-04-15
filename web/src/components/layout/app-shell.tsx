@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
@@ -9,7 +9,9 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { LanguageSwitcher } from "@/components/language-switcher";
-import { SetupWizard } from "@/components/setup-wizard";
+const SetupWizard = React.lazy(() =>
+  import("@/components/setup-wizard").then(m => ({ default: m.SetupWizard }))
+);
 import { NotificationBell } from "@/components/notification-bell";
 import { UserDropdown } from "@/components/user-dropdown";
 import { VersionBanner } from "@/components/version-banner";
@@ -317,7 +319,9 @@ export function AppShell() {
         onRefresh={consoleData.refresh}
       />
 
-      <SetupWizard />
+      <Suspense fallback={null}>
+        <SetupWizard />
+      </Suspense>
     </div>
   );
 }

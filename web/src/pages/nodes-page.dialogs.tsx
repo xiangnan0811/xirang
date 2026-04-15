@@ -1,9 +1,14 @@
-import { lazy, Suspense } from "react";
+import React, { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
-import { NodeEditorDialog } from "@/components/node-editor-dialog";
-import { NodeMigrateWizard } from "@/components/node-migrate-wizard";
+
+const NodeEditorDialog = React.lazy(() =>
+  import("@/components/node-editor-dialog").then(m => ({ default: m.NodeEditorDialog }))
+);
+const NodeMigrateWizard = React.lazy(() =>
+  import("@/components/node-migrate-wizard").then(m => ({ default: m.NodeMigrateWizard }))
+);
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -84,14 +89,16 @@ export function NodesPageDialogs({
 
   return (
     <>
-      <NodeEditorDialog
-        open={editorOpen}
-        onOpenChange={handleEditorOpenChange}
-        editingNode={editingNode}
-        sshKeys={sshKeys}
-        onSave={handleSaveNode}
-        onTestConnection={handleTestConnection}
-      />
+      <Suspense fallback={null}>
+        <NodeEditorDialog
+          open={editorOpen}
+          onOpenChange={handleEditorOpenChange}
+          editingNode={editingNode}
+          sshKeys={sshKeys}
+          onSave={handleSaveNode}
+          onTestConnection={handleTestConnection}
+        />
+      </Suspense>
 
       <Dialog
         open={terminalNode !== null}
@@ -210,14 +217,16 @@ export function NodesPageDialogs({
 
       {/* 迁移节点向导 */}
       {token && migrateSourceNode !== null && (
-        <NodeMigrateWizard
-          open
-          onOpenChange={(open) => { if (!open) setMigrateSourceNode(null); }}
-          sourceNode={migrateSourceNode}
-          nodes={nodes}
-          token={token}
-          onSuccess={() => { setMigrateSourceNode(null); void refreshNodes(); }}
-        />
+        <Suspense fallback={null}>
+          <NodeMigrateWizard
+            open
+            onOpenChange={(open) => { if (!open) setMigrateSourceNode(null); }}
+            sourceNode={migrateSourceNode}
+            nodes={nodes}
+            token={token}
+            onSuccess={() => { setMigrateSourceNode(null); void refreshNodes(); }}
+          />
+        </Suspense>
       )}
 
       {dialog}

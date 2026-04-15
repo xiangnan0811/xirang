@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3,
@@ -25,7 +25,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
-import { ReportConfigDialog } from "@/components/report-config-dialog";
+const ReportConfigDialog = React.lazy(() =>
+  import("@/components/report-config-dialog").then(m => ({ default: m.ReportConfigDialog }))
+);
 
 const reportsApi = createReportsApi();
 
@@ -390,19 +392,21 @@ export function ReportsPage() {
       )}
 
       {isAdmin && (
-        <ReportConfigDialog
-          open={dialogOpen}
-          onOpenChange={(v) => { setDialogOpen(v); if (!v) setEditingConfig(null); }}
-          onSaved={(cfg) =>
-            setConfigs((prev) =>
-              prev.some((c) => c.id === cfg.id)
-                ? prev.map((c) => (c.id === cfg.id ? cfg : c))
-                : [...prev, cfg]
-            )
-          }
-          token={token ?? ""}
-          editingConfig={editingConfig}
-        />
+        <Suspense fallback={null}>
+          <ReportConfigDialog
+            open={dialogOpen}
+            onOpenChange={(v) => { setDialogOpen(v); if (!v) setEditingConfig(null); }}
+            onSaved={(cfg) =>
+              setConfigs((prev) =>
+                prev.some((c) => c.id === cfg.id)
+                  ? prev.map((c) => (c.id === cfg.id ? cfg : c))
+                  : [...prev, cfg]
+              )
+            }
+            token={token ?? ""}
+            editingConfig={editingConfig}
+          />
+        </Suspense>
       )}
     </div>
   );

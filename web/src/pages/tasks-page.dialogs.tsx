@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RotateCcw, FolderSearch, GitCompareArrows } from "lucide-react";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
@@ -6,7 +6,10 @@ import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
-import { TaskEditorDialog } from "@/components/task-create-dialog";
+
+const TaskEditorDialog = React.lazy(() =>
+  import("@/components/task-create-dialog").then(m => ({ default: m.TaskEditorDialog }))
+);
 import { TaskRunDetail } from "@/components/task-run-detail";
 import { TaskRunHistory } from "@/components/task-run-history";
 import { Button } from "@/components/ui/button";
@@ -107,27 +110,31 @@ export function TasksPageDialogs({
 
   return (
     <>
-      <TaskEditorDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        nodes={nodes}
-        policies={policies}
-        tasks={tasks}
-        onSave={handleCreateTask}
-      />
+      <Suspense fallback={null}>
+        <TaskEditorDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+          nodes={nodes}
+          policies={policies}
+          tasks={tasks}
+          onSave={handleCreateTask}
+        />
+      </Suspense>
 
-      <TaskEditorDialog
-        open={editDialogOpen}
-        onOpenChange={(open) => {
-          setEditDialogOpen(open);
-          if (!open) setEditingTask(null);
-        }}
-        nodes={nodes}
-        policies={policies}
-        tasks={tasks}
-        onSave={handleUpdateTask}
-        editingTask={editingTask}
-      />
+      <Suspense fallback={null}>
+        <TaskEditorDialog
+          open={editDialogOpen}
+          onOpenChange={(open) => {
+            setEditDialogOpen(open);
+            if (!open) setEditingTask(null);
+          }}
+          nodes={nodes}
+          policies={policies}
+          tasks={tasks}
+          onSave={handleUpdateTask}
+          editingTask={editingTask}
+        />
+      </Suspense>
 
       <Dialog
         open={!!historyTask}

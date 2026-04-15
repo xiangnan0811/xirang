@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
 import type { ConsoleOutletContext } from "@/components/layout/app-shell";
-import { IntegrationCreateDialog } from "@/components/integration-create-dialog";
-import { IntegrationEditorDialog, type IntegrationEditorDraft } from "@/components/integration-editor-dialog";
+import type { IntegrationEditorDraft } from "@/components/integration-editor-dialog";
+
+const IntegrationCreateDialog = React.lazy(() =>
+  import("@/components/integration-create-dialog").then(m => ({ default: m.IntegrationCreateDialog }))
+);
+const IntegrationEditorDialog = React.lazy(() =>
+  import("@/components/integration-editor-dialog").then(m => ({ default: m.IntegrationEditorDialog }))
+);
 import { IntegrationManager } from "@/pages/notifications-page.integration-manager";
 import { toast } from "@/components/ui/toast";
 import type { IntegrationChannel } from "@/types/domain";
@@ -84,27 +90,31 @@ export function ChannelsTab() {
         onOpenEdit={openEditDialog}
       />
 
-      <IntegrationCreateDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onSave={async (input) => {
-          await addIntegration(input);
-          setCreateDialogOpen(false);
-          toast.success(t("notifications.integrationCreated"));
-        }}
-      />
+      <Suspense fallback={null}>
+        <IntegrationCreateDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+          onSave={async (input) => {
+            await addIntegration(input);
+            setCreateDialogOpen(false);
+            toast.success(t("notifications.integrationCreated"));
+          }}
+        />
+      </Suspense>
 
-      <IntegrationEditorDialog
-        open={editDialogOpen}
-        onOpenChange={(next) => {
-          setEditDialogOpen(next);
-          if (!next) {
-            setEditingIntegration(null);
-          }
-        }}
-        integration={editingIntegration}
-        onSave={handleEditIntegration}
-      />
+      <Suspense fallback={null}>
+        <IntegrationEditorDialog
+          open={editDialogOpen}
+          onOpenChange={(next) => {
+            setEditDialogOpen(next);
+            if (!next) {
+              setEditingIntegration(null);
+            }
+          }}
+          integration={editingIntegration}
+          onSave={handleEditIntegration}
+        />
+      </Suspense>
     </div>
   );
 }
