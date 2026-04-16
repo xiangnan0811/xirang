@@ -129,8 +129,11 @@ function mapDeliveryStats(payload?: DeliveryStatsResponse | null): AlertDelivery
 export function createAlertsApi() {
   return {
     async getAlerts(token: string, options?: { signal?: AbortSignal }): Promise<AlertRecord[]> {
-      const rows = (await request<AlertResponse[]>("/alerts", { token, signal: options?.signal })) ?? [];
-      return rows.map((row) => mapAlert(row));
+      // 后端 /alerts 返回 paginated envelope（含 total/page/page_size），
+      // core.ts 的 request() 会把带 total 字段的响应整体透传，所以这里需要 unwrapPaginated 拆出 items。
+      const payload = await request<PaginatedEnvelope<AlertResponse[]>>("/alerts", { token, signal: options?.signal });
+      const { items } = unwrapPaginated(payload);
+      return items.map((row) => mapAlert(row));
     },
 
     async getAlertsPaginated(
@@ -235,8 +238,10 @@ export function createAlertsApi() {
       if (options?.limit) {
         query.set("limit", String(options.limit));
       }
-      const rows = (await request<AlertResponse[]>(`/alerts?${query.toString()}`, { token, signal: options?.signal })) ?? [];
-      return rows.map((row) => mapAlert(row));
+      // 同 getAlerts：后端返回 paginated envelope。
+      const payload = await request<PaginatedEnvelope<AlertResponse[]>>(`/alerts?${query.toString()}`, { token, signal: options?.signal });
+      const { items } = unwrapPaginated(payload);
+      return items.map((row) => mapAlert(row));
     },
 
     async retryFailedDeliveries(token: string, alertId: string): Promise<AlertBulkRetryResult> {

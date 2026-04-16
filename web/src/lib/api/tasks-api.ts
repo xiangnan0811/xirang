@@ -1,6 +1,6 @@
 import type { LogEvent, NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
 import i18n from "@/i18n";
-import { extractErrorCode, formatTime, request } from "./core";
+import { extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 
 type TaskResponse = {
   id: number;
@@ -158,8 +158,10 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
 export function createTasksApi() {
   return {
     async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
-      const rows = (await request<TaskResponse[]>("/tasks", { token, signal: options?.signal })) ?? [];
-      return rows.map((row, index) => mapTask(row, index));
+      // 后端 /tasks 返回 paginated envelope，与 /alerts 情况相同，需 unwrap。
+      const payload = await request<PaginatedEnvelope<TaskResponse[]>>("/tasks", { token, signal: options?.signal });
+      const { items } = unwrapPaginated(payload);
+      return items.map((row, index) => mapTask(row, index));
     },
 
     async getTask(token: string, taskId: number): Promise<TaskRecord> {

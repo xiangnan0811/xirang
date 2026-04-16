@@ -13,7 +13,9 @@ var Log zerolog.Logger
 // Init 初始化全局日志，level 可选: debug, info, warn, error
 func Init(level string) {
 	lvl, err := zerolog.ParseLevel(level)
-	if err != nil {
+	// ParseLevel("") 返回 (NoLevel, nil) — NoLevel(6) 高于 FatalLevel(4)，
+	// 会把所有正常日志（包括 Fatal）过滤掉，导致进程静默退出。
+	if err != nil || lvl == zerolog.NoLevel {
 		lvl = zerolog.InfoLevel
 	}
 
