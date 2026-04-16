@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/xiangnan0811/xirang/compare/v0.7.0...v0.7.1) (2026-04-16)
+
+
+### Bug Fixes
+
+* **docker:** pin Go to 1.26.2 + upgrade supercronic to v0.2.44 ([#21](https://github.com/xiangnan0811/xirang/issues/21)) ([68060d2](https://github.com/xiangnan0811/xirang/commit/68060d2323f43c16758ac15e0a73b5cc10a35bae))
+
 ## [0.7.0](https://github.com/xiangnan0811/xirang/compare/v0.6.0...v0.7.0) (2026-04-15)
 
 
