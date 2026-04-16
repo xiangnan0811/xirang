@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/xiangnan0811/xirang/compare/v0.7.1...v0.7.2) (2026-04-16)
+
+
+### Bug Fixes
+
+* startup silent exit + paginated API unwrap ([#23](https://github.com/xiangnan0811/xirang/issues/23)) ([f02fe19](https://github.com/xiangnan0811/xirang/commit/f02fe199bdbc542f908d7e1d45b289bbad5ac610))
+
 ## [0.7.1](https://github.com/xiangnan0811/xirang/compare/v0.7.0...v0.7.1) (2026-04-16)
 
 
