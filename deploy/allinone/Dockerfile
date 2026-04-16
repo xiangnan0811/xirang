@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS backend-builder
+FROM golang:1.26.2-alpine AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
@@ -30,12 +30,12 @@ ARG TARGETARCH
 RUN set -eux; \
     arch="${TARGETARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}"; \
     case "${arch}" in \
-      amd64) supercronic_sha256="feefa310da569c81b99e1027b86b27b51e6ee9ab647747b49099645120cfc671" ;; \
-      arm64) supercronic_sha256="f1f8585c66de020fef494dd636058f99949d108f569fef00016a1c8b9eb145b3" ;; \
+      amd64) supercronic_sha256="6feff7d5eba16a89cf229b7eb644cfae2f03a32c62ca320f17654659315275b6" ;; \
+      arm64) supercronic_sha256="ec29b3129ab20100971d21d391150d50398e5caaa33b8652eab919e2c5143057" ;; \
       *) echo "unsupported supercronic arch: ${arch}" >&2; exit 1 ;; \
     esac; \
     apk add --no-cache curl rsync openssh-client sqlite bash; \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-${arch}" \
+    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.44/supercronic-linux-${arch}" \
          -o /usr/local/bin/supercronic; \
     echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum -c -; \
     chmod +x /usr/local/bin/supercronic
