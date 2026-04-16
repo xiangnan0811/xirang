@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/xiangnan0811/xirang/compare/v0.7.2...v0.7.3) (2026-04-16)
+
+
+### Bug Fixes
+
+* **docker:** eliminate HIGH CVEs in published images ([#25](https://github.com/xiangnan0811/xirang/issues/25)) ([5ec58a8](https://github.com/xiangnan0811/xirang/commit/5ec58a888f8e3b2b704556e01b6c358c41e9a8d9))
+
 ## [0.7.2](https://github.com/xiangnan0811/xirang/compare/v0.7.1...v0.7.2) (2026-04-16)
 
 
