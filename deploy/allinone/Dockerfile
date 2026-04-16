@@ -23,22 +23,29 @@ RUN set -eux; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
 
+# 自行编译 supercronic，避免官方预编译二进制（v0.2.44 用 Go 1.26.1）带入过期 stdlib 的 HIGH CVE
+# （CVE-2026-32280/32282/33810，fix in 1.26.2）。用当前 builder 的 Go 1.26.2 重编一份，
+# 支持 linux/amd64 与 linux/arm64 交叉编译。
+FROM golang:1.26.2-alpine AS supercronic-builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG SUPERCRONIC_VERSION=v0.2.44
+RUN apk add --no-cache git
+RUN set -eux; \
+    git clone --depth 1 --branch "${SUPERCRONIC_VERSION}" https://github.com/aptible/supercronic.git /src; \
+    cd /src; \
+    CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
+        go build -trimpath -ldflags='-s -w' -o /out/supercronic
+
 FROM nginx:1.27-alpine
 
-# 安装 supercronic（非 root cron 替代）、sqlite3（WAL 一致性备份）和 curl（健康检查）
-ARG TARGETARCH
-RUN set -eux; \
-    arch="${TARGETARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}"; \
-    case "${arch}" in \
-      amd64) supercronic_sha256="6feff7d5eba16a89cf229b7eb644cfae2f03a32c62ca320f17654659315275b6" ;; \
-      arm64) supercronic_sha256="ec29b3129ab20100971d21d391150d50398e5caaa33b8652eab919e2c5143057" ;; \
-      *) echo "unsupported supercronic arch: ${arch}" >&2; exit 1 ;; \
-    esac; \
-    apk add --no-cache curl rsync openssh-client sqlite bash; \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.44/supercronic-linux-${arch}" \
-         -o /usr/local/bin/supercronic; \
-    echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum -c -; \
-    chmod +x /usr/local/bin/supercronic
+# 升级基础镜像已安装包到最新补丁版本（解 libxml2 / musl / zlib 等 HIGH CVE）
+# 再安装运行期依赖：rsync/openssh-client（任务执行）、sqlite（备份 WAL 一致性）、bash（脚本）、curl（健康检查）
+RUN apk upgrade --no-cache && \
+    apk add --no-cache curl rsync openssh-client sqlite bash
+
+COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
+RUN chmod +x /usr/local/bin/supercronic
 
 # 创建非 root 用户
 RUN addgroup -S -g 10000 xirang && adduser -S -u 10000 -G xirang -h /home/xirang -s /sbin/nologin xirang
