@@ -1,6 +1,7 @@
 import React, { Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { useSSHKeysPageState } from "@/pages/ssh-keys-page.state";
+import { SSHKeysHero } from "@/pages/ssh-keys-page.hero";
 import { SSHKeysToolbar } from "@/pages/ssh-keys-page.toolbar";
 import { SSHKeysTable } from "@/pages/ssh-keys-page.table";
 import { SSHKeysGrid } from "@/pages/ssh-keys-page.grid";
@@ -162,6 +163,13 @@ export function SSHKeysPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      {/* ── 页面标题 ── */}
+      <SSHKeysHero
+        total={stats.total}
+        active={stats.inUse}
+        onCreate={openCreateDialog}
+      />
+
       {/* ── 统计卡片 ── */}
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"

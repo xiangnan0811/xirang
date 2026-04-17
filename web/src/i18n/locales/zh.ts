@@ -1220,6 +1220,8 @@ const zh = {
 
   // ── SSH keys page ──
   sshKeys: {
+    pageTitle: "SSH 密钥",
+    pageSubtitle: "{{count}} 把密钥 · {{active}} 正在使用",
     addKey: "新增 SSH Key",
     editKey: "编辑 SSH Key",
     deleteKey: "删除 SSH Key",

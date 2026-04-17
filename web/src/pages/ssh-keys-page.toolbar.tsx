@@ -56,8 +56,8 @@ export function SSHKeysToolbar({
     <div className="flex flex-wrap items-center justify-between gap-2">
       {/* ---------- 左侧操作按钮 ---------- */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
-          <Plus className="mr-1 size-3.5" />
+        <Button size="sm" shape="pill" className="shrink-0" onClick={openCreateDialog}>
+          <Plus className="size-4" aria-hidden="true" />
           {t("sshKeys.addKey")}
         </Button>
         <Button
@@ -79,7 +79,7 @@ export function SSHKeysToolbar({
           {t("sshKeys.exportPublicKeys")}
         </Button>
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           className="shrink-0"
           onClick={() => openRotationWizard()}

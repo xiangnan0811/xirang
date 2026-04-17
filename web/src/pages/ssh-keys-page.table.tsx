@@ -5,6 +5,7 @@ import { SSHKeyActionsMenu } from "@/components/ssh-key-actions-menu";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { MonoChip } from "@/components/ui/mono-chip";
 import { formatTime } from "@/lib/api/core";
 import { cn } from "@/lib/utils";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
@@ -161,9 +162,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     </Badge>
                   </td>
                   <td className="px-3 py-2.5">
-                    <code className="max-w-[200px] truncate block font-mono text-xs text-muted-foreground">
-                      {key.fingerprint}
-                    </code>
+                    <MonoChip>{key.fingerprint}</MonoChip>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
                     {key.lastUsedAt ? (

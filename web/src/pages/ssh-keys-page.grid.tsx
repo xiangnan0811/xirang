@@ -6,6 +6,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Badge } from "@/components/ui/badge";
+import { MonoChip } from "@/components/ui/mono-chip";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { formatTime } from "@/lib/api/core";
@@ -194,7 +195,9 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div>
                   <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
-                  <code className="mt-0.5 block truncate font-mono">{key.fingerprint}</code>
+                  <div className="mt-0.5">
+                    <MonoChip>{key.fingerprint}</MonoChip>
+                  </div>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>
@@ -295,7 +298,9 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div>
                   <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
-                  <code className="mt-0.5 block truncate font-mono">{key.fingerprint}</code>
+                  <div className="mt-0.5">
+                    <MonoChip>{key.fingerprint}</MonoChip>
+                  </div>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>

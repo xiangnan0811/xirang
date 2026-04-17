@@ -1220,6 +1220,8 @@ const en = {
 
   // ── SSH keys page ──
   sshKeys: {
+    pageTitle: "SSH Keys",
+    pageSubtitle: "{{count}} keys · {{active}} in use",
     addKey: "Add SSH Key",
     editKey: "Edit SSH Key",
     deleteKey: "Delete SSH Key",
