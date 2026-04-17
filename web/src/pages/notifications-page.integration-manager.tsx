@@ -156,7 +156,7 @@ export function IntegrationManager({
                         {t("common.edit")}
                       </Button>
                       <Button
-                        variant="danger"
+                        variant="destructive"
                         size="icon"
                         aria-label={t("notifications.deleteIntegrationAriaLabel", { name: integration.name })}
                         disabled={busy}
