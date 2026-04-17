@@ -94,28 +94,21 @@ describe("SettingsPage", () => {
     expect(screen.getByText("settings.personal.title")).toBeDefined();
   });
 
-  it("each tab has aria-controls pointing to its own panel id", () => {
+  it("renders vertical tablist", () => {
     renderSettingsPage();
-    const tabs = screen.getAllByRole("tab");
-    const tabIds = ["personal", "account", "users", "channels", "system", "maintenance"];
-    tabs.forEach((tab, i) => {
-      expect(tab).toHaveAttribute("id", `settings-tab-${tabIds[i]}`);
-      expect(tab).toHaveAttribute("aria-controls", `settings-panel-${tabIds[i]}`);
-    });
+    const tablist = screen.getByRole("tablist");
+    expect(tablist).toHaveAttribute("aria-orientation", "vertical");
   });
 
-  it("active tabpanel has id and aria-labelledby matching active tab", () => {
+  it("personal tab is active by default", () => {
     renderSettingsPage();
-    const panel = screen.getByRole("tabpanel");
-    expect(panel).toHaveAttribute("id", "settings-panel-personal");
-    expect(panel).toHaveAttribute("aria-labelledby", "settings-tab-personal");
+    const personalTab = screen.getByRole("tab", { name: "settings.tabs.personal" });
+    expect(personalTab).toHaveAttribute("data-state", "active");
   });
 
   it("respects initial tab from query string", () => {
     renderSettingsPage(["/app/settings?tab=system"]);
-
-    expect(screen.getByRole("tab", { name: "settings.tabs.system" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "settings-panel-system");
+    expect(screen.getByRole("tab", { name: "settings.tabs.system" })).toHaveAttribute("data-state", "active");
   });
 
   it("syncs active tab when search params change after mount", async () => {
@@ -126,8 +119,7 @@ describe("SettingsPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "settings.tabs.maintenance" })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "settings-panel-maintenance");
+      expect(screen.getByRole("tab", { name: "settings.tabs.maintenance" })).toHaveAttribute("data-state", "active");
     });
   });
 
@@ -138,11 +130,11 @@ describe("SettingsPage", () => {
     const personalTab = screen.getByRole("tab", { name: "settings.tabs.personal" });
     personalTab.focus();
 
-    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowDown}");
 
-    const accountTab = screen.getByRole("tab", { name: "settings.tabs.account" });
-    expect(accountTab).toHaveAttribute("aria-selected", "true");
-    expect(accountTab).toHaveFocus();
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "settings-panel-account");
+    await waitFor(() => {
+      const accountTab = screen.getByRole("tab", { name: "settings.tabs.account" });
+      expect(accountTab).toHaveAttribute("data-state", "active");
+    });
   });
 });

@@ -2024,6 +2024,7 @@ const zh = {
   // ── settings ──
   settings: {
     title: "设置",
+    pageTitle: "设置",
     tabs: {
       personal: "个人偏好",
       account: "账户安全",

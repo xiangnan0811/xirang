@@ -2024,6 +2024,7 @@ const en = {
   // ── settings ──
   settings: {
     title: "Settings",
+    pageTitle: "Settings",
     tabs: {
       personal: "Preferences",
       account: "Account Security",
