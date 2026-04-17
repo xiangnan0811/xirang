@@ -290,6 +290,14 @@ const en = {
     taskStatusFailed: "Failed",
     taskStatusRunning: "Syncing",
     taskStatusRetrying: "Retrying",
+    greeting: {
+      morning: "Good morning",
+      afternoon: "Good afternoon",
+      evening: "Good evening",
+      night: "Good night",
+    },
+    heroSubtitle: "System health at a glance",
+    exportReport: "Export",
   },
 
   // ── nodes page ──

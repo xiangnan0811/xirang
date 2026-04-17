@@ -23,6 +23,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 import { OverviewTrafficChart } from "@/pages/overview-page.traffic";
 import { OverviewRecentTasks } from "@/pages/overview-page.recent-tasks";
+import { OverviewHero } from "@/pages/overview-page.hero";
 
 const MATRIX_PREVIEW_LIMIT = 80;
 
@@ -148,6 +149,7 @@ export function OverviewPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <OverviewHero />
       <StatCardsSection
         className="grid-cols-4 animate-slide-up [animation-delay:150ms]"
         items={[
@@ -222,7 +224,7 @@ export function OverviewPage() {
                   <div
                     role="group"
                     aria-label={t("overview.matrixPreviewAriaLabel", { shown: previewNodes.length, total: nodes.length })}
-                    className="flex flex-wrap gap-2 overflow-y-auto pb-4"
+                    className="flex flex-wrap gap-1 overflow-y-auto pb-4"
                   >
                     {previewNodes.map((node) => {
                       let dotColor = "bg-muted-foreground/30";
@@ -232,7 +234,7 @@ export function OverviewPage() {
                         <button
                           key={node.id}
                           type="button"
-                          className={`relative size-3 rounded-sm ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                          className={`relative size-[18px] rounded-[4px] ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                           onClick={() => navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`)}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
@@ -305,7 +307,7 @@ export function OverviewPage() {
             <DialogCloseButton />
           </DialogHeader>
           <div className="flex-1 overflow-y-auto px-6 pb-6">
-            <div role="group" aria-label={t("overview.matrixFullAriaLabel", { count: nodes.length })} className="flex flex-wrap gap-2">
+            <div role="group" aria-label={t("overview.matrixFullAriaLabel", { count: nodes.length })} className="flex flex-wrap gap-1">
               {nodes.map((node) => {
                 let dotColor = "bg-muted-foreground/30";
                 if (node.status === "online") dotColor = "bg-success";
@@ -314,7 +316,7 @@ export function OverviewPage() {
                   <button
                     key={node.id}
                     type="button"
-                    className={`relative size-3.5 rounded-sm ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                    className={`relative size-[18px] rounded-[4px] ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                     onClick={() => {
                       setMatrixFullscreen(false);
                       navigate(`/app/nodes?keyword=${encodeURIComponent(node.name)}`);
