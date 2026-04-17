@@ -53,11 +53,6 @@
     --touch-target-size: 44px;
 
     /* --- Legacy aliases (referenced by existing components / tailwind.config.ts) --- */
-    --brand-soil: 30 36% 44%;
-    --brand-clay: 22 44% 56%;
-    --brand-life: 160 84% 39.4%;
-    --surface-1: 0 0% 96%;
-    --surface-2: 0 0% 94%;
     --nav-active: 240 4.8% 95.9%;
     --nav-active-foreground: 0 0% 3.9%;
     --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -115,11 +110,6 @@
     --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.5);
 
     /* --- Legacy aliases (dark) --- */
-    --brand-soil: 34 42% 62%;
-    --brand-clay: 20 45% 58%;
-    --brand-life: 160 72% 52.4%;
-    --surface-1: 0 0% 7%;
-    --surface-2: 0 0% 11%;
     --nav-active: 240 3.7% 15.9%;
     --nav-active-foreground: 0 0% 98%;
     --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
