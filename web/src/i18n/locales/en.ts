@@ -1638,6 +1638,11 @@ const en = {
   // ── backups page ──
   backups: {
     title: "Backup Management",
+    pageTitle: "Backups",
+    pageSubtitle: "{{count}} policies · {{healthy}} healthy",
+    newBackup: "New backup",
+    loadingTitle: "Loading backup data...",
+    loadingDesc: "Reading backup health status",
   },
 
   // ── backup health panel ──

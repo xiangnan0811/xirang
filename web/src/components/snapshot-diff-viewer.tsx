@@ -113,18 +113,27 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
               <p className="px-3 py-4 text-sm text-muted-foreground text-center">{t('snapshots.noDifference')}</p>
             )}
             {diff.changes.map((change) => (
-              <div key={change.path} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                {change.type === "added" && <FilePlus className="size-3.5 text-success shrink-0" />}
-                {change.type === "removed" && <FileMinus className="size-3.5 text-destructive shrink-0" />}
+              <div
+                key={change.path}
+                className={
+                  change.type === "added"
+                    ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]"
+                    : change.type === "removed"
+                      ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--destructive)/0.08)] text-[hsl(var(--destructive))]"
+                      : "flex items-center gap-2 px-3 py-1.5 text-sm"
+                }
+              >
+                {change.type === "added" && <FilePlus className="size-3.5 shrink-0" />}
+                {change.type === "removed" && <FileMinus className="size-3.5 shrink-0" />}
                 {change.type === "changed" && <File className="size-3.5 text-warning shrink-0" />}
                 <span className="truncate">{change.path}</span>
                 {change.size_before != null && change.size_after != null && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  <span className="ml-auto shrink-0 opacity-75">
                     {formatBytes(change.size_before)} → {formatBytes(change.size_after)}
                   </span>
                 )}
                 {change.size_before == null && change.size_after != null && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  <span className="ml-auto shrink-0 opacity-75">
                     {formatBytes(change.size_after)}
                   </span>
                 )}

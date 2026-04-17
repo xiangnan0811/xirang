@@ -1638,6 +1638,11 @@ const zh = {
   // ── backups page ──
   backups: {
     title: "备份管理",
+    pageTitle: "备份",
+    pageSubtitle: "{{count}} 个策略 · {{healthy}} 通过",
+    newBackup: "新建备份",
+    loadingTitle: "加载备份数据中...",
+    loadingDesc: "正在读取备份健康状态",
   },
 
   // ── backup health panel ──
