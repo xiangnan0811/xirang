@@ -1,43 +1,56 @@
 import * as React from "react";
 import type { LucideIcon } from "lucide-react";
-import { Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface EmptyStateProps {
-  icon?: LucideIcon;
-  title: string;
-  description?: string;
+export interface EmptyStateProps
+  extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
+  icon?: React.ReactNode | LucideIcon;
+  title: React.ReactNode;
+  description?: React.ReactNode;
   action?: React.ReactNode;
-  className?: string;
 }
 
-function EmptyState({
-  icon: Icon = Inbox,
+export function EmptyState({
+  className,
+  icon,
   title,
   description,
   action,
-  className,
+  ...props
 }: EmptyStateProps) {
+  // Handle both LucideIcon (class) and ReactNode (element)
+  const resolvedIcon = React.useMemo(() => {
+    if (!icon) return null;
+
+    // If icon is a Lucide icon component (function/class), render it with size
+    if (typeof icon === "function") {
+      const Icon = icon as LucideIcon;
+      return <Icon className="size-5" />;
+    }
+
+    // Otherwise it's already a ReactNode element
+    return icon;
+  }, [icon]);
+
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center py-16 text-center",
-        className
+        "flex flex-col items-center justify-center rounded-lg bg-card px-6 py-10 text-center shadow-sm",
+        "dark:border dark:border-border",
+        className,
       )}
+      {...props}
     >
-      <div className="mb-4 flex size-16 items-center justify-center rounded-xl bg-secondary">
-        <Icon className="size-7 text-muted-foreground" />
-      </div>
-      <h3 className="text-base font-semibold">{title}</h3>
-      {description ? (
-        <p className="mt-1.5 max-w-[300px] text-sm text-muted-foreground">
-          {description}
-        </p>
+      {resolvedIcon ? (
+        <div className="mb-3 flex size-14 items-center justify-center rounded-xl bg-[hsl(var(--accent-brand)/0.18)] text-[hsl(var(--primary))]">
+          {resolvedIcon}
+        </div>
       ) : null}
-      {action ? <div className="mt-5">{action}</div> : null}
+      <div className="text-sm font-semibold text-foreground">{title}</div>
+      {description ? (
+        <div className="mx-auto mt-1 max-w-[260px] text-xs text-muted-foreground">{description}</div>
+      ) : null}
+      {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
 }
-
-export { EmptyState };
-export type { EmptyStateProps };
