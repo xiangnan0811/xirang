@@ -290,6 +290,14 @@ const zh = {
     taskStatusFailed: "失败",
     taskStatusRunning: "同步中",
     taskStatusRetrying: "重试中",
+    greeting: {
+      morning: "早上好",
+      afternoon: "下午好",
+      evening: "晚上好",
+      night: "夜深了",
+    },
+    heroSubtitle: "系统健康状态一览",
+    exportReport: "导出",
   },
 
   // ── nodes page ──

@@ -106,7 +106,13 @@ export function OverviewTrafficChart({
                     data={chartMetrics.chartData}
                     margin={{ top: 6, right: 8, left: -12, bottom: 4 }}
                   >
-                    <CartesianGrid strokeDasharray="none" stroke={chartTheme.grid} vertical={false} />
+                    <defs>
+                      <linearGradient id="throughputGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(var(--chart-ingress))" stopOpacity={0.06} />
+                        <stop offset="100%" stopColor="hsl(var(--chart-ingress))" stopOpacity={0.01} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="none" stroke="hsl(var(--secondary))" vertical={false} />
                     <XAxis
                       dataKey="label"
                       tick={{ fontSize: 10, fill: chartTheme.axis }}
@@ -150,12 +156,12 @@ export function OverviewTrafficChart({
                     />
                     {visibleLayers.activity && (
                       <Bar dataKey="activity" yAxisId="right" name={t("overview.chartActivity")}
-                        fill={chartTheme.series[1]} opacity={0.22}
+                        fill="hsl(var(--chart-egress))" opacity={0.22}
                         maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
                     )}
                     {visibleLayers.failures && (
                       <Bar dataKey="failed" yAxisId="right" name={t("overview.chartFailures")}
-                        fill={chartTheme.error} opacity={0.7}
+                        fill="hsl(var(--destructive))" opacity={0.7}
                         maxBarSize={8} radius={[2, 2, 0, 0]} isAnimationActive={false} />
                     )}
                     {visibleLayers.throughput && (
@@ -164,10 +170,10 @@ export function OverviewTrafficChart({
                         dataKey="throughput"
                         yAxisId="left"
                         name={t("overview.chartThroughput")}
-                        stroke={chartTheme.series[0]}
+                        stroke="hsl(var(--chart-ingress))"
                         strokeWidth={1.5}
-                        fill={chartTheme.series[0]}
-                        fillOpacity={0.06}
+                        fill="url(#throughputGradient)"
+                        fillOpacity={1}
                         dot={false}
                         activeDot={{ r: 3 }}
                         isAnimationActive={false}
