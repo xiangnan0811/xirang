@@ -67,6 +67,7 @@ export function AccountTab() {
         <div className="space-y-3 max-w-sm">
           <input
             id="current-password"
+            name="current-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.currentPassword")}
@@ -77,6 +78,7 @@ export function AccountTab() {
           />
           <input
             id="new-password"
+            name="new-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.newPassword")}
@@ -87,6 +89,7 @@ export function AccountTab() {
           />
           <input
             id="confirm-password"
+            name="confirm-password"
             type="password"
             className={inputClass}
             placeholder={t("settings.account.confirmPassword")}
