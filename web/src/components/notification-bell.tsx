@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAlertBell } from "@/hooks/use-alert-bell";
 import { getSeverityMeta } from "@/lib/status";
+import { formatRelativeTime } from "@/lib/date-utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,31 +16,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-function formatRelativeTime(dateString: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
-  if (!dateString || dateString === "-") return "";
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) return dateString;
-
-  const now = Date.now();
-  const diff = now - date.getTime();
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (seconds < 60) return t('common.justNow');
-  if (minutes < 60) return t('notificationBell.minutesAgo', { count: minutes });
-  if (hours < 24) return t('notificationBell.hoursAgo', { count: hours });
-  if (days < 30) return t('notificationBell.daysAgo', { count: days });
-  return dateString;
-}
-
 type NotificationBellProps = {
   token: string | null;
 };
 
 export function NotificationBell({ token }: NotificationBellProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = (i18n.language.startsWith("zh") ? "zh" : "en") as "zh" | "en";
   const navigate = useNavigate();
   const { unreadCount, recentAlerts, loading, fetchRecent } = useAlertBell(token);
 
@@ -122,7 +105,9 @@ export function NotificationBell({ token }: NotificationBellProps) {
                       {alert.nodeName}
                     </span>
                     <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-                      {formatRelativeTime(alert.triggeredAt, t)}
+                      {alert.triggeredAt && alert.triggeredAt !== "-"
+                        ? formatRelativeTime(alert.triggeredAt, locale)
+                        : ""}
                     </span>
                   </div>
                   <p className="line-clamp-2 w-full text-xs text-muted-foreground">
