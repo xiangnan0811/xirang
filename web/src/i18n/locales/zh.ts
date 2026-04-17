@@ -177,6 +177,7 @@ const zh = {
     featureOrchestrateDesc: "策略、任务、通知与 SSH Key 管理",
     featureCompliance: "安全合规",
     featureComplianceDesc: "权限控制 + 审计追踪 + 失败快速闭环",
+    heroTagline: "在温暖安静的控制台中完成每一次部署、每一条备份、每一个告警。",
   },
 
   // ── command palette / global search ──

@@ -7,9 +7,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   Key,
-  MonitorCheck,
   PartyPopper,
   Rocket,
   Server,
@@ -27,11 +25,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Stepper } from "@/components/ui/stepper";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
+import { SetupWizardStep1 } from "./setup-wizard.step1";
+import { SetupWizardStep2 } from "./setup-wizard.step2";
+import { SetupWizardStep3 } from "./setup-wizard.step3";
 
 /* -------------------------------------------------------------------------- */
-/*  类型                                                                       */
+/*  Types                                                                      */
 /* -------------------------------------------------------------------------- */
 
 interface WizardStep {
@@ -39,13 +41,13 @@ interface WizardStep {
   title: string;
   description: string;
   icon: React.ReactNode;
-  /** 跳转路径，null 表示无链接（欢迎页 / 完成页） */
+  /** Navigation path, null means no link (welcome / complete pages) */
   linkTo: string | null;
   linkLabel: string | null;
 }
 
 /* -------------------------------------------------------------------------- */
-/*  组件                                                                       */
+/*  Component                                                                  */
 /* -------------------------------------------------------------------------- */
 
 const ICON_CLASS = "size-6";
@@ -121,7 +123,7 @@ export function SetupWizard() {
   const [showDialog, setShowDialog] = useState(false);
   const [completing, setCompleting] = useState(false);
 
-  // 首次登录延迟弹出
+  // Delay popup on first login
   useEffect(() => {
     if (!wizardState.completed && !wizardState.dismissed) {
       const timer = setTimeout(() => setShowDialog(true), 600);
@@ -129,15 +131,23 @@ export function SetupWizard() {
     }
   }, [wizardState.completed, wizardState.dismissed]);
 
-  /* ---- 派生状态 ---- */
+  /* ---- Derived state ---- */
   const step = wizardState.currentStep;
   const currentStep = STEPS[step];
   const isWelcome = step === 0;
   const isComplete = step === TOTAL_STEPS - 1;
-  // 进度百分比：欢迎页 0%，完成页 100%
-  const progress = Math.round((step / (TOTAL_STEPS - 1)) * 100);
 
-  /* ---- 后端标记 ---- */
+  /* ---- Stepper labels (welcome + middle steps + complete) ---- */
+  const stepperLabels = [
+    t("setupWizard.steps.welcome.title"),
+    t("setupWizard.steps.sshKey.title"),
+    t("setupWizard.steps.addNode.title"),
+    t("setupWizard.steps.createPolicy.title"),
+    t("setupWizard.steps.testBackup.title"),
+    t("setupWizard.steps.complete.title"),
+  ];
+
+  /* ---- Backend mark ---- */
   const markOnboarded = useCallback(() => {
     void request("/me/onboarded", {
       method: "POST",
@@ -147,7 +157,7 @@ export function SetupWizard() {
     });
   }, [token]);
 
-  /* ---- 操作 ---- */
+  /* ---- Actions ---- */
   const handleNext = useCallback(() => {
     if (step < TOTAL_STEPS - 1) {
       setWizardState((prev) => ({ ...prev, currentStep: prev.currentStep + 1 }));
@@ -163,7 +173,6 @@ export function SetupWizard() {
   const handleFinish = useCallback(() => {
     setCompleting(true);
     markOnboarded();
-    // 短暂延迟让用户看到完成状态
     setTimeout(() => {
       setWizardState((prev) => ({ ...prev, completed: true, dismissed: true }));
       setShowDialog(false);
@@ -180,7 +189,6 @@ export function SetupWizard() {
   const handleDialogClose = useCallback(
     (open: boolean) => {
       if (!open) {
-        // 用户主动关闭视作跳过
         setWizardState((prev) => ({ ...prev, dismissed: true }));
         markOnboarded();
       }
@@ -199,7 +207,14 @@ export function SetupWizard() {
     [markOnboarded, navigate, setWizardState],
   );
 
-  // 键盘导航
+  const handleJumpToStep = useCallback(
+    (index: number) => {
+      setWizardState((prev) => ({ ...prev, currentStep: index }));
+    },
+    [setWizardState],
+  );
+
+  // Keyboard navigation
   useEffect(() => {
     if (!showDialog) return;
 
@@ -221,7 +236,7 @@ export function SetupWizard() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showDialog, isWelcome, isComplete, handlePrevious, handleNext, handleFinish]);
 
-  // 已完成或已跳过则不渲染
+  // Do not render if completed or dismissed
   if (wizardState.completed || wizardState.dismissed) {
     return null;
   }
@@ -229,13 +244,13 @@ export function SetupWizard() {
   return (
     <Dialog open={showDialog} onOpenChange={handleDialogClose}>
       <DialogContent size="md" className="sm:max-w-xl glass-panel border-border/70 overflow-hidden">
-        {/* 欢迎页 / 完成页渐变背景 */}
+        {/* Welcome / complete gradient background */}
         {(isWelcome || isComplete) && (
           <div className="absolute inset-0 z-0 bg-gradient-to-br from-primary/10 via-background to-secondary/5 pointer-events-none" />
         )}
         <DialogCloseButton className="z-10 bg-background/50 backdrop-blur-sm" />
 
-        {/* ---------- 头部 ---------- */}
+        {/* ---------- Header ---------- */}
         <DialogHeader className="relative z-10 pt-4 pb-2">
           <DialogTitle className="flex items-center gap-2.5 text-xl">
             <span
@@ -255,126 +270,34 @@ export function SetupWizard() {
           </DialogDescription>
         </DialogHeader>
 
-        {/* ---------- 主体 ---------- */}
+        {/* ---------- Stepper progress bar ---------- */}
+        <div className="relative z-10 px-6 pt-1 pb-2">
+          <Stepper steps={stepperLabels} current={step} />
+        </div>
+
+        {/* ---------- Body ---------- */}
         <DialogBody className="relative z-10 py-6">
-          {/* 欢迎页：能力卡片 */}
-          {isWelcome && (
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { icon: <ShieldCheck className="size-5" />, label: t("setupWizard.capabilities.backupMgmt"), desc: t("setupWizard.capabilities.backupMgmtDesc") },
-                { icon: <MonitorCheck className="size-5" />, label: t("setupWizard.capabilities.nodeMonitor"), desc: t("setupWizard.capabilities.nodeMonitorDesc") },
-                { icon: <ClipboardList className="size-5" />, label: t("setupWizard.capabilities.policySchedule"), desc: t("setupWizard.capabilities.policyScheduleDesc") },
-              ].map((item) => (
-                <div
-                  key={item.label}
-                  className="glass-panel p-4 flex flex-col items-center text-center space-y-2 border-border/40"
-                >
-                  <div className="p-2.5 bg-primary/10 rounded-full text-primary">
-                    {item.icon}
-                  </div>
-                  <h3 className="font-medium text-sm">{item.label}</h3>
-                  <p className="text-xs text-muted-foreground">{item.desc}</p>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Step 1: Welcome capability cards */}
+          {isWelcome && <SetupWizardStep1 />}
 
-          {/* 中间步骤：进度条 + 步骤指示器 + 操作链接 */}
+          {/* Steps 2–5: Progress + dot nav + link button */}
           {!isWelcome && !isComplete && (
-            <div className="space-y-6">
-              {/* 进度条 */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span className="text-muted-foreground">{t("setupWizard.configProgress")}</span>
-                  <span className="text-primary">{progress}%</span>
-                </div>
-                <div className="h-2 rounded-full bg-muted/60 overflow-hidden backdrop-blur-sm">
-                  <div
-                    className="h-full bg-primary transition-[width] duration-500 ease-in-out"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* 步骤指示器（点状） */}
-              <div className="flex items-center justify-center gap-2">
-                {STEPS.slice(1, -1).map((s, index) => {
-                  const stepIndex = index + 1;
-                  const isDone = stepIndex < step;
-                  const isCurrent = stepIndex === step;
-
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() =>
-                        setWizardState((prev) => ({ ...prev, currentStep: stepIndex }))
-                      }
-                      className={cn(
-                        "flex items-center justify-center rounded-full transition-[color,background-color,transform] duration-300",
-                        isCurrent
-                          ? "size-8 border-2 border-primary bg-primary/10"
-                          : isDone
-                            ? "size-8 border-2 border-success/50 bg-success/10"
-                            : "size-8 border-2 border-border/50 bg-muted/20 opacity-60 hover:opacity-90",
-                      )}
-                      aria-label={t("setupWizard.jumpToStep", { title: s.title })}
-                      aria-current={isCurrent ? "step" : undefined}
-                    >
-                      {isDone ? (
-                        <CheckCircle2 className="size-4 text-success" />
-                      ) : (
-                        <span
-                          className={cn(
-                            "text-xs font-semibold",
-                            isCurrent ? "text-primary" : "text-muted-foreground",
-                          )}
-                        >
-                          {index + 1}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* 操作链接按钮 */}
-              {currentStep.linkTo && currentStep.linkLabel && (
-                <div className="flex justify-center pt-2">
-                  <Button
-                    variant="outline"
-                    className="gap-2"
-                    onClick={() => handleNavigate(currentStep.linkTo!)}
-                  >
-                    <ExternalLink className="size-4" />
-                    {currentStep.linkLabel}
-                  </Button>
-                </div>
-              )}
-            </div>
+            <SetupWizardStep2
+              steps={STEPS}
+              currentStepIndex={step}
+              totalSteps={TOTAL_STEPS}
+              onJumpToStep={handleJumpToStep}
+              onNavigate={handleNavigate}
+            />
           )}
 
-          {/* 完成页 */}
-          {isComplete && (
-            <div className="flex flex-col items-center text-center space-y-4 py-4">
-              <div className="p-4 bg-success/10 rounded-full text-success">
-                <CheckCircle2 className="size-10" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">
-                  {t("setupWizard.completeHint1")}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {t("setupWizard.completeHint2")}
-                </p>
-              </div>
-            </div>
-          )}
+          {/* Step 6: Complete */}
+          {isComplete && <SetupWizardStep3 />}
         </DialogBody>
 
-        {/* ---------- 底部按钮 ---------- */}
+        {/* ---------- Footer buttons ---------- */}
         <DialogFooter className="relative z-10 pt-2 pb-4 flex items-center sm:justify-between">
-          {/* 左侧：跳过 */}
+          {/* Left: skip */}
           <div className="flex items-center">
             {!isWelcome && !isComplete && (
               <Button
@@ -388,7 +311,7 @@ export function SetupWizard() {
             )}
           </div>
 
-          {/* 右侧：导航按钮 */}
+          {/* Right: navigation buttons */}
           <div className="flex items-center gap-2">
             {!isWelcome && (
               <Button variant="outline" onClick={handlePrevious}>

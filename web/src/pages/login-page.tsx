@@ -143,41 +143,20 @@ export function LoginPage() {
       <div aria-hidden className="bg-login-ambient" />
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="hidden rounded-lg border border-border bg-card shadow-md p-8 md:flex md:flex-col md:justify-center lg:p-12">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms]">
-            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-[4px] border border-border bg-background" />
+        <section className="hidden rounded-xl border border-border bg-card shadow-md p-12 md:flex md:flex-col md:justify-center">
+          <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms]">
+            <img src="/xirang-mark.svg" alt="XiRang" className="size-4 rounded-sm" />
             <span>XiRang / X-Soil</span>
           </div>
-          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
-            <span>{t("login.platformName")}</span>
+          <h1 className="text-5xl font-extrabold tracking-tight lg:text-6xl animate-slide-up [animation-delay:150ms]">
+            {t("login.platformName")}
           </h1>
-          <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
+          <p className="mt-6 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
             {t("login.platformSlogan")}
           </p>
-
-          <div className="mt-8 grid gap-4 sm:grid-cols-2 animate-slide-up [animation-delay:250ms]">
-            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
-              </div>
-              <p className="text-sm font-semibold">{t("login.featureMonitor")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureMonitorDesc")}</p>
-            </div>
-            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
-              </div>
-              <p className="text-sm font-semibold">{t("login.featureOrchestrate")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureOrchestrateDesc")}</p>
-            </div>
-            <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4 sm:col-span-2">
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
-              </div>
-              <p className="text-sm font-semibold">{t("login.featureCompliance")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("login.featureComplianceDesc")}</p>
-            </div>
-          </div>
+          <p className="mt-8 text-sm text-muted-foreground animate-slide-up [animation-delay:250ms]">
+            {t("login.heroTagline")}
+          </p>
         </section>
 
         <Card className="flex flex-col justify-center rounded-lg border border-border bg-card shadow-md animate-slide-up [animation-delay:200ms]">

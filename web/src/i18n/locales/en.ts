@@ -177,6 +177,7 @@ const en = {
     featureOrchestrateDesc: "Policies, tasks, notifications & SSH key management",
     featureCompliance: "Security & Compliance",
     featureComplianceDesc: "RBAC + audit trail + fast failure resolution",
+    heroTagline: "Land every deploy, every backup, every alert — from a calm, warm console.",
   },
 
   // ── command palette / global search ──
