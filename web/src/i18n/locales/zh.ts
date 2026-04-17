@@ -185,6 +185,8 @@ const zh = {
     kbd: "⌘K",
     openLabel: "打开命令面板",
     placeholderEmpty: "输入以搜索…",
+    emptyResults: "无匹配结果",
+    navigation: "导航",
   },
 
   // ── app shell / header / sidebar ──

@@ -185,6 +185,8 @@ const en = {
     kbd: "⌘K",
     openLabel: "Open command palette",
     placeholderEmpty: "Type to search…",
+    emptyResults: "No results found",
+    navigation: "Navigation",
   },
 
   // ── app shell / header / sidebar ──
