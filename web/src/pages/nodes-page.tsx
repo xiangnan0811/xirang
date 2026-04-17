@@ -1,19 +1,28 @@
 import { useTranslation } from "react-i18next";
-import { Layers } from "lucide-react";
+import { Layers, Terminal, Trash2 } from "lucide-react";
 import { NodesGrid } from "@/pages/nodes-page.grid";
 import { NodesTable } from "@/pages/nodes-page.table";
 import { useNodesPageState } from "@/pages/nodes-page.state";
 import { NodesPageDialogs } from "@/pages/nodes-page.dialogs";
 import { NodesPageToolbar } from "@/pages/nodes-page.toolbar";
+import { BulkActionBar } from "@/components/bulk-action-bar";
 import {
   Card,
   CardContent,
 } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { Button } from "@/components/ui/button";
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import type { NodeRecord } from "@/types/domain";
 
@@ -121,6 +130,17 @@ export function NodesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      {/* PageHero */}
+      <PageHero
+        title={t("nodes.pageTitle")}
+        subtitle={t("nodes.pageSubtitle", { count: nodes.length, online: nodeStats.online })}
+        actions={
+          <Button shape="pill" onClick={openCreateDialog}>
+            + {t("nodes.addNode")}
+          </Button>
+        }
+      />
+
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"
         items={[
@@ -226,45 +246,84 @@ export function NodesPage() {
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit={t("nodes.nodeUnit")} />
 
-          {/* 分组视图 */}
+          {/* 分组视图 — Radix Accordion for proper keyboard/a11y */}
           {groupView && groupedNodes ? (
-            <div className="space-y-4">
+            <Accordion
+              type="multiple"
+              defaultValue={groupedNodes.map(([tag]) => tag)}
+              className="space-y-2"
+            >
               {groupedNodes.map(([tag, tagNodes]) => (
-                <details key={tag} open className="group">
-                  <summary className="flex cursor-pointer items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm font-medium hover:bg-muted/60">
+                <AccordionItem key={tag} value={tag} className="rounded-md">
+                  <AccordionTrigger>
                     <Layers className="size-4 text-muted-foreground" />
-                    {tag}
-                    <span className="ml-auto text-xs text-muted-foreground">{t("nodes.groupNodeCount", { count: tagNodes.length })}</span>
-                  </summary>
-                  <div className="mt-2">
+                    <span>{tag}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("nodes.groupNodeCount", { count: tagNodes.length })}
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent>
                     <NodesGrid
                       {...nodesViewProps}
                       sortedNodes={tagNodes}
                     />
-                  </div>
-                </details>
+                  </AccordionContent>
+                </AccordionItem>
               ))}
-            </div>
+            </Accordion>
           ) : (
-          <>
-          {/* 移动端始终显示卡片视图（viewMode 可能从桌面端持久化为 list） */}
-          <div className={viewMode === "list" ? "md:hidden" : undefined}>
-            <NodesGrid {...nodesViewProps} />
-          </div>
-          {viewMode === "list" && (
-            <NodesTable {...nodesViewProps} />
-          )}
-          <Pagination
-            page={page}
-            pageSize={pageSize}
-            total={filteredTotal}
-            onPageChange={setPage}
-            onPageSizeChange={setPageSize}
-          />
-          </>
+            <>
+              {/* 移动端始终显示卡片视图（viewMode 可能从桌面端持久化为 list） */}
+              <div className={viewMode === "list" ? "md:hidden" : undefined}>
+                <NodesGrid {...nodesViewProps} />
+              </div>
+              {viewMode === "list" && (
+                <NodesTable {...nodesViewProps} />
+              )}
+              <Pagination
+                page={page}
+                pageSize={pageSize}
+                total={filteredTotal}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+              />
+            </>
           )}
         </CardContent>
       </Card>
+
+      {/* Sticky bulk action bar — slides up when nodes are selected */}
+      <BulkActionBar visible={selectedNodeIds.length > 0}>
+        <span className="text-sm font-medium">
+          {t("nodes.batchWithCount", { count: selectedNodeIds.length })}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="rounded-full text-background/80 hover:bg-white/10 hover:text-background"
+          onClick={() => state.setBatchCmdOpen(true)}
+        >
+          <Terminal className="mr-1 size-3.5" />
+          {t("nodes.batchCommand")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="rounded-full text-red-300 hover:bg-red-500/20 hover:text-red-200"
+          onClick={() => void state.handleBulkDelete()}
+        >
+          <Trash2 className="mr-1 size-3.5" />
+          {t("nodes.batchDelete")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="rounded-full text-background/60 hover:bg-white/10 hover:text-background"
+          onClick={() => state.setSelectedNodeIds([])}
+        >
+          {t("nodes.clearSelection")}
+        </Button>
+      </BulkActionBar>
 
       <NodesPageDialogs
         token={state.token}

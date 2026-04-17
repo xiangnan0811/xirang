@@ -6,8 +6,6 @@ import {
   Layers,
   MoreHorizontal,
   ServerCog,
-  Terminal,
-  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,17 +51,19 @@ export function NodesPageToolbar({
   csvInputRef,
   openCreateDialog,
   toggleSelectAllVisible,
-  handleBulkDelete,
   handleImportCSV,
   handleExportCSV,
   handleDownloadTemplate,
-  setBatchCmdOpen,
   resetFilters,
+  // handleBulkDelete and setBatchCmdOpen are now in BulkActionBar; kept in props for compat
+  handleBulkDelete: _handleBulkDelete,
+  setBatchCmdOpen: _setBatchCmdOpen,
 }: NodesPageToolbarProps) {
   const { t } = useTranslation();
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {/* Add node button is also shown in PageHero; keep here for in-card quick access */}
       <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
         <ServerCog className="mr-1 size-3.5" />
         {t("nodes.addNode")}
@@ -155,11 +155,14 @@ export function NodesPageToolbar({
         <Layers className="mr-1 size-3.5" />
         {t("nodes.groupLabel")}
       </Button>
+      {/* Selection shortcuts */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" aria-label={t("nodes.batchLabel")}>
-            <MoreHorizontal className="mr-1 size-4" />
-            {selectedNodeIds.length > 0 ? t("nodes.batchWithCount", { count: selectedNodeIds.length }) : t("nodes.batchLabel")}
+            <CheckSquare className="mr-1 size-4" />
+            {selectedNodeIds.length > 0
+              ? t("nodes.batchWithCount", { count: selectedNodeIds.length })
+              : t("nodes.batchLabel")}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
@@ -174,22 +177,7 @@ export function NodesPageToolbar({
             {t("nodes.clearSelection")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={!selectedNodeIds.length}
-            onClick={() => setBatchCmdOpen(true)}
-          >
-            <Terminal className="mr-2 size-3.5" />
-            {t("nodes.batchCommandCount", { count: selectedNodeIds.length })}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={!selectedNodeIds.length}
-            className="text-destructive focus:text-destructive"
-            onClick={() => void handleBulkDelete()}
-          >
-            <Trash2 className="mr-2 size-3.5" />
-            {t("nodes.deleteCount", { count: selectedNodeIds.length })}
-          </DropdownMenuItem>
+          {/* Note: bulk delete + batch cmd are in the sticky BulkActionBar */}
         </DropdownMenuContent>
       </DropdownMenu>
       <Button size="sm" variant="outline" onClick={resetFilters}>

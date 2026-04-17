@@ -56,7 +56,9 @@ export default {
         "slide-down": "slide-down var(--duration-slow) var(--ease-enter)",
         "animate-in": "animate-in var(--duration-slow) var(--ease-enter)",
         "popover-in": "popover-in var(--duration-fast) var(--ease-enter)",
-        "popover-out": "popover-out var(--duration-fast) var(--ease-exit)"
+        "popover-out": "popover-out var(--duration-fast) var(--ease-exit)",
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out"
       },
       keyframes: {
         "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
@@ -64,7 +66,9 @@ export default {
         "slide-down": { from: { opacity: "0", translate: "0 -8px" }, to: { opacity: "1", translate: "0 0" } },
         "animate-in": { from: { opacity: "0", scale: "0.96" }, to: { opacity: "1", scale: "1" } },
         "popover-in": { from: { opacity: "0", scale: "0.94" }, to: { opacity: "1", scale: "1" } },
-        "popover-out": { from: { opacity: "1", scale: "1" }, to: { opacity: "0", scale: "0.94" } }
+        "popover-out": { from: { opacity: "1", scale: "1" }, to: { opacity: "0", scale: "0.94" } },
+        "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
+        "accordion-up": { from: { height: "var(--radix-accordion-content-height)" }, to: { height: "0" } }
       }
     }
   },

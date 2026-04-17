@@ -421,6 +421,8 @@ const en = {
     emergencyBackupConfirmTitle: "Confirm Emergency Backup",
     emergencyBackupConfirmDesc: "Run emergency backup for node {{name}}? All associated backup policies will be triggered immediately.",
     emergencyBackupTriggered: "Emergency backup triggered: {{count}} tasks started.",
+    pageTitle: "Nodes",
+    pageSubtitle: "{{count}} nodes · {{online}} online",
     migrateSuccess: "Migration complete: {{policies}} policies, {{tasks}} tasks migrated.",
     templateDownloaded: "Node import template downloaded.",
     terminalTitle: "Web Terminal — {{name}}",

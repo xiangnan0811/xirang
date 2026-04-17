@@ -421,6 +421,8 @@ const zh = {
     emergencyBackupConfirmTitle: "紧急备份确认",
     emergencyBackupConfirmDesc: "确认对节点 {{name}} 执行紧急备份？将立即触发该节点关联的所有备份策略。",
     emergencyBackupTriggered: "紧急备份已触发：{{count}} 个任务已启动。",
+    pageTitle: "节点",
+    pageSubtitle: "{{count}} 个节点 · {{online}} 在线",
     migrateSuccess: "迁移完成：{{policies}} 个策略、{{tasks}} 个任务已迁移。",
     templateDownloaded: "已下载节点导入模板。",
     terminalTitle: "Web 终端 — {{name}}",
