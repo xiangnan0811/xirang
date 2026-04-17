@@ -15,8 +15,10 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-fade-in",
-      className
+      "fixed inset-0 z-50 bg-foreground/45",
+      "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150",
+      "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-150",
+      className,
     )}
     {...props}
   />
@@ -37,13 +39,16 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 w-full translate-x-[-50%] translate-y-[-50%] rounded-lg border border-border bg-card shadow-lg data-[state=open]:animate-animate-in",
+        "fixed left-1/2 top-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2 rounded-xl bg-card shadow-xl",
+        "dark:border dark:border-border",
+        "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.96] data-[state=open]:duration-[220ms]",
+        "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.98] data-[state=closed]:duration-150",
         {
           "max-w-[480px]": size === "sm",
           "max-w-[560px]": size === "md",
           "max-w-[640px]": size === "lg",
         },
-        className
+        className,
       )}
       {...props}
     >
@@ -54,18 +59,21 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col space-y-1.5 px-6 pt-6", className)} {...props} />
+  <div className={cn("flex flex-col gap-1 px-6 pt-5 pb-3", className)} {...props} />
 );
 DialogHeader.displayName = "DialogHeader";
 
 const DialogBody = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("px-6 py-4", className)} {...props} />
+  <div className={cn("px-6 py-3 text-sm text-foreground/90", className)} {...props} />
 );
 DialogBody.displayName = "DialogBody";
 
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn("flex items-center justify-end gap-2 border-t bg-secondary/50 px-6 py-3", className)}
+    className={cn(
+      "flex items-center justify-end gap-2 border-t border-border bg-secondary/60 px-6 py-3 rounded-b-xl",
+      className,
+    )}
     {...props}
   />
 );
@@ -77,7 +85,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-base font-semibold leading-none tracking-tight", className)}
+    className={cn("text-base font-semibold tracking-tight", className)}
     {...props}
   />
 ));
@@ -89,7 +97,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    className={cn("text-xs text-muted-foreground", className)}
     {...props}
   />
 ));
@@ -99,28 +107,21 @@ function DialogCloseButton({ className, ...props }: React.ButtonHTMLAttributes<H
   return (
     <DialogPrimitive.Close
       className={cn(
-        "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-ring disabled:pointer-events-none",
-        className
+        "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100",
+        "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/35",
+        "disabled:pointer-events-none",
+        className,
       )}
       {...props}
     >
-      <X className="size-4" />
+      <X className="size-4" aria-hidden />
       <span className="sr-only">Close</span>
     </DialogPrimitive.Close>
   );
 }
 
 export {
-  Dialog,
-  DialogPortal,
-  DialogOverlay,
-  DialogClose,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogBody,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
-  DialogCloseButton,
+  Dialog, DialogPortal, DialogOverlay, DialogClose, DialogTrigger,
+  DialogContent, DialogHeader, DialogBody, DialogFooter,
+  DialogTitle, DialogDescription, DialogCloseButton,
 };
