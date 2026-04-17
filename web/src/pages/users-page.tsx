@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { KeyRound, LogOut, Shield, UserPlus, Users } from "lucide-react";
+import { KeyRound, LogOut, Shield, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { LoadingState } from "@/components/ui/loading-state";
-import { Select } from "@/components/ui/select";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { UserRecord } from "@/types/domain";
+import { UsersTable } from "@/pages/users-page.table";
+import { CreateUserForm } from "@/pages/users-page.dialogs";
 
 type RoleType = UserRecord["role"];
 
@@ -28,8 +29,6 @@ export function UsersPage() {
     label: t(`users.roles.${key}`),
   }));
 
-  const roleLabel = (role: RoleType) =>
-    roleOptions.find((item) => item.value === role)?.label ?? role;
   const { confirm, dialog } = useConfirm();
   const { token, username, role, userId, logout } = useAuth();
   const isAdmin = role === "admin";
@@ -37,26 +36,23 @@ export function UsersPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
+  // ── 修改自己密码 ──
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
 
+  // ── 创建用户表单 ──
   const [newUsername, setNewUsername] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<RoleType>("operator");
   const [creatingUser, setCreatingUser] = useState(false);
 
+  // ── 用户列表编辑状态 ──
   const [roleDrafts, setRoleDrafts] = useState<Record<number, RoleType>>({});
-  const [passwordDrafts, setPasswordDrafts] = useState<Record<number, string>>(
-    {},
-  );
-  const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>(
-    {},
-  );
-  const [deletingUserMap, setDeletingUserMap] = useState<Record<number, boolean>>(
-    {},
-  );
+  const [passwordDrafts, setPasswordDrafts] = useState<Record<number, string>>({});
+  const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>({});
+  const [deletingUserMap, setDeletingUserMap] = useState<Record<number, boolean>>({});
 
   const loadUsers = useCallback(async () => {
     if (!token || !isAdmin) {
@@ -68,10 +64,7 @@ export function UsersPage() {
       const rows = await apiClient.getUsers(token);
       setUsers(rows);
       setRoleDrafts(
-        Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<
-          number,
-          RoleType
-        >,
+        Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<number, RoleType>,
       );
     } catch (error) {
       toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
@@ -84,10 +77,17 @@ export function UsersPage() {
     void loadUsers();
   }, [loadUsers]);
 
-  const sortedUsers = useMemo(() => {
-    return [...users].sort((a, b) => a.id - b.id);
-  }, [users]);
+  const sortedUsers = useMemo(
+    () => [...users].sort((a, b) => a.id - b.id),
+    [users],
+  );
 
+  const adminCount = useMemo(
+    () => users.filter((u) => u.role === "admin").length,
+    [users],
+  );
+
+  // ── Handlers ──
   const handleChangePassword = async () => {
     if (!token) {
       toast.error(t("users.errorNotLoggedIn"));
@@ -110,9 +110,7 @@ export function UsersPage() {
       toast.success(t("users.passwordChanged"));
       navigate("/login", { replace: true });
     } catch (error) {
-      toast.error(
-        t("users.changePasswordFailed", { error: getErrorMessage(error) }),
-      );
+      toast.error(t("users.changePasswordFailed", { error: getErrorMessage(error) }));
     } finally {
       setChangingPassword(false);
     }
@@ -147,9 +145,7 @@ export function UsersPage() {
       setNewUserRole("operator");
       toast.success(t("users.createSuccess"));
     } catch (error) {
-      toast.error(
-        t("users.createFailed", { error: getErrorMessage(error) }),
-      );
+      toast.error(t("users.createFailed", { error: getErrorMessage(error) }));
     } finally {
       setCreatingUser(false);
     }
@@ -176,9 +172,7 @@ export function UsersPage() {
       setPasswordDrafts((prev) => ({ ...prev, [target.id]: "" }));
       toast.success(t("users.updateSuccess"));
     } catch (error) {
-      toast.error(
-        t("users.updateFailed", { error: getErrorMessage(error) }),
-      );
+      toast.error(t("users.updateFailed", { error: getErrorMessage(error) }));
     } finally {
       setSavingUserMap((prev) => ({ ...prev, [target.id]: false }));
     }
@@ -192,15 +186,11 @@ export function UsersPage() {
 
     const confirmed = await confirm({
       title: t("users.confirmDeleteTitle"),
-      description: t("users.confirmDeleteDesc", {
-        username: target.username,
-      }),
+      description: t("users.confirmDeleteDesc", { username: target.username }),
       confirmText: t("common.delete"),
       cancelText: t("common.cancel"),
     });
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     setDeletingUserMap((prev) => ({ ...prev, [target.id]: true }));
     try {
@@ -208,9 +198,7 @@ export function UsersPage() {
       setUsers((prev) => prev.filter((item) => item.id !== target.id));
       toast.success(t("users.deleteSuccess"));
     } catch (error) {
-      toast.error(
-        t("users.deleteFailed", { error: getErrorMessage(error) }),
-      );
+      toast.error(t("users.deleteFailed", { error: getErrorMessage(error) }));
     } finally {
       setDeletingUserMap((prev) => ({ ...prev, [target.id]: false }));
     }
@@ -225,17 +213,28 @@ export function UsersPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="animate-fade-in space-y-5">
+      {/* ── PageHero ── */}
+      <PageHero
+        title={t("users.pageTitle")}
+        subtitle={
+          isAdmin
+            ? t("users.pageSubtitle", { count: users.length, admins: adminCount })
+            : undefined
+        }
+      />
+
+      {/* ── 账号安全 ── */}
       <Card>
         <CardContent className="space-y-4 pt-6">
           <div className="flex items-center gap-2 font-medium">
-            <KeyRound className="size-4" />
+            <KeyRound className="size-4" aria-hidden="true" />
             {t("users.accountSecurity")}
           </div>
           <p className="text-sm text-muted-foreground">
             {t("users.currentLogin", {
               username: username ?? t("common.unknown"),
-              role: role ? roleLabel(role) : "",
+              role: role ? (roleOptions.find((o) => o.value === role)?.label ?? role) : "",
             })}
           </p>
           <div className="grid gap-3 md:grid-cols-3">
@@ -244,155 +243,77 @@ export function UsersPage() {
               placeholder={t("users.currentPassword")}
               aria-label={t("users.currentPassword")}
               value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
+              onChange={(e) => setCurrentPassword(e.target.value)}
             />
             <Input
               type="password"
               placeholder={t("users.newPasswordPlaceholder")}
               aria-label={t("users.newPassword")}
               value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
+              onChange={(e) => setNewPassword(e.target.value)}
             />
             <Input
               type="password"
               placeholder={t("users.confirmPassword")}
               aria-label={t("users.confirmPassword")}
               value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
+              onChange={(e) => setConfirmPassword(e.target.value)}
             />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button loading={changingPassword} onClick={handleChangePassword}>
+            <Button shape="pill" loading={changingPassword} onClick={() => void handleChangePassword()}>
               {t("users.changePassword")}
             </Button>
-            <Button variant="outline" onClick={handleLogout}>
-              <LogOut className="mr-2 size-4" />
+            <Button shape="pill" variant="outline" onClick={() => void handleLogout()}>
+              <LogOut className="mr-2 size-4" aria-hidden="true" />
               {t("appShell.logout")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
+      {/* ── 用户管理（仅管理员） ── */}
       {isAdmin ? (
-        <Card>
-          <CardContent className="space-y-4 pt-6">
-            <div className="flex items-center gap-2 font-medium">
-              <Users className="size-4" />
-              {t("users.userManagement")}
-            </div>
-            <div className="grid gap-2 md:grid-cols-4">
-              <Input
-                placeholder={t("users.newUsername")}
-                aria-label={t("users.newUsername")}
-                value={newUsername}
-                onChange={(event) => setNewUsername(event.target.value)}
-              />
-              <Input
-                type="password"
-                placeholder={t("users.initialPassword")}
-                aria-label={t("users.initialPassword")}
-                value={newUserPassword}
-                onChange={(event) => setNewUserPassword(event.target.value)}
-              />
-              <Select
-                value={newUserRole}
-                onChange={(event) =>
-                  setNewUserRole(event.target.value as RoleType)
-                }
-              >
-                {roleOptions.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </Select>
-              <Button loading={creatingUser} onClick={handleCreateUser}>
-                <UserPlus className="mr-2 size-4" />
-                {t("users.createUser")}
-              </Button>
-            </div>
+        <>
+          <CreateUserForm
+            newUsername={newUsername}
+            setNewUsername={setNewUsername}
+            newUserPassword={newUserPassword}
+            setNewUserPassword={setNewUserPassword}
+            newUserRole={newUserRole}
+            setNewUserRole={setNewUserRole}
+            creating={creatingUser}
+            roleOptions={roleOptions}
+            onSubmit={() => void handleCreateUser()}
+          />
 
-            {loadingUsers ? (
-              <LoadingState description={t("users.loadingDesc")} />
-            ) : sortedUsers.length === 0 ? (
-              <EmptyState
-                title={t("users.emptyTitle")}
-                description={t("users.emptyDesc")}
-              />
-            ) : (
-              <div className="space-y-2">
-                {sortedUsers.map((item) => {
-                  const isSelf = userId === item.id;
-                  return (
-                    <div
-                      key={item.id}
-                      className="rounded-xl border border-border/70 p-3"
-                    >
-                      <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_auto] md:items-center">
-                        <div>
-                          <p className="font-medium">{item.username}</p>
-                          <p className="text-xs text-muted-foreground">
-                            ID: {item.id} · {roleLabel(item.role)}
-                            {item.totpEnabled ? (
-                              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
-                                <Shield className="size-2.5" />
-                                2FA
-                              </span>
-                            ) : null}
-                          </p>
-                        </div>
-                        <Select
-                          aria-label={t("users.roleForUser", { username: item.username })}
-                          value={roleDrafts[item.id] ?? item.role}
-                          onChange={(event) =>
-                            setRoleDrafts((prev) => ({
-                              ...prev,
-                              [item.id]: event.target.value as RoleType,
-                            }))
-                          }
-                          disabled={isSelf}
-                        >
-                          {roleOptions.map((one) => (
-                            <option key={one.value} value={one.value}>{one.label}</option>
-                          ))}
-                        </Select>
-                        <Input
-                          type="password"
-                          aria-label={t("users.passwordForUser", { username: item.username })}
-                          value={passwordDrafts[item.id] ?? ""}
-                          onChange={(event) =>
-                            setPasswordDrafts((prev) => ({
-                              ...prev,
-                              [item.id]: event.target.value,
-                            }))
-                          }
-                          placeholder={t("users.passwordKeepEmpty")}
-                        />
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            loading={Boolean(savingUserMap[item.id])}
-                            onClick={() => void handleUpdateUser(item)}
-                          >
-                            {t("common.save")}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={isSelf}
-                            loading={Boolean(deletingUserMap[item.id])}
-                            onClick={() => void handleDeleteUser(item)}
-                          >
-                            {t("common.delete")}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+          <Card>
+            <CardContent className="space-y-4 pt-6">
+              <div className="flex items-center gap-2 font-medium">
+                <Users className="size-4" aria-hidden="true" />
+                {t("users.userManagement")}
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <UsersTable
+                loading={loadingUsers}
+                sortedUsers={sortedUsers}
+                roleDrafts={roleDrafts}
+                passwordDrafts={passwordDrafts}
+                savingUserMap={savingUserMap}
+                deletingUserMap={deletingUserMap}
+                roleOptions={roleOptions}
+                currentUserId={userId}
+                onRoleChange={(id, role) =>
+                  setRoleDrafts((prev) => ({ ...prev, [id]: role }))
+                }
+                onPasswordChange={(id, value) =>
+                  setPasswordDrafts((prev) => ({ ...prev, [id]: value }))
+                }
+                onUpdate={(user) => void handleUpdateUser(user)}
+                onDelete={(user) => void handleDeleteUser(user)}
+              />
+            </CardContent>
+          </Card>
+        </>
       ) : (
         <Card>
           <CardContent className="pt-6">

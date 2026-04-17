@@ -1174,6 +1174,9 @@ const en = {
 
   // ── users page ──
   users: {
+    pageTitle: "Users",
+    pageSubtitle: "{{count}} users · {{admins}} admins",
+    createUserTitle: "Add User",
     addUser: "Add User",
     editUser: "Edit User",
     deleteUser: "Delete User",

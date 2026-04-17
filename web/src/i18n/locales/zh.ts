@@ -1174,6 +1174,9 @@ const zh = {
 
   // ── users page ──
   users: {
+    pageTitle: "用户",
+    pageSubtitle: "共 {{count}} 位用户 · {{admins}} 管理员",
+    createUserTitle: "新增用户",
     addUser: "新增用户",
     editUser: "编辑用户",
     deleteUser: "删除用户",
