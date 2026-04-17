@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { AppTextarea } from "@/components/ui/app-textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
@@ -162,7 +162,7 @@ export function RotationUpload({
         >
           {t("sshKeys.keyTypeLabel")}
         </label>
-        <AppSelect
+        <Select
           id="rotation-key-type"
           containerClassName="w-full"
           value={newKeyType}
@@ -172,7 +172,7 @@ export function RotationUpload({
           <option value="rsa">RSA</option>
           <option value="ed25519">ED25519</option>
           <option value="ecdsa">ECDSA</option>
-        </AppSelect>
+        </Select>
         <p className="mt-1 text-xs text-muted-foreground">
           {t("sshKeys.keyTypeHint")}
         </p>

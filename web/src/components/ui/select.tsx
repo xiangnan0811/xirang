@@ -1,30 +1,23 @@
 import * as React from "react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
-  options: { value: string; label: string }[];
-}
+export type SelectProps = React.SelectHTMLAttributes<HTMLSelectElement> & {
+  /** Layout classes for the outer wrapper (width, grid spans, etc.). */
+  containerClassName?: string;
+};
 
 const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, options, ...props }, ref) => {
-    return (
-      <select
-        className={cn(
-          "h-9 w-full rounded-md border border-input bg-card px-3 text-sm shadow-sm ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-          className
-        )}
-        ref={ref}
-        {...props}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+  ({ className, containerClassName, children, ...props }, ref) => (
+    <div className={cn("relative", containerClassName)}>
+      <select ref={ref} className={cn("app-select w-full", className)} {...props}>
+        {children}
       </select>
-    );
-  }
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  )
 );
+
 Select.displayName = "Select";
 
 export { Select };

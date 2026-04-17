@@ -188,11 +188,11 @@ export function UsersTab() {
           <Select
             value={newUserRole}
             onChange={(event) => setNewUserRole(event.target.value as RoleType)}
-            options={roleOptions.map((item) => ({
-              value: item.value,
-              label: item.label,
-            }))}
-          />
+          >
+            {roleOptions.map((item) => (
+              <option key={item.value} value={item.value}>{item.label}</option>
+            ))}
+          </Select>
           <Button loading={creatingUser} onClick={handleCreateUser}>
             <UserPlus className="mr-2 size-4" />
             {t("users.createUser")}
@@ -232,12 +232,12 @@ export function UsersTab() {
                         [item.id]: event.target.value as RoleType,
                       }))
                     }
-                    options={roleOptions.map((one) => ({
-                      value: one.value,
-                      label: one.label,
-                    }))}
                     disabled={isSelf}
-                  />
+                  >
+                    {roleOptions.map((one) => (
+                      <option key={one.value} value={one.value}>{one.label}</option>
+                    ))}
+                  </Select>
                   <Input
                     type="password"
                     aria-label={t("users.passwordForUser", { username: item.username })}

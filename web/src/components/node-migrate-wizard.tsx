@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { CheckCircle2, XCircle, AlertTriangle, SkipForward, Loader2, ArrowRightLeft } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogCloseButton } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api/client";
@@ -174,7 +174,7 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
                 <label htmlFor="migrate-target" className="mb-1 block text-sm font-medium">
                   {t("nodes.migrateTargetLabel")}
                 </label>
-                <AppSelect
+                <Select
                   id="migrate-target"
                   containerClassName="w-full"
                   value={targetNodeId ? String(targetNodeId) : ""}
@@ -186,7 +186,7 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
                       {n.name} ({n.host})
                     </option>
                   ))}
-                </AppSelect>
+                </Select>
               </div>
               <div className="flex justify-end pt-2">
                 <Button disabled={!targetNodeId} onClick={handleNext}>{t("nodes.migrateStepNext")}</Button>

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast";
 
@@ -229,7 +229,7 @@ export function AuditPage() {
                 onChange={(event) => setKeyword(event.target.value)}
               />
             </div>
-            <AppSelect
+            <Select
               value={method}
               onChange={(event) => setMethod(event.target.value)}
               aria-label={t("audit.methodFilter")}
@@ -240,7 +240,7 @@ export function AuditPage() {
               <option value="PUT">PUT</option>
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
-            </AppSelect>
+            </Select>
             <Button
               className="md:col-span-2 lg:col-span-1"
               onClick={() => void load(1)}

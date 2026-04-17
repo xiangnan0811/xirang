@@ -9,7 +9,7 @@ import {
   Card,
   CardContent,
 } from "@/components/ui/card";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
@@ -183,7 +183,7 @@ export function NodesPage() {
               placeholder={t("nodes.searchPlaceholder")}
               aria-label={t("nodes.keywordAriaLabel")}
             />
-            <AppSelect
+            <Select
               containerClassName="w-full"
               aria-label={t("nodes.statusAriaLabel")}
               value={statusFilter}
@@ -195,8 +195,8 @@ export function NodesPage() {
               <option value="online">{t("nodes.statusOnline")}</option>
               <option value="warning">{t("nodes.statusWarning")}</option>
               <option value="offline">{t("nodes.statusOffline")}</option>
-            </AppSelect>
-            <AppSelect
+            </Select>
+            <Select
               containerClassName="w-full"
               aria-label={t("nodes.tagAriaLabel")}
               value={tagFilter}
@@ -207,8 +207,8 @@ export function NodesPage() {
                   {tag === "all" ? t("nodes.allTags") : tag}
                 </option>
               ))}
-            </AppSelect>
-            <AppSelect
+            </Select>
+            <Select
               containerClassName="w-full col-span-2 md:col-span-1"
               aria-label={t("nodes.sortAriaLabel")}
               value={sortBy}
@@ -221,7 +221,7 @@ export function NodesPage() {
               <option value="name-desc">{t("nodes.sortNameDesc")}</option>
               <option value="disk-low">{t("nodes.sortDiskLow")}</option>
               <option value="backup-recent">{t("nodes.sortBackupRecent")}</option>
-            </AppSelect>
+            </Select>
           </FilterPanel>
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit={t("nodes.nodeUnit")} />

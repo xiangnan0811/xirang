@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { SearchInput } from "@/components/ui/search-input";
@@ -43,7 +43,7 @@ export function TasksFilters({
           aria-label={t("tasks.searchAriaLabel")}
         />
 
-        <AppSelect
+        <Select
           containerClassName="w-full"
           aria-label={t("tasks.statusFilterAriaLabel")}
           value={statusFilter}
@@ -60,9 +60,9 @@ export function TasksFilters({
           <option value="canceled">{t("tasks.statusCanceled")}</option>
           <option value="warning">{t("tasks.statusWarning")}</option>
           <option value="paused">{t("tasks.statusPaused")}</option>
-        </AppSelect>
+        </Select>
 
-        <AppSelect
+        <Select
           containerClassName="w-full"
           aria-label={t("tasks.nodeFilterAriaLabel")}
           value={nodeFilter}
@@ -74,7 +74,7 @@ export function TasksFilters({
               {node.name}
             </option>
           ))}
-        </AppSelect>
+        </Select>
 
         <div className="flex items-center gap-2 justify-end col-span-full sm:col-span-2 md:col-span-3 lg:col-span-1">
           <Button
