@@ -793,6 +793,11 @@ const en = {
     selectAtLeastOne: "Please select at least one task first",
     batchTriggerConfirmDesc: "Confirm batch trigger {{count}} selected tasks?",
     batchExecuteCount: "Batch Execute ({{count}})",
+    pageTitle: "Tasks",
+    pageSubtitle: "{{total}} tasks · {{running}} running",
+    createTask: "New task",
+    expandChain: "Expand dependency chain",
+    collapseChain: "Collapse dependency chain",
   },
 
   // ── task run history ──

@@ -2,11 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Plus } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
-import { CronGenerator } from "@/components/cron-generator";
 import type {
   NewTaskInput,
   NodeRecord,
@@ -14,8 +11,11 @@ import type {
   TaskExecutorType,
   TaskRecord,
 } from "@/types/domain";
+import { TaskBasics } from "@/components/task-create-dialog.basics";
+import { TaskSchedule } from "@/components/task-create-dialog.schedule";
+import { TaskAdvanced } from "@/components/task-create-dialog.advanced";
 
-type TaskDraft = {
+export type TaskDraft = {
   name: string;
   nodeId: string;
   policyId: string;
@@ -93,8 +93,6 @@ function taskRecordToDraft(task: TaskRecord): TaskDraft {
   };
 }
 
-// executor labels moved to translation keys: taskCreate.executorTypes.*
-
 function toNumberOrNull(value: string): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -135,12 +133,12 @@ export function TaskEditorDialog({
   const handleSave = async () => {
     const nodeId = toNumberOrNull(draft.nodeId);
     if (!nodeId) {
-      toast.error(t('taskCreate.errorNodeRequired'), { id: "task-editor-node-required" });
+      toast.error(t("taskCreate.errorNodeRequired"), { id: "task-editor-node-required" });
       return;
     }
 
     if (!draft.name.trim()) {
-      toast.error(t('taskCreate.errorNameRequired'), { id: "task-editor-name-required" });
+      toast.error(t("taskCreate.errorNameRequired"), { id: "task-editor-name-required" });
       return;
     }
 
@@ -190,282 +188,40 @@ export function TaskEditorDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      icon={isEditing ? <Pencil className="size-5 text-primary" /> : <Plus className="size-5 text-primary" />}
-      title={isEditing ? t('taskCreate.titleEdit') : t('taskCreate.titleCreate')}
-      description={isEditing ? t('taskCreate.descEdit') : t('taskCreate.descCreate')}
+      icon={
+        isEditing ? (
+          <Pencil className="size-5 text-primary" />
+        ) : (
+          <Plus className="size-5 text-primary" />
+        )
+      }
+      title={isEditing ? t("taskCreate.titleEdit") : t("taskCreate.titleCreate")}
+      description={isEditing ? t("taskCreate.descEdit") : t("taskCreate.descCreate")}
       saving={saving}
       onSubmit={handleSave}
-      submitLabel={isEditing ? t('taskCreate.submitEdit') : t('taskCreate.submitCreate')}
-      savingLabel={isEditing ? t('taskCreate.savingEdit') : t('taskCreate.savingCreate')}
+      submitLabel={isEditing ? t("taskCreate.submitEdit") : t("taskCreate.submitCreate")}
+      savingLabel={isEditing ? t("taskCreate.savingEdit") : t("taskCreate.savingCreate")}
     >
-      <div>
-        <label htmlFor="task-editor-name" className="mb-1 block text-sm font-medium">{t('taskCreate.taskName')}</label>
-        <Input id="task-editor-name" placeholder={t('taskCreate.taskNamePlaceholder')}
-          value={draft.name}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, name: event.target.value }))
-          }
-        />
-      </div>
+      <TaskBasics
+        draft={draft}
+        setDraft={setDraft}
+        nodes={nodes}
+        policies={policies}
+        tasks={tasks}
+        editingTask={editingTask}
+        saving={saving}
+      />
 
-      <div>
-        <label htmlFor="task-editor-node" className="mb-1 block text-sm font-medium">{t('taskCreate.targetNode')}</label>
-        <Select id="task-editor-node" containerClassName="w-full"
-          value={draft.nodeId}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
-          }
-        >
-          <option value="">{t('taskCreate.selectNode')}</option>
-          {nodes.map((node) => (
-            <option key={node.id} value={String(node.id)}>
-              {node.name} ({node.host})
-            </option>
-          ))}
-        </Select>
-      </div>
+      <TaskSchedule draft={draft} setDraft={setDraft} saving={saving} />
 
-      <div>
-        <label htmlFor="task-editor-policy" className="mb-1 block text-sm font-medium">
-          {t('taskCreate.relatedPolicy')}
-        </label>
-        <Select
-          id="task-editor-policy"
-          containerClassName="w-full"
-          value={draft.policyId}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, policyId: event.target.value }))
-          }
-        >
-          <option value="">{t('taskCreate.noPolicyCustom')}</option>
-          {policies.map((policy) => (
-            <option key={policy.id} value={String(policy.id)}>
-              {policy.name}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      {tasks && tasks.length > 0 && (
-        <div>
-          <label htmlFor="task-editor-depends-on" className="mb-1 block text-sm font-medium">
-            {t('taskCreate.dependsOnTask')}
-          </label>
-          <Select
-            id="task-editor-depends-on"
-            containerClassName="w-full"
-            value={draft.dependsOnTaskId}
-            onChange={(event) =>
-              setDraft((prev) => ({ ...prev, dependsOnTaskId: event.target.value, cronSpec: event.target.value ? "" : prev.cronSpec }))
-            }
-          >
-            <option value="">{t('taskCreate.noDependency')}</option>
-            {tasks
-              .filter((t) => t.id !== editingTask?.id)
-              .map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name ?? t.policyName}
-                </option>
-              ))}
-          </Select>
-          {draft.dependsOnTaskId && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('taskCreate.dependsOnHint')}
-            </p>
-          )}
-        </div>
-      )}
-
-      <div>
-        <label htmlFor="task-editor-executor-type" className="mb-1 block text-sm font-medium">{t('taskCreate.executorType')}</label>
-        <Select
-          id="task-editor-executor-type"
-          containerClassName="w-full"
-          value={draft.executorType}
-          onChange={(event) =>
-            setDraft((prev) => ({ ...prev, executorType: event.target.value as TaskExecutorType }))
-          }
-        >
-          <option value="rsync">{t('taskCreate.executorTypes.rsync')}</option>
-          <option value="command">{t('taskCreate.executorTypes.command')}</option>
-          <option value="restic">{t('taskCreate.executorTypes.restic')}</option>
-          <option value="rclone">{t('taskCreate.executorTypes.rclone')}</option>
-        </Select>
-      </div>
-
-      <div>
-        <label htmlFor="task-editor-cron" className="mb-1 block text-sm font-medium">
-          {t('taskCreate.cronOptional')}
-        </label>
-        <CronGenerator
-          id="task-editor-cron"
-          value={draft.cronSpec}
-          onChange={(val) =>
-            setDraft((prev) => ({ ...prev, cronSpec: val }))
-          }
-          disabled={saving}
-        />
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t('taskCreate.cronEmptyHint')}
-        </p>
-      </div>
-
-      {draft.executorType === "command" && (
-        <div>
-          <label htmlFor="task-editor-command" className="mb-1 block text-sm font-medium">
-            {t('taskCreate.shellCommand')}
-          </label>
-          <Input
-            id="task-editor-command"
-            placeholder={t('taskCreate.commandPlaceholder')}
-            value={draft.command}
-            onChange={(event) =>
-              setDraft((prev) => ({ ...prev, command: event.target.value }))
-            }
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('taskCreate.shellCommandHint')}
-          </p>
-        </div>
-      )}
-
-      {(draft.executorType === "rsync" || draft.executorType === "restic") && (
-        <>
-          <div>
-            <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
-              {draft.executorType === "rsync" ? t('taskCreate.rsyncSourcePath') : t('taskCreate.sourcePath')}
-            </label>
-            <Input
-              id="task-editor-rsync-source"
-              placeholder="/data/source"
-              value={draft.rsyncSource}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, rsyncSource: event.target.value }))
-              }
-            />
-          </div>
-          {isEditing && draft.rsyncTarget ? (
-            <div className="glass-panel rounded-md px-3 py-2 text-sm">
-              <span className="font-medium text-muted-foreground">{t('taskCreate.autoTargetPath')}:</span>{' '}
-              <span className="font-mono text-xs">{draft.rsyncTarget}</span>
-            </div>
-          ) : (
-            <div className="glass-panel rounded-md px-3 py-2 text-sm text-muted-foreground">
-              <span className="font-medium">{t('taskCreate.autoTargetPath')}:</span>{' '}
-              {(() => {
-                const selectedNode = nodes.find((n) => String(n.id) === draft.nodeId);
-                if (selectedNode?.backupDir) {
-                  return <span className="font-mono text-xs">/backup/{selectedNode.backupDir}/</span>;
-                }
-                return <span className="text-xs">{t('taskCreate.selectNodeFirst')}</span>;
-              })()}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground">{t('taskCreate.autoTargetHint')}</p>
-        </>
-      )}
-
-      {draft.executorType === "rclone" && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <label htmlFor="task-editor-rsync-source" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.sourcePath')}
-            </label>
-            <Input
-              id="task-editor-rsync-source"
-              placeholder="/data/source"
-              value={draft.rsyncSource}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, rsyncSource: event.target.value }))
-              }
-            />
-          </div>
-          <div>
-            <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.rcloneRemotePath')}
-            </label>
-            <Input
-              id="task-editor-rsync-target"
-              placeholder="s3:my-bucket/backups"
-              value={draft.rsyncTarget}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, rsyncTarget: event.target.value }))
-              }
-            />
-          </div>
-        </div>
-      )}
-
-      {draft.executorType === "restic" && (
-        <>
-          <div>
-            <label htmlFor="task-editor-restic-password" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.resticRepoPassword')}
-            </label>
-            <Input
-              id="task-editor-restic-password"
-              type="password"
-              placeholder={t('taskCreate.resticPassword')}
-              value={draft.resticPassword}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, resticPassword: event.target.value }))
-              }
-            />
-          </div>
-          <div>
-            <label htmlFor="task-editor-restic-excludes" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.resticExcludeRules')}
-            </label>
-            <textarea
-              id="task-editor-restic-excludes"
-              className="glass-panel w-full min-h-[72px] resize-none rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              placeholder={"*.log\n/tmp\n/proc"}
-              value={draft.resticExcludePatterns}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, resticExcludePatterns: event.target.value }))
-              }
-            />
-          </div>
-        </>
-      )}
-
-      {draft.executorType === "rclone" && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <label htmlFor="task-editor-rclone-bwlimit" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.rcloneBandwidthLimit')}
-            </label>
-            <Input
-              id="task-editor-rclone-bwlimit"
-              placeholder={t('taskCreate.bwLimitPlaceholder')}
-              value={draft.rcloneBandwidthLimit}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, rcloneBandwidthLimit: event.target.value }))
-              }
-            />
-          </div>
-          <div>
-            <label htmlFor="task-editor-rclone-transfers" className="mb-1 block text-sm font-medium">
-              {t('taskCreate.rcloneConcurrentTransfers')}
-            </label>
-            <Input
-              id="task-editor-rclone-transfers"
-              type="number"
-              min={1}
-              max={32}
-              placeholder={t('taskCreate.concurrencyPlaceholder')}
-              value={draft.rcloneTransfers}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, rcloneTransfers: event.target.value }))
-              }
-            />
-          </div>
-        </div>
-      )}
+      <TaskAdvanced
+        draft={draft}
+        setDraft={setDraft}
+        nodes={nodes}
+        isEditing={isEditing}
+      />
     </FormDialog>
   );
 }
 
 export { TaskEditorDialog as TaskCreateDialog };
-
-export type { TaskDraft };

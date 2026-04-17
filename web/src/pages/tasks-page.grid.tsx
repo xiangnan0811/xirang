@@ -41,6 +41,7 @@ export const TasksGrid = React.memo(function TasksGrid({
         const isPendingDelete = pendingAction?.id === task.id && pendingAction.action === "delete";
         const isPendingTrigger = pendingAction?.id === task.id && pendingAction.action === "trigger";
 
+        const isRunning = task.status === "running" || task.status === "retrying";
         return (
           <div
             key={task.id}
@@ -62,9 +63,17 @@ export const TasksGrid = React.memo(function TasksGrid({
                   onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
                   aria-label={t('tasks.selectTaskAriaLabel', { name: task.name || task.policyName })}
                 />
-                <div>
-                  <p className="font-medium">{task.name || task.policyName}</p>
-                  <p className="text-xs text-muted-foreground">{t('tasks.taskIdLabel', { id: task.id })}</p>
+                <div className="flex items-center gap-1.5">
+                  {isRunning && (
+                    <span
+                      className="pulse-online size-2 shrink-0 rounded-full"
+                      aria-label={t("tasks.statusRunning")}
+                    />
+                  )}
+                  <div>
+                    <p className="font-medium">{task.name || task.policyName}</p>
+                    <p className="text-xs text-muted-foreground">{t('tasks.taskIdLabel', { id: task.id })}</p>
+                  </div>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
