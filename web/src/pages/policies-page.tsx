@@ -114,14 +114,8 @@ export function PoliciesPage() {
   };
 
   const handleSave = async (draft: PolicyDraft) => {
-    if (
-      !draft.name.trim() ||
-      !draft.sourcePath.trim() ||
-      !draft.cron.trim()
-    ) {
-      toast.error(t('policies.saveError'));
-      return;
-    }
+    // Dialog validates required fields before calling this handler; early-return silently if bypassed
+    if (!draft.name.trim() || !draft.sourcePath.trim() || !draft.cron.trim()) return;
 
     const input: NewPolicyInput = {
       name: draft.name.trim(),
