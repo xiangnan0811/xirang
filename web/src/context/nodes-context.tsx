@@ -20,6 +20,11 @@ export function useNodesContext(): NodesContextValue {
   return ctx;
 }
 
+/** Safe variant — returns null when no provider (for global widgets like CommandPalette). */
+export function useNodesContextOptional(): NodesContextValue | null {
+  return useContext(NodesContext);
+}
+
 export function NodesContextProvider({
   children,
   value,
