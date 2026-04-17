@@ -206,10 +206,8 @@ export function TasksPage() {
   }, [tasks]);
 
   const handleCreateTask = async (input: NewTaskInput) => {
-    if (!input.name.trim() || !input.nodeId) {
-      toast.error(t("tasks.createError"));
-      return;
-    }
+    // Dialog validates name/node before calling this handler; early-return silently if bypassed
+    if (!input.name.trim() || !input.nodeId) return;
 
     try {
       const taskId = await createTask(input);
@@ -232,10 +230,8 @@ export function TasksPage() {
 
   const handleUpdateTask = async (input: NewTaskInput) => {
     if (!editingTask) return;
-    if (!input.name.trim() || !input.nodeId) {
-      toast.error(t("tasks.updateError"));
-      return;
-    }
+    // Dialog validates name/node before calling this handler; early-return silently if bypassed
+    if (!input.name.trim() || !input.nodeId) return;
     try {
       await updateTask(editingTask.id, input);
       setEditDialogOpen(false);

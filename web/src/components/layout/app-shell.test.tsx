@@ -58,6 +58,10 @@ vi.mock("@/components/layout/mobile-navigation", () => ({
   MobileNavigation: () => null,
 }));
 
+vi.mock("@/components/ui/command-palette", () => ({
+  CommandPalette: () => null,
+}));
+
 function renderShell() {
   return render(
     <MemoryRouter

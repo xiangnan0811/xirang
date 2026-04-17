@@ -263,13 +263,12 @@ function ConfigCard({
         {expanded && (
           <div className="mt-2 overflow-hidden rounded-lg border border-border/50 bg-muted/10">
             {loadingReports ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                {t("common.loading")}
-              </div>
+              <LoadingState className="py-2" rows={2} title={t("common.loading")} />
             ) : !reports?.length ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                {t("reports.noReportsHint")}
-              </div>
+              <EmptyState
+                className="rounded-none border-0 py-6"
+                title={t("reports.noReportsHint")}
+              />
             ) : (
               reports.map((r) => <ReportRow key={r.id} report={r} />)
             )}
