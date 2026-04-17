@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/xiangnan0811/xirang/compare/v0.8.0...v0.9.0) (2026-04-17)
+
+
+### Features
+
+* **web:** Wave 2 W2-03 · Tasks page redesign ([#32](https://github.com/xiangnan0811/xirang/issues/32)) ([d101cbc](https://github.com/xiangnan0811/xirang/commit/d101cbcc9aee7f8ea73c6e332afe5a3b72735e36))
+* **web:** Wave 2 W2-04 · Backups page redesign ([#34](https://github.com/xiangnan0811/xirang/issues/34)) ([9820ca7](https://github.com/xiangnan0811/xirang/commit/9820ca79bf988cacdcca0ecea8f501abd91a2c1b))
+
 ## [0.8.0](https://github.com/xiangnan0811/xirang/compare/v0.7.3...v0.8.0) (2026-04-17)
 
 
