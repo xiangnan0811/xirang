@@ -22,13 +22,22 @@ type StatCardsSectionProps = {
   cardClassName?: string;
 };
 
-const toneClassMap: Record<StatCardTone, { text: string; bg: string; line: string }> = {
-  info: { text: "text-info", bg: "bg-info/10", line: "bg-info" },
-  success: { text: "text-success", bg: "bg-success/10", line: "bg-success" },
-  warning: { text: "text-warning", bg: "bg-warning/10", line: "bg-warning" },
-  destructive: { text: "text-destructive", bg: "bg-destructive/10", line: "bg-destructive" },
-  primary: { text: "text-primary", bg: "bg-primary/10", line: "bg-primary" },
-};
+function toneTextClass(tone: StatCardTone | undefined): string {
+  switch (tone) {
+    case "success":
+      return "text-[hsl(var(--success))]";
+    case "warning":
+      return "text-[hsl(var(--warning))]";
+    case "destructive":
+      return "text-[hsl(var(--destructive))]";
+    case "info":
+      return "text-[hsl(var(--info))]";
+    case "primary":
+      return "text-[hsl(var(--primary))]";
+    default:
+      return "text-muted-foreground";
+  }
+}
 
 export function StatCardsSection({
   items,
@@ -42,48 +51,43 @@ export function StatCardsSection({
       className={cn("grid gap-1.5 sm:gap-3", className)}
       style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
     >
-      {items.map((item) => {
-        const s = toneClassMap[item.tone ?? "info"];
-        return (
+      {items.map((item) => (
+        <div
+          key={item.id ?? item.title}
+          data-tone={item.tone ?? "info"}
+          className={cn(
+            "rounded-lg bg-card p-5 shadow-sm dark:border dark:border-border",
+            cardClassName
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+              {item.title}
+            </div>
+            {item.icon ? (
+              <div className="text-muted-foreground">{item.icon}</div>
+            ) : null}
+          </div>
           <div
-            key={item.id ?? item.title}
-            data-tone={item.tone ?? "info"}
             className={cn(
-              "rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group",
-              cardClassName
+              "mt-3 text-[28px] font-semibold tabular-nums leading-none tracking-[-0.025em] text-foreground",
+              item.valueClassName
             )}
           >
-            <div className={`absolute top-0 left-0 w-1 h-full ${s.line} opacity-60 group-hover:opacity-100 transition-opacity`} />
-            <div className="p-3 sm:p-4 flex items-center gap-2.5 sm:gap-3 pl-4 sm:pl-5">
-              {item.icon && (
-                <div className={`flex items-center justify-center rounded-lg p-2 sm:p-2.5 ${s.bg} ${s.text}`}>
-                  {item.icon}
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-1.5">
-                  <div className={cn("text-xl sm:text-2xl font-bold font-mono tracking-tight text-foreground/90", item.valueClassName)}>
-                    {item.value}
-                  </div>
-                  {item.unit ? (
-                    <span className="text-[10px] sm:text-xs font-medium text-muted-foreground uppercase">
-                      {item.unit}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="text-[10px] sm:text-[11px] font-medium text-muted-foreground uppercase tracking-wider truncate" title={item.title}>
-                  {item.title}
-                </div>
-                {item.description ? (
-                  <div className="text-[10px] text-muted-foreground/80 truncate mt-0.5 sm:mt-1 hidden sm:block">
-                    {item.description}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            {item.value}
+            {item.unit ? (
+              <span className="ml-1 text-sm font-medium text-muted-foreground">
+                {item.unit}
+              </span>
+            ) : null}
           </div>
-        );
-      })}
+          {item.description ? (
+            <div className={cn("mt-2 text-xs font-medium", toneTextClass(item.tone))}>
+              {item.description}
+            </div>
+          ) : null}
+        </div>
+      ))}
     </section>
   );
 }
