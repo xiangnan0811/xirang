@@ -4,8 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useCommandPalette } from "@/context/command-palette-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { useTasksContext } from "@/context/tasks-context";
+import { useNodesContextOptional } from "@/context/nodes-context";
+import { useTasksContextOptional } from "@/context/tasks-context";
 
 const routes = [
   { key: "nav.overview", path: "/app/overview" },
@@ -26,8 +26,10 @@ export function CommandPalette() {
   const { open, setOpen } = useCommandPalette();
   const [query, setQuery] = React.useState("");
   const navigate = useNavigate();
-  const { nodes } = useNodesContext();
-  const { tasks } = useTasksContext();
+  const nodesCtx = useNodesContextOptional();
+  const tasksCtx = useTasksContextOptional();
+  const nodes = nodesCtx?.nodes ?? [];
+  const tasks = tasksCtx?.tasks ?? [];
 
   // Reset query when closed
   React.useEffect(() => {

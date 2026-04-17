@@ -28,6 +28,11 @@ export function useTasksContext(): TasksContextValue {
   return ctx;
 }
 
+/** Safe variant — returns null when no provider (for global widgets like CommandPalette). */
+export function useTasksContextOptional(): TasksContextValue | null {
+  return useContext(TasksContext);
+}
+
 export function TasksContextProvider({
   children,
   value,
