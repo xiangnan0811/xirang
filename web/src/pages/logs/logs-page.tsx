@@ -7,8 +7,9 @@ import { useTasksContext } from "@/context/tasks-context";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { Card, CardContent } from "@/components/ui/card";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast";
-import { getErrorMessage } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
 import {
   selectedNodeStorageKey,
@@ -190,6 +191,23 @@ export function LogsPage() {
     selectedTask === "all"
       ? null
       : tasks.find((task) => String(task.id) === selectedTask);
+
+  const selectedNodeName =
+    selectedNode !== "all"
+      ? (nodes.find((n) => n.name === selectedNode)?.name ?? selectedNode)
+      : null;
+
+  const wsStatus = connected
+    ? "open"
+    : connectionWarning?.toLowerCase().includes("reconnect")
+      ? "reconnecting"
+      : "closed";
+
+  const wsStatusClass = cn(
+    wsStatus === "open" && "pulse-online",
+    wsStatus === "reconnecting" && "pulse-warning",
+    wsStatus === "closed" && "pulse-offline",
+  );
 
   const refreshFocusedTaskStatus = useCallback(async () => {
     if (!focusedTaskNumber) {
@@ -470,6 +488,25 @@ export function LogsPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={t("logs.pageTitle")}
+        subtitle={
+          selectedNodeName
+            ? t("logs.pageSubtitleWithNode", { nodeName: selectedNodeName })
+            : t("logs.pageSubtitle")
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <span
+              className={cn("inline-block size-2 rounded-full", wsStatusClass)}
+              aria-label={t(`logs.wsStatus.${wsStatus}`)}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t(`logs.wsStatus.${wsStatus}`)}
+            </span>
+          </div>
+        }
+      />
       <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <LogsFilterBar

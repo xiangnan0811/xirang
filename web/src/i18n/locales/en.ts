@@ -931,6 +931,14 @@ const en = {
     historyCount: "History: {{count}} entries",
     errorCodeLabel: "Current task error code: {{code}}",
     resetFilter: "Reset filters",
+    pageTitle: "Logs",
+    pageSubtitle: "Live log stream",
+    pageSubtitleWithNode: "{{nodeName}} live stream",
+    wsStatus: {
+      open: "Connected",
+      reconnecting: "Reconnecting",
+      closed: "Disconnected",
+    },
   },
 
   // ── notifications page ──

@@ -931,6 +931,14 @@ const zh = {
     historyCount: "历史回溯：{{count}} 条",
     errorCodeLabel: "当前任务错误码：{{code}}",
     resetFilter: "重置筛选",
+    pageTitle: "日志",
+    pageSubtitle: "流式日志",
+    pageSubtitleWithNode: "{{nodeName}} 实时流",
+    wsStatus: {
+      open: "已连接",
+      reconnecting: "重新连接中",
+      closed: "已断开",
+    },
   },
 
   // ── notifications page ──
