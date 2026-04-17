@@ -235,25 +235,6 @@
       background-color var(--duration-normal) var(--ease-enter);
   }
 
-  .app-select {
-    @apply h-10 appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm text-foreground;
-    transition: border-color var(--duration-normal) var(--ease-enter),
-      box-shadow var(--duration-normal) var(--ease-enter),
-      background-color var(--duration-normal) var(--ease-enter);
-  }
-
-  .app-select:focus-visible {
-    @apply border-primary/35 outline-none ring-2 ring-primary/35;
-  }
-
-  .app-select:disabled {
-    @apply cursor-not-allowed opacity-60;
-  }
-
-  .app-select[aria-invalid="true"] {
-    @apply border-destructive/70 ring-destructive/35;
-  }
-
   .sticky-filter {
     position: static;
   }
