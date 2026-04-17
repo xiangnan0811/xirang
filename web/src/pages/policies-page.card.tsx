@@ -45,7 +45,11 @@ export function PolicyCard({
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {policy.isTemplate && <Badge tone="neutral">{t('policies.template')}</Badge>}
+          {policy.isTemplate ? (
+            <Badge tone="neutral">{t("policies.badgeTemplate")}</Badge>
+          ) : (
+            <Badge tone="info">{t("policies.badgeManual")}</Badge>
+          )}
           <Badge tone={policy.enabled ? "success" : "neutral"}>
             {policy.enabled ? t('common.enabled') : t('common.disabled')}
           </Badge>

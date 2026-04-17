@@ -25,6 +25,7 @@ import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context";
 import { PolicyCard } from "@/pages/policies-page.card";
 import { PoliciesFilters } from "@/pages/policies-page.filters";
+import { PoliciesHero } from "@/pages/policies-page.hero";
 
 const keywordStorageKey = "xirang.policies.keyword";
 
@@ -189,6 +190,11 @@ export function PoliciesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <PoliciesHero
+        total={policies.length}
+        enabled={activeCount}
+        onCreate={openCreateDialog}
+      />
       <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -322,7 +328,11 @@ export function PoliciesPage() {
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5">
                           <p className="font-medium">{policy.name}</p>
-                          {policy.isTemplate && <Badge tone="neutral">{t('policies.template')}</Badge>}
+                          {policy.isTemplate ? (
+                            <Badge tone="neutral">{t("policies.badgeTemplate")}</Badge>
+                          ) : (
+                            <Badge tone="info">{t("policies.badgeManual")}</Badge>
+                          )}
                         </div>
                         <p className="text-xs text-muted-foreground">{t('policies.threshold', { value: policy.criticalThreshold })}</p>
                       </td>
