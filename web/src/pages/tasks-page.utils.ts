@@ -45,4 +45,23 @@ export type TasksViewProps = {
   allVisibleSelected: boolean;
   toggleTaskSelection: (id: number, checked: boolean) => void;
   toggleSelectAllVisible: (checked: boolean) => void;
+  /** Set of expanded chain_run_ids (for chain folding in table view) */
+  expandedChains?: Set<string>;
+  onToggleChain?: (chainRunId: string) => void;
 };
+
+/**
+ * Groups tasks with the same dependsOnTaskId into simple parent/child chains.
+ * Returns a map of parentId -> child task ids for UI chain folding.
+ */
+export function buildChainParentMap(tasks: TaskRecord[]): Map<number, number[]> {
+  const map = new Map<number, number[]>();
+  for (const task of tasks) {
+    if (task.dependsOnTaskId) {
+      const children = map.get(task.dependsOnTaskId) ?? [];
+      children.push(task.id);
+      map.set(task.dependsOnTaskId, children);
+    }
+  }
+  return map;
+}

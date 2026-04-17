@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Terminal, Play } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context";
 import { useNodesContext } from "@/context/nodes-context";
 import { useTasksContext } from "@/context/tasks-context";
 import { usePoliciesContext } from "@/context/policies-context";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
@@ -26,6 +24,8 @@ import { TasksTable } from "@/pages/tasks-page.table";
 import { normalizeStatusFilter } from "@/pages/tasks-page.utils";
 import { TasksPageDialogs } from "@/pages/tasks-page.dialogs";
 import { TasksFilters } from "@/pages/tasks-page.filters";
+import { TasksHero } from "@/pages/tasks-page.hero";
+import { TasksBulkBar } from "@/pages/tasks-page.bulk-bar";
 
 const keywordStorageKey = "xirang.tasks.keyword";
 const statusStorageKey = "xirang.tasks.status";
@@ -107,6 +107,8 @@ export function TasksPage() {
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [pauseConfirmTask, setPauseConfirmTask] = useState<TaskRecord | null>(null);
+  // Chain folding state: set of parent task ids whose children are expanded
+  const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
   const filteredTasks = useMemo(() => {
     const effectiveKeyword = deferredKeyword.trim().toLowerCase();
@@ -167,6 +169,18 @@ export function TasksPage() {
       return next.length === prev.length ? prev : next;
     });
   }, [tasks]);
+
+  const handleToggleChain = useCallback((chainKey: string) => {
+    setExpandedChains((prev) => {
+      const next = new Set(prev);
+      if (next.has(chainKey)) {
+        next.delete(chainKey);
+      } else {
+        next.add(chainKey);
+      }
+      return next;
+    });
+  }, []);
 
   const taskStats = useMemo(() => {
     let pending = 0;
@@ -335,8 +349,48 @@ export function TasksPage() {
     }
   };
 
+  const handleBatchExecute = () => {
+    if (selectedTaskIds.length === 0) {
+      setBatchDialogOpen(true);
+      return;
+    }
+    const nodeIds = [...new Set(
+      tasks
+        .filter((t) => selectedTaskSet.has(t.id))
+        .map((t) => t.nodeId)
+    )];
+    setBatchDialogOpen(true);
+    setBatchDefaultNodeIds(nodeIds);
+  };
+
+  const handleBatchTrigger = async () => {
+    if (selectedTaskIds.length === 0) {
+      toast.error(t("tasks.selectAtLeastOne"));
+      return;
+    }
+    const ok = await confirm({
+      title: t("tasks.batchTriggerTitle"),
+      description: t("tasks.batchTriggerConfirmDesc", { count: selectedTaskIds.length }),
+    });
+    if (!ok) return;
+    try {
+      const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
+      setSelectedTaskIds([]);
+      toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
+      void refreshTasks();
+    } catch (err) {
+      toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
+    }
+  };
+
   return (
     <div className="animate-fade-in space-y-5">
+      <TasksHero
+        totalCount={tasks.length}
+        runningCount={taskStats.running}
+        onCreate={() => setCreateDialogOpen(true)}
+      />
+
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"
         items={[
@@ -377,67 +431,6 @@ export function TasksPage() {
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="mr-1 size-3.5" />
-                {t("tasks.addTask")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  if (selectedTaskIds.length === 0) {
-                    setBatchDialogOpen(true);
-                    return;
-                  }
-                  const nodeIds = [...new Set(
-                    tasks
-                      .filter((t) => selectedTaskSet.has(t.id))
-                      .map((t) => t.nodeId)
-                  )];
-                  setBatchDialogOpen(true);
-                  setBatchDefaultNodeIds(nodeIds);
-                }}
-              >
-                <Terminal className="mr-1 size-3.5" />
-                {selectedTaskIds.length > 0
-                  ? t("tasks.batchExecuteCount", { count: selectedTaskIds.length })
-                  : t("tasks.batchExecute")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={async () => {
-                  if (selectedTaskIds.length === 0) {
-                    toast.error(t("tasks.selectAtLeastOne"));
-                    return;
-                  }
-                  const ok = await confirm({
-                    title: t("tasks.batchTriggerTitle"),
-                    description: t("tasks.batchTriggerConfirmDesc", { count: selectedTaskIds.length }),
-                  });
-                  if (!ok) return;
-                  try {
-                    const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
-                    setSelectedTaskIds([]);
-                    toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
-                    void refreshTasks();
-                  } catch (err) {
-                    toast.error(t("tasks.batchTriggerFailed", { error: getErrorMessage(err) }));
-                  }
-                }}
-              >
-                <Play className="mr-1 size-3.5" />
-                {selectedTaskIds.length > 0
-                  ? t("tasks.triggerCount", { count: selectedTaskIds.length })
-                  : t("tasks.batchTrigger")}
-              </Button>
-              {selectedTaskIds.length > 0 && (
-                <Button size="sm" variant="ghost" onClick={() => setSelectedTaskIds([])}>
-                  {t("tasks.clearSelection")}
-                </Button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
               <ViewModeToggle
                 value={viewMode}
                 onChange={(mode) => setViewModeRaw(mode)}
@@ -447,6 +440,13 @@ export function TasksPage() {
               />
             </div>
           </div>
+
+          <TasksBulkBar
+            selectedCount={selectedTaskIds.length}
+            onBatchExecute={handleBatchExecute}
+            onBatchTrigger={() => void handleBatchTrigger()}
+            onClearSelection={() => setSelectedTaskIds([])}
+          />
 
           <TasksFilters
             keyword={keyword}
@@ -508,6 +508,8 @@ export function TasksPage() {
               allVisibleSelected={allVisibleSelected}
               toggleTaskSelection={toggleTaskSelection}
               toggleSelectAllVisible={toggleSelectAllVisible}
+              expandedChains={expandedChains}
+              onToggleChain={handleToggleChain}
             />
           )}
 

@@ -793,6 +793,11 @@ const zh = {
     batchTriggerConfirmDesc: "确认批量触发 {{count}} 个选中的任务？",
     batchExecuteCount: "批量执行 ({{count}})",
     errorLabel: "失败信息：{{error}}",
+    pageTitle: "任务",
+    pageSubtitle: "{{total}} 个任务 · {{running}} 运行中",
+    createTask: "新建任务",
+    expandChain: "展开依赖链",
+    collapseChain: "收起依赖链",
   },
 
   // ── task run history ──
