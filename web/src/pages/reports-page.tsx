@@ -1,282 +1,34 @@
 import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  BarChart3,
-  ChevronDown,
-  ChevronRight,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Trash2,
-  Zap,
-} from "lucide-react";
+import { BarChart3, Plus, RefreshCw } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
-import { formatDateOnly } from "@/lib/api/core";
-import {
-  createReportsApi,
-  type Report,
-  type ReportConfig,
-} from "@/lib/api/reports-api";
+import { createReportsApi, type ReportConfig } from "@/lib/api/reports-api";
 import { getErrorMessage } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingState } from "@/components/ui/loading-state";
+import { PageHero } from "@/components/ui/page-hero";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { useConfirm } from "@/hooks/use-confirm";
+import { ConfigCard } from "@/pages/reports-page.config";
+
 const ReportConfigDialog = React.lazy(() =>
   import("@/components/report-config-dialog").then(m => ({ default: m.ReportConfigDialog }))
 );
 
 const reportsApi = createReportsApi();
 
-function formatDate(iso: string) {
-  return formatDateOnly(iso);
-}
-
-function SuccessRateBadge({ rate }: { rate: number }) {
-  const tone = rate >= 95 ? "success" : rate >= 80 ? "warning" : "destructive";
-  return <Badge tone={tone}>{rate.toFixed(1)}%</Badge>;
-}
-
-function ReportRow({ report }: { report: Report }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-
-  let topFailures: {
-    node_name: string;
-    task_name: string;
-    count: number;
-    last_err: string;
-  }[] = [];
-  try {
-    topFailures = JSON.parse(report.top_failures) as typeof topFailures;
-  } catch {
-    /* ignore */
-  }
-
+function ConfigGridSkeleton() {
   return (
-    <div className="border-b border-border/40 last:border-0">
-      <button
-        type="button"
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/20"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        {open ? (
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-        )}
-        <span className="flex-1 text-sm">
-          {formatDate(report.period_start)} — {formatDate(report.period_end)}
-        </span>
-        <SuccessRateBadge rate={report.success_rate} />
-        <span className="ml-3 text-xs tabular-nums text-muted-foreground">
-          {t("reports.successRuns", {
-            success: report.success_runs,
-            total: report.total_runs,
-          })}
-        </span>
-        <span className="ml-3 text-xs tabular-nums text-muted-foreground">
-          {t("reports.avgDuration", { ms: report.avg_duration_ms })}
-        </span>
-      </button>
-
-      {open && (
-        <div className="overflow-x-auto px-6 pb-4 pt-1 text-sm text-muted-foreground">
-          {topFailures.length > 0 ? (
-            <div>
-              <p className="mb-2 font-medium text-foreground">
-                {t("reports.topFailures", { count: topFailures.length })}
-              </p>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border/40 text-left">
-                    <th scope="col" className="pb-1.5 pr-4">{t("reports.colNode")}</th>
-                    <th scope="col" className="pb-1.5 pr-4">{t("reports.colTask")}</th>
-                    <th scope="col" className="pb-1.5 pr-4">
-                      {t("reports.colFailCount")}
-                    </th>
-                    <th scope="col" className="pb-1.5">{t("reports.colLastError")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topFailures.map((f, i) => (
-                    <tr
-                      key={i}
-                      className="border-b border-border/20 last:border-0"
-                    >
-                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.node_name}>{f.node_name}</td>
-                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.task_name}>{f.task_name}</td>
-                      <td className="py-1 pr-4 tabular-nums">{f.count}</td>
-                      <td className="max-w-xs truncate py-1">
-                        {f.last_err || "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p>{t("reports.noFailures")}</p>
-          )}
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <Skeleton className="h-5 w-2/3 rounded" />
+          <Skeleton className="h-3.5 w-full rounded" />
+          <Skeleton className="h-3.5 w-1/2 rounded" />
         </div>
-      )}
+      ))}
     </div>
-  );
-}
-
-function ConfigCard({
-  cfg,
-  isAdmin,
-  token,
-  onEdit,
-  onDelete,
-  onGenerate,
-}: {
-  cfg: ReportConfig;
-  isAdmin: boolean;
-  token: string;
-  onEdit: (cfg: ReportConfig) => void;
-  onDelete: (id: number) => void;
-  onGenerate: (id: number) => void;
-}) {
-  const { t } = useTranslation();
-  const [reports, setReports] = useState<Report[] | null>(null);
-  const [loadingReports, setLoadingReports] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [generating, setGenerating] = useState(false);
-
-  const loadReports = useCallback(async () => {
-    setLoadingReports(true);
-    try {
-      const data = await reportsApi.listReports(token, cfg.id);
-      setReports(data);
-    } catch (err) {
-      toast.error(t("reports.loadFailed") + ": " + getErrorMessage(err));
-      setReports([]);
-    } finally {
-      setLoadingReports(false);
-    }
-  }, [token, cfg.id, t]);
-
-  const handleExpand = () => {
-    if (!expanded && reports === null) {
-      void loadReports();
-    }
-    setExpanded((v) => !v);
-  };
-
-  const handleGenerate = async () => {
-    setGenerating(true);
-    try {
-      await onGenerate(cfg.id);
-      setExpanded(true);
-      void loadReports();
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const scopeLabel =
-    cfg.scope_type === "all"
-      ? t("reports.scopeLabels.all")
-      : cfg.scope_type === "tag"
-        ? t("reports.scopeTagValue", { value: cfg.scope_value })
-        : t("reports.scopeLabels.node_ids");
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-2 pb-2">
-        <div>
-          <p className="font-semibold">{cfg.name}</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {cfg.period === "weekly"
-              ? t("reports.periodLabels.weekly")
-              : t("reports.periodLabels.monthly")}{" "}
-            · {scopeLabel} · {cfg.cron}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Badge tone={cfg.enabled ? "success" : "neutral"}>
-            {cfg.enabled ? t("common.enabled") : t("common.disabled")}
-          </Badge>
-          {isAdmin && (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-muted-foreground hover:text-foreground"
-                title={t("reports.generateNow")}
-                aria-label={t("reports.generateNow")}
-                disabled={generating}
-                onClick={() => void handleGenerate()}
-              >
-                {generating ? (
-                  <RefreshCw className="size-4 animate-spin" />
-                ) : (
-                  <Zap className="size-4" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-muted-foreground hover:text-foreground"
-                title={t("common.edit")}
-                aria-label={t("common.edit")}
-                onClick={() => onEdit(cfg)}
-              >
-                <Pencil className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-destructive/80 hover:text-destructive"
-                title={t("reports.deleteConfig")}
-                aria-label={t("reports.deleteConfig")}
-                onClick={() => onDelete(cfg.id)}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </>
-          )}
-        </div>
-      </CardHeader>
-
-      <CardContent className="pt-0">
-        <button
-          type="button"
-          className="flex items-center gap-1.5 text-xs text-primary hover:underline"
-          onClick={handleExpand}
-          aria-expanded={expanded}
-        >
-          {expanded ? (
-            <ChevronDown className="size-3.5" />
-          ) : (
-            <ChevronRight className="size-3.5" />
-          )}
-          {t("reports.historyReports")}
-        </button>
-
-        {expanded && (
-          <div className="mt-2 overflow-hidden rounded-lg border border-border/50 bg-muted/10">
-            {loadingReports ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                {t("common.loading")}
-              </div>
-            ) : !reports?.length ? (
-              <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                {t("reports.noReportsHint")}
-              </div>
-            ) : (
-              reports.map((r) => <ReportRow key={r.id} report={r} />)
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -309,7 +61,10 @@ export function ReportsPage() {
 
   const handleDelete = async (id: number) => {
     if (!token) return;
-    const ok = await confirm({ title: t("reports.deleteConfirm"), description: t("reports.deleteConfirmDesc") });
+    const ok = await confirm({
+      title: t("reports.deleteConfirm"),
+      description: t("reports.deleteConfirmDesc"),
+    });
     if (!ok) return;
     try {
       await reportsApi.deleteConfig(token, id);
@@ -326,45 +81,46 @@ export function ReportsPage() {
       await reportsApi.generateNow(token, id);
       toast.success(t("reports.generatedSuccess"));
     } catch (err) {
-      toast.error(
-        t("reports.generateFailed") + ": " + getErrorMessage(err),
-      );
+      toast.error(t("reports.generateFailed") + ": " + getErrorMessage(err));
     }
   };
 
+  const openCreate = () => {
+    setEditingConfig(null);
+    setDialogOpen(true);
+  };
+
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-6 p-4">
       {confirmDialog}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{t("reports.pageTitle")}</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {t("reports.pageDesc")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void loadConfigs()}
-            disabled={loading}
-          >
-            <RefreshCw
-              className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`}
-            />
-            {t("common.refresh")}
-          </Button>
-          {isAdmin && (
-            <Button size="sm" onClick={() => { setEditingConfig(null); setDialogOpen(true); }}>
-              <Plus className="mr-1.5 size-4" />
-              {t("reports.addConfig")}
+
+      <PageHero
+        title={t("reports.pageTitle")}
+        subtitle={t("reports.pageSubtitle", { count: configs.length })}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              shape="pill"
+              onClick={() => void loadConfigs()}
+              disabled={loading}
+            >
+              <RefreshCw className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`} />
+              {t("common.refresh")}
             </Button>
-          )}
-        </div>
-      </div>
+            {isAdmin && (
+              <Button shape="pill" onClick={openCreate}>
+                <Plus className="mr-1.5 size-4" aria-hidden />
+                {t("reports.addConfig")}
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       {loading ? (
-        <LoadingState title={t("reports.loading")} rows={3} />
+        <ConfigGridSkeleton />
       ) : configs.length === 0 ? (
         <EmptyState
           icon={BarChart3}
@@ -383,7 +139,10 @@ export function ReportsPage() {
               cfg={cfg}
               isAdmin={isAdmin}
               token={token ?? ""}
-              onEdit={(c) => { setEditingConfig(c); setDialogOpen(true); }}
+              onEdit={(c) => {
+                setEditingConfig(c);
+                setDialogOpen(true);
+              }}
               onDelete={(id) => void handleDelete(id)}
               onGenerate={handleGenerate}
             />
@@ -395,7 +154,10 @@ export function ReportsPage() {
         <Suspense fallback={null}>
           <ReportConfigDialog
             open={dialogOpen}
-            onOpenChange={(v) => { setDialogOpen(v); if (!v) setEditingConfig(null); }}
+            onOpenChange={(v) => {
+              setDialogOpen(v);
+              if (!v) setEditingConfig(null);
+            }}
             onSaved={(cfg) =>
               setConfigs((prev) =>
                 prev.some((c) => c.id === cfg.id)
