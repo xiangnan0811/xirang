@@ -177,13 +177,6 @@
     transition-duration: 80ms !important;
   }
 
-  html[data-power="save"] .pulse-online,
-  html[data-power="save"] .pulse-warning,
-  html[data-power="save"] .pulse-offline {
-    animation: none !important;
-    box-shadow: none !important;
-  }
-
   html[data-power="save"] .app-shell-bg::before {
     opacity: 0.35;
   }
@@ -337,24 +330,16 @@
     background-color: hsl(var(--terminal-panel-bg) / 0.55);
   }
 
-  /* --- Status pulse animations --- */
-  .pulse-online {
-    background-color: hsl(var(--success));
-    box-shadow: 0 0 0 hsl(var(--success) / 0.55);
-    animation: pulse-online 1.6s infinite;
-  }
-
-  .pulse-warning {
-    background-color: hsl(var(--warning));
-    box-shadow: 0 0 0 hsl(var(--warning) / 0.5);
-    animation: pulse-warning 1.8s infinite;
-  }
-
+  /* --- Status pulse (breathing opacity, warm-safe) --- */
+  .pulse-online,
+  .pulse-warning,
   .pulse-offline {
-    background-color: hsl(var(--destructive));
-    box-shadow: 0 0 0 hsl(var(--destructive) / 0.55);
-    animation: pulse-offline 1.6s infinite;
+    animation: pulse-breathe 2.4s ease-in-out infinite;
+    will-change: opacity;
   }
+  .pulse-online  { background-color: hsl(var(--success)); }
+  .pulse-warning { background-color: hsl(var(--warning)); }
+  .pulse-offline { background-color: hsl(var(--destructive)); }
 
   .mobile-sheet {
     box-shadow: var(--shadow-mobile-sheet);
@@ -392,47 +377,26 @@
   }
 }
 
-/* --- Pulse keyframes --- */
-@keyframes pulse-online {
-  0% {
-    box-shadow: 0 0 0 0 hsl(var(--success) / 0.52);
-  }
+/* --- Pulse keyframe (breathing opacity) --- */
+@keyframes pulse-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.92); }
+}
 
-  70% {
-    box-shadow: 0 0 0 8px hsl(var(--success) / 0);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 hsl(var(--success) / 0);
+@media (prefers-reduced-motion: reduce) {
+  .pulse-online, .pulse-warning, .pulse-offline {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 
-@keyframes pulse-warning {
-  0% {
-    box-shadow: 0 0 0 0 hsl(var(--warning) / 0.52);
-  }
-
-  70% {
-    box-shadow: 0 0 0 8px hsl(var(--warning) / 0);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 hsl(var(--warning) / 0);
-  }
-}
-
-@keyframes pulse-offline {
-  0% {
-    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.52);
-  }
-
-  70% {
-    box-shadow: 0 0 0 8px hsl(var(--destructive) / 0);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0);
-  }
+html[data-power="save"] .pulse-online,
+html[data-power="save"] .pulse-warning,
+html[data-power="save"] .pulse-offline {
+  animation: none !important;
+  opacity: 1 !important;
+  box-shadow: none !important;
 }
 
 /* --- Motion keyframes (kept for new design) --- */
