@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Download, RefreshCw, Search } from "lucide-react";
+import { ClipboardList, Download, RefreshCw, Search } from "lucide-react";
+import { TableVirtuoso } from "react-virtuoso";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -10,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
+import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 
 const pageSize = 30;
@@ -55,6 +58,24 @@ function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
     from: from.toISOString(),
     to: now.toISOString(),
   };
+}
+
+function TableSkeleton() {
+  return (
+    <div className="space-y-2 py-4">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} className="flex gap-3 px-3">
+          <Skeleton className="h-4 w-36 rounded" />
+          <Skeleton className="h-4 w-20 rounded" />
+          <Skeleton className="h-4 w-16 rounded" />
+          <Skeleton className="h-4 w-12 rounded" />
+          <Skeleton className="h-4 w-48 rounded" />
+          <Skeleton className="h-4 w-12 rounded" />
+          <Skeleton className="h-4 w-28 rounded" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function AuditPage() {
@@ -179,45 +200,55 @@ export function AuditPage() {
   }, [keyword, method, timeRange, token]);
 
   return (
-    <div className="animate-fade-in space-y-5">
+    <div className="animate-fade-in space-y-5 p-4">
+      <PageHero
+        title={t("audit.pageTitle")}
+        subtitle={t("audit.pageSubtitle", { count: total })}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              shape="pill"
+              onClick={() => void load(page)}
+              disabled={loading}
+            >
+              <RefreshCw className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`} />
+              {t("common.refresh")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              shape="pill"
+              onClick={() => void exportCSV()}
+              disabled={exporting || loading}
+            >
+              <Download className="mr-1.5 size-4" />
+              {exporting ? t("audit.exporting") : t("audit.exportCSV")}
+            </Button>
+          </div>
+        }
+      />
+
       <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void load(page)}
-                disabled={loading}
-              >
-                <RefreshCw className="mr-1 size-3.5" />
-                {t("common.refresh")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void exportCSV()}
-                disabled={exporting || loading}
-              >
-                <Download className="mr-1 size-3.5" />
-                {exporting ? t("audit.exporting") : t("audit.exportCSV")}
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="neutral">
-                {t("audit.readOps", { count: auditStats.readOps })}
-              </Badge>
-              <Badge tone="warning">
-                {t("audit.writeOps", { count: auditStats.writeOps })}
-              </Badge>
-              <Badge tone="destructive">
-                {t("audit.errorStatus", { count: auditStats.errorStatus })}
-              </Badge>
-              <Badge tone="neutral">
-                {t("audit.total", { count: total })}
-              </Badge>
-            </div>
+          {/* Stats badges */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">
+              {t("audit.readOps", { count: auditStats.readOps })}
+            </Badge>
+            <Badge tone="warning">
+              {t("audit.writeOps", { count: auditStats.writeOps })}
+            </Badge>
+            <Badge tone="destructive">
+              {t("audit.errorStatus", { count: auditStats.errorStatus })}
+            </Badge>
+            <Badge tone="neutral">
+              {t("audit.total", { count: total })}
+            </Badge>
           </div>
+
+          {/* Filter panel */}
           <div className="filter-panel sticky-filter grid gap-2 md:grid-cols-[1fr_auto] lg:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -250,6 +281,7 @@ export function AuditPage() {
             </Button>
           </div>
 
+          {/* Time range toggles */}
           <div className="flex flex-wrap items-center gap-2">
             {(
               [
@@ -271,62 +303,86 @@ export function AuditPage() {
             ))}
           </div>
 
-          {/* 小屏卡片，大屏表格 */}
+          {/* Mobile card list */}
           <div className="grid gap-3 sm:grid-cols-2 md:hidden lg:grid-cols-3">
-            {rows.map((row) => (
-              <div key={row.id} className="hover:bg-accent transition-colors p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-medium">{row.username || "-"}</p>
-                  <Badge tone={methodBadge(row.method)}>{row.method}</Badge>
+            {loading ? (
+              [0, 1, 2].map((i) => (
+                <div key={i} className="space-y-2 rounded-lg border border-border p-3">
+                  <Skeleton className="h-4 w-2/3 rounded" />
+                  <Skeleton className="h-3 w-full rounded" />
+                  <Skeleton className="h-3 w-1/2 rounded" />
                 </div>
-                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  <p>
-                    {t("audit.colTime")}：{row.createdAt}
-                  </p>
-                  <p>
-                    {t("audit.colRole")}：{row.role || "-"}
-                  </p>
-                  <p>
-                    {t("audit.colPath")}：
-                    <span className="break-all font-mono">{row.path}</span>
-                  </p>
-                  <p>
-                    {t("audit.colStatusCode")}：{row.statusCode}
-                  </p>
-                  <p>
-                    {t("audit.colClientIP")}：{row.clientIP}
-                  </p>
-                </div>
+              ))
+            ) : rows.length === 0 ? (
+              <div className="col-span-full">
+                <EmptyState
+                  icon={ClipboardList}
+                  title={t("audit.emptyTitle")}
+                  description={t("audit.emptyDesc")}
+                />
               </div>
-            ))}
-            {!rows.length && !loading ? (
-              <EmptyState title={t("audit.emptyTitle")} />
-            ) : null}
+            ) : (
+              rows.map((row) => (
+                <div key={row.id} className="hover:bg-accent transition-colors p-3 rounded-lg border border-border">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{row.username || "-"}</p>
+                    <Badge tone={methodBadge(row.method)}>{row.method}</Badge>
+                  </div>
+                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <p>
+                      {t("audit.colTime")}：{row.createdAt}
+                    </p>
+                    <p>
+                      {t("audit.colRole")}：{row.role || "-"}
+                    </p>
+                    <p>
+                      {t("audit.colPath")}：
+                      <span className="break-all font-mono">{row.path}</span>
+                    </p>
+                    <p>
+                      {t("audit.colStatusCode")}：{row.statusCode}
+                    </p>
+                    <p>
+                      {t("audit.colClientIP")}：{row.clientIP}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
-          <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
-            <table className="min-w-[1080px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colTime")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colUser")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colRole")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colMethod")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colPath")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colStatusCode")}</th>
-                  <th scope="col" className="px-3 py-2.5">{t("audit.colClientIP")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40"
-                  >
-                    <td className="px-3 py-2.5">{row.createdAt}</td>
-                    <td className="px-3 py-2.5">{row.username || "-"}</td>
-                    <td className="px-3 py-2.5">{row.role || "-"}</td>
-                    <td className="px-3 py-2.5">
+          {/* Desktop virtualized table */}
+          <div className="rounded-lg border border-border bg-card hidden overflow-hidden md:block">
+            {loading ? (
+              <TableSkeleton />
+            ) : rows.length === 0 ? (
+              <EmptyState
+                icon={ClipboardList}
+                title={t("audit.emptyTitle")}
+                description={t("audit.emptyDesc")}
+                className="py-8"
+              />
+            ) : (
+              <TableVirtuoso
+                style={{ height: 600 }}
+                data={rows}
+                fixedHeaderContent={() => (
+                  <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colTime")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colUser")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colRole")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colMethod")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colPath")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colStatusCode")}</th>
+                    <th scope="col" className="px-3 py-2.5 text-left">{t("audit.colClientIP")}</th>
+                  </tr>
+                )}
+                itemContent={(_, row) => (
+                  <>
+                    <td className="px-3 py-2.5 text-sm">{row.createdAt}</td>
+                    <td className="px-3 py-2.5 text-sm">{row.username || "-"}</td>
+                    <td className="px-3 py-2.5 text-sm">{row.role || "-"}</td>
+                    <td className="px-3 py-2.5 text-sm">
                       <Badge tone={methodBadge(row.method)}>
                         {row.method}
                       </Badge>
@@ -334,19 +390,24 @@ export function AuditPage() {
                     <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
                       {row.path}
                     </td>
-                    <td className="px-3 py-2.5">{row.statusCode}</td>
-                    <td className="px-3 py-2.5 text-muted-foreground">
+                    <td className="px-3 py-2.5 text-sm">{row.statusCode}</td>
+                    <td className="px-3 py-2.5 text-sm text-muted-foreground">
                       {row.clientIP}
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!rows.length && !loading ? (
-              <div className="px-3 py-4 text-sm text-muted-foreground">
-                {t("audit.emptyTitle")}
-              </div>
-            ) : null}
+                  </>
+                )}
+                components={{
+                  TableRow: ({ children, ...props }) => (
+                    <tr
+                      {...props}
+                      className="border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40"
+                    >
+                      {children}
+                    </tr>
+                  ),
+                }}
+              />
+            )}
           </div>
 
           <Pagination

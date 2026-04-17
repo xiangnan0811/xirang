@@ -1136,6 +1136,8 @@ const en = {
 
   // ── audit page ──
   audit: {
+    pageTitle: "Audit",
+    pageSubtitle: "{{count}} audit entries",
     exportCSV: "Export CSV",
     exporting: "Exporting...",
     pathFilterPlaceholder: "Filter by path keyword, e.g. /nodes /policies",
@@ -1149,6 +1151,7 @@ const en = {
       "30d": "Last 30 days",
     },
     emptyTitle: "No audit records for current filters.",
+    emptyDesc: "Try adjusting your filters and try again.",
     exportSuccess: "Audit log CSV exported successfully.",
     errorNotLoggedIn: "Please log in to view audit logs.",
     errorForbidden: "No permission to access audit logs (admin only).",
@@ -1161,10 +1164,10 @@ const en = {
     colPath: "Path",
     colStatusCode: "Status Code",
     colClientIP: "Client IP",
-    readOps: "Read Ops",
-    writeOps: "Write Ops",
-    errorStatus: "Error Status",
-    total: "Total",
+    readOps: "Read Ops {{count}}",
+    writeOps: "Write Ops {{count}}",
+    errorStatus: "Error Status {{count}}",
+    total: "Total {{count}}",
     allMethods: "All Methods",
     query: "Query",
   },

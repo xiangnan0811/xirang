@@ -1136,6 +1136,8 @@ const zh = {
 
   // ── audit page ──
   audit: {
+    pageTitle: "审计",
+    pageSubtitle: "共 {{count}} 条审计日志",
     exportCSV: "导出 CSV",
     exporting: "导出中...",
     pathFilterPlaceholder: "按路径关键字过滤，例如 /nodes /policies",
@@ -1149,6 +1151,7 @@ const zh = {
       "30d": "近 30 天",
     },
     emptyTitle: "当前筛选条件下没有审计记录。",
+    emptyDesc: "请调整筛选条件后重试。",
     exportSuccess: "审计日志 CSV 导出成功。",
     errorNotLoggedIn: "请先登录后查看审计日志。",
     errorForbidden: "当前账号无权访问审计日志（仅管理员可读）。",
@@ -1161,10 +1164,10 @@ const zh = {
     colPath: "路径",
     colStatusCode: "状态码",
     colClientIP: "客户端 IP",
-    readOps: "读操作",
-    writeOps: "写操作",
-    errorStatus: "错误状态",
-    total: "总计",
+    readOps: "读操作 {{count}}",
+    writeOps: "写操作 {{count}}",
+    errorStatus: "错误状态 {{count}}",
+    total: "总计 {{count}}",
     allMethods: "全部方法",
     query: "查询",
   },
