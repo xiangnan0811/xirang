@@ -39,6 +39,9 @@ const ReportsPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/pages/settings-page").then((m) => ({ default: m.SettingsPage }))
 );
+const MorePage = lazy(() =>
+  import("@/pages/more-page").then((m) => ({ default: m.MorePage }))
+);
 
 function PageLoader() {
   return (
@@ -124,6 +127,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "settings",
         element: <LazyPage><SettingsPage /></LazyPage>
+      },
+      {
+        path: "more",
+        element: <LazyPage><MorePage /></LazyPage>
       }
     ]
   },

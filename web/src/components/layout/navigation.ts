@@ -58,7 +58,7 @@ export const navItems: NavItem[] = [
     path: "/app/policies",
     icon: ListChecks,
     group: "automate",
-    mobileTab: true
+    mobileTab: false
   },
   {
     titleKey: "nav.backups",
@@ -86,7 +86,7 @@ export const navItems: NavItem[] = [
     path: "/app/notifications",
     icon: Bell,
     group: "observe",
-    mobileTab: true
+    mobileTab: false
   },
   {
     titleKey: "nav.audit",
