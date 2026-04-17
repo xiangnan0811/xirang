@@ -508,6 +508,23 @@
 
 
 @layer utilities {
+  .bg-login-ambient {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 18% 0%, hsl(var(--accent-brand) / 0.18), transparent 35%),
+      radial-gradient(circle at 88% 6%, hsl(var(--success) / 0.16), transparent 38%),
+      linear-gradient(180deg, hsl(var(--foreground) / 0.04), hsl(var(--foreground) / 0.12));
+  }
+
+  .dark .bg-login-ambient {
+    background:
+      radial-gradient(circle at 20% 0%, hsl(var(--accent-brand) / 0.2), transparent 35%),
+      radial-gradient(circle at 88% 6%, hsl(var(--success) / 0.2), transparent 38%),
+      linear-gradient(180deg, hsl(var(--background) / 0.68), hsl(var(--background) / 0.9));
+  }
+
   .animate-float {
     animation: float 4s ease-in-out infinite;
   }
