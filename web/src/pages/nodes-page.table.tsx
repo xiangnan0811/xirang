@@ -119,7 +119,7 @@ export const NodesTable = React.memo(function NodesTable({
                     </p>
                   </td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <Badge variant={status.variant}>
+                    <Badge tone={status.variant}>
                       {status.label}
                     </Badge>
                   </td>
@@ -155,7 +155,7 @@ export const NodesTable = React.memo(function NodesTable({
                   <td className="px-3 py-2.5">
                     <div className="flex flex-wrap gap-1">
                       {node.tags.map((tag) => (
-                        <Badge key={tag} variant="outline">
+                        <Badge key={tag} tone="neutral">
                           {tag}
                         </Badge>
                       ))}

@@ -99,6 +99,9 @@ const en = {
       core: "Core",
       backup: "Backup",
       monitor: "Monitor",
+      operate: "Operate",
+      automate: "Automate",
+      observe: "Observe",
     },
   },
 
@@ -174,6 +177,14 @@ const en = {
     featureOrchestrateDesc: "Policies, tasks, notifications & SSH key management",
     featureCompliance: "Security & Compliance",
     featureComplianceDesc: "RBAC + audit trail + fast failure resolution",
+  },
+
+  // ── command palette / global search ──
+  search: {
+    placeholder: "Search nodes, tasks, logs…",
+    kbd: "⌘K",
+    openLabel: "Open command palette",
+    placeholderEmpty: "Type to search…",
   },
 
   // ── app shell / header / sidebar ──

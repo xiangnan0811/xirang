@@ -40,7 +40,7 @@ describe("StatCardsSection", () => {
     });
 
     const description = screen.getByText("健康率 92%");
-    expect(description).toHaveClass("hidden", "sm:block");
+    expect(description).toHaveClass("mt-2", "text-xs", "font-medium");
 
     const infoCard = screen.getByText("失败任务").closest("[data-tone]");
     expect(infoCard).not.toBeNull();

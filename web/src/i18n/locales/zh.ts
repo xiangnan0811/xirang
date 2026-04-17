@@ -99,6 +99,9 @@ const zh = {
       core: "核心",
       backup: "备份",
       monitor: "监控",
+      operate: "运维",
+      automate: "自动化",
+      observe: "观测",
     },
   },
 
@@ -174,6 +177,14 @@ const zh = {
     featureOrchestrateDesc: "策略、任务、通知与 SSH Key 管理",
     featureCompliance: "安全合规",
     featureComplianceDesc: "权限控制 + 审计追踪 + 失败快速闭环",
+  },
+
+  // ── command palette / global search ──
+  search: {
+    placeholder: "搜索节点、任务、日志…",
+    kbd: "⌘K",
+    openLabel: "打开命令面板",
+    placeholderEmpty: "输入以搜索…",
   },
 
   // ── app shell / header / sidebar ──

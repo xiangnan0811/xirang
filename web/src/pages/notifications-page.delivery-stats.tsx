@@ -130,7 +130,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
                     <div key={item.integrationId} className="rounded-xl border border-border bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-medium">{item.name}</p>
-                        <Badge variant={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
+                        <Badge tone={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
                         <p>{t("notifications.statsSent", { count: item.sent })}</p>

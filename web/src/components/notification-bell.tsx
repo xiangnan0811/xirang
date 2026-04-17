@@ -63,12 +63,12 @@ export function NotificationBell({ token }: NotificationBellProps) {
           <DropdownMenuLabel className="p-0 text-sm font-semibold">{t('notificationBell.label')}</DropdownMenuLabel>
           <div className="flex items-center gap-1.5">
             {unreadCount.critical > 0 ? (
-              <Badge variant="danger" className="h-5 px-1.5 text-[10px]">
+              <Badge tone="destructive" className="h-5 px-1.5 text-[10px]">
                 {t('notificationBell.critical')} {unreadCount.critical}
               </Badge>
             ) : null}
             {unreadCount.warning > 0 ? (
-              <Badge variant="warning" className="h-5 px-1.5 text-[10px]">
+              <Badge tone="warning" className="h-5 px-1.5 text-[10px]">
                 {t('notificationBell.warning')} {unreadCount.warning}
               </Badge>
             ) : null}
@@ -96,7 +96,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
                 >
                   <div className="flex w-full items-center gap-2">
                     <Badge
-                      variant={severityMeta.variant}
+                      tone={severityMeta.variant}
                       className="h-5 shrink-0 px-1.5 text-[10px]"
                     >
                       {severityMeta.label}

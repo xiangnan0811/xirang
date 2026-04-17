@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
@@ -22,6 +23,7 @@ export default {
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         "accent-brand": "hsl(var(--accent-brand))",
+        "accent-brand-foreground": "hsl(var(--background))",
         chart: {
           1: "hsl(var(--chart-1))",
           2: "hsl(var(--chart-2))",
@@ -35,14 +37,18 @@ export default {
         mono: ['"JetBrains Mono"', "monospace"]
       },
       borderRadius: {
-        lg: "var(--radius-lg)",
+        sm: "var(--radius-sm)",
+        DEFAULT: "var(--radius)",
         md: "var(--radius)",
-        sm: "var(--radius-sm)"
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
       },
       boxShadow: {
         sm: "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-md)",
         md: "var(--shadow-md)",
-        lg: "var(--shadow-lg)"
+        lg: "var(--shadow-lg)",
+        xl: "var(--shadow-xl)",
       },
       animation: {
         "fade-in": "fade-in var(--duration-slow) var(--ease-enter)",
@@ -62,5 +68,5 @@ export default {
       }
     }
   },
-  plugins: []
+  plugins: [tailwindcssAnimate]
 } satisfies Config;

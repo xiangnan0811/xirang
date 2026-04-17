@@ -93,9 +93,9 @@ export function TaskRunDetail({ run, token, onBack }: Props) {
             {getTriggerIcon(run.triggerType)}
             {t(`tasks.triggerTypeDetail.${triggerKey}`)}
           </span>
-          <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
+          <Badge tone={statusMeta.variant}>{statusMeta.label}</Badge>
           {run.verifyStatus !== "none" && (
-            <Badge variant={run.verifyStatus === "passed" ? "success" : "warning"}>
+            <Badge tone={run.verifyStatus === "passed" ? "success" : "warning"}>
               {run.verifyStatus === "passed" ? t('taskRunHistory.verifyPassed') : run.verifyStatus === "warning" ? t('taskRunHistory.verifyWarning') : t('taskRunHistory.verifyFailed')}
             </Badge>
           )}

@@ -69,27 +69,27 @@ export const TasksGrid = React.memo(function TasksGrid({
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {!task.cronSpec && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{t('tasks.typeManual')}</Badge>
+                  <Badge tone="neutral" className="text-[10px] px-1.5 py-0">{t('tasks.typeManual')}</Badge>
                 )}
                 {task.cronSpec && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{t('tasks.typeCron')}</Badge>
+                  <Badge tone="neutral" className="text-[10px] px-1.5 py-0">{t('tasks.typeCron')}</Badge>
                 )}
-                <Badge variant={status.variant}>{status.label}</Badge>
+                <Badge tone={status.variant}>{status.label}</Badge>
                 {task.verifyStatus && task.verifyStatus !== "none" && (
                   <Badge
-                    variant={task.verifyStatus === "passed" ? "success" : "warning"}
+                    tone={task.verifyStatus === "passed" ? "success" : "warning"}
                     className="text-[10px] px-1.5 py-0"
                   >
                     {task.verifyStatus === "passed" ? t('tasks.verifyPassed') : task.verifyStatus === "warning" ? t('tasks.verifyWarning') : t('tasks.verifyFailed')}
                   </Badge>
                 )}
                 {task.enabled === false && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  <Badge tone="neutral" className="text-[10px] px-1.5 py-0">
                     {t('tasks.paused')}
                   </Badge>
                 )}
                 {task.skipNext && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                  <Badge tone="neutral" className="text-[10px] px-1.5 py-0">
                     {t('tasks.skipNextBadge')}
                   </Badge>
                 )}

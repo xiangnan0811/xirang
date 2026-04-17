@@ -18,7 +18,7 @@ export function integrationIcon(type: IntegrationChannel["type"]) {
 export function alertStatusMeta(status: AlertRecord["status"]) {
   switch (status) {
     case "open":
-      return { label: i18n.t("notifications.alertStatusOpen"), variant: "danger" as const };
+      return { label: i18n.t("notifications.alertStatusOpen"), variant: "destructive" as const };
     case "acked":
       return { label: i18n.t("notifications.alertStatusAcked"), variant: "warning" as const };
     default:

@@ -83,7 +83,7 @@ export function SSHKeyActionsMenu({
           <Monitor className="mr-2 size-4" />
           {t("sshKeys.viewAssociatedNodes")}
           {nodeCount > 0 && (
-            <Badge variant="success" className="ml-auto">
+            <Badge tone="success" className="ml-auto">
               {nodeCount}
             </Badge>
           )}

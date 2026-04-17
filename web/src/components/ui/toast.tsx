@@ -3,25 +3,27 @@ import { Toaster as SonnerToaster, toast } from "sonner";
 function Toaster() {
   return (
     <SonnerToaster
-      position="top-right"
+      position="bottom-right"
       offset={16}
       expand
       richColors
       closeButton
       visibleToasts={5}
+      theme="system"
       toastOptions={{
         duration: 4200,
         classNames: {
           toast:
-            "group rounded-xl border border-border bg-foreground text-background shadow-md",
+            "group rounded-lg border border-l-4 border-border shadow-lg",
           title: "text-sm font-semibold tracking-wide",
           description: "text-xs text-muted-foreground",
           actionButton: "bg-primary text-primary-foreground",
           cancelButton: "bg-muted text-muted-foreground",
-          error: "border-destructive/45 text-destructive",
-          success: "border-success/45 text-success",
-          warning: "border-warning/45 text-warning",
-          info: "border-info/45 text-info",
+          default: "border-l-border",
+          error: "border-l-destructive",
+          success: "border-l-success",
+          warning: "border-l-warning",
+          info: "border-l-info",
         },
       }}
     />

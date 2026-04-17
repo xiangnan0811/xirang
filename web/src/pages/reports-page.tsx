@@ -36,8 +36,8 @@ function formatDate(iso: string) {
 }
 
 function SuccessRateBadge({ rate }: { rate: number }) {
-  const variant = rate >= 95 ? "success" : rate >= 80 ? "warning" : "danger";
-  return <Badge variant={variant}>{rate.toFixed(1)}%</Badge>;
+  const tone = rate >= 95 ? "success" : rate >= 80 ? "warning" : "destructive";
+  return <Badge tone={tone}>{rate.toFixed(1)}%</Badge>;
 }
 
 function ReportRow({ report }: { report: Report }) {
@@ -200,7 +200,7 @@ function ConfigCard({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Badge variant={cfg.enabled ? "success" : "outline"}>
+          <Badge tone={cfg.enabled ? "success" : "neutral"}>
             {cfg.enabled ? t("common.enabled") : t("common.disabled")}
           </Badge>
           {isAdmin && (

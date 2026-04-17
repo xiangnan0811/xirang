@@ -21,7 +21,7 @@ type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
 function methodBadge(method: string) {
   const normalized = method.toUpperCase();
   if (normalized === "DELETE") {
-    return "danger" as const;
+    return "destructive" as const;
   }
   if (
     normalized === "POST" ||
@@ -30,7 +30,7 @@ function methodBadge(method: string) {
   ) {
     return "warning" as const;
   }
-  return "outline" as const;
+  return "neutral" as const;
 }
 
 function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
@@ -204,16 +204,16 @@ export function AuditPage() {
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">
+              <Badge tone="neutral">
                 {t("audit.readOps", { count: auditStats.readOps })}
               </Badge>
-              <Badge variant="warning">
+              <Badge tone="warning">
                 {t("audit.writeOps", { count: auditStats.writeOps })}
               </Badge>
-              <Badge variant="danger">
+              <Badge tone="destructive">
                 {t("audit.errorStatus", { count: auditStats.errorStatus })}
               </Badge>
-              <Badge variant="secondary">
+              <Badge tone="neutral">
                 {t("audit.total", { count: total })}
               </Badge>
             </div>
@@ -277,7 +277,7 @@ export function AuditPage() {
               <div key={row.id} className="hover:bg-accent transition-colors p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{row.username || "-"}</p>
-                  <Badge variant={methodBadge(row.method)}>{row.method}</Badge>
+                  <Badge tone={methodBadge(row.method)}>{row.method}</Badge>
                 </div>
                 <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                   <p>
@@ -327,7 +327,7 @@ export function AuditPage() {
                     <td className="px-3 py-2.5">{row.username || "-"}</td>
                     <td className="px-3 py-2.5">{row.role || "-"}</td>
                     <td className="px-3 py-2.5">
-                      <Badge variant={methodBadge(row.method)}>
+                      <Badge tone={methodBadge(row.method)}>
                         {row.method}
                       </Badge>
                     </td>

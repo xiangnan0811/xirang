@@ -28,7 +28,7 @@ export function PoliciesFilters({
         value={keyword}
         onChange={(event) => setKeyword(event.target.value)}
       />
-      <Badge variant="secondary" className="hidden lg:inline-flex">
+      <Badge tone="neutral" className="hidden lg:inline-flex">
         {t('policies.enabledRatio', { active: activeCount, total: totalCount })}
       </Badge>
       <Button size="sm" variant="outline" onClick={resetFilters}>

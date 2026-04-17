@@ -38,16 +38,16 @@ export interface SSHKeysGridProps {
 // 密钥类型 -> Badge variant 映射
 // ---------------------------------------------------------------------------
 
-function keyTypeBadgeVariant(keyType: string): "default" | "warning" | "secondary" {
+function keyTypeBadgeVariant(keyType: string): "neutral" | "warning" {
   switch (keyType.toLowerCase()) {
     case "ed25519":
-      return "default";
+      return "neutral";
     case "rsa":
       return "warning";
     case "ecdsa":
-      return "secondary";
+      return "neutral";
     default:
-      return "secondary";
+      return "neutral";
   }
 }
 
@@ -164,7 +164,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   />
                 </label>
                 <div className="inline-flex items-center gap-1.5">
-                  <Badge variant={keyTypeBadgeVariant(key.keyType)}>
+                  <Badge tone={keyTypeBadgeVariant(key.keyType)}>
                     {key.keyType.toUpperCase()}
                   </Badge>
                   <SSHKeyActionsMenu
@@ -208,7 +208,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
 
               {/* 底部：使用状态 + 快捷操作 */}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                <Badge variant={nodeCount > 0 ? "success" : "secondary"}>
+                <Badge tone={nodeCount > 0 ? "success" : "neutral"}>
                   {nodeCount > 0
                     ? t("sshKeys.nodesInUse", { count: nodeCount })
                     : t("sshKeys.unusedLabel")}
@@ -276,7 +276,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <Badge variant={keyTypeBadgeVariant(key.keyType)}>
+                  <Badge tone={keyTypeBadgeVariant(key.keyType)}>
                     {key.keyType.toUpperCase()}
                   </Badge>
                   <SSHKeyActionsMenu
@@ -309,7 +309,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
 
               {/* 底部：使用状态 + 快捷操作 */}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                <Badge variant={nodeCount > 0 ? "success" : "secondary"}>
+                <Badge tone={nodeCount > 0 ? "success" : "neutral"}>
                   {nodeCount > 0
                     ? t("sshKeys.nodesInUse", { count: nodeCount })
                     : t("sshKeys.unusedLabel")}

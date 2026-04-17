@@ -6,60 +6,72 @@
 
 @layer base {
   :root {
-    /* --- Vercel-inspired Zinc palette (Light) --- */
-    --background: 0 0% 98%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 3.9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 160 84% 39.4%;
-    --success-foreground: 0 0% 98%;
-    --warning: 43 96% 56.3%;
-    --warning-foreground: 0 0% 3.9%;
-    --info: 217 91% 60%;
-    --info-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 0 0% 3.9%;
-    --accent-brand: 160 84% 39.4%;
-    --chart-1: 0 0% 3.9%;
-    --chart-2: 240 3.8% 46.1%;
-    --chart-3: 240 5% 64.9%;
-    --chart-ingress: 0 0% 3.9%;
-    --chart-egress: 240 5% 83.5%;
-    --radius: 0.375rem;
-    --radius-lg: 0.5rem;
-    --radius-sm: 0.25rem;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-    --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.12);
+    /* Sage Softened · Light */
+    --background: 42 40% 97%;
+    --foreground: 38 14% 15%;
+    --card: 45 40% 99%;
+    --card-foreground: 38 14% 15%;
+    --popover: 45 40% 99%;
+    --popover-foreground: 38 14% 15%;
+    --primary: 90 24% 38%;
+    --primary-foreground: 42 40% 97%;
+    --secondary: 40 25% 92%;
+    --secondary-foreground: 38 14% 15%;
+    --muted: 40 25% 92%;
+    --muted-foreground: 34 13% 48%;
+    --accent: 40 25% 92%;
+    --accent-foreground: 38 14% 15%;
+    --accent-brand: 90 20% 55%;
+    --destructive: 19 48% 45%;
+    --destructive-foreground: 42 40% 97%;
+    --success: 90 24% 38%;
+    --success-foreground: 42 40% 97%;
+    --warning: 34 40% 63%;
+    --warning-foreground: 38 14% 15%;
+    --info: 210 18% 55%;
+    --info-foreground: 42 40% 97%;
+    --border: 40 30% 86%;
+    --input: 40 30% 86%;
+    --ring: 90 20% 55%;
+
+    /* Chart series — neutral ink + sage/honey accents */
+    --chart-1: 38 14% 15%;
+    --chart-2: 34 13% 48%;
+    --chart-3: 34 13% 68%;
+    --chart-ingress: 90 24% 38%;
+    --chart-egress: 34 40% 63%;
+
+    /* Radius scale (Sage) */
+    --radius: 0.625rem;       /* 10px */
+    --radius-sm: 0.375rem;    /* 6px */
+    --radius-lg: 0.875rem;    /* 14px */
+    --radius-xl: 1.125rem;    /* 18px */
+
+    /* Shadows — warm-tinted for light */
+    --shadow-sm: 0 1px 2px rgba(90, 80, 60, 0.06);
+    --shadow-md: 0 2px 6px -1px rgba(139, 120, 90, 0.08), 0 1px 2px rgba(139, 120, 90, 0.06);
+    --shadow-lg: 0 12px 40px -8px rgba(139, 120, 90, 0.18);
+    --shadow-xl: 0 24px 48px -8px rgba(139, 120, 90, 0.22);
+
+    /* Motion (unchanged) */
     --duration-fast: 100ms;
     --duration-normal: 150ms;
     --duration-slow: 200ms;
     --ease-enter: cubic-bezier(0, 0, 0.2, 1);
     --ease-exit: cubic-bezier(0.4, 0, 1, 1);
     --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
     --touch-target-size: 44px;
 
-    /* --- Legacy aliases (referenced by existing components / tailwind.config.ts) --- */
-    --nav-active: 240 4.8% 95.9%;
-    --nav-active-foreground: 0 0% 3.9%;
-    --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-    --shadow-panel-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
-    --shadow-mobile-sheet: 0 -4px 16px rgba(0, 0, 0, 0.1);
+    /* --- Legacy aliases still in use (nav-active*, shadow-panel*, shadow-mobile-sheet) --- */
+    /* Keep these pointing at new Sage equivalents until Wave 1 Task 1.25 (mobile-navigation rewrite) */
+    --nav-active: 40 25% 92%;              /* same as new --accent */
+    --nav-active-foreground: 38 14% 15%;   /* same as --foreground */
+    --shadow-panel: 0 1px 2px rgba(90, 80, 60, 0.06), 0 1px 2px rgba(139, 120, 90, 0.06);
+    --shadow-panel-hover: 0 4px 12px rgba(139, 120, 90, 0.12);
+    --shadow-mobile-sheet: 0 -4px 16px rgba(139, 120, 90, 0.18);
 
-    /* --- Terminal theme (preserved — terminal has its own aesthetic) --- */
+    /* --- Terminal theme (unchanged) --- */
     --terminal-bg-start: 220 44% 11%;
     --terminal-bg-end: 224 62% 7%;
     --terminal-glow: 147 66% 42%;
@@ -74,49 +86,54 @@
   }
 
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 3.9%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 160 72% 52.4%;
-    --success-foreground: 0 0% 3.9%;
-    --warning: 45 93% 47.5%;
-    --warning-foreground: 0 0% 3.9%;
-    --info: 217 91% 60%;
-    --info-foreground: 0 0% 3.9%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
-    --accent-brand: 160 72% 52.4%;
-    --chart-1: 0 0% 98%;
-    --chart-2: 240 3.8% 46.1%;
-    --chart-3: 240 3.7% 25%;
-    --chart-ingress: 0 0% 98%;
-    --chart-egress: 240 3.7% 25%;
+    --background: 36 12% 9%;
+    --foreground: 42 40% 95%;
+    --card: 36 10% 12%;
+    --card-foreground: 42 40% 95%;
+    --popover: 36 10% 12%;
+    --popover-foreground: 42 40% 95%;
+    --primary: 90 22% 55%;
+    --primary-foreground: 36 12% 9%;
+    --secondary: 36 8% 18%;
+    --secondary-foreground: 42 40% 95%;
+    --muted: 36 8% 18%;
+    --muted-foreground: 34 13% 62%;
+    --accent: 36 8% 18%;
+    --accent-foreground: 42 40% 95%;
+    --accent-brand: 90 22% 63%;
+    --destructive: 19 60% 58%;
+    --destructive-foreground: 36 12% 9%;
+    --success: 90 22% 55%;
+    --success-foreground: 36 12% 9%;
+    --warning: 34 50% 70%;
+    --warning-foreground: 36 12% 9%;
+    --info: 210 25% 68%;
+    --info-foreground: 36 12% 9%;
+    --border: 36 8% 22%;
+    --input: 36 8% 22%;
+    --ring: 90 22% 55%;
+
+    /* Chart series (dark) */
+    --chart-1: 42 40% 95%;
+    --chart-2: 34 13% 62%;
+    --chart-3: 34 13% 42%;
+    --chart-ingress: 90 22% 55%;
+    --chart-egress: 34 50% 70%;
+
+    /* Shadows — pure-black for dark (warm tints vanish) */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
+    --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.6);
 
-    /* --- Legacy aliases (dark) --- */
-    --nav-active: 240 3.7% 15.9%;
-    --nav-active-foreground: 0 0% 98%;
+    /* --- Legacy aliases still in use (dark mode mapping) --- */
+    --nav-active: 36 8% 18%;                 /* same as new --accent */
+    --nav-active-foreground: 42 40% 95%;     /* same as --foreground */
     --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
     --shadow-panel-hover: 0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-mobile-sheet: 0 -4px 16px rgba(0, 0, 0, 0.4);
 
-    /* --- Terminal theme (dark) --- */
+    /* Terminal dark (unchanged) */
     --terminal-bg-start: 223 46% 9%;
     --terminal-bg-end: 224 60% 6%;
     --terminal-glow: 147 62% 50%;
@@ -216,25 +233,6 @@
     transition: border-color var(--duration-normal) var(--ease-enter),
       box-shadow var(--duration-normal) var(--ease-enter),
       background-color var(--duration-normal) var(--ease-enter);
-  }
-
-  .app-select {
-    @apply h-10 appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm text-foreground;
-    transition: border-color var(--duration-normal) var(--ease-enter),
-      box-shadow var(--duration-normal) var(--ease-enter),
-      background-color var(--duration-normal) var(--ease-enter);
-  }
-
-  .app-select:focus-visible {
-    @apply border-primary/35 outline-none ring-2 ring-primary/35;
-  }
-
-  .app-select:disabled {
-    @apply cursor-not-allowed opacity-60;
-  }
-
-  .app-select[aria-invalid="true"] {
-    @apply border-destructive/70 ring-destructive/35;
   }
 
   .sticky-filter {
@@ -506,4 +504,9 @@ html[data-power="save"] .pulse-offline {
   100% {
     transform: translateY(0);
   }
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

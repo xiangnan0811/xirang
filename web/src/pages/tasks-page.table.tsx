@@ -83,29 +83,29 @@ export const TasksTable = React.memo(function TasksTable({
                   <td className="px-3 py-2.5 text-muted-foreground">{task.nodeName}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex flex-wrap items-center gap-1">
-                      <Badge variant={status.variant}>{status.label}</Badge>
+                      <Badge tone={status.variant}>{status.label}</Badge>
                       {task.verifyStatus && task.verifyStatus !== "none" && (
                         <Badge
-                          variant={task.verifyStatus === "passed" ? "success" : "warning"}
+                          tone={task.verifyStatus === "passed" ? "success" : "warning"}
                           className="text-[10px]"
                         >
                           {task.verifyStatus === "passed" ? t('tasks.verifyPassed') : task.verifyStatus === "warning" ? t('tasks.verifyWarning') : t('tasks.verifyFailed')}
                         </Badge>
                       )}
                       {task.enabled === false && (
-                        <Badge variant="secondary" className="text-[10px]">
+                        <Badge tone="neutral" className="text-[10px]">
                           {t('tasks.paused')}
                         </Badge>
                       )}
                       {task.skipNext && (
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge tone="neutral" className="text-[10px]">
                           {t('tasks.skipNextBadge')}
                         </Badge>
                       )}
                     </div>
                   </td>
                   <td className="px-3 py-2.5">
-                    <Badge variant={task.cronSpec ? "secondary" : "outline"} className="text-[10px]">
+                    <Badge tone="neutral" className="text-[10px]">
                       {task.cronSpec ? t('tasks.typeCron') : t('tasks.typeManual')}
                     </Badge>
                   </td>

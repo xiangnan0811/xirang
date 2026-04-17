@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LogOut, Menu, RefreshCw, Settings, X } from "lucide-react";
+import { LogOut, MoreHorizontal, RefreshCw, X } from "lucide-react";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
@@ -20,15 +20,17 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
   const { t } = useTranslation();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
   const navItems = useMemo(() => getVisibleNavItems(role), [role]);
   const drawerId = "mobile-quick-menu";
   const drawerTitleId = "mobile-quick-menu-title";
 
-  const mobileTabs = useMemo(() => navItems.filter((item) => item.mobileTab !== false), [navItems]);
-  const tabBaseClass =
-    "flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-xs transition-colors";
+  // The 4 primary tabs shown in the bottom bar
+  const primaryTabs = useMemo(() => navItems.filter((item) => item.mobileTab === true), [navItems]);
+
+  // Items shown in the "More" drawer (everything not in primary tabs)
+  const drawerItems = useMemo(() => navItems.filter((item) => item.mobileTab !== true), [navItems]);
 
   useEffect(() => {
     if (!drawerOpen) {
@@ -85,7 +87,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
       }
     };
 
-    const buttonElement = menuButtonRef.current;
+    const buttonElement = moreButtonRef.current;
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -97,61 +99,75 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
 
   return (
     <>
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/75 bg-background/88 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden">
-        <div
-          className="grid h-[68px]"
-          style={{ gridTemplateColumns: `repeat(${Math.max(1, mobileTabs.length)}, minmax(0, 1fr))` }}
-        >
-          {mobileTabs.map((item) => {
-            const Icon = item.icon;
-            const active = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
+      {/* 5-tab bottom bar */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 grid h-[60px] grid-cols-5 border-t border-border/75 bg-background/88 backdrop-blur-xl md:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        aria-label={t("appShell.mobileNav")}
+      >
+        {primaryTabs.map((item) => {
+          const Icon = item.icon;
+          const active = location.pathname === item.path;
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.path === "/app/overview"}
+              aria-label={t("appShell.switchTo", { name: t(item.titleKey) })}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors",
+                active
+                  ? "text-[hsl(var(--nav-active-foreground))] font-semibold"
+                  : "text-muted-foreground"
+              )}
+            >
+              <span
                 className={cn(
-                  tabBaseClass,
-                  active
-                    ? "text-[hsl(var(--nav-active-foreground))]"
-                    : "text-muted-foreground"
+                  "rounded-full px-2 py-0.5 transition-colors",
+                  active ? "bg-[hsl(var(--nav-active))]" : "bg-transparent"
                 )}
-                aria-label={t('appShell.switchTo', { name: t(item.titleKey) })}
-                aria-current={active ? "page" : undefined}
               >
-                <span
-                  className={cn(
-                    "rounded-full px-2 py-0.5 transition-colors",
-                    active
-                      ? "bg-[hsl(var(--nav-active))]"
-                      : "bg-transparent"
-                  )}
-                >
-                  <Icon className="size-4" />
-                </span>
-                {t(item.titleKey)}
-              </Link>
-            );
-          })}
-        </div>
+                <Icon className="size-[18px]" aria-hidden />
+              </span>
+              <span>{t(item.titleKey)}</span>
+            </NavLink>
+          );
+        })}
+
+        {/* 5th tab — More */}
+        <button
+          ref={moreButtonRef}
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          aria-label={t("appShell.openQuickMenu")}
+          aria-controls={drawerId}
+          aria-expanded={drawerOpen}
+          className={cn(
+            "flex flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors",
+            drawerOpen
+              ? "text-[hsl(var(--nav-active-foreground))] font-semibold"
+              : "text-muted-foreground"
+          )}
+        >
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              drawerOpen ? "bg-[hsl(var(--nav-active))]" : "bg-transparent"
+            )}
+          >
+            <MoreHorizontal className="size-[18px]" aria-hidden />
+          </span>
+          <span>{t("nav.more")}</span>
+        </button>
       </nav>
 
-      <button
-        ref={menuButtonRef}
-        className="fixed right-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-50 rounded-full border border-border/80 bg-background/85 p-2.5 shadow-panel md:hidden"
-        onClick={() => setDrawerOpen(true)}
-        aria-label={t('appShell.openQuickMenu')}
-        aria-controls={drawerId}
-        aria-expanded={drawerOpen}
-        type="button"
-      >
-        <Menu className="size-5" />
-      </button>
-
+      {/* More drawer */}
       {drawerOpen ? (
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             className="absolute inset-0 bg-black/50"
-            aria-label={t('appShell.closeDrawer')}
+            aria-label={t("appShell.closeDrawer")}
             onClick={() => setDrawerOpen(false)}
             type="button"
           />
@@ -167,15 +183,21 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
             <div className="mb-4 flex items-center justify-between">
               <p id={drawerTitleId} className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <img src="/xirang-mark.svg" alt="XiRang" className="size-5 rounded-sm" />
-                {t('appShell.quickOps')}
+                {t("appShell.quickOps")}
               </p>
-              <Button variant="ghost" size="icon" aria-label={t('appShell.closeQuickMenu')} title={t('appShell.closeQuickMenu')} onClick={() => setDrawerOpen(false)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("appShell.closeQuickMenu")}
+                title={t("appShell.closeQuickMenu")}
+                onClick={() => setDrawerOpen(false)}
+              >
                 <X className="size-5" />
               </Button>
             </div>
 
             <div className="space-y-2">
-              {navItems.map((item) => {
+              {drawerItems.map((item) => {
                 const Icon = item.icon;
                 const active = location.pathname === item.path;
                 return (
@@ -188,7 +210,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                       "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200",
                       active
                         ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
-                        : "border-transparent text-muted-foreground transition-[color,background-color,opacity] duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground"
                     )}
                   >
                     <Icon className="size-4" />
@@ -198,32 +220,16 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
               })}
             </div>
 
-            {/* 设置入口 */}
-            <Link
-              to="/app/settings"
-              onClick={() => setDrawerOpen(false)}
-              aria-current={location.pathname === "/app/settings" ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200 mt-2",
-                location.pathname === "/app/settings"
-                  ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
-                  : "border-transparent text-muted-foreground transition-[color,background-color,opacity] duration-200 ease-out hover:border-border/70 hover:bg-background/70 hover:text-foreground"
-              )}
-            >
-              <Settings className="size-4" />
-              {t("nav.settings")}
-            </Link>
-
             <div className="mt-6">
               <Button variant="outline" className="h-10 w-full" onClick={onRefresh}>
                 <RefreshCw className="mr-1 size-4" />
-                {t('appShell.refreshData')}
+                {t("appShell.refreshData")}
               </Button>
             </div>
 
             <div className="mt-auto flex items-center justify-between border-t border-border/80 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
               <div className="flex items-center gap-2">
-                <p className="text-xs text-muted-foreground">{t('appShell.currentUser', { name: username ?? t('common.unknown') })}</p>
+                <p className="text-xs text-muted-foreground">{t("appShell.currentUser", { name: username ?? t("common.unknown") })}</p>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -234,7 +240,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                   }}
                 >
                   <LogOut className="mr-1 size-3" />
-                  {t('appShell.logoutShort')}
+                  {t("appShell.logoutShort")}
                 </Button>
               </div>
               <div className="flex items-center gap-1">
