@@ -9,11 +9,12 @@ import {
   ListChecks,
   Monitor,
   Server,
+  Settings,
   type LucideIcon
 } from "lucide-react";
 import type { UserRecord } from "@/types/domain";
 
-export type NavGroup = "core" | "backup" | "monitor";
+export type NavGroup = "operate" | "automate" | "observe" | "pinned";
 
 export type NavItem = {
   titleKey: string;
@@ -24,10 +25,10 @@ export type NavItem = {
   adminOnly?: boolean;
 };
 
-export const navGroups: { key: NavGroup; labelKey: string }[] = [
-  { key: "core", labelKey: "nav.group.core" },
-  { key: "backup", labelKey: "nav.group.backup" },
-  { key: "monitor", labelKey: "nav.group.monitor" },
+export const navGroups: { key: Exclude<NavGroup, "pinned">; labelKey: string }[] = [
+  { key: "operate", labelKey: "nav.group.operate" },
+  { key: "automate", labelKey: "nav.group.automate" },
+  { key: "observe", labelKey: "nav.group.observe" },
 ];
 
 export const navItems: NavItem[] = [
@@ -35,72 +36,79 @@ export const navItems: NavItem[] = [
     titleKey: "nav.overview",
     path: "/app/overview",
     icon: LayoutDashboard,
-    group: "core",
+    group: "operate",
     mobileTab: true
   },
   {
     titleKey: "nav.nodes",
     path: "/app/nodes",
     icon: Server,
-    group: "core",
+    group: "operate",
     mobileTab: true
   },
   {
     titleKey: "nav.sshKeys",
     path: "/app/ssh-keys",
     icon: KeyRound,
-    group: "core",
+    group: "operate",
     mobileTab: false
   },
   {
     titleKey: "nav.policies",
     path: "/app/policies",
     icon: ListChecks,
-    group: "backup",
+    group: "automate",
     mobileTab: true
   },
   {
     titleKey: "nav.backups",
     path: "/app/backups",
     icon: HardDrive,
-    group: "backup",
+    group: "automate",
     mobileTab: false
   },
   {
     titleKey: "nav.tasks",
     path: "/app/tasks",
     icon: ClipboardList,
-    group: "backup",
+    group: "automate",
     mobileTab: true
   },
   {
     titleKey: "nav.logs",
     path: "/app/logs",
     icon: Monitor,
-    group: "monitor",
+    group: "observe",
     mobileTab: true
   },
   {
     titleKey: "nav.alertCenter",
     path: "/app/notifications",
     icon: Bell,
-    group: "monitor",
+    group: "observe",
     mobileTab: true
   },
   {
     titleKey: "nav.audit",
     path: "/app/audit",
     icon: FileSearch,
-    group: "monitor",
+    group: "observe",
     mobileTab: false
   },
   {
     titleKey: "nav.reports",
     path: "/app/reports",
     icon: FileText,
-    group: "monitor",
+    group: "observe",
     mobileTab: false
-  }
+  },
+  {
+    titleKey: "nav.settings",
+    path: "/app/settings",
+    icon: Settings,
+    group: "pinned",
+    mobileTab: false
+  },
 ];
 
 export function getVisibleNavItems(role: UserRecord["role"] | null): NavItem[] {

@@ -99,6 +99,9 @@ const en = {
       core: "Core",
       backup: "Backup",
       monitor: "Monitor",
+      operate: "Operate",
+      automate: "Automate",
+      observe: "Observe",
     },
   },
 

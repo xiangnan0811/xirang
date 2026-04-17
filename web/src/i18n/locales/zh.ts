@@ -99,6 +99,9 @@ const zh = {
       core: "核心",
       backup: "备份",
       monitor: "监控",
+      operate: "运维",
+      automate: "自动化",
+      observe: "观测",
     },
   },
 
