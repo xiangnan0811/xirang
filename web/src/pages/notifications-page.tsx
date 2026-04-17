@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
+import { Plus } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context";
 import { useTasksContext } from "@/context/tasks-context";
 import { useAlertsContext } from "@/context/alerts-context";
@@ -8,8 +9,15 @@ import { useIntegrationsContext } from "@/context/integrations-context";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications/alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { PageHero } from "@/components/ui/page-hero";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
+import { toast } from "@/components/ui/toast";
+
+const IntegrationCreateDialog = React.lazy(() =>
+  import("@/components/integration-create-dialog").then((m) => ({ default: m.IntegrationCreateDialog }))
+);
 
 export function NotificationsPage() {
   const { t } = useTranslation();
@@ -17,7 +25,9 @@ export function NotificationsPage() {
   const { globalSearch, setGlobalSearch, refreshVersion } = useSharedContext();
   const { tasks, refreshTasks } = useTasksContext();
   const { fetchAlertDeliveryStats } = useAlertsContext();
-  const { integrations, refreshIntegrations } = useIntegrationsContext();
+  const { integrations, refreshIntegrations, addIntegration } = useIntegrationsContext();
+
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   useEffect(() => {
     void refreshIntegrations();
@@ -48,6 +58,17 @@ export function NotificationsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+      <PageHero
+        title={t("notifications.pageTitle")}
+        subtitle={t("notifications.pageSubtitle", { total: alertStats.total, active: activeIntegrations })}
+        actions={
+          <Button shape="pill" onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="size-4" aria-hidden="true" />
+            {t("notifications.addIntegration")}
+          </Button>
+        }
+      />
+
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"
         items={[
@@ -92,6 +113,19 @@ export function NotificationsPage() {
           refreshVersion={refreshVersion}
         />
       ) : null}
+
+      <Suspense fallback={null}>
+        <IntegrationCreateDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+          onSave={async (input) => {
+            await addIntegration(input);
+            setCreateDialogOpen(false);
+            void refreshIntegrations();
+            toast.success(t("notifications.integrationCreated"));
+          }}
+        />
+      </Suspense>
     </div>
   );
 }

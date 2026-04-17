@@ -80,43 +80,56 @@ export function IntegrationManager({
             <div className="flex items-center gap-2 font-medium">
               {t("notifications.integrationSettingsTitle")}
             </div>
-            <Button size="sm" onClick={onOpenCreate}>
+            <Button size="sm" shape="pill" onClick={onOpenCreate}>
               <Plus className="mr-1 size-3.5" />
               {t("notifications.addIntegration")}
             </Button>
           </div>
+
           {integrations.length ? (
-            integrations.map((integration) => {
-              const Icon = integrationIcon(integration.type);
-              const isUpdating = (updatingIntegrationMap[integration.id] ?? 0) > 0;
-              const isTesting = (testingIntegrationMap[integration.id] ?? 0) > 0;
-              const busy = isUpdating || isTesting;
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {integrations.map((integration) => {
+                const Icon = integrationIcon(integration.type);
+                const isUpdating = (updatingIntegrationMap[integration.id] ?? 0) > 0;
+                const isTesting = (testingIntegrationMap[integration.id] ?? 0) > 0;
+                const busy = isUpdating || isTesting;
 
-              return (
-                <div key={integration.id} className="rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group p-3 transition-colors hover:bg-muted/10">
-                  <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-60 group-hover:opacity-100 transition-opacity" />
-                  <div className="flex flex-wrap items-center justify-between gap-2 pl-2">
-                    <div className="flex items-center gap-3">
-                      <span className="flex items-center justify-center rounded-lg p-2.5 bg-primary/10 text-primary">
-                        <Icon className="size-5" />
-                      </span>
-                      <div>
-                        <p className="font-medium text-foreground/90">{integration.name}</p>
-                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mt-0.5">{integration.type}</p>
+                return (
+                  <div
+                    key={integration.id}
+                    className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:bg-muted/10"
+                  >
+                    {/* Card header: icon + name + switch */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                          <Icon className="size-5" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-foreground/90">{integration.name}</p>
+                          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mt-0.5">
+                            {integration.type}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <Switch
                         checked={integration.enabled}
-                        aria-label={t("notifications.toggleEnabled", { action: integration.enabled ? t("common.disable") : t("common.enable"), name: integration.name })}
+                        aria-label={t("notifications.toggleEnabled", {
+                          action: integration.enabled ? t("common.disable") : t("common.enable"),
+                          name: integration.name,
+                        })}
                         disabled={busy}
                         onCheckedChange={() =>
                           void (async () => {
                             beginOp(integration.id, "update");
                             try {
                               await toggleIntegration(integration.id);
-                              toast.success(t("notifications.toggledSuccess", { name: integration.name, action: integration.enabled ? t("common.disabled") : t("common.enabled") }));
+                              toast.success(
+                                t("notifications.toggledSuccess", {
+                                  name: integration.name,
+                                  action: integration.enabled ? t("common.disabled") : t("common.enabled"),
+                                })
+                              );
                             } catch (error) {
                               toast.error(getErrorMessage(error));
                             } finally {
@@ -125,16 +138,34 @@ export function IntegrationManager({
                           })()
                         }
                       />
+                    </div>
+
+                    {/* Last delivered muted line */}
+                    <div className="space-y-0.5 text-xs text-muted-foreground">
+                      <p className="break-all">{t("notifications.endpointLabel", { endpoint: integration.endpoint })}</p>
+                      <p>{t("notifications.failThresholdLabel", { count: integration.failThreshold })}</p>
+                      <p>{t("notifications.cooldownLabel", { minutes: integration.cooldownMinutes })}</p>
+                    </div>
+
+                    {/* Actions row */}
+                    <div className="flex items-center gap-2 pt-1">
                       <Button
                         variant="outline"
                         size="sm"
+                        className="flex-1"
                         disabled={busy}
                         onClick={() => {
                           beginOp(integration.id, "test");
                           void testIntegration(integration.id)
                             .then((result) => {
                               if (result.ok) {
-                                toast.success(t("notifications.testResultSuccess", { name: integration.name, message: result.message, latency: result.latencyMs }));
+                                toast.success(
+                                  t("notifications.testResultSuccess", {
+                                    name: integration.name,
+                                    message: result.message,
+                                    latency: result.latencyMs,
+                                  })
+                                );
                               } else {
                                 toast.error(result.message);
                               }
@@ -151,9 +182,9 @@ export function IntegrationManager({
                         size="sm"
                         disabled={busy}
                         onClick={() => onOpenEdit(integration)}
+                        aria-label={t("common.edit")}
                       >
-                        <Wrench className="mr-1 size-4" />
-                        {t("common.edit")}
+                        <Wrench className="size-4" />
                       </Button>
                       <Button
                         variant="destructive"
@@ -166,15 +197,9 @@ export function IntegrationManager({
                       </Button>
                     </div>
                   </div>
-
-                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                    <p className="break-all">{t("notifications.endpointLabel", { endpoint: integration.endpoint })}</p>
-                    <p>{t("notifications.failThresholdLabel", { count: integration.failThreshold })}</p>
-                    <p>{t("notifications.cooldownLabel", { minutes: integration.cooldownMinutes })}</p>
-                  </div>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           ) : (
             <EmptyState title={t("notifications.noIntegrations")} description={t("notifications.noIntegrationsDesc")} />
           )}

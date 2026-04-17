@@ -100,7 +100,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
         </div>
       </CardHeader>
       {!collapsed && (
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           {deliveryStatsLoading ? (
             <LoadingState
               title={t("notifications.statsLoadingTitle")}
@@ -109,6 +109,7 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
             />
           ) : deliveryStats ? (
             <>
+              {/* Summary row */}
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-success/30 bg-success/10 p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground">{t("notifications.deliverySent")}</p>
@@ -124,23 +125,55 @@ export function DeliveryStatsCard({ fetchAlertDeliveryStats }: DeliveryStatsProp
                 </div>
               </div>
 
+              {/* Horizontal bar rows per integration */}
               {deliveryStats.byIntegration.length ? (
-                <div className="grid gap-2 md:grid-cols-2">
-                  {deliveryStats.byIntegration.map((item) => (
-                    <div key={item.integrationId} className="rounded-xl border border-border bg-muted/20 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-medium">{item.name}</p>
-                        <Badge tone={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
+                <div className="space-y-3">
+                  {deliveryStats.byIntegration.map((item) => {
+                    const total = item.sent + item.failed;
+                    const sentPct = total > 0 ? Math.round((item.sent / total) * 100) : 0;
+                    const failedPct = total > 0 ? 100 - sentPct : 0;
+                    return (
+                      <div key={item.integrationId} className="space-y-1.5">
+                        {/* Label row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="truncate text-sm font-medium">{item.name}</span>
+                            <Badge tone={item.failed > 0 ? "warning" : "success"}>{item.type}</Badge>
+                          </div>
+                          <div className="flex shrink-0 gap-3 text-xs text-muted-foreground">
+                            <span className="text-[color:var(--chart-ingress,theme(colors.green.500))]">
+                              {t("notifications.statsSent", { count: item.sent })}
+                            </span>
+                            <span className="text-destructive">
+                              {t("notifications.statsFailed", { count: item.failed })}
+                            </span>
+                            <span className={cn(item.successRate >= 95 ? "text-success" : "text-warning")}>
+                              {t("notifications.statsSuccessRate", { rate: item.successRate })}
+                            </span>
+                          </div>
+                        </div>
+                        {/* Horizontal bar */}
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted/40">
+                          {total > 0 ? (
+                            <div className="flex h-full">
+                              <div
+                                className="h-full bg-[var(--chart-ingress,theme(colors.green.500))] transition-all"
+                                style={{ width: `${sentPct}%` }}
+                              />
+                              {failedPct > 0 && (
+                                <div
+                                  className="h-full bg-destructive transition-all"
+                                  style={{ width: `${failedPct}%` }}
+                                />
+                              )}
+                            </div>
+                          ) : (
+                            <div className="h-full w-full bg-muted/60 rounded-full" />
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                        <p>{t("notifications.statsSent", { count: item.sent })}</p>
-                        <p>{t("notifications.statsFailed", { count: item.failed })}</p>
-                        <p className={cn(item.successRate >= 95 ? "text-success" : "text-warning")}>
-                          {t("notifications.statsSuccessRate", { rate: item.successRate })}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">{t("notifications.noDeliveryInWindow")}</p>

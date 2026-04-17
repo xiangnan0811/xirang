@@ -1056,6 +1056,8 @@ const en = {
     statsSuccessRate: "Success rate {{rate}}%",
     noDeliveryInWindow: "No deliveries in the current time window",
     noStatsData: "No statistics data available",
+    pageTitle: "Notifications",
+    pageSubtitle: "{{total}} alerts · {{active}} active",
   },
 
   // ── integration create/edit dialog ──

@@ -1056,6 +1056,8 @@ const zh = {
     statsSuccessRate: "成功率 {{rate}}%",
     noDeliveryInWindow: "当前时间窗口内无投递记录",
     noStatsData: "暂无统计数据",
+    pageTitle: "通知",
+    pageSubtitle: "{{total}} 条告警 · {{active}} 活跃",
   },
 
   // ── integration create/edit dialog ──

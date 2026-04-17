@@ -136,52 +136,72 @@ export function AlertList({
     );
   };
 
-  // --- 卡片视图 ---
+  // --- 卡片/时间线视图 ---
   const renderCardView = (items: AlertRecord[]) => (
-    <div className="space-y-2">
+    <div className="relative space-y-0 pl-6">
+      {/* Left timeline rail */}
+      <div className="absolute left-[7px] top-0 bottom-0 w-px bg-border" aria-hidden="true" />
+
       {items.map((alert) => {
         const severity = getSeverityMeta(alert.severity);
         const status = alertStatusMeta(alert.status);
-        const toneClass = alert.severity === "critical" ? "bg-destructive" : alert.severity === "warning" ? "bg-warning" : "bg-info";
+        const dotClass =
+          alert.severity === "critical"
+            ? "bg-destructive"
+            : alert.severity === "warning"
+              ? "bg-warning"
+              : "bg-info";
+
         return (
-          <div
-            key={alert.id}
-            ref={alert.id === highlightedAlertId ? (el) => highlightRef(alert.id, el) : undefined}
-            className="rounded-lg border border-border bg-card shadow-sm overflow-hidden relative group p-4 transition-colors hover:bg-muted/10"
-          >
-            <div className={`absolute top-0 left-0 w-1.5 h-full ${toneClass} opacity-60 group-hover:opacity-100 transition-opacity`} />
-            <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-foreground/90 truncate">
-                    {alert.nodeName}
-                  </span>
-                  <Badge tone={severity.variant}>{severity.label}</Badge>
-                  <Badge tone={status.variant}>{status.label}</Badge>
+          <div key={alert.id} className="relative pb-3 last:pb-0">
+            {/* Timeline dot */}
+            <span
+              className={`absolute -left-[19px] top-4 size-3 rounded-full border-2 border-background ${dotClass}`}
+              aria-hidden="true"
+            />
+
+            <div
+              ref={alert.id === highlightedAlertId ? (el) => highlightRef(alert.id, el) : undefined}
+              className="rounded-lg border border-border bg-card shadow-sm overflow-hidden p-4 transition-colors hover:bg-muted/10"
+            >
+              {/* Timestamp → severity badge → status badge */}
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">{alert.triggeredAt}</span>
+                <Badge tone={severity.variant}>{severity.label}</Badge>
+                <Badge tone={status.variant}>{status.label}</Badge>
+              </div>
+
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground/90 truncate">{alert.nodeName}</span>
+                  </div>
+                  <p className="mt-1 text-sm">{alert.message}</p>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    {alert.taskId ? (
+                      <span>
+                        {t("notifications.taskLabel", { id: alert.taskId })}
+                        {alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}
+                      </span>
+                    ) : (
+                      <span>{t("notifications.nodeProbe")}</span>
+                    )}
+                    <span>{alert.policyName}</span>
+                  </div>
                 </div>
-                <p className="mt-1.5 text-sm">{alert.message}</p>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                  {alert.taskId ? (
-                    <span>{t("notifications.taskLabel", { id: alert.taskId })}{alert.taskRunId ? ` ${t("notifications.taskRunLabel", { id: alert.taskRunId })}` : ""}</span>
-                  ) : (
-                    <span>{t("notifications.nodeProbe")}</span>
-                  )}
-                  <span>{alert.policyName}</span>
-                  <span>{alert.triggeredAt}</span>
+                <div className="shrink-0">
+                  <AlertBulkActions
+                    alert={alert}
+                    deliveryOpen={deliveryOpenAlertId === alert.id}
+                    onRetry={onRetry}
+                    onAck={onAck}
+                    onResolve={onResolve}
+                    onToggleDeliveries={onToggleDeliveries}
+                  />
                 </div>
               </div>
-              <div className="shrink-0">
-                <AlertBulkActions
-                  alert={alert}
-                  deliveryOpen={deliveryOpenAlertId === alert.id}
-                  onRetry={onRetry}
-                  onAck={onAck}
-                  onResolve={onResolve}
-                  onToggleDeliveries={onToggleDeliveries}
-                />
-              </div>
+              {renderDeliveryPanel(alert)}
             </div>
-            {renderDeliveryPanel(alert)}
           </div>
         );
       })}

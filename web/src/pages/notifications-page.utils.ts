@@ -1,4 +1,4 @@
-import { Mail, MessageSquare, Send, Webhook } from "lucide-react";
+import { Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import i18n from "@/i18n";
 import type { AlertRecord, IntegrationChannel } from "@/types/domain";
 
@@ -10,6 +10,12 @@ export function integrationIcon(type: IntegrationChannel["type"]) {
       return MessageSquare;
     case "telegram":
       return Send;
+    case "feishu":
+      return MessageSquare;
+    case "dingtalk":
+      return Bell;
+    case "wecom":
+      return Building2;
     default:
       return Webhook;
   }
@@ -57,4 +63,3 @@ export function severityToTone(severity: AlertRecord["severity"]) {
   }
   return "online" as const;
 }
-
