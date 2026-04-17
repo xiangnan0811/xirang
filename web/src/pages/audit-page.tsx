@@ -343,9 +343,10 @@ export function AuditPage() {
               </tbody>
             </table>
             {!rows.length && !loading ? (
-              <div className="px-3 py-4 text-sm text-muted-foreground">
-                {t("audit.emptyTitle")}
-              </div>
+              <EmptyState
+                className="rounded-none border-0 py-8"
+                title={t("audit.emptyTitle")}
+              />
             ) : null}
           </div>
 
