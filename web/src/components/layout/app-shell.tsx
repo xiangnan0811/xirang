@@ -1,6 +1,6 @@
 import React, { Suspense } from "react";
 import { useLocation, useNavigate, useOutlet } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, Search } from "lucide-react";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
@@ -33,28 +33,21 @@ import { apiClient } from "@/lib/api/client";
 import { CommandPaletteProvider, useCommandPalette } from "@/context/command-palette-context";
 import { CommandPalette } from "@/components/ui/command-palette";
 
-const prefersReducedMotion =
-  typeof window !== "undefined" &&
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
 function AnimatedOutlet() {
   const location = useLocation();
+  const reduced = useReducedMotion();
   // useOutlet() captures the current outlet element so AnimatePresence can
   // hold on to the exiting page while the entering page mounts.
   const outlet = useOutlet();
 
-  if (prefersReducedMotion) {
-    return <>{outlet}</>;
-  }
-
   return (
-    <AnimatePresence mode="wait">
+    <AnimatePresence mode="wait" initial={false}>
       <motion.div
         key={location.pathname}
-        initial={{ opacity: 0, y: 8 }}
+        initial={reduced ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2, ease: [0, 0, 0.2, 1] }}
+        exit={reduced ? { opacity: 0 } : { opacity: 0 }}
+        transition={{ duration: reduced ? 0 : 0.2, ease: [0, 0, 0.2, 1] }}
       >
         {outlet}
       </motion.div>
