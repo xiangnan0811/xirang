@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 type PaginationProps = {
@@ -42,7 +42,7 @@ export function Pagination({
       <div className="flex items-center gap-3">
         <span>{t("common.pageInfo", { page, total })}</span>
         {onPageSizeChange ? (
-          <AppSelect
+          <Select
             containerClassName="w-auto"
             className="h-8 py-0 pr-7 pl-2 text-xs"
             aria-label={t("common.perPage", { size: pageSize })}
@@ -54,7 +54,7 @@ export function Pagination({
                 {t("common.perPage", { size })}
               </option>
             ))}
-          </AppSelect>
+          </Select>
         ) : null}
       </div>
       <div className="flex gap-2">

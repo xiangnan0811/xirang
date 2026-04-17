@@ -4,8 +4,8 @@ import { KeyRound, Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import {
   parseSSHKeyType,
@@ -150,7 +150,7 @@ export function SSHKeyEditorDialog({
         >
           {t("sshKeys.keyTypeLabel")}
         </label>
-        <AppSelect
+        <Select
           id="ssh-key-edit-type"
           containerClassName="w-full"
           value={draft.keyType}
@@ -165,7 +165,7 @@ export function SSHKeyEditorDialog({
           <option value="rsa">RSA</option>
           <option value="ed25519">ED25519</option>
           <option value="ecdsa">ECDSA</option>
-        </AppSelect>
+        </Select>
         <p className="mt-1 text-xs text-muted-foreground">
           {t("sshKeys.keyTypeHint")}
         </p>
@@ -198,7 +198,7 @@ export function SSHKeyEditorDialog({
             onChange={handleFileUpload}
           />
         </div>
-        <AppTextarea
+        <Textarea
           id="ssh-key-edit-private-key"
           className="min-h-36 text-xs"
           placeholder={

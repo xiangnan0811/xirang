@@ -4,8 +4,8 @@ import { ServerCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import {
   parseSSHKeyType,
@@ -277,7 +277,7 @@ export function NodeEditorDialog({
 
       <div>
         <label htmlFor="node-edit-auth" className="mb-1 block text-sm font-medium">{t('nodeEditor.authMethod')}</label>
-        <AppSelect id="node-edit-auth" containerClassName="w-full"
+        <Select id="node-edit-auth" containerClassName="w-full"
           value={draft.authType}
           onChange={(event) =>
               setDraft((prev) => ({
@@ -288,13 +288,13 @@ export function NodeEditorDialog({
           >
           <option value="key">{t('nodeEditor.keyAuth')}</option>
           <option value="password">{t('nodeEditor.passwordAuth')}</option>
-        </AppSelect>
+        </Select>
       </div>
 
       {draft.authType === "key" ? (
         <div>
           <label htmlFor="node-edit-ssh-key" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshKey')}</label>
-          <AppSelect id="node-edit-ssh-key" containerClassName="w-full"
+          <Select id="node-edit-ssh-key" containerClassName="w-full"
             value={draft.keyId}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, keyId: event.target.value }))
@@ -307,7 +307,7 @@ export function NodeEditorDialog({
               </option>
             ))}
             <option value="__new__">{t('nodeEditor.newSshKey')}</option>
-          </AppSelect>
+          </Select>
         </div>
       ) : (
         <div>
@@ -351,7 +351,7 @@ export function NodeEditorDialog({
               <label htmlFor="node-edit-inline-key-type" className="mb-1 block text-xs font-medium">
                 {t('nodeEditor.keyType')}
               </label>
-              <AppSelect
+              <Select
                 id="node-edit-inline-key-type"
                 containerClassName="w-full"
                 value={draft.inlineKeyType}
@@ -366,10 +366,10 @@ export function NodeEditorDialog({
                 <option value="rsa">RSA</option>
                 <option value="ed25519">ED25519</option>
                 <option value="ecdsa">ECDSA</option>
-              </AppSelect>
+              </Select>
             </div>
           </div>
-          <AppTextarea
+          <Textarea
             id="node-edit-inline-private-key"
             className="mt-1 min-h-28 text-xs"
             placeholder={t('nodeEditor.privateKeyPlaceholder')}

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, Clock3 } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
@@ -334,7 +334,7 @@ export function PolicyEditorDialog({
               <label htmlFor="policy-edit-pre-hook" className="mb-1 block text-sm font-medium">
                 {t('policyEditor.preHook')}
               </label>
-              <AppTextarea
+              <Textarea
                 id="policy-edit-pre-hook"
                 className="min-h-16 text-xs font-mono"
                 placeholder={t('policyEditor.preHookPlaceholder')}
@@ -349,7 +349,7 @@ export function PolicyEditorDialog({
               <label htmlFor="policy-edit-post-hook" className="mb-1 block text-sm font-medium">
                 {t('policyEditor.postHook')}
               </label>
-              <AppTextarea
+              <Textarea
                 id="policy-edit-post-hook"
                 className="min-h-16 text-xs font-mono"
                 placeholder={t('policyEditor.postHookPlaceholder')}

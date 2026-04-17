@@ -4,7 +4,7 @@ import { Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
@@ -211,7 +211,7 @@ export function IntegrationCreateDialog({
           <label htmlFor="create-integration-type" className="mb-1 block text-sm font-medium">
             {t("integration.channelType")}
           </label>
-          <AppSelect
+          <Select
             id="create-integration-type"
             containerClassName="w-full"
             value={draft.type}
@@ -230,7 +230,7 @@ export function IntegrationCreateDialog({
             <option value="feishu">{t("integration.typeLabels.feishu")}</option>
             <option value="dingtalk">{t("integration.typeLabels.dingtalk")}</option>
             <option value="wecom">{t("integration.typeLabels.wecom")}</option>
-          </AppSelect>
+          </Select>
         </div>
 
         <div>

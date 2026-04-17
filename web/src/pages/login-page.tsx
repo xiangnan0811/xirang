@@ -140,7 +140,7 @@ export function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8 animate-fade-in">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,137,92,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.16),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.04),rgba(15,23,42,0.24))] dark:bg-[radial-gradient(circle_at_20%_0%,rgba(180,137,92,0.2),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(34,197,94,0.2),transparent_38%),linear-gradient(180deg,rgba(2,6,23,0.68),rgba(2,6,23,0.9))]" />
+      <div aria-hidden className="bg-login-ambient" />
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
         <section className="hidden rounded-lg border border-border bg-card shadow-md p-8 md:flex md:flex-col md:justify-center lg:p-12">
@@ -180,7 +180,7 @@ export function LoginPage() {
           </div>
         </section>
 
-        <Card className="flex flex-col justify-center rounded-lg border border-border bg-card shadow-md border-t-4 border-t-primary/80 animate-slide-up [animation-delay:200ms]">
+        <Card className="flex flex-col justify-center rounded-lg border border-border bg-card shadow-md animate-slide-up [animation-delay:200ms]">
           <CardHeader className="space-y-3 pb-6 animate-slide-up [animation-delay:250ms]">
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
               <ShieldCheck className="size-6" />

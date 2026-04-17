@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FilterPanel } from "@/components/ui/filter-panel";
 import { SearchInput } from "@/components/ui/search-input";
@@ -63,7 +63,7 @@ export function AlertFilters({
           onChange={(event) => onKeywordChange(event.target.value)}
           placeholder={t("notifications.keywordPlaceholder")}
         />
-        <AppSelect
+        <Select
           containerClassName="w-full"
           aria-label={t("notifications.severityFilter")}
           value={severityFilter}
@@ -73,8 +73,8 @@ export function AlertFilters({
           <option value="critical">{t("status.alert.critical")}</option>
           <option value="warning">{t("status.alert.warning")}</option>
           <option value="info">{t("status.alert.info")}</option>
-        </AppSelect>
-        <AppSelect
+        </Select>
+        <Select
           containerClassName="w-full"
           aria-label={t("notifications.statusFilter")}
           value={statusFilter}
@@ -85,7 +85,7 @@ export function AlertFilters({
           <option value="open">{t("notifications.statusOpen")}</option>
           <option value="acked">{t("notifications.statusAcked")}</option>
           <option value="resolved">{t("notifications.statusResolved")}</option>
-        </AppSelect>
+        </Select>
       </FilterPanel>
 
       {/* 筛选摘要 */}

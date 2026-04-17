@@ -16,7 +16,7 @@ const SSHKeyRotationWizard = React.lazy(() =>
   import("@/components/ssh-key-rotation/ssh-key-rotation-wizard").then(m => ({ default: m.SSHKeyRotationWizard }))
 );
 import { Card, CardContent } from "@/components/ui/card";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
@@ -227,7 +227,7 @@ export function SSHKeysPage() {
               placeholder={t("sshKeys.searchPlaceholder")}
               aria-label={t("sshKeys.searchAriaLabel")}
             />
-            <AppSelect
+            <Select
               containerClassName="w-full"
               aria-label={t("sshKeys.keyTypeAriaLabel")}
               value={keyTypeFilter}
@@ -237,8 +237,8 @@ export function SSHKeysPage() {
               <option value="rsa">RSA</option>
               <option value="ed25519">ED25519</option>
               <option value="ecdsa">ECDSA</option>
-            </AppSelect>
-            <AppSelect
+            </Select>
+            <Select
               containerClassName="w-full"
               aria-label={t("sshKeys.usageStatusAriaLabel")}
               value={usageStatusFilter}
@@ -247,8 +247,8 @@ export function SSHKeysPage() {
               <option value="all">{t("sshKeys.allUsageStatus")}</option>
               <option value="in-use">{t("sshKeys.filterInUse")}</option>
               <option value="unused">{t("sshKeys.filterUnused")}</option>
-            </AppSelect>
-            <AppSelect
+            </Select>
+            <Select
               containerClassName="w-full"
               aria-label={t("sshKeys.sortAriaLabel")}
               value={sortBy}
@@ -258,7 +258,7 @@ export function SSHKeysPage() {
               <option value="name-desc">{t("sshKeys.sortNameDesc")}</option>
               <option value="created">{t("sshKeys.sortCreated")}</option>
               <option value="last-used">{t("sshKeys.sortLastUsed")}</option>
-            </AppSelect>
+            </Select>
           </FilterPanel>
 
           <FilterSummary

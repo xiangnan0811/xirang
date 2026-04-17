@@ -11,7 +11,7 @@ import { integrationIcon } from "@/pages/notifications-page.utils";
 import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -197,7 +197,7 @@ export function ReportConfigDialog({
 
         <div className="grid grid-cols-2 gap-3">
           <LabelRow label={t("reportConfig.scope")}>
-            <AppSelect
+            <Select
               value={draft.scopeType}
               onChange={(e) =>
                 set({ scopeType: e.target.value as Draft["scopeType"] })
@@ -208,10 +208,10 @@ export function ReportConfigDialog({
                   {t(`reports.scopeLabels.${v}`)}
                 </option>
               ))}
-            </AppSelect>
+            </Select>
           </LabelRow>
           <LabelRow label={t("reportConfig.period")}>
-            <AppSelect
+            <Select
               value={draft.period}
               onChange={(e) =>
                 set({ period: e.target.value as Draft["period"] })
@@ -222,7 +222,7 @@ export function ReportConfigDialog({
                   {t(`reports.periodLabels.${v}`)}
                 </option>
               ))}
-            </AppSelect>
+            </Select>
           </LabelRow>
         </div>
 

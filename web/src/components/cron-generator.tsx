@@ -3,7 +3,7 @@ import { Clock, CalendarDays, Settings2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { cronToNatural, nextRunPreview } from "@/lib/cron-utils";
 
 type CronGeneratorProps = {
@@ -184,7 +184,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
               <RefreshCw className="size-4" />
               {t('cron.executionFrequency')}
             </span>
-            <AppSelect
+            <Select
               value={scheduleType}
               onChange={(e) => setScheduleType(e.target.value as ScheduleType)}
               className="w-[180px] h-8 text-sm"
@@ -196,7 +196,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
               <option value="weekly">{t('cron.weekly')}</option>
               <option value="monthly">{t('cron.monthly')}</option>
               <option value="custom">{t('cron.custom')}</option>
-            </AppSelect>
+            </Select>
           </div>
 
           <div className="min-h-[60px]">

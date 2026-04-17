@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Download, Maximize2 } from "lucide-react";
 import type { NodeRecord, TaskRecord } from "@/types/domain";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
 import { InlineAlert } from "@/components/ui/inline-alert";
@@ -60,7 +60,7 @@ export function LogsFilterBar({
         sticky={false}
         className="flex flex-wrap items-center gap-3"
       >
-        <AppSelect
+        <Select
           containerClassName="w-[140px]"
           aria-label={t("logs.nodeFilter")}
           value={selectedNode}
@@ -72,9 +72,9 @@ export function LogsFilterBar({
               {node.name}
             </option>
           ))}
-        </AppSelect>
+        </Select>
 
-        <AppSelect
+        <Select
           containerClassName="w-[160px]"
           aria-label={t("logs.taskFilter")}
           value={selectedTask}
@@ -86,7 +86,7 @@ export function LogsFilterBar({
               #{task.id} {task.policyName}
             </option>
           ))}
-        </AppSelect>
+        </Select>
 
         <div className="hidden items-center gap-3 border-r border-border/50 pr-2 sm:flex">
           <div

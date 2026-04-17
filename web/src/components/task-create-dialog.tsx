@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Pencil, Plus } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { AppSelect } from "@/components/ui/app-select";
+import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
@@ -210,7 +210,7 @@ export function TaskEditorDialog({
 
       <div>
         <label htmlFor="task-editor-node" className="mb-1 block text-sm font-medium">{t('taskCreate.targetNode')}</label>
-        <AppSelect id="task-editor-node" containerClassName="w-full"
+        <Select id="task-editor-node" containerClassName="w-full"
           value={draft.nodeId}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
@@ -222,14 +222,14 @@ export function TaskEditorDialog({
               {node.name} ({node.host})
             </option>
           ))}
-        </AppSelect>
+        </Select>
       </div>
 
       <div>
         <label htmlFor="task-editor-policy" className="mb-1 block text-sm font-medium">
           {t('taskCreate.relatedPolicy')}
         </label>
-        <AppSelect
+        <Select
           id="task-editor-policy"
           containerClassName="w-full"
           value={draft.policyId}
@@ -243,7 +243,7 @@ export function TaskEditorDialog({
               {policy.name}
             </option>
           ))}
-        </AppSelect>
+        </Select>
       </div>
 
       {tasks && tasks.length > 0 && (
@@ -251,7 +251,7 @@ export function TaskEditorDialog({
           <label htmlFor="task-editor-depends-on" className="mb-1 block text-sm font-medium">
             {t('taskCreate.dependsOnTask')}
           </label>
-          <AppSelect
+          <Select
             id="task-editor-depends-on"
             containerClassName="w-full"
             value={draft.dependsOnTaskId}
@@ -267,7 +267,7 @@ export function TaskEditorDialog({
                   {t.name ?? t.policyName}
                 </option>
               ))}
-          </AppSelect>
+          </Select>
           {draft.dependsOnTaskId && (
             <p className="mt-1 text-xs text-muted-foreground">
               {t('taskCreate.dependsOnHint')}
@@ -278,7 +278,7 @@ export function TaskEditorDialog({
 
       <div>
         <label htmlFor="task-editor-executor-type" className="mb-1 block text-sm font-medium">{t('taskCreate.executorType')}</label>
-        <AppSelect
+        <Select
           id="task-editor-executor-type"
           containerClassName="w-full"
           value={draft.executorType}
@@ -290,7 +290,7 @@ export function TaskEditorDialog({
           <option value="command">{t('taskCreate.executorTypes.command')}</option>
           <option value="restic">{t('taskCreate.executorTypes.restic')}</option>
           <option value="rclone">{t('taskCreate.executorTypes.rclone')}</option>
-        </AppSelect>
+        </Select>
       </div>
 
       <div>
