@@ -16,7 +16,7 @@ export function PageHero({ title, subtitle, actions, className }: PageHeroProps)
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+          <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>
         ) : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
