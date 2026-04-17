@@ -18,18 +18,13 @@ export function EmptyState({
   action,
   ...props
 }: EmptyStateProps) {
-  // Handle both LucideIcon (class) and ReactNode (element)
+  // Handle both LucideIcon (component type, incl. forwardRef) and ReactNode (element)
   const resolvedIcon = React.useMemo(() => {
     if (!icon) return null;
-
-    // If icon is a Lucide icon component (function/class), render it with size
-    if (typeof icon === "function") {
-      const Icon = icon as LucideIcon;
-      return <Icon className="size-5" />;
-    }
-
-    // Otherwise it's already a ReactNode element
-    return icon;
+    if (React.isValidElement(icon)) return icon;
+    // Treat anything else callable/forwardRef as a component type
+    const Icon = icon as React.ComponentType<{ className?: string }>;
+    return <Icon className="size-5" />;
   }, [icon]);
 
   return (
