@@ -108,7 +108,7 @@ export function AlertList({
                   <span className="font-medium">
                     {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
                   </span>
-                  <Badge variant={delivery.status === "sent" ? "success" : "danger"}>
+                  <Badge tone={delivery.status === "sent" ? "success" : "destructive"}>
                     {delivery.status === "sent" ? t("notifications.deliverySent") : t("notifications.deliveryFailed")}
                   </Badge>
                 </div>
@@ -156,8 +156,8 @@ export function AlertList({
                   <span className="font-medium text-foreground/90 truncate">
                     {alert.nodeName}
                   </span>
-                  <Badge variant={severity.variant}>{severity.label}</Badge>
-                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <Badge tone={severity.variant}>{severity.label}</Badge>
+                  <Badge tone={status.variant}>{status.label}</Badge>
                 </div>
                 <p className="mt-1.5 text-sm">{alert.message}</p>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -224,14 +224,14 @@ export function AlertList({
                 className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group"
               >
                 <td className="px-3 py-2.5">
-                  <Badge variant={severity.variant}>{severity.label}</Badge>
+                  <Badge tone={severity.variant}>{severity.label}</Badge>
                 </td>
                 <td className="px-3 py-2.5 font-medium">{alert.nodeName}</td>
                 <td className="px-3 py-2.5 max-w-[300px] truncate" title={alert.message}>{alert.message}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.policyName}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.triggeredAt}</td>
                 <td className="px-3 py-2.5">
-                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <Badge tone={status.variant}>{status.label}</Badge>
                 </td>
                 <td className="px-3 py-2.5">
                   <AlertBulkActions

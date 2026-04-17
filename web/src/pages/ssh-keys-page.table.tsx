@@ -35,16 +35,16 @@ export interface SSHKeysTableProps {
 // 密钥类型 -> Badge variant 映射
 // ---------------------------------------------------------------------------
 
-function keyTypeBadgeVariant(keyType: string): "default" | "warning" | "secondary" {
+function keyTypeBadgeVariant(keyType: string): "neutral" | "warning" {
   switch (keyType.toLowerCase()) {
     case "ed25519":
-      return "default";
+      return "neutral";
     case "rsa":
       return "warning";
     case "ecdsa":
-      return "secondary";
+      return "neutral";
     default:
-      return "secondary";
+      return "neutral";
   }
 }
 
@@ -156,7 +156,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     {key.username}
                   </td>
                   <td className="px-3 py-2.5">
-                    <Badge variant={keyTypeBadgeVariant(key.keyType)}>
+                    <Badge tone={keyTypeBadgeVariant(key.keyType)}>
                       {key.keyType.toUpperCase()}
                     </Badge>
                   </td>
@@ -173,7 +173,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     )}
                   </td>
                   <td className="px-3 py-2.5">
-                    <Badge variant={nodeCount > 0 ? "success" : "secondary"}>
+                    <Badge tone={nodeCount > 0 ? "success" : "neutral"}>
                       {nodeCount}
                     </Badge>
                   </td>

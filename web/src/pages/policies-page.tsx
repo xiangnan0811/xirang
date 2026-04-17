@@ -212,9 +212,9 @@ export function PoliciesPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="success">{t('policies.enabledCount', { count: activeCount })}</Badge>
-              <Badge variant="outline">{t('policies.disabledCount', { count: disabledCount })}</Badge>
-              <Badge variant="secondary" className="hidden lg:inline-flex">{t('policies.filteredCount', { count: filteredPolicies.length })}</Badge>
+              <Badge tone="success">{t('policies.enabledCount', { count: activeCount })}</Badge>
+              <Badge tone="neutral">{t('policies.disabledCount', { count: disabledCount })}</Badge>
+              <Badge tone="neutral" className="hidden lg:inline-flex">{t('policies.filteredCount', { count: filteredPolicies.length })}</Badge>
             </div>
           </div>
           <PoliciesFilters
@@ -322,7 +322,7 @@ export function PoliciesPage() {
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5">
                           <p className="font-medium">{policy.name}</p>
-                          {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
+                          {policy.isTemplate && <Badge tone="neutral">{t('policies.template')}</Badge>}
                         </div>
                         <p className="text-xs text-muted-foreground">{t('policies.threshold', { value: policy.criticalThreshold })}</p>
                       </td>

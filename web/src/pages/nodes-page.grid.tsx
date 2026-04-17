@@ -109,7 +109,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                   {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
-                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <Badge tone={status.variant}>{status.label}</Badge>
                   <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
               </div>
@@ -278,7 +278,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                   {t("nodes.selectLabel")}
                 </label>
                 <div className="inline-flex items-center gap-1.5">
-                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <Badge tone={status.variant}>{status.label}</Badge>
                   <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                 </div>
               </div>

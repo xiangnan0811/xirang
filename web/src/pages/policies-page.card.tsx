@@ -45,8 +45,8 @@ export function PolicyCard({
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {policy.isTemplate && <Badge variant="secondary">{t('policies.template')}</Badge>}
-          <Badge variant={policy.enabled ? "success" : "outline"}>
+          {policy.isTemplate && <Badge tone="neutral">{t('policies.template')}</Badge>}
+          <Badge tone={policy.enabled ? "success" : "neutral"}>
             {policy.enabled ? t('common.enabled') : t('common.disabled')}
           </Badge>
         </div>
@@ -58,9 +58,9 @@ export function PolicyCard({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Badge variant="outline">Cron: {policy.cron}</Badge>
-        <Badge variant="outline">{t('policies.failureThreshold', { value: policy.criticalThreshold })}</Badge>
-        <Badge variant="secondary">{t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}</Badge>
+        <Badge tone="neutral">Cron: {policy.cron}</Badge>
+        <Badge tone="neutral">{t('policies.failureThreshold', { value: policy.criticalThreshold })}</Badge>
+        <Badge tone="neutral">{t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}</Badge>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
