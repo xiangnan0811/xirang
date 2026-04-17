@@ -179,6 +179,14 @@ const en = {
     featureComplianceDesc: "RBAC + audit trail + fast failure resolution",
   },
 
+  // ── command palette / global search ──
+  search: {
+    placeholder: "Search nodes, tasks, logs…",
+    kbd: "⌘K",
+    openLabel: "Open command palette",
+    placeholderEmpty: "Type to search…",
+  },
+
   // ── app shell / header / sidebar ──
   appShell: {
     skipToContent: "Skip to main content",

@@ -48,7 +48,7 @@ export function DesktopSidebar({
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border bg-card md:flex pb-4 transition-[width] duration-200",
-        hasWarning ? "pt-[84px]" : "pt-[52px]",
+        hasWarning ? "pt-[88px]" : "pt-14",
         isCollapsed ? "w-16 px-2" : "w-60 px-3",
       )}
     >

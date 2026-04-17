@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useRef, useState } from "react";
+import React, { Suspense } from "react";
 import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
@@ -18,18 +18,8 @@ import { VersionBanner } from "@/components/version-banner";
 
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/error-boundary";
-import {
-  Dialog,
-  DialogBody,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
 import { SharedContextProvider } from "@/context/shared-context";
 import { NodesContextProvider } from "@/context/nodes-context";
@@ -40,6 +30,8 @@ import { IntegrationsContextProvider } from "@/context/integrations-context";
 import { SSHKeysContextProvider } from "@/context/ssh-keys-context";
 import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
+import { CommandPaletteProvider, useCommandPalette } from "@/context/command-palette-context";
+import { CommandPalette } from "@/components/ui/command-palette";
 
 const prefersReducedMotion =
   typeof window !== "undefined" &&
@@ -70,30 +62,14 @@ function AnimatedOutlet() {
   );
 }
 
-function isTypingTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tagName = target.tagName.toLowerCase();
-  return (
-    tagName === "input" ||
-    tagName === "textarea" ||
-    tagName === "select" ||
-    target.isContentEditable
-  );
-}
 
-export function AppShell() {
+function AppShellInner() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { username, role, token, logout } = useAuth();
   const consoleData = useConsoleData(token);
+  const cmdPalette = useCommandPalette();
 
-  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const globalSearchValueRef = useRef(consoleData.globalSearch);
-  const setGlobalSearchRef = useRef(consoleData.setGlobalSearch);
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>("xirang.sidebar.collapsed", false);
   const hasWarning = Boolean(consoleData.warning);
 
@@ -109,55 +85,6 @@ export function AppShell() {
     navigate("/login", { replace: true });
   };
 
-  useEffect(() => {
-    globalSearchValueRef.current = consoleData.globalSearch;
-    setGlobalSearchRef.current = consoleData.setGlobalSearch;
-  }, [consoleData.globalSearch, consoleData.setGlobalSearch]);
-
-  useEffect(() => {
-    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
-      const isQuickFocus =
-        (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) ||
-        (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !isTypingTarget(event.target));
-
-      if (isQuickFocus) {
-        event.preventDefault();
-        const isDesktop = window.matchMedia("(min-width: 1280px)").matches;
-        if (isDesktop) {
-          globalSearchInputRef.current?.focus();
-          globalSearchInputRef.current?.select();
-        } else {
-          setMobileSearchOpen(true);
-        }
-        return;
-      }
-
-      const activeElement = document.activeElement;
-      if (
-        event.key === "Escape" &&
-        activeElement === globalSearchInputRef.current &&
-        globalSearchValueRef.current
-      ) {
-        event.preventDefault();
-        setGlobalSearchRef.current("");
-      }
-    };
-
-    window.addEventListener("keydown", handleGlobalSearchShortcut);
-    return () => window.removeEventListener("keydown", handleGlobalSearchShortcut);
-  }, []);
-
-  useEffect(() => {
-    if (!mobileSearchOpen) {
-      return;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      mobileSearchInputRef.current?.focus();
-      mobileSearchInputRef.current?.select();
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, [mobileSearchOpen]);
-
   return (
     <div className="min-h-screen app-shell-bg overflow-x-hidden">
       <VersionBanner />
@@ -171,11 +98,11 @@ export function AppShell() {
       {/* 顶部固定导航栏 */}
       <header
         className={cn(
-          "fixed top-0 left-0 right-0 z-50 border-b border-border bg-card",
-          hasWarning ? "h-[84px]" : "h-[52px]"
+          "fixed top-0 left-0 right-0 z-50 border-b border-border bg-background",
+          hasWarning ? "h-[88px]" : "h-14"
         )}
       >
-        <div className="flex h-[52px] items-center">
+        <div className="flex h-14 items-center">
           <div className="flex items-center md:hidden px-4">
             <img
               src="/xirang-mark.svg"
@@ -204,31 +131,30 @@ export function AppShell() {
           </div>
 
           <div className="flex min-w-0 flex-1 items-center justify-between px-4 lg:px-6">
-            <div className="hidden min-w-0 xl:flex items-center gap-3">
-              <div className="relative shrink-0">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  ref={globalSearchInputRef}
-                  value={consoleData.globalSearch}
-                  onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
-                  className="h-8 w-60 pl-9 pr-16 bg-background/50 text-xs xl:w-72"
-                  aria-label={t('appShell.searchAriaLabel')}
-                  aria-keyshortcuts="Control+K Meta+K /"
-                  placeholder={t('appShell.searchPlaceholder')}
-                />
-                <span className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground xl:inline-flex border border-border/50 shadow-sm font-mono">
-                  ⌘ K
-                </span>
-              </div>
+            {/* 搜索按钮（md+ 可见），点击打开命令面板 */}
+            <div className="hidden min-w-0 md:flex items-center gap-3">
+              <button
+                type="button"
+                onClick={cmdPalette.toggle}
+                aria-label={t('search.openLabel')}
+                className="hidden w-[280px] items-center gap-2 rounded-md border border-border bg-card/80 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent md:flex"
+              >
+                <Search className="size-3.5 shrink-0" aria-hidden />
+                <span className="flex-1 text-left">{t('search.placeholder')}</span>
+                <kbd className="rounded border border-border bg-background px-1.5 py-[2px] font-mono text-[10px]">
+                  {t('search.kbd')}
+                </kbd>
+              </button>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
+              {/* 移动端搜索图标按钮 */}
               <Button
                 variant="ghost"
                 size="icon"
-                className="xl:hidden size-8"
-                onClick={() => setMobileSearchOpen(true)}
-                aria-label={t('appShell.openSearch')}
+                className="md:hidden size-8"
+                onClick={cmdPalette.toggle}
+                aria-label={t('search.openLabel')}
               >
                 <Search className="size-4" />
               </Button>
@@ -274,7 +200,7 @@ export function AppShell() {
       {/* 侧边栏与主区包裹层 */}
       <div className={cn(
         "relative flex w-full transition-[padding,margin] duration-200",
-        hasWarning ? "pt-[84px]" : "pt-[52px]",
+        hasWarning ? "pt-[88px]" : "pt-14",
         sidebarCollapsed ? "md:pl-16" : "md:pl-60"
       )}>
         <DesktopSidebar
@@ -284,7 +210,7 @@ export function AppShell() {
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
 
-        <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-84px)]" : "min-h-[calc(100vh-52px)]")}>
+        <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-88px)]" : "min-h-[calc(100vh-56px)]")}>
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
             <SharedContextProvider value={{
@@ -373,29 +299,6 @@ export function AppShell() {
         </div>
       </div>
 
-      <Dialog open={mobileSearchOpen} onOpenChange={setMobileSearchOpen}>
-        <DialogContent size="sm">
-          <DialogHeader>
-            <DialogTitle>{t('appShell.searchDialogTitle')}</DialogTitle>
-            <DialogDescription>{t('appShell.searchDialogDesc')}</DialogDescription>
-            <DialogCloseButton />
-          </DialogHeader>
-          <DialogBody className="space-y-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                ref={mobileSearchInputRef}
-                value={consoleData.globalSearch}
-                onChange={(event) => consoleData.setGlobalSearch(event.target.value)}
-                className="pl-9"
-                aria-label={t('appShell.searchAriaLabel')}
-                placeholder={t('appShell.searchPlaceholderShort')}
-              />
-            </div>
-          </DialogBody>
-        </DialogContent>
-      </Dialog>
-
       <MobileNavigation
         username={username}
         role={role}
@@ -406,6 +309,16 @@ export function AppShell() {
       <Suspense fallback={null}>
         <SetupWizard />
       </Suspense>
+
+      <CommandPalette />
     </div>
+  );
+}
+
+export function AppShell() {
+  return (
+    <CommandPaletteProvider>
+      <AppShellInner />
+    </CommandPaletteProvider>
   );
 }
