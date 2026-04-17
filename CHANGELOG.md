@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/xiangnan0811/xirang/compare/v0.7.3...v0.8.0) (2026-04-17)
+
+
+### Features
+
+* **web:** Wave 1 · Sage tokens + primitive refresh ([#28](https://github.com/xiangnan0811/xirang/issues/28)) ([662ef6f](https://github.com/xiangnan0811/xirang/commit/662ef6fc170ca15a5bb249322d2f02b70f3d5d34))
+* **web:** Wave 2 W2-01 · Overview redesign ([#30](https://github.com/xiangnan0811/xirang/issues/30)) ([9574aee](https://github.com/xiangnan0811/xirang/commit/9574aee02825237c37a1c91feeab57dede408388))
+
 ## [0.7.3](https://github.com/xiangnan0811/xirang/compare/v0.7.2...v0.7.3) (2026-04-16)
 
 
