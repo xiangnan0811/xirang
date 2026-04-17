@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/xiangnan0811/xirang/compare/v0.9.0...v0.10.0) (2026-04-17)
+
+
+### Features
+
+* **web:** Wave 3 · polish (CommandPalette live + UI gallery + primitive tests) ([#36](https://github.com/xiangnan0811/xirang/issues/36)) ([426f0f8](https://github.com/xiangnan0811/xirang/commit/426f0f8cfdba94180c1a698647dcb6fe9cb2f448))
+
+
+### Bug Fixes
+
+* **web:** CommandPalette uses optional context hooks (fix app crash) ([#38](https://github.com/xiangnan0811/xirang/issues/38)) ([fc91f09](https://github.com/xiangnan0811/xirang/commit/fc91f0923d8d68d58077109090614d7df9c0b406))
+* **web:** PageHero subtitle wrapper p → div (fix DOM nesting warning) ([#39](https://github.com/xiangnan0811/xirang/issues/39)) ([a18a0a1](https://github.com/xiangnan0811/xirang/commit/a18a0a1385523c1db90276350737aeceecf295dd))
+
 ## [0.9.0](https://github.com/xiangnan0811/xirang/compare/v0.8.0...v0.9.0) (2026-04-17)
 
 
