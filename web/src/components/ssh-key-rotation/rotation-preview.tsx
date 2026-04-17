@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import {
@@ -202,7 +202,7 @@ export function RotationUpload({
             onChange={handleFileUpload}
           />
         </div>
-        <AppTextarea
+        <Textarea
           id="rotation-private-key"
           className="min-h-36 text-xs"
           placeholder={t("sshKeys.privateKeyPlaceholder")}

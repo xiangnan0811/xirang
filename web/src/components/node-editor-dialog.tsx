@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import {
   parseSSHKeyType,
@@ -369,7 +369,7 @@ export function NodeEditorDialog({
               </Select>
             </div>
           </div>
-          <AppTextarea
+          <Textarea
             id="node-edit-inline-private-key"
             className="mt-1 min-h-28 text-xs"
             placeholder={t('nodeEditor.privateKeyPlaceholder')}

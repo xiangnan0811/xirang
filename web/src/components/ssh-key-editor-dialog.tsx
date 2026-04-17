@@ -5,7 +5,7 @@ import { toast } from "@/components/ui/toast";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { AppTextarea } from "@/components/ui/app-textarea";
+import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import {
   parseSSHKeyType,
@@ -198,7 +198,7 @@ export function SSHKeyEditorDialog({
             onChange={handleFileUpload}
           />
         </div>
-        <AppTextarea
+        <Textarea
           id="ssh-key-edit-private-key"
           className="min-h-36 text-xs"
           placeholder={
