@@ -323,7 +323,7 @@ type NodeMetricSample struct {
 	LatencyMs   *int64    `gorm:"column:latency_ms" json:"latency_ms,omitempty"`
 	DiskGBUsed  *float64  `gorm:"column:disk_gb_used" json:"disk_gb_used,omitempty"`
 	DiskGBTotal *float64  `gorm:"column:disk_gb_total" json:"disk_gb_total,omitempty"`
-	ProbeOK     bool      `gorm:"not null;default:true" json:"probe_ok"`
+	ProbeOK     bool      `gorm:"not null" json:"probe_ok"`
 	SampledAt   time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
 	CreatedAt   time.Time `json:"created_at"`
 }

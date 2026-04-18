@@ -26,16 +26,13 @@ func (s *DBSink) Name() string { return "db" }
 //     *float64) — left nil when Sample has nil
 //   - non-nullable float columns (cpu/mem/disk pct, load_1m) — left as zero
 //     when Sample has nil, because those columns are NOT NULL DEFAULT 0
-//
-// Note: probe_ok is passed as an integer (0/1) via raw Exec to work around a
-// GORM/SQLite quirk where Go false is serialised as the SQL literal "true" on
-// numeric-affinity columns that carry DEFAULT true.
 func (s *DBSink) Write(ctx context.Context, sample Sample) error {
 	row := model.NodeMetricSample{
 		NodeID:      sample.NodeID,
 		SampledAt:   sample.SampledAt,
 		DiskGBUsed:  sample.DiskGBUsed,
 		DiskGBTotal: sample.DiskGBTotal,
+		ProbeOK:     sample.ProbeOK,
 	}
 	if sample.CPUPct != nil {
 		row.CpuPct = *sample.CPUPct
@@ -53,23 +50,5 @@ func (s *DBSink) Write(ctx context.Context, sample Sample) error {
 		v := int64(*sample.LatencyMs)
 		row.LatencyMs = &v
 	}
-
-	// Encode the bool as 0/1 so the SQLite driver cannot misrepresent false
-	// as the SQL literal "true" (a known GORM/SQLite quirk on numeric-affinity
-	// columns with DEFAULT true).
-	probeOK := 0
-	if sample.ProbeOK {
-		probeOK = 1
-	}
-
-	return s.db.WithContext(ctx).Exec(
-		`INSERT INTO node_metric_samples
-		 (node_id, sampled_at, cpu_pct, mem_pct, disk_pct, load_1m,
-		  latency_ms, disk_gb_used, disk_gb_total, probe_ok)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.NodeID, row.SampledAt,
-		row.CpuPct, row.MemPct, row.DiskPct, row.Load1m,
-		row.LatencyMs, row.DiskGBUsed, row.DiskGBTotal,
-		probeOK,
-	).Error
+	return s.db.WithContext(ctx).Create(&row).Error
 }
