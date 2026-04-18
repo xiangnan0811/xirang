@@ -66,6 +66,7 @@ go run ./cmd/server
 | DELETE | /nodes/:id | 🔒 删除节点 |
 | POST | /nodes/:id/test-connection | 🔒 测试连接 |
 | GET | /nodes/:id/metrics | 🔒 资源指标 |
+| GET | /nodes/:id/status | 🔒 节点状态快照（最新采样 + 1h/24h 聚合 + 告警/任务计数） |
 | GET | /nodes/:id/files | 🔒 远程文件列表 |
 | GET | /nodes/:id/files/content | 🔒 文件内容 |
 | GET | /nodes/:id/docker-volumes | 🔒 Docker 卷列表 |

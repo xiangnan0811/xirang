@@ -143,6 +143,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/nodes/:id", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Delete)
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.TestConnection)
 	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Metrics)
+	nodeMetricsHandler := handlers.NewNodeMetricsHandler(dep.DB)
+	secured.GET("/nodes/:id/status", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.Status)
 	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.ListNodeFiles)
 	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.GetNodeFileContent)
 	secured.GET("/nodes/:id/docker-volumes", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), dockerHandler.ListVolumes)
