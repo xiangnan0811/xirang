@@ -106,3 +106,62 @@ func (a *Aggregator) rollupHourly(ctx context.Context, from, to time.Time) (int,
 	}
 	return int(result.RowsAffected), nil
 }
+
+// rollupDaily aggregates hourly buckets with bucket_start in [from, to) into
+// the daily tier. Same idempotency guarantee and mutex discipline as
+// rollupHourly. probe_ok / probe_fail / sample_count are summed (they are
+// already counts from the hourly layer). Floats use AVG(avg)/MAX(max).
+func (a *Aggregator) rollupDaily(ctx context.Context, from, to time.Time) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	bucket := a.bucketExpr("day", "bucket_start")
+	query := fmt.Sprintf(`
+        INSERT INTO node_metric_samples_daily (
+            node_id, bucket_start,
+            cpu_pct_avg, cpu_pct_max,
+            mem_pct_avg, mem_pct_max,
+            disk_pct_avg, disk_pct_max,
+            load1_avg, load1_max,
+            latency_ms_avg, latency_ms_max,
+            disk_gb_used_avg, disk_gb_total,
+            probe_ok, probe_fail, sample_count, created_at
+        )
+        SELECT
+            node_id,
+            %[1]s AS bucket_start,
+            AVG(cpu_pct_avg), MAX(cpu_pct_max),
+            AVG(mem_pct_avg), MAX(mem_pct_max),
+            AVG(disk_pct_avg), MAX(disk_pct_max),
+            AVG(load1_avg),    MAX(load1_max),
+            AVG(latency_ms_avg), MAX(latency_ms_max),
+            AVG(disk_gb_used_avg),
+            MAX(disk_gb_total),
+            SUM(probe_ok), SUM(probe_fail), SUM(sample_count),
+            CURRENT_TIMESTAMP
+        FROM node_metric_samples_hourly
+        WHERE bucket_start >= ? AND bucket_start < ?
+        GROUP BY node_id, %[1]s
+        ON CONFLICT (node_id, bucket_start) DO UPDATE SET
+            cpu_pct_avg      = excluded.cpu_pct_avg,
+            cpu_pct_max      = excluded.cpu_pct_max,
+            mem_pct_avg      = excluded.mem_pct_avg,
+            mem_pct_max      = excluded.mem_pct_max,
+            disk_pct_avg     = excluded.disk_pct_avg,
+            disk_pct_max     = excluded.disk_pct_max,
+            load1_avg        = excluded.load1_avg,
+            load1_max        = excluded.load1_max,
+            latency_ms_avg   = excluded.latency_ms_avg,
+            latency_ms_max   = excluded.latency_ms_max,
+            disk_gb_used_avg = excluded.disk_gb_used_avg,
+            disk_gb_total    = excluded.disk_gb_total,
+            probe_ok         = excluded.probe_ok,
+            probe_fail       = excluded.probe_fail,
+            sample_count     = excluded.sample_count
+    `, bucket)
+
+	result := a.db.WithContext(ctx).Exec(query, from, to)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return int(result.RowsAffected), nil
+}

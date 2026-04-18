@@ -103,3 +103,52 @@ func TestRollupHourly_Idempotent(t *testing.T) {
 		t.Fatalf("expected max to update to 150 after re-rollup, got %v", got.CpuPctMax)
 	}
 }
+
+func TestRollupDaily_FromHourly(t *testing.T) {
+	db := newAggTestDB(t)
+	day := time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)
+	// Seed 24 hourly buckets in the day, cpu_pct_avg = h, cpu_pct_max = h+5.
+	for h := 0; h < 24; h++ {
+		cpuAvg := float64(h)
+		cpuMax := float64(h) + 5
+		if err := db.Create(&model.NodeMetricSampleHourly{
+			NodeID:      1,
+			BucketStart: day.Add(time.Duration(h) * time.Hour),
+			CpuPctAvg:   &cpuAvg,
+			CpuPctMax:   &cpuMax,
+			ProbeOK:     10,
+			ProbeFail:   0,
+			SampleCount: 10,
+		}).Error; err != nil {
+			t.Fatalf("seed hour %d: %v", h, err)
+		}
+	}
+	agg := &Aggregator{db: db, dialect: "sqlite"}
+
+	n, err := agg.rollupDaily(context.Background(), day, day.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("rollup: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 day bucket, got %d", n)
+	}
+	var got model.NodeMetricSampleDaily
+	if err := db.First(&got, "node_id = ?", 1).Error; err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	// AVG of 0..23 = 11.5
+	if got.CpuPctAvg == nil || *got.CpuPctAvg != 11.5 {
+		t.Fatalf("expected cpu_pct_avg=11.5, got %v", got.CpuPctAvg)
+	}
+	// MAX of (h+5 for h=0..23) = 28
+	if got.CpuPctMax == nil || *got.CpuPctMax != 28 {
+		t.Fatalf("expected cpu_pct_max=28, got %v", got.CpuPctMax)
+	}
+	// SUM of probe_ok=10 over 24 buckets = 240
+	if got.ProbeOK != 240 {
+		t.Fatalf("expected probe_ok=240, got %d", got.ProbeOK)
+	}
+	if got.SampleCount != 240 {
+		t.Fatalf("expected sample_count=240, got %d", got.SampleCount)
+	}
+}
