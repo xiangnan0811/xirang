@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"math"
 
 	"xirang/backend/internal/model"
 
@@ -47,7 +48,9 @@ func (s *DBSink) Write(ctx context.Context, sample Sample) error {
 		row.Load1m = *sample.Load1
 	}
 	if sample.LatencyMs != nil {
-		v := int64(*sample.LatencyMs)
+		// Round rather than truncate so sub-millisecond fractionals don't
+		// silently collapse to 0.
+		v := int64(math.Round(*sample.LatencyMs))
 		row.LatencyMs = &v
 	}
 	return s.db.WithContext(ctx).Create(&row).Error
