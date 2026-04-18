@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"time"
@@ -182,11 +183,22 @@ func (a *Aggregator) backfill(ctx context.Context) error {
 // scanNullableTime scans a MAX/MIN aggregate that may be NULL into a time.Time.
 // Returns the zero value when the column is NULL (empty table).
 //
-// SQLite stores datetime columns as strings and returns them as driver.Value
-// type string; it returns nil for NULL aggregates. Scanning either directly
-// into *time.Time fails for both cases with gorm/go-sqlite3. We therefore
-// scan into *string and parse with a set of known SQLite datetime formats.
-func scanNullableTime(db *gorm.DB, query string, args ...interface{}) time.Time {
+// Postgres returns native timestamptz values; sql.NullTime handles both the
+// NULL and the value case correctly via the pgx/lib-pq drivers.
+//
+// SQLite stores datetime columns as strings (TEXT affinity). go-sqlite3
+// returns them as driver.Value type string, and NULL aggregates come back
+// as nil. Direct *time.Time scan fails on both cases, so for SQLite we scan
+// into *string and parse with a set of known datetime layouts.
+func (a *Aggregator) scanNullableTime(db *gorm.DB, query string, args ...interface{}) time.Time {
+	if a.dialect == "postgres" {
+		var t sql.NullTime
+		db.Raw(query, args...).Scan(&t)
+		if t.Valid {
+			return t.Time.UTC()
+		}
+		return time.Time{}
+	}
 	var raw *string
 	db.Raw(query, args...).Scan(&raw)
 	if raw == nil || *raw == "" {
@@ -214,9 +226,9 @@ func scanNullableTime(db *gorm.DB, query string, args ...interface{}) time.Time 
 // rollupHourly on each. The 5-minute cushion avoids picking up an in-flight
 // hour. Does NOT acquire a.mu — rollupHourly locks each call individually.
 func (a *Aggregator) catchUpHourly(ctx context.Context) error {
-	lastBucket := scanNullableTime(a.db.WithContext(ctx),
+	lastBucket := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MAX(bucket_start) FROM node_metric_samples_hourly")
-	oldestSample := scanNullableTime(a.db.WithContext(ctx),
+	oldestSample := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MIN(sampled_at) FROM node_metric_samples")
 
 	var from time.Time
@@ -243,9 +255,9 @@ func (a *Aggregator) catchUpHourly(ctx context.Context) error {
 
 // catchUpDaily does the same for daily buckets, sourcing from hourly.
 func (a *Aggregator) catchUpDaily(ctx context.Context) error {
-	lastBucket := scanNullableTime(a.db.WithContext(ctx),
+	lastBucket := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MAX(bucket_start) FROM node_metric_samples_daily")
-	oldestHourly := scanNullableTime(a.db.WithContext(ctx),
+	oldestHourly := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MIN(bucket_start) FROM node_metric_samples_hourly")
 
 	var from time.Time
