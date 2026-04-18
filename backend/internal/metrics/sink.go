@@ -16,6 +16,10 @@ type Sink interface {
 // FanSink dispatches a single Sample to every configured sink. Failures in
 // one sink are logged but never block delivery to the others, so a flaky
 // remote push never breaks core DB persistence.
+//
+// FanSink itself satisfies Sink so it can be composed (e.g. nested fan-outs
+// or used behind any Sink-typed handle). Its Write always returns nil — child
+// errors are logged, never propagated.
 type FanSink struct {
 	sinks []Sink
 }
@@ -27,9 +31,12 @@ func NewFanSink(sinks ...Sink) *FanSink {
 	return &FanSink{sinks: sinks}
 }
 
+// Name identifies the fan aggregator for logging purposes.
+func (f *FanSink) Name() string { return "fan" }
+
 // Write delivers the sample to every child sink. Errors are logged with
-// sink name + node id context and do not interrupt other sinks.
-func (f *FanSink) Write(ctx context.Context, s Sample) {
+// sink name + node id context and do not interrupt other sinks. Always nil.
+func (f *FanSink) Write(ctx context.Context, s Sample) error {
 	for _, sink := range f.sinks {
 		if err := sink.Write(ctx, s); err != nil {
 			logger.Module("metrics").Warn().
@@ -39,4 +46,5 @@ func (f *FanSink) Write(ctx context.Context, s Sample) {
 				Msg("metric sink write failed")
 		}
 	}
+	return nil
 }
