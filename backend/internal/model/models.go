@@ -353,6 +353,31 @@ type NodeMetricSampleHourly struct {
 
 func (NodeMetricSampleHourly) TableName() string { return "node_metric_samples_hourly" }
 
+// NodeMetricSampleDaily 节点资源采样 1d 聚合桶
+type NodeMetricSampleDaily struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	NodeID        uint      `gorm:"not null;uniqueIndex:idx_nmsd_node_bucket,priority:1" json:"node_id"`
+	BucketStart   time.Time `gorm:"not null;uniqueIndex:idx_nmsd_node_bucket,priority:2;index:idx_nmsd_bucket" json:"bucket_start"`
+	CpuPctAvg     *float64  `gorm:"column:cpu_pct_avg" json:"cpu_pct_avg,omitempty"`
+	CpuPctMax     *float64  `gorm:"column:cpu_pct_max" json:"cpu_pct_max,omitempty"`
+	MemPctAvg     *float64  `gorm:"column:mem_pct_avg" json:"mem_pct_avg,omitempty"`
+	MemPctMax     *float64  `gorm:"column:mem_pct_max" json:"mem_pct_max,omitempty"`
+	DiskPctAvg    *float64  `gorm:"column:disk_pct_avg" json:"disk_pct_avg,omitempty"`
+	DiskPctMax    *float64  `gorm:"column:disk_pct_max" json:"disk_pct_max,omitempty"`
+	Load1Avg      *float64  `gorm:"column:load1_avg" json:"load1_avg,omitempty"`
+	Load1Max      *float64  `gorm:"column:load1_max" json:"load1_max,omitempty"`
+	LatencyMsAvg  *float64  `gorm:"column:latency_ms_avg" json:"latency_ms_avg,omitempty"`
+	LatencyMsMax  *float64  `gorm:"column:latency_ms_max" json:"latency_ms_max,omitempty"`
+	DiskGBUsedAvg *float64  `gorm:"column:disk_gb_used_avg" json:"disk_gb_used_avg,omitempty"`
+	DiskGBTotal   *float64  `gorm:"column:disk_gb_total" json:"disk_gb_total,omitempty"`
+	ProbeOK       int64     `gorm:"column:probe_ok;not null;default:0" json:"probe_ok"`
+	ProbeFail     int64     `gorm:"column:probe_fail;not null;default:0" json:"probe_fail"`
+	SampleCount   int64     `gorm:"column:sample_count;not null;default:0" json:"sample_count"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (NodeMetricSampleDaily) TableName() string { return "node_metric_samples_daily" }
+
 // NodeOwner 节点 ownership 关联表（operator 只能访问自己负责的节点）
 type NodeOwner struct {
 	NodeID    uint      `gorm:"primaryKey" json:"node_id"`
