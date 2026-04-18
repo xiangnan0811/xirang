@@ -42,6 +42,9 @@ const SettingsPage = lazy(() =>
 const MorePage = lazy(() =>
   import("@/pages/more-page").then((m) => ({ default: m.MorePage }))
 );
+const NodesDetailPage = lazy(() =>
+  import("@/pages/nodes-detail-page").then((m) => ({ default: m.NodesDetailPage }))
+);
 
 function PageLoader() {
   return (
@@ -83,6 +86,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "nodes",
         element: <LazyPage><NodesPage /></LazyPage>
+      },
+      {
+        path: "nodes/:id",
+        element: <LazyPage><NodesDetailPage /></LazyPage>
       },
       {
         path: "ssh-keys",
