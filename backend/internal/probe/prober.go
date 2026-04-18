@@ -207,42 +207,23 @@ func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, disk
 		return
 	}
 
-	lat := int64(probeLatencyMs)
-	sample := model.NodeMetricSample{
+	cpuPct, memPct, diskPct, load1 := nm.cpuPct, nm.memPct, nm.diskPct, nm.load1m
+	latency := float64(probeLatencyMs)
+	ms := metrics.Sample{
 		NodeID:    node.ID,
-		CpuPct:    nm.cpuPct,
-		MemPct:    nm.memPct,
-		DiskPct:   nm.diskPct,
-		Load1m:    nm.load1m,
-		LatencyMs: &lat,
-		ProbeOK:   true,
+		NodeName:  node.Name,
 		SampledAt: time.Now().UTC(),
+		CPUPct:    &cpuPct,
+		MemPct:    &memPct,
+		DiskPct:   &diskPct,
+		Load1:     &load1,
+		LatencyMs: &latency,
+		ProbeOK:   true,
 	}
 	if diskGBTotal > 0 {
-		usedCopy := diskGBUsed
-		totalCopy := diskGBTotal
-		sample.DiskGBUsed = &usedCopy
-		sample.DiskGBTotal = &totalCopy
-	}
-	ms := metrics.Sample{
-		NodeID:      node.ID,
-		NodeName:    node.Name,
-		SampledAt:   sample.SampledAt,
-		ProbeOK:     sample.ProbeOK,
-		DiskGBUsed:  sample.DiskGBUsed,
-		DiskGBTotal: sample.DiskGBTotal,
-	}
-	cpu := sample.CpuPct
-	mem := sample.MemPct
-	disk := sample.DiskPct
-	load := sample.Load1m
-	ms.CPUPct = &cpu
-	ms.MemPct = &mem
-	ms.DiskPct = &disk
-	ms.Load1 = &load
-	if sample.LatencyMs != nil {
-		lat := float64(*sample.LatencyMs)
-		ms.LatencyMs = &lat
+		used, total := diskGBUsed, diskGBTotal
+		ms.DiskGBUsed = &used
+		ms.DiskGBTotal = &total
 	}
 	if err := p.sink.Write(ctx, ms); err != nil {
 		// FanSink.Write returns nil today, but honour the contract in case the
