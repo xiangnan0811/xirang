@@ -43,7 +43,16 @@ func (a *Aggregator) bucketExpr(unit, col string) string {
 // rollupHourly aggregates raw samples with sampled_at in [from, to) into the
 // hourly tier. Idempotent: re-running the same window replaces aggregates via
 // ON CONFLICT DO UPDATE. Returns the number of buckets written/updated.
+//
+// Acquires the Aggregator mutex to serialise backfill vs scheduled ticks —
+// both paths call this method and must not interleave on the same window.
+//
+// MAX(disk_gb_total) is a deliberate approximation: disk capacity rarely
+// changes within an hour, and if it does (resize), preferring the larger
+// value matches the spec's "terminal value" semantic without tracking order.
 func (a *Aggregator) rollupHourly(ctx context.Context, from, to time.Time) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	bucket := a.bucketExpr("hour", "sampled_at")
 	query := fmt.Sprintf(`
         INSERT INTO node_metric_samples_hourly (
