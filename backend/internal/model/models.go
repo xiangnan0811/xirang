@@ -314,14 +314,18 @@ type TaskTrafficSample struct {
 
 // NodeMetricSample 节点资源采样记录
 type NodeMetricSample struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	NodeID    uint      `gorm:"not null;index:idx_node_metric_node_sampled,priority:1" json:"node_id"`
-	CpuPct    float64   `gorm:"not null;default:0" json:"cpu_pct"`
-	MemPct    float64   `gorm:"not null;default:0" json:"mem_pct"`
-	DiskPct   float64   `gorm:"not null;default:0" json:"disk_pct"`
-	Load1m    float64   `gorm:"column:load_1m;not null;default:0" json:"load_1m"`
-	SampledAt time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	NodeID      uint      `gorm:"not null;index:idx_node_metric_node_sampled,priority:1" json:"node_id"`
+	CpuPct      float64   `gorm:"not null;default:0" json:"cpu_pct"`
+	MemPct      float64   `gorm:"not null;default:0" json:"mem_pct"`
+	DiskPct     float64   `gorm:"not null;default:0" json:"disk_pct"`
+	Load1m      float64   `gorm:"column:load_1m;not null;default:0" json:"load_1m"`
+	LatencyMs   *int      `json:"latency_ms,omitempty"`
+	DiskGBUsed  *float64  `json:"disk_gb_used,omitempty"`
+	DiskGBTotal *float64  `json:"disk_gb_total,omitempty"`
+	ProbeOK     bool      `gorm:"not null;default:true" json:"probe_ok"`
+	SampledAt   time.Time `gorm:"not null;index:idx_node_metric_node_sampled,priority:2;index:idx_node_metric_sampled_at" json:"sampled_at"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // NodeOwner 节点 ownership 关联表（operator 只能访问自己负责的节点）
