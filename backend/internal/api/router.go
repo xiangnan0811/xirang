@@ -238,11 +238,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
 
+	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)
 	secured.GET("/version", versionHandler.Info)
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
 	secured.POST("/system/verify-mount", middleware.RequireRole("admin"), storageGuideHandler.VerifyMount)
+	secured.GET("/admin/metrics/rollup-status", middleware.RequireRole("admin"), adminMetricsHandler.RollupStatus)
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 	secured.POST("/nodes/:id/migrate/preflight", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.MigratePreflight)

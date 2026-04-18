@@ -224,6 +224,7 @@ go run ./cmd/server
 | GET | /healthz | 健康检查（无需认证） |
 | GET | /metrics | Prometheus 指标（无需认证） |
 | GET | /swagger/*any | Swagger UI（无需认证） |
+| GET | /admin/metrics/rollup-status | 🔒 聚合器诊断（hourly/daily 最新桶 + 落后秒数），仅 admin |
 
 ## 执行器
 
