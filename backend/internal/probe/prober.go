@@ -183,7 +183,7 @@ func (p *Prober) probeNode(node model.Node) {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(resolveErr).Msg("恢复节点探测告警失败")
 	}
 
-	go p.collectAndSaveMetrics(node)
+	go p.collectAndSaveMetrics(node, result.Latency, float64(diskUsed), float64(diskTotal))
 }
 
 type nodeMetrics struct {
@@ -193,7 +193,7 @@ type nodeMetrics struct {
 	load1m  float64
 }
 
-func (p *Prober) collectAndSaveMetrics(node model.Node) {
+func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, diskGBUsed, diskGBTotal float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -203,13 +203,22 @@ func (p *Prober) collectAndSaveMetrics(node model.Node) {
 		return
 	}
 
+	lat := int64(probeLatencyMs)
 	sample := model.NodeMetricSample{
 		NodeID:    node.ID,
 		CpuPct:    metrics.cpuPct,
 		MemPct:    metrics.memPct,
 		DiskPct:   metrics.diskPct,
 		Load1m:    metrics.load1m,
+		LatencyMs: &lat,
+		ProbeOK:   true,
 		SampledAt: time.Now().UTC(),
+	}
+	if diskGBTotal > 0 {
+		usedCopy := diskGBUsed
+		totalCopy := diskGBTotal
+		sample.DiskGBUsed = &usedCopy
+		sample.DiskGBTotal = &totalCopy
 	}
 	if err := p.db.Create(&sample).Error; err != nil {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(err).Msg("保存节点资源指标失败")
