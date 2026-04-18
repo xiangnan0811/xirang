@@ -68,6 +68,7 @@ go run ./cmd/server
 | GET | /nodes/:id/metrics | 🔒 资源指标 |
 | GET | /nodes/:id/status | 🔒 节点状态快照（最新采样 + 1h/24h 聚合 + 告警/任务计数） |
 | GET | /nodes/:id/metric-series | 🔒 按时间窗返回多指标序列（granularity=auto/raw/hourly/daily）|
+| GET | /nodes/:id/disk-forecast | 🔒 磁盘用量线性回归预测（days_to_full + confidence 分层） |
 | GET | /nodes/:id/files | 🔒 远程文件列表 |
 | GET | /nodes/:id/files/content | 🔒 文件内容 |
 | GET | /nodes/:id/docker-volumes | 🔒 Docker 卷列表 |

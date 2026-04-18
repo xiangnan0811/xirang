@@ -325,6 +325,63 @@ func dailyFieldMap(r model.NodeMetricSampleDaily) map[metrics.Field][2]*float64 
 	}
 }
 
+type diskForecastResponse struct {
+	DiskGBTotal   float64  `json:"disk_gb_total"`
+	DiskGBUsedNow float64  `json:"disk_gb_used_now"`
+	DailyGrowthGB *float64 `json:"daily_growth_gb"`
+	Forecast      struct {
+		DaysToFull *float64 `json:"days_to_full"`
+		DateFull   *string  `json:"date_full"`
+		Confidence string   `json:"confidence"`
+	} `json:"forecast"`
+}
+
+// DiskForecast returns a disk-usage projection derived from the last 30 days
+// of daily aggregates for the node.
+func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	var rows []model.NodeMetricSampleDaily
+	h.db.Where("node_id = ? AND bucket_start >= ?", id, cutoff).
+		Order("bucket_start ASC").Find(&rows)
+
+	resp := diskForecastResponse{}
+	if len(rows) == 0 {
+		resp.Forecast.Confidence = string(metrics.ConfidenceInsufficient)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	pts := make([]metrics.ForecastPoint, 0, len(rows))
+	t0 := rows[0].BucketStart
+	for _, r := range rows {
+		if r.DiskGBUsedAvg == nil {
+			continue
+		}
+		day := r.BucketStart.Sub(t0).Hours() / 24
+		pts = append(pts, metrics.ForecastPoint{Day: day, DiskGBUsed: *r.DiskGBUsedAvg})
+		resp.DiskGBUsedNow = *r.DiskGBUsedAvg
+		if r.DiskGBTotal != nil {
+			resp.DiskGBTotal = *r.DiskGBTotal
+		}
+	}
+
+	f := metrics.DiskForecast(pts, resp.DiskGBTotal)
+	resp.DailyGrowthGB = f.DailyGrowthGB
+	resp.Forecast.Confidence = string(f.Confidence)
+	if f.DaysToFull != nil && *f.DaysToFull > 0 {
+		resp.Forecast.DaysToFull = f.DaysToFull
+		when := time.Now().UTC().Add(time.Duration(*f.DaysToFull*24) * time.Hour).Format("2006-01-02")
+		resp.Forecast.DateFull = &when
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // fillTrend aggregates hourly buckets in [from, to) into a flat map of
 // metric → averaged value plus probe_ok_ratio. No-op if no buckets exist.
 func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[string]float64) {
