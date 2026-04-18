@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"xirang/backend/internal/logger"
+
 	"gorm.io/gorm"
 )
 
@@ -164,4 +166,160 @@ func (a *Aggregator) rollupDaily(ctx context.Context, from, to time.Time) (int, 
 		return 0, result.Error
 	}
 	return int(result.RowsAffected), nil
+}
+
+// backfill walks forward from the oldest uncovered window, synchronously
+// filling hourly then daily tiers up to (now - 5min) and (now - 1d)
+// respectively. Called once at Start before the tickers arm. Safe to call
+// on a cold boot (empty aggregate tables → backfill from oldest raw sample).
+func (a *Aggregator) backfill(ctx context.Context) error {
+	if err := a.catchUpHourly(ctx); err != nil {
+		return fmt.Errorf("hourly backfill: %w", err)
+	}
+	return a.catchUpDaily(ctx)
+}
+
+// scanNullableTime scans a MAX/MIN aggregate that may be NULL into a time.Time.
+// Returns the zero value when the column is NULL (empty table).
+//
+// SQLite stores datetime columns as strings and returns them as driver.Value
+// type string; it returns nil for NULL aggregates. Scanning either directly
+// into *time.Time fails for both cases with gorm/go-sqlite3. We therefore
+// scan into *string and parse with a set of known SQLite datetime formats.
+func scanNullableTime(db *gorm.DB, query string, args ...interface{}) time.Time {
+	var raw *string
+	db.Raw(query, args...).Scan(&raw)
+	if raw == nil || *raw == "" {
+		return time.Time{}
+	}
+	// SQLite emits datetimes in several formats depending on how they were stored.
+	formats := []string{
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z",
+		time.RFC3339Nano,
+		time.RFC3339,
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, *raw); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+// catchUpHourly walks every uncovered hourly bucket from MAX(bucket_start)+1h
+// (or oldest raw sample, if the table is empty) up to now-5min, calling
+// rollupHourly on each. The 5-minute cushion avoids picking up an in-flight
+// hour. Does NOT acquire a.mu — rollupHourly locks each call individually.
+func (a *Aggregator) catchUpHourly(ctx context.Context) error {
+	lastBucket := scanNullableTime(a.db.WithContext(ctx),
+		"SELECT MAX(bucket_start) FROM node_metric_samples_hourly")
+	oldestSample := scanNullableTime(a.db.WithContext(ctx),
+		"SELECT MIN(sampled_at) FROM node_metric_samples")
+
+	var from time.Time
+	if lastBucket.IsZero() {
+		if oldestSample.IsZero() {
+			rollupLagSeconds.WithLabelValues("hourly").Set(0)
+			return nil
+		}
+		from = oldestSample.Truncate(time.Hour)
+	} else {
+		from = lastBucket.Add(time.Hour)
+	}
+	end := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Hour)
+	for from.Before(end) {
+		to := from.Add(time.Hour)
+		if _, err := a.rollupHourly(ctx, from, to); err != nil {
+			return err
+		}
+		from = to
+	}
+	rollupLagSeconds.WithLabelValues("hourly").Set(time.Since(end).Seconds())
+	return nil
+}
+
+// catchUpDaily does the same for daily buckets, sourcing from hourly.
+func (a *Aggregator) catchUpDaily(ctx context.Context) error {
+	lastBucket := scanNullableTime(a.db.WithContext(ctx),
+		"SELECT MAX(bucket_start) FROM node_metric_samples_daily")
+	oldestHourly := scanNullableTime(a.db.WithContext(ctx),
+		"SELECT MIN(bucket_start) FROM node_metric_samples_hourly")
+
+	var from time.Time
+	if lastBucket.IsZero() {
+		if oldestHourly.IsZero() {
+			rollupLagSeconds.WithLabelValues("daily").Set(0)
+			return nil
+		}
+		from = oldestHourly.Truncate(24 * time.Hour)
+	} else {
+		from = lastBucket.Add(24 * time.Hour)
+	}
+	end := time.Now().UTC().Truncate(24 * time.Hour)
+	for from.Before(end) {
+		to := from.Add(24 * time.Hour)
+		if _, err := a.rollupDaily(ctx, from, to); err != nil {
+			return err
+		}
+		from = to
+	}
+	rollupLagSeconds.WithLabelValues("daily").Set(time.Since(end).Seconds())
+	return nil
+}
+
+// Start performs backfill synchronously, then arms the periodic tickers.
+// Blocks on backfill; returns once the background loop is running.
+func (a *Aggregator) Start(ctx context.Context) error {
+	if err := a.backfill(ctx); err != nil {
+		return err
+	}
+	aggCtx, cancel := context.WithCancel(ctx)
+	a.cancel = cancel
+	go a.loop(aggCtx)
+	return nil
+}
+
+// loop runs the scheduled ticks until ctx is cancelled.
+func (a *Aggregator) loop(ctx context.Context) {
+	defer close(a.done)
+	hourly := time.NewTicker(1 * time.Minute)
+	daily := time.NewTicker(10 * time.Minute)
+	defer hourly.Stop()
+	defer daily.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hourly.C:
+			a.measureRollup(ctx, "hourly", a.catchUpHourly)
+		case <-daily.C:
+			a.measureRollup(ctx, "daily", a.catchUpDaily)
+		}
+	}
+}
+
+// measureRollup wraps a catch-up call with duration observation and error
+// logging. Errors never escalate — they're logged and the next tick retries.
+func (a *Aggregator) measureRollup(ctx context.Context, tier string, fn func(context.Context) error) {
+	start := time.Now()
+	if err := fn(ctx); err != nil {
+		logger.Module("metrics").Warn().Str("tier", tier).Err(err).Msg("rollup failed")
+	}
+	rollupDurationSeconds.WithLabelValues(tier).Observe(time.Since(start).Seconds())
+}
+
+// Stop signals the background loop to exit and waits for completion or ctx timeout.
+func (a *Aggregator) Stop(ctx context.Context) error {
+	if a.cancel != nil {
+		a.cancel()
+	}
+	select {
+	case <-a.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

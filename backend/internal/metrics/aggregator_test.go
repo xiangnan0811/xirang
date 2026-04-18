@@ -152,3 +152,28 @@ func TestRollupDaily_FromHourly(t *testing.T) {
 		t.Fatalf("expected sample_count=240, got %d", got.SampleCount)
 	}
 }
+
+func TestAggregator_BackfillsHourlyFromRaw(t *testing.T) {
+	db := newAggTestDB(t)
+	now := time.Now().UTC().Truncate(time.Hour)
+	// Seed 3 raw samples at h-3, h-2, h-1 relative to now.
+	for h := -3; h <= -1; h++ {
+		if err := db.Create(&model.NodeMetricSample{
+			NodeID:    1,
+			CpuPct:    float64(h) + 50,
+			ProbeOK:   true,
+			SampledAt: now.Add(time.Duration(h) * time.Hour).Add(15 * time.Minute),
+		}).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	agg := NewAggregator(db, "sqlite")
+	if err := agg.backfill(context.Background()); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	var count int64
+	db.Model(&model.NodeMetricSampleHourly{}).Count(&count)
+	if count != 3 {
+		t.Fatalf("expected 3 hourly buckets after backfill, got %d", count)
+	}
+}
