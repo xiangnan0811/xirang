@@ -14,10 +14,21 @@ fi
 WARN=0
 MSGS=()
 
+# Returns 0 if the path is ignored (thus can never be staged — check would be unsatisfiable).
+is_gitignored() {
+  git check-ignore -q "$1" 2>/dev/null
+}
+
 check() {
   local trigger="$1"
   local doc="$2"
   local msg="$3"
+  # Skip checks whose target doc is gitignored (e.g. local-only CLAUDE.md):
+  # the author's intent is to remind about doc sync, but an ignored file can
+  # never be staged so the rule would be impossible to satisfy.
+  if is_gitignored "$doc"; then
+    return
+  fi
   if echo "$STAGED" | grep -q "$trigger"; then
     if ! echo "$STAGED" | grep -q "$doc"; then
       MSGS+=("$msg")
