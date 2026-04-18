@@ -1,4 +1,4 @@
-CREATE TABLE node_metric_samples_hourly (
+CREATE TABLE IF NOT EXISTS node_metric_samples_hourly (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id INTEGER NOT NULL,
     bucket_start DATETIME NOT NULL,
@@ -17,8 +17,9 @@ CREATE TABLE node_metric_samples_hourly (
     probe_ok INTEGER NOT NULL DEFAULT 0,
     probe_fail INTEGER NOT NULL DEFAULT 0,
     sample_count INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME NOT NULL,
-    UNIQUE (node_id, bucket_start)
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (node_id, bucket_start),
+    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
-CREATE INDEX idx_nmsh_node_bucket ON node_metric_samples_hourly(node_id, bucket_start);
-CREATE INDEX idx_nmsh_bucket ON node_metric_samples_hourly(bucket_start);
+CREATE INDEX IF NOT EXISTS idx_nmsh_node_bucket ON node_metric_samples_hourly(node_id, bucket_start);
+CREATE INDEX IF NOT EXISTS idx_nmsh_bucket ON node_metric_samples_hourly(bucket_start);
