@@ -15,6 +15,7 @@ import (
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/logger"
+	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
@@ -86,7 +87,8 @@ func main() {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
 
-	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency)
+	metricSink := metrics.NewFanSink(metrics.NewDBSink(db))
+	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
 	prober.Start(hubCtx)
 
 	reportScheduler := reporting.NewScheduler(hubCtx, db)
