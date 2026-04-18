@@ -3,8 +3,10 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -74,6 +76,253 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		Count(&resp.RunningTasks)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// Response payload shape ------------------------------------------------------
+
+type metricPoint struct {
+	T   time.Time `json:"t"`
+	Avg *float64  `json:"avg,omitempty"`
+	Max *float64  `json:"max,omitempty"`
+	V   *float64  `json:"v,omitempty"`
+}
+
+type metricSeries struct {
+	Metric string        `json:"metric"`
+	Unit   string        `json:"unit"`
+	Points []metricPoint `json:"points"`
+}
+
+type metricsSeriesResponse struct {
+	Granularity   string         `json:"granularity"`
+	BucketSeconds int            `json:"bucket_seconds"`
+	Series        []metricSeries `json:"series"`
+}
+
+var fieldUnits = map[metrics.Field]string{
+	metrics.FieldCPUPct:       "percent",
+	metrics.FieldMemPct:       "percent",
+	metrics.FieldDiskPct:      "percent",
+	metrics.FieldLoad1:        "load",
+	metrics.FieldLatencyMs:    "ms",
+	metrics.FieldDiskGBUsed:   "gb",
+	metrics.FieldProbeOKRatio: "ratio",
+}
+
+const rawMaxPointsPerSeries = 1500
+
+// Metrics returns a time-windowed series for one or more fields, picking a
+// storage tier automatically based on the span size unless the client
+// overrides via ?granularity=.
+func (h *NodeMetricsHandler) Metrics(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	from, errFrom := time.Parse(time.RFC3339, c.Query("from"))
+	to, errTo := time.Parse(time.RFC3339, c.Query("to"))
+	if errFrom != nil || errTo != nil || !to.After(from) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from/to"})
+		return
+	}
+	fields := resolveFields(c.Query("fields"))
+
+	grQuery := c.DefaultQuery("granularity", "auto")
+	var chosen metrics.Granularity
+	switch grQuery {
+	case "auto":
+		chosen = metrics.SelectGranularity(to.Sub(from))
+	case "raw":
+		chosen = metrics.GranularityRaw
+	case "hourly":
+		chosen = metrics.GranularityHourly
+	case "daily":
+		chosen = metrics.GranularityDaily
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid granularity"})
+		return
+	}
+
+	resp := metricsSeriesResponse{Granularity: string(chosen)}
+	switch chosen {
+	case metrics.GranularityRaw:
+		resp.BucketSeconds = 0
+		resp.Series = h.rawSeries(uint(id), from, to, fields)
+	case metrics.GranularityHourly:
+		resp.BucketSeconds = 3600
+		resp.Series = h.hourlySeries(uint(id), from, to, fields)
+	case metrics.GranularityDaily:
+		resp.BucketSeconds = 86400
+		resp.Series = h.dailySeries(uint(id), from, to, fields)
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func resolveFields(raw string) []metrics.Field {
+	if raw == "" {
+		return metrics.AllFields
+	}
+	out := []metrics.Field{}
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, metrics.Field(s))
+		}
+	}
+	return out
+}
+
+// rawSeries returns point lists from node_metric_samples. If the window holds
+// more than 1500 samples per series, applies equidistant stride downsampling
+// (keeping the last point). Raw-tier points use {"t", "v"} only — no avg/max.
+func (h *NodeMetricsHandler) rawSeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+	var rows []model.NodeMetricSample
+	h.db.Where("node_id = ? AND sampled_at >= ? AND sampled_at < ?", nodeID, from, to).
+		Order("sampled_at ASC").Find(&rows)
+
+	stride := 1
+	if len(rows) > rawMaxPointsPerSeries {
+		stride = (len(rows) + rawMaxPointsPerSeries - 1) / rawMaxPointsPerSeries
+	}
+
+	out := make([]metricSeries, 0, len(fields))
+	for _, f := range fields {
+		pts := make([]metricPoint, 0, len(rows)/stride+1)
+		for i, r := range rows {
+			if i%stride != 0 && i != len(rows)-1 {
+				continue
+			}
+			v := rawFieldValue(r, f)
+			if v == nil {
+				continue
+			}
+			val := *v
+			pts = append(pts, metricPoint{T: r.SampledAt, V: &val})
+		}
+		out = append(out, metricSeries{Metric: string(f), Unit: fieldUnits[f], Points: pts})
+	}
+	return out
+}
+
+func rawFieldValue(r model.NodeMetricSample, f metrics.Field) *float64 {
+	switch f {
+	case metrics.FieldCPUPct:
+		v := r.CpuPct
+		return &v
+	case metrics.FieldMemPct:
+		v := r.MemPct
+		return &v
+	case metrics.FieldDiskPct:
+		v := r.DiskPct
+		return &v
+	case metrics.FieldLoad1:
+		v := r.Load1m
+		return &v
+	case metrics.FieldLatencyMs:
+		if r.LatencyMs == nil {
+			return nil
+		}
+		v := float64(*r.LatencyMs)
+		return &v
+	case metrics.FieldDiskGBUsed:
+		return r.DiskGBUsed
+	case metrics.FieldProbeOKRatio:
+		var v float64
+		if r.ProbeOK {
+			v = 1
+		}
+		return &v
+	}
+	return nil
+}
+
+// hourlySeries pulls from node_metric_samples_hourly. Points carry avg + max.
+func (h *NodeMetricsHandler) hourlySeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+	var rows []model.NodeMetricSampleHourly
+	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
+		Order("bucket_start ASC").Find(&rows)
+	return aggregateSeries(fields, len(rows), func(i int) (time.Time, map[metrics.Field][2]*float64) {
+		r := rows[i]
+		return r.BucketStart, hourlyFieldMap(r)
+	})
+}
+
+// dailySeries pulls from node_metric_samples_daily. Shape matches hourly.
+func (h *NodeMetricsHandler) dailySeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+	var rows []model.NodeMetricSampleDaily
+	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
+		Order("bucket_start ASC").Find(&rows)
+	return aggregateSeries(fields, len(rows), func(i int) (time.Time, map[metrics.Field][2]*float64) {
+		r := rows[i]
+		return r.BucketStart, dailyFieldMap(r)
+	})
+}
+
+// aggregateSeries is the shared shape-builder for hourly & daily rows.
+// accessor returns (bucketStart, field → [avgPtr, maxPtr]) for the i-th row.
+func aggregateSeries(
+	fields []metrics.Field,
+	n int,
+	accessor func(int) (time.Time, map[metrics.Field][2]*float64),
+) []metricSeries {
+	out := make([]metricSeries, 0, len(fields))
+	for _, f := range fields {
+		pts := make([]metricPoint, 0, n)
+		for i := 0; i < n; i++ {
+			t, fieldMap := accessor(i)
+			pair, ok := fieldMap[f]
+			if !ok || (pair[0] == nil && pair[1] == nil) {
+				continue
+			}
+			p := metricPoint{T: t}
+			if pair[0] != nil {
+				avg := *pair[0]
+				p.Avg = &avg
+			}
+			if pair[1] != nil {
+				max := *pair[1]
+				p.Max = &max
+			}
+			pts = append(pts, p)
+		}
+		out = append(out, metricSeries{Metric: string(f), Unit: fieldUnits[f], Points: pts})
+	}
+	return out
+}
+
+// probeOKRatio returns ratio pointer (nil if sample_count is 0).
+func probeOKRatio(ok int64, total int64) *float64 {
+	if total == 0 {
+		return nil
+	}
+	v := float64(ok) / float64(total)
+	return &v
+}
+
+func hourlyFieldMap(r model.NodeMetricSampleHourly) map[metrics.Field][2]*float64 {
+	ratio := probeOKRatio(r.ProbeOK, r.SampleCount)
+	return map[metrics.Field][2]*float64{
+		metrics.FieldCPUPct:       {r.CpuPctAvg, r.CpuPctMax},
+		metrics.FieldMemPct:       {r.MemPctAvg, r.MemPctMax},
+		metrics.FieldDiskPct:      {r.DiskPctAvg, r.DiskPctMax},
+		metrics.FieldLoad1:        {r.Load1Avg, r.Load1Max},
+		metrics.FieldLatencyMs:    {r.LatencyMsAvg, r.LatencyMsMax},
+		metrics.FieldDiskGBUsed:   {r.DiskGBUsedAvg, nil},
+		metrics.FieldProbeOKRatio: {ratio, nil},
+	}
+}
+
+func dailyFieldMap(r model.NodeMetricSampleDaily) map[metrics.Field][2]*float64 {
+	ratio := probeOKRatio(r.ProbeOK, r.SampleCount)
+	return map[metrics.Field][2]*float64{
+		metrics.FieldCPUPct:       {r.CpuPctAvg, r.CpuPctMax},
+		metrics.FieldMemPct:       {r.MemPctAvg, r.MemPctMax},
+		metrics.FieldDiskPct:      {r.DiskPctAvg, r.DiskPctMax},
+		metrics.FieldLoad1:        {r.Load1Avg, r.Load1Max},
+		metrics.FieldLatencyMs:    {r.LatencyMsAvg, r.LatencyMsMax},
+		metrics.FieldDiskGBUsed:   {r.DiskGBUsedAvg, nil},
+		metrics.FieldProbeOKRatio: {ratio, nil},
+	}
 }
 
 // fillTrend aggregates hourly buckets in [from, to) into a flat map of
