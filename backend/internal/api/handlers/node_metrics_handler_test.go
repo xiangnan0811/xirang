@@ -254,3 +254,60 @@ func TestNodeMetricsHandler_DiskForecast_Insufficient(t *testing.T) {
 		t.Fatalf("expected insufficient, got %s", resp.Forecast.Confidence)
 	}
 }
+
+func TestDownsample_UnderMaxReturnsInput(t *testing.T) {
+	pts := []metricPoint{{T: time.Unix(0, 0)}, {T: time.Unix(1, 0)}, {T: time.Unix(2, 0)}}
+	got := downsample(pts, 10)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 points, got %d", len(got))
+	}
+}
+
+func TestDownsample_CapsAndKeepsLastPoint(t *testing.T) {
+	pts := make([]metricPoint, 100)
+	for i := range pts {
+		pts[i] = metricPoint{T: time.Unix(int64(i), 0)}
+	}
+	got := downsample(pts, 10)
+	if len(got) > 11 {
+		t.Fatalf("expected at most 11 points, got %d", len(got))
+	}
+	if got[len(got)-1].T != pts[len(pts)-1].T {
+		t.Fatalf("last point must be preserved")
+	}
+}
+
+func TestFillTrend_WeightedBySampleCount(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.NodeMetricSampleHourly{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Hour)
+	// Bucket A: 3 samples, cpu_avg = 10  — short hour, few samples
+	// Bucket B: 120 samples, cpu_avg = 50 — normal hour, dense samples
+	// Un-weighted average would be 30; weighted (by sample_count) is
+	// (10*3 + 50*120) / (3+120) = 6030/123 ≈ 49.02
+	a, b := 10.0, 50.0
+	rows := []model.NodeMetricSampleHourly{
+		{NodeID: 1, BucketStart: now.Add(-2 * time.Hour), CpuPctAvg: &a, SampleCount: 3, ProbeOK: 3},
+		{NodeID: 1, BucketStart: now.Add(-1 * time.Hour), CpuPctAvg: &b, SampleCount: 120, ProbeOK: 120},
+	}
+	for _, r := range rows {
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	h := NewNodeMetricsHandler(db)
+	dst := map[string]float64{}
+	h.fillTrend(1, now.Add(-3*time.Hour), now, dst)
+
+	expected := (10*3.0 + 50*120.0) / 123.0
+	got := dst["cpu_pct_avg"]
+	if diff := got - expected; diff > 0.01 || diff < -0.01 {
+		t.Fatalf("expected weighted cpu_pct_avg ≈ %.2f, got %.4f", expected, got)
+	}
+	// Un-weighted would have been 30 — make sure we're not silently using that.
+	if got < 40 {
+		t.Fatalf("weight appears not applied: %.2f too close to un-weighted 30", got)
+	}
+}

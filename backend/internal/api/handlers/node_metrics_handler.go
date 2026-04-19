@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
 
@@ -47,8 +49,15 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		Trend24h: map[string]float64{},
 	}
 
+	log := logger.Module("node_metrics").With().Uint64("node_id", id).Logger()
+
+	// "No samples yet" is a legitimate empty state for a just-created node;
+	// don't log it. Real DB errors (connection drops, schema drift) should
+	// surface so operators can see the signal instead of a zero-filled page.
 	var latest model.NodeMetricSample
-	if err := h.db.Where("node_id = ?", id).Order("sampled_at desc").First(&latest).Error; err == nil {
+	err = h.db.Where("node_id = ?", id).Order("sampled_at desc").First(&latest).Error
+	switch {
+	case err == nil:
 		t := latest.SampledAt
 		resp.ProbedAt = &t
 		resp.Online = latest.ProbeOK
@@ -59,21 +68,29 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		if latest.LatencyMs != nil {
 			resp.Current["latency_ms"] = float64(*latest.LatencyMs)
 		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// No-op — node has no samples yet.
+	default:
+		log.Warn().Err(err).Msg("latest sample query failed")
 	}
 
 	now := time.Now().UTC()
 	h.fillTrend(uint(id), now.Add(-1*time.Hour), now, resp.Trend1h)
 	h.fillTrend(uint(id), now.Add(-24*time.Hour), now, resp.Trend24h)
 
-	h.db.Model(&model.Alert{}).
+	if err := h.db.Model(&model.Alert{}).
 		Where("node_id = ? AND status = ?", id, "open").
-		Count(&resp.OpenAlerts)
+		Count(&resp.OpenAlerts).Error; err != nil {
+		log.Warn().Err(err).Msg("open alerts count failed")
+	}
 
 	// TaskRun has no direct node_id column; join through tasks table.
-	h.db.Table("task_runs").
+	if err := h.db.Table("task_runs").
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
 		Where("tasks.node_id = ? AND task_runs.status = ?", id, "running").
-		Count(&resp.RunningTasks)
+		Count(&resp.RunningTasks).Error; err != nil {
+		log.Warn().Err(err).Msg("running tasks count failed")
+	}
 
 	c.JSON(http.StatusOK, resp)
 }
@@ -172,34 +189,52 @@ func resolveFields(raw string) []metrics.Field {
 	return out
 }
 
-// rawSeries returns point lists from node_metric_samples. If the window holds
-// more than 1500 samples per series, applies equidistant stride downsampling
-// (keeping the last point). Raw-tier points use {"t", "v"} only — no avg/max.
+// rawSeries returns point lists from node_metric_samples. For each requested
+// field it first filters to non-null observations, THEN applies equidistant
+// stride decimation so the result is capped at rawMaxPointsPerSeries.
+//
+// Filtering-before-striding matters for sparse nullable columns (latency_ms,
+// disk_gb_used): otherwise the stride is computed from the full row count and
+// nullable-null rows land on stride indices, dropping observations that
+// happened between them.
+//
+// Raw-tier points use {"t", "v"} only — no avg/max.
 func (h *NodeMetricsHandler) rawSeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
 	var rows []model.NodeMetricSample
 	h.db.Where("node_id = ? AND sampled_at >= ? AND sampled_at < ?", nodeID, from, to).
 		Order("sampled_at ASC").Find(&rows)
 
-	stride := 1
-	if len(rows) > rawMaxPointsPerSeries {
-		stride = (len(rows) + rawMaxPointsPerSeries - 1) / rawMaxPointsPerSeries
-	}
-
 	out := make([]metricSeries, 0, len(fields))
 	for _, f := range fields {
-		pts := make([]metricPoint, 0, len(rows)/stride+1)
-		for i, r := range rows {
-			if i%stride != 0 && i != len(rows)-1 {
-				continue
-			}
+		// Gather non-null observations for this field first.
+		full := make([]metricPoint, 0, len(rows))
+		for _, r := range rows {
 			v := rawFieldValue(r, f)
 			if v == nil {
 				continue
 			}
 			val := *v
-			pts = append(pts, metricPoint{T: r.SampledAt, V: &val})
+			full = append(full, metricPoint{T: r.SampledAt, V: &val})
 		}
+		pts := downsample(full, rawMaxPointsPerSeries)
 		out = append(out, metricSeries{Metric: string(f), Unit: fieldUnits[f], Points: pts})
+	}
+	return out
+}
+
+// downsample returns up to max equidistant points from the sorted input,
+// always including the last element so the trailing edge of the window is
+// never silently dropped.
+func downsample(src []metricPoint, max int) []metricPoint {
+	if max <= 0 || len(src) <= max {
+		return src
+	}
+	stride := (len(src) + max - 1) / max
+	out := make([]metricPoint, 0, max+1)
+	for i, p := range src {
+		if i%stride == 0 || i == len(src)-1 {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -383,7 +418,10 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 }
 
 // fillTrend aggregates hourly buckets in [from, to) into a flat map of
-// metric → averaged value plus probe_ok_ratio. No-op if no buckets exist.
+// metric → sample_count-weighted average plus probe_ok_ratio. Weighting
+// avoids biasing the trend toward short buckets with few raw samples
+// (e.g. a 3-sample hour counts 3, not equal to a 120-sample hour).
+// No-op if no buckets exist.
 func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[string]float64) {
 	var rows []model.NodeMetricSampleHourly
 	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
@@ -391,47 +429,52 @@ func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[
 	if len(rows) == 0 {
 		return
 	}
-	var cpu, mem, disk, load, latency float64
-	var cpuN, memN, diskN, loadN, latencyN int
+	var cpuSum, memSum, diskSum, loadSum, latencySum float64
+	var cpuW, memW, diskW, loadW, latencyW int64
 	var okSum, totalSum int64
 	for _, r := range rows {
+		w := r.SampleCount
+		if w <= 0 {
+			continue
+		}
+		wf := float64(w)
 		if r.CpuPctAvg != nil {
-			cpu += *r.CpuPctAvg
-			cpuN++
+			cpuSum += *r.CpuPctAvg * wf
+			cpuW += w
 		}
 		if r.MemPctAvg != nil {
-			mem += *r.MemPctAvg
-			memN++
+			memSum += *r.MemPctAvg * wf
+			memW += w
 		}
 		if r.DiskPctAvg != nil {
-			disk += *r.DiskPctAvg
-			diskN++
+			diskSum += *r.DiskPctAvg * wf
+			diskW += w
 		}
 		if r.Load1Avg != nil {
-			load += *r.Load1Avg
-			loadN++
+			loadSum += *r.Load1Avg * wf
+			loadW += w
 		}
 		if r.LatencyMsAvg != nil {
-			latency += *r.LatencyMsAvg
-			latencyN++
+			latencySum += *r.LatencyMsAvg * wf
+			latencyW += w
 		}
 		okSum += r.ProbeOK
 		totalSum += r.SampleCount
 	}
-	if cpuN > 0 {
-		dst["cpu_pct_avg"] = cpu / float64(cpuN)
+	if cpuW > 0 {
+		dst["cpu_pct_avg"] = cpuSum / float64(cpuW)
 	}
-	if memN > 0 {
-		dst["mem_pct_avg"] = mem / float64(memN)
+	if memW > 0 {
+		dst["mem_pct_avg"] = memSum / float64(memW)
 	}
-	if diskN > 0 {
-		dst["disk_pct_avg"] = disk / float64(diskN)
+	if diskW > 0 {
+		dst["disk_pct_avg"] = diskSum / float64(diskW)
 	}
-	if loadN > 0 {
-		dst["load1_avg"] = load / float64(loadN)
+	if loadW > 0 {
+		dst["load1_avg"] = loadSum / float64(loadW)
 	}
-	if latencyN > 0 {
-		dst["latency_ms_avg"] = latency / float64(latencyN)
+	if latencyW > 0 {
+		dst["latency_ms_avg"] = latencySum / float64(latencyW)
 	}
 	if totalSum > 0 {
 		dst["probe_ok_ratio"] = float64(okSum) / float64(totalSum)
