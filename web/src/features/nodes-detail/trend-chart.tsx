@@ -87,35 +87,36 @@ export default function TrendChart({
         })}
       </div>
 
-      <div style={{ height }}>
-        {hasData ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-              <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip labelFormatter={(v) => new Date(String(v)).toLocaleString()} />
-              {visible.map((s, i) => (
-                <Line
-                  key={s.metric}
-                  type="monotone"
-                  dataKey={s.metric}
-                  stroke={COLORS[i % COLORS.length]}
-                  strokeWidth={1.5}
-                  dot={false}
-                  isAnimationActive={false}
-                  connectNulls
-                  name={`${s.metric} (${s.unit})`}
-                />
-              ))}
-            </ComposedChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            暂无数据
-          </div>
-        )}
-      </div>
+      {hasData ? (
+        <ResponsiveContainer width="100%" height={height}>
+          <ComposedChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={24} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip labelFormatter={(v) => new Date(String(v)).toLocaleString()} />
+            {visible.map((s, i) => (
+              <Line
+                key={s.metric}
+                type="monotone"
+                dataKey={s.metric}
+                stroke={COLORS[i % COLORS.length]}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls
+                name={`${s.metric} (${s.unit})`}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      ) : (
+        <div
+          style={{ height }}
+          className="flex items-center justify-center text-sm text-muted-foreground"
+        >
+          暂无数据
+        </div>
+      )}
     </div>
   );
 }
