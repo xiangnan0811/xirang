@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/xiangnan0811/xirang/compare/v0.10.0...v0.11.0) (2026-04-19)
+
+
+### Features
+
+* **p5a:** metrics lifecycle — aggregation, forecasting, node detail UI ([#40](https://github.com/xiangnan0811/xirang/issues/40)) ([19f976b](https://github.com/xiangnan0811/xirang/commit/19f976bac00b6a2a73bdffd0c82316da6cda192b))
+
 ## [0.10.0](https://github.com/xiangnan0811/xirang/compare/v0.9.0...v0.10.0) (2026-04-17)
 
 
