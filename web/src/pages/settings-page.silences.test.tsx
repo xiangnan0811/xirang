@@ -42,6 +42,16 @@ vi.mock("@/lib/api/silences", () => ({
     Array.isArray(s.match_tags) ? s.match_tags : [],
 }))
 
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    getNodes: vi.fn().mockResolvedValue([
+      { id: 1, name: "node-1" },
+      { id: 2, name: "node-2" },
+    ]),
+    getAlerts: vi.fn().mockResolvedValue([]),
+  },
+}))
+
 describe("SilencesPanel", () => {
   beforeEach(() => {
     toastErrorMock.mockReset()
@@ -82,5 +92,32 @@ describe("SilencesPanel", () => {
 
     expect(toastErrorMock).toHaveBeenCalledWith("结束时间必须晚于开始时间")
     expect(createSilenceMock).not.toHaveBeenCalled()
+  })
+
+  it("shows node options in dropdown when dialog opens", async () => {
+    render(<SilencesPanel />)
+    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+    // Wait for nodes to load (apiClient.getNodes is mocked)
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "全部节点" })).toBeInTheDocument()
+    })
+    expect(screen.getByRole("option", { name: "node-1" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "node-2" })).toBeInTheDocument()
+  })
+
+  it("adds and removes tags via chip picker", async () => {
+    render(<SilencesPanel />)
+    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+
+    const tagInput = screen.getByPlaceholderText(/输入标签后按 Enter/)
+    await userEvent.type(tagInput, "prod")
+    await userEvent.keyboard("{Enter}")
+
+    // chip "prod" should appear
+    expect(screen.getByText("prod")).toBeInTheDocument()
+
+    // Remove it via ✕ button
+    await userEvent.click(screen.getByRole("button", { name: "移除标签 prod" }))
+    expect(screen.queryByText("prod")).not.toBeInTheDocument()
   })
 })

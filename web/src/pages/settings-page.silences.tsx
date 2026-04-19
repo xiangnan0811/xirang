@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
-import { Plus, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { Plus, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -10,8 +10,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Select } from "@/components/ui/select"
 import { toast } from "@/components/ui/toast"
 import { useAuth } from "@/context/auth-context"
+import { apiClient } from "@/lib/api/client"
 import {
   createSilence,
   deleteSilence,
@@ -21,6 +23,7 @@ import {
   type SilenceInput,
 } from "@/lib/api/silences"
 import { getErrorMessage } from "@/lib/utils"
+import type { NodeRecord } from "@/types/domain"
 
 // ---------- helpers ----------
 
@@ -54,6 +57,17 @@ function remaining(endAt: string): string {
   return `剩余 ${hours} 小时`
 }
 
+// Static alert error-code prefixes as datalist hints
+const ALERT_CODE_HINTS = [
+  "XR-EXEC-",
+  "XR-VRFY-",
+  "XR-NODE-",
+  "XR-NODE-EXPIRY-",
+  "XR-RETN-",
+  "XR-INTG-",
+  "XR-REPORT-",
+]
+
 // ---------- CreateSilenceDialog ----------
 
 type CreateSilenceDialogProps = {
@@ -71,27 +85,63 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   const [name, setName] = useState("")
   const [matchNodeId, setMatchNodeId] = useState("")
   const [matchCategory, setMatchCategory] = useState("")
-  const [matchTags, setMatchTags] = useState("")
+  const [tags, setTags] = useState<string[]>([])
+  const [tagInput, setTagInput] = useState("")
   const [startsAt, setStartsAt] = useState(() => nowPlusHours(0))
   const [endsAt, setEndsAt] = useState(() => nowPlusHours(1))
   const [note, setNote] = useState("")
   const [submitting, setSubmitting] = useState(false)
+
+  const [nodes, setNodes] = useState<NodeRecord[]>([])
+  const [recentCodes, setRecentCodes] = useState<string[]>([])
+  const tagInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (open) {
       setName("")
       setMatchNodeId("")
       setMatchCategory("")
-      setMatchTags("")
+      setTags([])
+      setTagInput("")
       setStartsAt(nowPlusHours(0))
       setEndsAt(nowPlusHours(1))
       setNote("")
+
+      // Fetch nodes for dropdown
+      apiClient.getNodes(token).then(setNodes).catch(() => { /* silently ignore */ })
+
+      // Fetch recent alert error codes for datalist
+      apiClient.getAlerts(token).then((alerts) => {
+        const codes = Array.from(new Set(alerts.map((a) => a.errorCode).filter(Boolean)))
+        setRecentCodes(codes.slice(0, 20))
+      }).catch(() => { /* silently ignore; fall back to static hints */ })
     }
-  }, [open])
+  }, [open, token])
 
   const applyPreset = (hours: number) => {
     setStartsAt(nowPlusHours(0))
     setEndsAt(nowPlusHours(hours))
+  }
+
+  const addTag = () => {
+    const v = tagInput.trim()
+    if (!v || tags.includes(v)) {
+      setTagInput("")
+      return
+    }
+    setTags([...tags, v])
+    setTagInput("")
+  }
+
+  const removeTag = (t: string) => {
+    setTags(tags.filter((x) => x !== t))
+  }
+
+  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      addTag()
+    }
   }
 
   const handleSubmit = async () => {
@@ -105,9 +155,9 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
     }
     const input: SilenceInput = {
       name: name.trim(),
-      match_node_id: matchNodeId.trim() ? Number(matchNodeId.trim()) : null,
+      match_node_id: matchNodeId ? Number(matchNodeId) : null,
       match_category: matchCategory.trim(),
-      match_tags: matchTags.trim() ? matchTags.split(",").map((t) => t.trim()).filter(Boolean) : [],
+      match_tags: tags,
       starts_at: new Date(startsAt).toISOString(),
       ends_at: new Date(endsAt).toISOString(),
       note: note.trim() || undefined,
@@ -125,6 +175,9 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
     }
   }
 
+  // Datalist options: prefer fetched recent codes, fall back to static prefixes
+  const datalistOptions = recentCodes.length > 0 ? recentCodes : ALERT_CODE_HINTS
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="md">
@@ -132,6 +185,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
           <DialogTitle>新建静默规则</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
+          {/* 名称 */}
           <div className="space-y-1">
             <label htmlFor="silence-name" className="text-sm font-medium">
               名称
@@ -144,40 +198,84 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
               placeholder="维护窗口-A"
             />
           </div>
+
+          {/* 节点 dropdown */}
           <div className="space-y-1">
             <label htmlFor="silence-node" className="text-sm font-medium">
-              节点 ID（留空表示全部节点）
+              节点（留空表示全部节点）
             </label>
-            <Input
+            <Select
               id="silence-node"
               value={matchNodeId}
               onChange={(e) => setMatchNodeId(e.target.value)}
-              placeholder="1"
-              type="number"
-            />
+            >
+              <option value="">全部节点</option>
+              {nodes.map((n) => (
+                <option key={n.id} value={String(n.id)}>
+                  {n.name}
+                </option>
+              ))}
+            </Select>
           </div>
+
+          {/* 告警 ErrorCode */}
           <div className="space-y-1">
             <label htmlFor="silence-category" className="text-sm font-medium">
-              告警类别（留空匹配全部）
+              告警 ErrorCode（留空匹配全部）
             </label>
-            <Input
+            <input
               id="silence-category"
+              list="alert-categories"
               value={matchCategory}
               onChange={(e) => setMatchCategory(e.target.value)}
-              placeholder="backup_failed"
+              placeholder="如 XR-NODE-5 或留空匹配全部"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
+            <datalist id="alert-categories">
+              {datalistOptions.map((code) => (
+                <option key={code} value={code} />
+              ))}
+            </datalist>
           </div>
+
+          {/* 标签 chip picker */}
           <div className="space-y-1">
-            <label htmlFor="silence-tags" className="text-sm font-medium">
-              标签（逗号分隔）
-            </label>
-            <Input
-              id="silence-tags"
-              value={matchTags}
-              onChange={(e) => setMatchTags(e.target.value)}
-              placeholder="prod,web"
-            />
+            <label className="text-sm font-medium">标签</label>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pb-1">
+                {tags.map((t) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-[3px] text-xs font-medium text-foreground"
+                  >
+                    {t}
+                    <button
+                      type="button"
+                      aria-label={`移除标签 ${t}`}
+                      onClick={() => removeTag(t)}
+                      className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input
+                ref={tagInputRef}
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={handleTagKeyDown}
+                placeholder="输入标签后按 Enter 或点击添加"
+              />
+              <Button type="button" variant="outline" size="sm" onClick={addTag}>
+                添加
+              </Button>
+            </div>
           </div>
+
+          {/* 静默窗口 */}
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium">静默窗口</label>
@@ -192,6 +290,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
                 <label htmlFor="silence-starts" className="text-xs text-muted-foreground">开始</label>
                 <Input
                   id="silence-starts"
+                  aria-label="开始"
                   type="datetime-local"
                   value={startsAt}
                   onChange={(e) => setStartsAt(e.target.value)}
@@ -201,6 +300,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
                 <label htmlFor="silence-ends" className="text-xs text-muted-foreground">结束</label>
                 <Input
                   id="silence-ends"
+                  aria-label="结束"
                   type="datetime-local"
                   value={endsAt}
                   onChange={(e) => setEndsAt(e.target.value)}
@@ -208,6 +308,8 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
               </div>
             </div>
           </div>
+
+          {/* 备注 */}
           <div className="space-y-1">
             <label htmlFor="silence-note" className="text-sm font-medium">
               备注
