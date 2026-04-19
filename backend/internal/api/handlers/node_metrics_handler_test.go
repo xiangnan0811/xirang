@@ -249,7 +249,9 @@ func TestNodeMetricsHandler_DiskForecast_Insufficient(t *testing.T) {
 			Confidence string `json:"confidence"`
 		} `json:"forecast"`
 	}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp.Forecast.Confidence != "insufficient" {
 		t.Fatalf("expected insufficient, got %s", resp.Forecast.Confidence)
 	}
