@@ -3,6 +3,7 @@ package alerting
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
@@ -20,6 +21,12 @@ var backoffTable = []time.Duration{
 
 const maxAttempts = 4
 
+func init() {
+	if maxAttempts != len(backoffTable) {
+		panic("alerting: maxAttempts must equal len(backoffTable)")
+	}
+}
+
 func backoffDuration(attempt int) time.Duration {
 	if attempt < 0 {
 		return backoffTable[0]
@@ -32,6 +39,7 @@ func backoffDuration(attempt int) time.Duration {
 
 // RetryWorker 定期扫描 status='retrying' 的告警投递记录并重新发送。
 type RetryWorker struct {
+	mu     sync.Mutex
 	db     *gorm.DB
 	sendFn func(integration model.Integration, alert model.Alert) error
 }
@@ -64,12 +72,45 @@ func (w *RetryWorker) tick(now time.Time) {
 }
 
 func (w *RetryWorker) attempt(d model.AlertDelivery) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	var integ model.Integration
 	if err := w.db.First(&integ, d.IntegrationID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			d.Status = "failed"
+			d.NextRetryAt = nil
+			d.LastError = "integration deleted"
+			d.AttemptCount++
+			w.db.Save(&d)
+			logger.Module("alerting").Warn().
+				Uint("delivery_id", d.ID).
+				Uint("integration_id", d.IntegrationID).
+				Msg("integration 已删除，投递标记为 failed")
+		} else {
+			logger.Module("alerting").Warn().
+				Uint("delivery_id", d.ID).Err(err).
+				Msg("读取 integration 失败，跳过本次重试")
+		}
 		return
 	}
 	var alert model.Alert
 	if err := w.db.First(&alert, d.AlertID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			d.Status = "failed"
+			d.NextRetryAt = nil
+			d.LastError = "alert deleted"
+			d.AttemptCount++
+			w.db.Save(&d)
+			logger.Module("alerting").Warn().
+				Uint("delivery_id", d.ID).
+				Uint("alert_id", d.AlertID).
+				Msg("alert 已删除，投递标记为 failed")
+		} else {
+			logger.Module("alerting").Warn().
+				Uint("delivery_id", d.ID).Err(err).
+				Msg("读取 alert 失败，跳过本次重试")
+		}
 		return
 	}
 	err := w.sendFn(integ, alert)

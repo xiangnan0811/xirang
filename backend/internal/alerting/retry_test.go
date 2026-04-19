@@ -104,4 +104,63 @@ func TestRetryWorker_ManualRetryBypassesSchedule(t *testing.T) {
 	if got.Status != "sent" {
 		t.Fatalf("expected sent, got %q", got.Status)
 	}
+	if got.NextRetryAt != nil {
+		t.Fatalf("ManualRetry 成功后 NextRetryAt 应为 nil，实际 %v", got.NextRetryAt)
+	}
+}
+
+func TestRetryWorker_MarksFailedWhenIntegrationDeleted(t *testing.T) {
+	db := setupTestDB(t)
+	// 不创建 Integration，使 IntegrationID=999 不存在
+	db.Create(&model.Alert{NodeID: 1, ErrorCode: "probe_down"})
+	past := time.Now().Add(-time.Second)
+	d := model.AlertDelivery{
+		AlertID:       1,
+		IntegrationID: 999,
+		Status:        "retrying",
+		AttemptCount:  0,
+		NextRetryAt:   &past,
+	}
+	db.Create(&d)
+
+	w := NewRetryWorker(db)
+	w.sendFn = func(integ model.Integration, alert model.Alert) error { return nil }
+	w.tick(time.Now())
+
+	var got model.AlertDelivery
+	db.First(&got, d.ID)
+	if got.Status != "failed" {
+		t.Fatalf("expected failed, got %q", got.Status)
+	}
+	if got.LastError != "integration deleted" {
+		t.Fatalf("expected LastError 'integration deleted', got %q", got.LastError)
+	}
+}
+
+func TestRetryWorker_MarksFailedWhenAlertDeleted(t *testing.T) {
+	db := setupTestDB(t)
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://example.invalid"})
+	// 不创建 Alert，使 AlertID=999 不存在
+	past := time.Now().Add(-time.Second)
+	d := model.AlertDelivery{
+		AlertID:       999,
+		IntegrationID: 1,
+		Status:        "retrying",
+		AttemptCount:  0,
+		NextRetryAt:   &past,
+	}
+	db.Create(&d)
+
+	w := NewRetryWorker(db)
+	w.sendFn = func(integ model.Integration, alert model.Alert) error { return nil }
+	w.tick(time.Now())
+
+	var got model.AlertDelivery
+	db.First(&got, d.ID)
+	if got.Status != "failed" {
+		t.Fatalf("expected failed, got %q", got.Status)
+	}
+	if got.LastError != "alert deleted" {
+		t.Fatalf("expected LastError 'alert deleted', got %q", got.LastError)
+	}
 }
