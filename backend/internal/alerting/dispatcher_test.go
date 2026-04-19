@@ -298,3 +298,107 @@ func openAlertingTestDB(t *testing.T) *gorm.DB {
 	}
 	return db
 }
+
+// setupTestDB 初始化包含静默规则所需全部表的测试数据库
+func setupTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := openAlertingTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Alert{},
+		&model.AlertDelivery{},
+		&model.Integration{},
+		&model.Node{},
+		&model.Silence{},
+	); err != nil {
+		t.Fatalf("初始化测试表失败: %v", err)
+	}
+	return db
+}
+
+func TestDispatch_SilencedAlertIsNotDelivered(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	now := time.Now()
+
+	// 创建节点
+	node := model.Node{ID: 1, Name: "node-a", Host: "1.2.3.4", Port: 22, Tags: "prod"}
+	db.Create(&node)
+
+	// 创建匹配 node 1 + error_code "probe_down" 的静默规则
+	nodeID := uint(1)
+	db.Create(&model.Silence{
+		Name:          "maint",
+		MatchNodeID:   &nodeID,
+		MatchCategory: "probe_down",
+		StartsAt:      now.Add(-time.Hour),
+		EndsAt:        now.Add(time.Hour),
+		CreatedBy:     1,
+	})
+
+	// 创建通道（使用本地 httptest server，快速响应）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL})
+
+	// 直接调用内部函数（同包内测试可访问），不预先创建 alert
+	alert := model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		Message:     "probe failed",
+		TriggeredAt: now,
+	}
+	_ = raiseAndDispatch(db, &alert)
+
+	// alert 由 raiseAndDispatch 写入，ID 已被填充
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("期望 0 条投递记录（已静默），实际 %d", count)
+	}
+}
+
+func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	now := time.Now()
+
+	// 静默规则指向另一个节点（999），不应匹配 node 1
+	otherNode := uint(999)
+	db.Create(&model.Silence{
+		Name:        "other",
+		MatchNodeID: &otherNode,
+		StartsAt:    now.Add(-time.Hour),
+		EndsAt:      now.Add(time.Hour),
+		CreatedBy:   1,
+	})
+
+	node := model.Node{ID: 1, Name: "node-a", Host: "1.2.3.4", Port: 22}
+	db.Create(&node)
+
+	// 使用本地 httptest server，确保 webhook 调用能快速完成
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL})
+
+	alert := model.Alert{
+		NodeID:      1,
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		TriggeredAt: now,
+	}
+	_ = raiseAndDispatch(db, &alert)
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count == 0 {
+		t.Fatal("期望至少 1 条投递记录（静默未命中，不应拦截）")
+	}
+}

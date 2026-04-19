@@ -282,6 +282,20 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	now := time.Now()
+
+	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
+	silences, _ := ActiveSilences(db, now)
+	if len(silences) > 0 {
+		var node model.Node
+		db.First(&node, alert.NodeID)
+		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
+			logger.Module("alerting").Info().
+				Uint("alert_id", alert.ID).
+				Uint("silence_id", matched.ID).
+				Msg("告警已静默，跳过投递")
+			return nil
+		}
+	}
 	var wg sync.WaitGroup
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {
