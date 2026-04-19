@@ -2,16 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { AlertRecord, AlertStatus } from "@/types/domain";
+import { buildAlertJumpHref } from "./alert-jump";
 
 // AlertStatus uses "acked" (not "acknowledged") per domain.ts
 type Filter = AlertStatus; // "open" | "acked" | "resolved"
-
-function windowHref(alert: AlertRecord): string {
-  const triggered = new Date(alert.triggeredAt ?? Date.now());
-  const from = new Date(triggered.getTime() - 15 * 60 * 1000).toISOString();
-  const to = new Date(triggered.getTime() + 15 * 60 * 1000).toISOString();
-  return `/app/nodes/${alert.nodeId}?tab=metrics&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-}
 
 const FILTER_LABELS: Record<Filter, string> = {
   open: "未处理",
@@ -95,7 +89,7 @@ export default function AlertsTab({ nodeId }: { nodeId: number }) {
                 </p>
               </div>
               <Link
-                to={windowHref(a)}
+                to={buildAlertJumpHref(a)}
                 data-testid={`alert-jump-${a.id}`}
                 className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
               >

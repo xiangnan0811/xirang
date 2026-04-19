@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { alertStatusMeta } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { getSeverityMeta } from "@/lib/status";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
+import { buildAlertJumpHref } from "@/features/nodes-detail/alert-jump";
 
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
 
@@ -168,6 +170,15 @@ export function AlertList({
                   )}
                   <span>{alert.policyName}</span>
                   <span>{alert.triggeredAt}</span>
+                  {alert.nodeId ? (
+                    <Link
+                      to={buildAlertJumpHref(alert)}
+                      data-testid={`alert-jump-${alert.id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {t("notifications.viewRelatedMetrics", { defaultValue: "查看关联指标 →" })}
+                    </Link>
+                  ) : null}
                 </div>
               </div>
               <div className="shrink-0">

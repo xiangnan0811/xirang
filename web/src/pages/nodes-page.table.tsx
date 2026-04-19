@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -102,7 +102,13 @@ export const NodesTable = React.memo(function NodesTable({
                     />
                   </td>
                   <td className="px-3 py-2.5">
-                    <p className="font-medium">{node.name}</p>
+                    <Link
+                      to={`/app/nodes/${node.id}`}
+                      data-testid={`nodes-list-link-${node.id}`}
+                      className="font-medium hover:underline"
+                    >
+                      {node.name}
+                    </Link>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
                     <p>

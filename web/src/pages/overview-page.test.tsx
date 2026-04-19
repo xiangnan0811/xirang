@@ -178,7 +178,7 @@ describe("OverviewPage", () => {
     expect(fullscreenDots).toHaveLength(210);
 
     await user.click(within(fullscreen).getByRole("button", { name: /Node-001，状态在线/ }));
-    expect(mockNavigate).toHaveBeenCalledWith("/app/nodes?keyword=Node-001");
+    expect(mockNavigate).toHaveBeenCalledWith("/app/nodes/1");
   });
 
   it("无数据时显示空提示并输出图表可访问名称", async () => {
