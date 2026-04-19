@@ -257,10 +257,12 @@ export function AlertCenter({
   };
 
   const handleRetryAllFailed = async (alertId: string) => {
+    const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed");
+    if (!failedDeliveries.length) return;
     setRetryingAllAlertId(alertId);
     try {
-      const result = await apiClient.retryFailedDeliveries(token, alertId);
-      toast.success(result.message);
+      await Promise.all(failedDeliveries.map((d) => retryDelivery(token, d.id)));
+      toast.success("批量重发成功");
       refreshDeliveries(alertId);
     } catch (err) {
       toast.error(getErrorMessage(err));

@@ -461,9 +461,11 @@ describe("NotificationsPage", () => {
 
     await user.click(batchRetryBtns[0]);
 
+    // 批量重发现在通过 retryDelivery 逐条调用，每条失败投递调用一次
     await waitFor(() => {
-      expect(mockRetryFailedDeliveries).toHaveBeenCalledWith("test-token", "alert-open");
+      expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-1");
     });
+    expect(mockRetryDelivery).toHaveBeenCalledTimes(1);
     expect(toastSuccessMock).toHaveBeenCalledWith("\u6279\u91CF\u91CD\u53D1\u6210\u529F");
     // 批量重发后会刷新投递记录列表
     await waitFor(() => {
