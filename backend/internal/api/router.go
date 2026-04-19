@@ -248,7 +248,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Delete)
 
 	if dep.RetryWorker != nil {
-		alertDeliveryHandler := handlers.NewAlertDeliveryHandler(dep.DB, dep.RetryWorker)
+		alertDeliveryHandler := handlers.NewAlertDeliveryHandler(dep.RetryWorker)
 		secured.POST("/alert-deliveries/:id/retry", middleware.RBAC("alerts:write"), alertDeliveryHandler.Retry)
 	}
 

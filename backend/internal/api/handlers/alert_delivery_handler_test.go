@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -39,18 +39,30 @@ func newDeliveryRouter(db *gorm.DB, worker *alerting.RetryWorker, role string) *
 		c.Set("userID", uint(1))
 		c.Next()
 	})
-	h := NewAlertDeliveryHandler(db, worker)
+	h := NewAlertDeliveryHandler(worker)
 	r.POST("/api/v1/alert-deliveries/:id/retry", middleware.RBAC("alerts:write"), h.Retry)
 	return r
 }
 
 // TestRetryDelivery_Success 验证 admin 对 retrying 状态的投递执行手动重试后返回 200，
-// 且底层 sendFn 成功时投递状态变为 "sent"。
+// 且底层 webhook 成功时投递状态变为 "sent"。
+// 使用 httptest.NewServer 替代 SetSendFn，避免跨包访问内部字段。
 func TestRetryDelivery_Success(t *testing.T) {
+	// 启动一个始终返回 200 的假 webhook 服务器
+	fakeWebhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeWebhook.Close)
+
 	db := openDeliveryTestDB(t)
 
-	// 植入 integration 和 alert
-	integ := model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://example.com"}
+	// 植入 integration，Endpoint 指向假 webhook
+	integ := model.Integration{
+		Name:     "wh",
+		Type:     "webhook",
+		Enabled:  true,
+		Endpoint: fakeWebhook.URL,
+	}
 	db.Create(&integ)
 	alert := model.Alert{NodeID: 1, NodeName: "n", ErrorCode: "XR-1", Severity: "warn", Status: "open", Message: "m"}
 	db.Create(&alert)
@@ -64,12 +76,7 @@ func TestRetryDelivery_Success(t *testing.T) {
 	}
 	db.Create(&delivery)
 
-	// 构建 worker，注入始终成功的 sendFn
 	worker := alerting.NewRetryWorker(db)
-	worker.SetSendFn(func(i model.Integration, a model.Alert) error {
-		return nil
-	})
-
 	r := newDeliveryRouter(db, worker, "admin")
 	w := doSilenceJSON(r, "POST", fmt.Sprintf("/api/v1/alert-deliveries/%d/retry", delivery.ID), "")
 	if w.Code != http.StatusOK {
@@ -106,7 +113,7 @@ func TestRetryDelivery_RequiresAdmin(t *testing.T) {
 func TestRetryDelivery_RejectsAlreadySent(t *testing.T) {
 	db := openDeliveryTestDB(t)
 
-	integ := model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://example.com"}
+	integ := model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:0"}
 	db.Create(&integ)
 	alert := model.Alert{NodeID: 1, NodeName: "n", ErrorCode: "XR-1", Severity: "warn", Status: "open", Message: "m"}
 	db.Create(&alert)
@@ -120,10 +127,6 @@ func TestRetryDelivery_RejectsAlreadySent(t *testing.T) {
 	db.Create(&delivery)
 
 	worker := alerting.NewRetryWorker(db)
-	worker.SetSendFn(func(i model.Integration, a model.Alert) error {
-		return errors.New("should not be called")
-	})
-
 	r := newDeliveryRouter(db, worker, "admin")
 	w := doSilenceJSON(r, "POST", fmt.Sprintf("/api/v1/alert-deliveries/%d/retry", delivery.ID), "")
 	if w.Code != http.StatusBadRequest {
@@ -131,5 +134,20 @@ func TestRetryDelivery_RejectsAlreadySent(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "already sent") {
 		t.Fatalf("期望错误信息包含 'already sent'，实际: %s", w.Body.String())
+	}
+}
+
+// TestRetryDelivery_NotFound 验证对不存在的 delivery ID 执行重试时返回 404。
+func TestRetryDelivery_NotFound(t *testing.T) {
+	db := openDeliveryTestDB(t)
+	worker := alerting.NewRetryWorker(db)
+
+	r := newDeliveryRouter(db, worker, "admin")
+	w := doSilenceJSON(r, "POST", "/api/v1/alert-deliveries/99999/retry", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("期望 404 Not Found，实际: %d — %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "delivery not found") {
+		t.Fatalf("期望响应包含 'delivery not found'，实际: %s", w.Body.String())
 	}
 }

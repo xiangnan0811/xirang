@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+
 	"xirang/backend/internal/alerting"
 
 	"github.com/gin-gonic/gin"
@@ -9,13 +11,12 @@ import (
 
 // AlertDeliveryHandler 处理告警投递相关请求。
 type AlertDeliveryHandler struct {
-	DB     *gorm.DB
 	Worker *alerting.RetryWorker
 }
 
 // NewAlertDeliveryHandler 创建 AlertDeliveryHandler。
-func NewAlertDeliveryHandler(db *gorm.DB, worker *alerting.RetryWorker) *AlertDeliveryHandler {
-	return &AlertDeliveryHandler{DB: db, Worker: worker}
+func NewAlertDeliveryHandler(worker *alerting.RetryWorker) *AlertDeliveryHandler {
+	return &AlertDeliveryHandler{Worker: worker}
 }
 
 // Retry 立即强制重试指定投递记录（管理员操作）。
@@ -27,6 +28,10 @@ func (h *AlertDeliveryHandler) Retry(c *gin.Context) {
 		return
 	}
 	if err := h.Worker.ManualRetry(id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "delivery not found")
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}
