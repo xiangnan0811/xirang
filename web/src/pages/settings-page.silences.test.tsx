@@ -20,6 +20,14 @@ vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),
 }))
 
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: "zh", changeLanguage: vi.fn() },
+  }),
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
+}))
+
 vi.mock("@/lib/api/silences", () => ({
   listSilences: vi.fn().mockResolvedValue([
     {

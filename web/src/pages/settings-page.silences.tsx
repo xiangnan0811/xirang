@@ -2,13 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Plus, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { FormDialog } from "@/components/ui/form-dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { toast } from "@/components/ui/toast"
@@ -179,159 +173,153 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   const datalistOptions = recentCodes.length > 0 ? recentCodes : ALERT_CODE_HINTS
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="md">
-        <DialogHeader>
-          <DialogTitle>新建静默规则</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          {/* 名称 */}
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="新建静默规则"
+      size="md"
+      saving={submitting}
+      onSubmit={handleSubmit}
+      submitLabel="创建"
+      savingLabel="创建中…"
+    >
+      {/* 名称 */}
+      <div className="space-y-1">
+        <label htmlFor="silence-name" className="text-sm font-medium">
+          名称
+        </label>
+        <Input
+          id="silence-name"
+          aria-label="名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="维护窗口-A"
+        />
+      </div>
+
+      {/* 节点 dropdown */}
+      <div className="space-y-1">
+        <label htmlFor="silence-node" className="text-sm font-medium">
+          节点（留空表示全部节点）
+        </label>
+        <Select
+          id="silence-node"
+          value={matchNodeId}
+          onChange={(e) => setMatchNodeId(e.target.value)}
+        >
+          <option value="">全部节点</option>
+          {nodes.map((n) => (
+            <option key={n.id} value={String(n.id)}>
+              {n.name}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      {/* 告警 ErrorCode */}
+      <div className="space-y-1">
+        <label htmlFor="silence-category" className="text-sm font-medium">
+          告警 ErrorCode（留空匹配全部）
+        </label>
+        <input
+          id="silence-category"
+          list="alert-categories"
+          value={matchCategory}
+          onChange={(e) => setMatchCategory(e.target.value)}
+          placeholder="如 XR-NODE-5 或留空匹配全部"
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+        <datalist id="alert-categories">
+          {datalistOptions.map((code) => (
+            <option key={code} value={code} />
+          ))}
+        </datalist>
+      </div>
+
+      {/* 标签 chip picker */}
+      <div className="space-y-1">
+        <label className="text-sm font-medium">标签</label>
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pb-1">
+            {tags.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-[3px] text-xs font-medium text-foreground"
+              >
+                {t}
+                <button
+                  type="button"
+                  aria-label={`移除标签 ${t}`}
+                  onClick={() => removeTag(t)}
+                  className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Input
+            ref={tagInputRef}
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={handleTagKeyDown}
+            placeholder="输入标签后按 Enter 或点击添加"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={addTag}>
+            添加
+          </Button>
+        </div>
+      </div>
+
+      {/* 静默窗口 */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">静默窗口</label>
+          {[{ label: "1 小时", h: 1 }, { label: "4 小时", h: 4 }, { label: "1 天", h: 24 }].map((p) => (
+            <Button key={p.h} size="sm" variant="outline" type="button" onClick={() => applyPreset(p.h)}>
+              {p.label}
+            </Button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-3 mt-2">
           <div className="space-y-1">
-            <label htmlFor="silence-name" className="text-sm font-medium">
-              名称
-            </label>
+            <label htmlFor="silence-starts" className="text-xs text-muted-foreground">开始</label>
             <Input
-              id="silence-name"
-              aria-label="名称"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="维护窗口-A"
+              id="silence-starts"
+              aria-label="开始"
+              type="datetime-local"
+              value={startsAt}
+              onChange={(e) => setStartsAt(e.target.value)}
             />
           </div>
-
-          {/* 节点 dropdown */}
           <div className="space-y-1">
-            <label htmlFor="silence-node" className="text-sm font-medium">
-              节点（留空表示全部节点）
-            </label>
-            <Select
-              id="silence-node"
-              value={matchNodeId}
-              onChange={(e) => setMatchNodeId(e.target.value)}
-            >
-              <option value="">全部节点</option>
-              {nodes.map((n) => (
-                <option key={n.id} value={String(n.id)}>
-                  {n.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          {/* 告警 ErrorCode */}
-          <div className="space-y-1">
-            <label htmlFor="silence-category" className="text-sm font-medium">
-              告警 ErrorCode（留空匹配全部）
-            </label>
-            <input
-              id="silence-category"
-              list="alert-categories"
-              value={matchCategory}
-              onChange={(e) => setMatchCategory(e.target.value)}
-              placeholder="如 XR-NODE-5 或留空匹配全部"
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-            <datalist id="alert-categories">
-              {datalistOptions.map((code) => (
-                <option key={code} value={code} />
-              ))}
-            </datalist>
-          </div>
-
-          {/* 标签 chip picker */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">标签</label>
-            {tags.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pb-1">
-                {tags.map((t) => (
-                  <span
-                    key={t}
-                    className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-[3px] text-xs font-medium text-foreground"
-                  >
-                    {t}
-                    <button
-                      type="button"
-                      aria-label={`移除标签 ${t}`}
-                      onClick={() => removeTag(t)}
-                      className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Input
-                ref={tagInputRef}
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={handleTagKeyDown}
-                placeholder="输入标签后按 Enter 或点击添加"
-              />
-              <Button type="button" variant="outline" size="sm" onClick={addTag}>
-                添加
-              </Button>
-            </div>
-          </div>
-
-          {/* 静默窗口 */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">静默窗口</label>
-              {[{ label: "1 小时", h: 1 }, { label: "4 小时", h: 4 }, { label: "1 天", h: 24 }].map((p) => (
-                <Button key={p.h} size="sm" variant="outline" type="button" onClick={() => applyPreset(p.h)}>
-                  {p.label}
-                </Button>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <div className="flex-1 space-y-1">
-                <label htmlFor="silence-starts" className="text-xs text-muted-foreground">开始</label>
-                <Input
-                  id="silence-starts"
-                  aria-label="开始"
-                  type="datetime-local"
-                  value={startsAt}
-                  onChange={(e) => setStartsAt(e.target.value)}
-                />
-              </div>
-              <div className="flex-1 space-y-1">
-                <label htmlFor="silence-ends" className="text-xs text-muted-foreground">结束</label>
-                <Input
-                  id="silence-ends"
-                  aria-label="结束"
-                  type="datetime-local"
-                  value={endsAt}
-                  onChange={(e) => setEndsAt(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 备注 */}
-          <div className="space-y-1">
-            <label htmlFor="silence-note" className="text-sm font-medium">
-              备注
-            </label>
+            <label htmlFor="silence-ends" className="text-xs text-muted-foreground">结束</label>
             <Input
-              id="silence-note"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="可选备注"
+              id="silence-ends"
+              aria-label="结束"
+              type="datetime-local"
+              value={endsAt}
+              onChange={(e) => setEndsAt(e.target.value)}
             />
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            取消
-          </Button>
-          <Button onClick={() => void handleSubmit()} disabled={submitting}>
-            {submitting ? "创建中…" : "创建"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </div>
+
+      {/* 备注 */}
+      <div className="space-y-1">
+        <label htmlFor="silence-note" className="text-sm font-medium">
+          备注
+        </label>
+        <Input
+          id="silence-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="可选备注"
+        />
+      </div>
+    </FormDialog>
   )
 }
 
