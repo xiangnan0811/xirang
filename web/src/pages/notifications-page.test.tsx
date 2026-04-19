@@ -21,9 +21,7 @@ const {
   mockAckAlert,
   mockResolveAlert,
   mockGetAlertDeliveries,
-  mockRetryAlertDelivery,
   mockRetryDelivery,
-  mockRetryFailedDeliveries,
   mockGetAlertUnreadCount,
   mockTriggerTask,
   mockGetAlerts,
@@ -34,9 +32,7 @@ const {
   mockAckAlert: vi.fn(),
   mockResolveAlert: vi.fn(),
   mockGetAlertDeliveries: vi.fn(),
-  mockRetryAlertDelivery: vi.fn(),
   mockRetryDelivery: vi.fn(),
-  mockRetryFailedDeliveries: vi.fn(),
   mockGetAlertUnreadCount: vi.fn(),
   mockTriggerTask: vi.fn(),
   mockGetAlerts: vi.fn(),
@@ -105,8 +101,6 @@ vi.mock("@/lib/api/client", () => ({
     ackAlert: mockAckAlert,
     resolveAlert: mockResolveAlert,
     getAlertDeliveries: mockGetAlertDeliveries,
-    retryAlertDelivery: mockRetryAlertDelivery,
-    retryFailedDeliveries: mockRetryFailedDeliveries,
     getAlertUnreadCount: mockGetAlertUnreadCount,
     triggerTask: mockTriggerTask,
     getAlerts: mockGetAlerts,
@@ -183,26 +177,7 @@ function setupDefaultMocks() {
       createdAt: "2026-02-24 10:01:00",
     },
   ]);
-  mockRetryAlertDelivery.mockResolvedValue({
-    ok: true,
-    message: "\u91CD\u53D1\u6210\u529F",
-    delivery: {
-      id: "delivery-2",
-      alertId: "alert-open",
-      integrationId: "int-1",
-      status: "sent",
-      createdAt: "2026-02-24 10:02:00",
-    },
-  });
   mockRetryDelivery.mockResolvedValue(undefined);
-  mockRetryFailedDeliveries.mockResolvedValue({
-    ok: true,
-    message: "\u6279\u91CF\u91CD\u53D1\u6210\u529F",
-    totalFailed: 1,
-    successCount: 1,
-    failedCount: 0,
-    newDeliveries: [],
-  });
   mockGetAlertUnreadCount.mockResolvedValue({
     total: 1,
     critical: 1,
@@ -329,9 +304,7 @@ describe("NotificationsPage", () => {
     mockAckAlert.mockReset();
     mockResolveAlert.mockReset();
     mockGetAlertDeliveries.mockReset();
-    mockRetryAlertDelivery.mockReset();
     mockRetryDelivery.mockReset();
-    mockRetryFailedDeliveries.mockReset();
     mockGetAlertUnreadCount.mockReset();
     mockTriggerTask.mockReset();
     mockGetAlerts.mockReset();
@@ -471,6 +444,50 @@ describe("NotificationsPage", () => {
     await waitFor(() => {
       expect(mockGetAlertDeliveries).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("bulk retry fans out across all failed deliveries", async () => {
+    const user = userEvent.setup();
+    // Seed 2 failed deliveries
+    mockGetAlertDeliveries.mockResolvedValue([
+      {
+        id: "delivery-a",
+        alertId: "alert-open",
+        integrationId: "int-1",
+        status: "failed",
+        error: "timeout",
+        createdAt: "2026-02-24 10:01:00",
+      },
+      {
+        id: "delivery-b",
+        alertId: "alert-open",
+        integrationId: "int-1",
+        status: "failed",
+        error: "connection refused",
+        createdAt: "2026-02-24 10:01:30",
+      },
+    ]);
+    mockRetryDelivery.mockResolvedValue(undefined);
+    createContext();
+
+    render(<NotificationsPage />);
+    expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
+
+    const moreButtons = screen.getAllByRole("button", { name: "\u66F4\u591A\u64CD\u4F5C" });
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "\u6295\u9012\u8BB0\u5F55" }));
+
+    const batchRetryBtns = await screen.findAllByRole("button", { name: "\u91CD\u53D1\u5168\u90E8\u5931\u8D25\u6295\u9012" });
+    expect(batchRetryBtns.length).toBeGreaterThanOrEqual(1);
+
+    await user.click(batchRetryBtns[0]);
+
+    await waitFor(() => {
+      expect(mockRetryDelivery).toHaveBeenCalledTimes(2);
+    });
+    expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-a");
+    expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-b");
+    expect(toastSuccessMock).toHaveBeenCalledWith("\u6279\u91CF\u91CD\u53D1\u6210\u529F");
   });
 
   it("投递失败统计卡片显示 24h 失败数", async () => {

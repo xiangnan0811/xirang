@@ -225,6 +225,7 @@ if [[ -z "$SILENCE_ID" ]]; then
   echo "[smoke][error] FAIL: silence create — response: $HTTP_BODY"
   exit 1
 fi
+trap 'if [ -n "${SILENCE_ID:-}" ]; then api_call DELETE "/silences/${SILENCE_ID}" >/dev/null 2>&1 || true; fi' EXIT
 log "  created silence $SILENCE_ID"
 
 # Revoke silence (DELETE → soft-delete, sets ends_at=now)

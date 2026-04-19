@@ -260,15 +260,17 @@ export function AlertCenter({
     const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed");
     if (!failedDeliveries.length) return;
     setRetryingAllAlertId(alertId);
-    try {
-      await Promise.all(failedDeliveries.map((d) => retryDelivery(token, d.id)));
+    const results = await Promise.allSettled(
+      failedDeliveries.map((d) => retryDelivery(token, d.id))
+    );
+    const failed = results.filter(r => r.status === "rejected").length;
+    if (failed === 0) {
       toast.success("批量重发成功");
-      refreshDeliveries(alertId);
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    } finally {
-      setRetryingAllAlertId(null);
+    } else {
+      toast.error(`批量重发：${results.length - failed} 成功，${failed} 失败`);
     }
+    refreshDeliveries(alertId);
+    setRetryingAllAlertId(null);
   };
 
   // --- 合并高亮告警和普通列表 ---
