@@ -285,9 +285,11 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 
 	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
 	silences, _ := ActiveSilences(db, now)
+	var node model.Node
+	nodeLoaded := false
 	if len(silences) > 0 {
-		var node model.Node
 		db.First(&node, alert.NodeID)
+		nodeLoaded = true
 		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
 			logger.Module("alerting").Info().
 				Uint("alert_id", alert.ID).
@@ -296,6 +298,20 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 			return nil
 		}
 	}
+
+	// 分组检查：同一 (category, nodeID, tags) 组合在窗口内只投递首次告警
+	if !nodeLoaded {
+		db.First(&node, alert.NodeID)
+	}
+	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))
+	if !SharedGrouping.ShouldSend(key) {
+		logger.Module("alerting").Info().
+			Uint("alert_id", alert.ID).
+			Int("group_count", SharedGrouping.Count(key)).
+			Msg("告警已被分组，跳过投递")
+		return nil
+	}
+
 	var wg sync.WaitGroup
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {

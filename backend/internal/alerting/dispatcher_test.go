@@ -399,6 +399,35 @@ func TestDispatch_SilencedAlertIsNotDelivered(t *testing.T) {
 	}
 }
 
+func TestDispatch_SecondAlertInGroupWindowIsSuppressed(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	db.Create(&model.Node{ID: 1, Name: "node-a"})
+	// FailThreshold=1：openCount 需 >= 1 才触发投递（与其他 dispatcher 测试保持一致）
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
+
+	// 重置包级分组状态，确保测试幂等
+	SharedGrouping = NewGrouping(5 * time.Minute)
+	t.Cleanup(func() { SharedGrouping = NewGrouping(5 * time.Minute) })
+
+	// Status 必须为 "open"，openCount 查询才能命中并满足 FailThreshold>=1
+	alert1 := &model.Alert{NodeID: 1, NodeName: "node-a", ErrorCode: "probe_down", Severity: "warn", Status: "open", Message: "first", TriggeredAt: time.Now()}
+	if err := raiseAndDispatch(db, alert1); err != nil {
+		t.Fatal(err)
+	}
+
+	alert2 := &model.Alert{NodeID: 1, NodeName: "node-a", ErrorCode: "probe_down", Severity: "warn", Status: "open", Message: "second", TriggeredAt: time.Now()}
+	if err := raiseAndDispatch(db, alert2); err != nil {
+		t.Fatal(err)
+	}
+
+	var deliveries int64
+	db.Model(&model.AlertDelivery{}).Count(&deliveries)
+	if deliveries != 1 {
+		t.Fatalf("expected 1 delivery (second grouped-out), got %d", deliveries)
+	}
+}
+
 func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 	db := setupTestDB(t)
