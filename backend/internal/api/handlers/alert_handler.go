@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -137,7 +138,7 @@ type alertGroupInfo struct {
 	// SiblingNodeIDs 刻意留空：渐进式内存分组只追踪计数，不保留单条告警标识。
 	// SiblingNodeIDs is intentionally empty: progressive in-memory grouping
 	// only tracks counts by key, not individual alert identity.
-	SiblingNodeIDs []uint `json:"sibling_node_ids"`
+	SiblingNodeIDs []uint `json:"sibling_node_ids,omitempty"`
 }
 
 // alertWithGroupInfo 在 Alert 模型基础上附加分组信息。
@@ -177,7 +178,13 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	}
 
 	var node model.Node
-	h.db.First(&node, a.NodeID)
+	if res := h.db.First(&node, a.NodeID); res.Error != nil {
+		logger.Module("api").Warn().
+			Uint("alert_id", a.ID).
+			Uint("node_id", a.NodeID).
+			Err(res.Error).
+			Msg("alert detail: 节点加载失败，group_count 将为 0")
+	}
 	tags := strings.Split(node.Tags, ",")
 	cleanTags := make([]string, 0, len(tags))
 	for _, t := range tags {

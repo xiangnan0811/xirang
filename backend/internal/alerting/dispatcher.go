@@ -288,7 +288,13 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	var node model.Node
 	nodeLoaded := false
 	if len(silences) > 0 {
-		db.First(&node, alert.NodeID)
+		if res := db.First(&node, alert.NodeID); res.Error != nil {
+			logger.Module("alerting").Warn().
+				Uint("alert_id", alert.ID).
+				Uint("node_id", alert.NodeID).
+				Err(res.Error).
+				Msg("静默检查：节点加载失败，使用空 tags 计算 group_key")
+		}
 		nodeLoaded = true
 		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
 			logger.Module("alerting").Info().
@@ -301,7 +307,13 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 
 	// 分组检查：同一 (category, nodeID, tags) 组合在窗口内只投递首次告警
 	if !nodeLoaded {
-		db.First(&node, alert.NodeID)
+		if res := db.First(&node, alert.NodeID); res.Error != nil {
+			logger.Module("alerting").Warn().
+				Uint("alert_id", alert.ID).
+				Uint("node_id", alert.NodeID).
+				Err(res.Error).
+				Msg("分组检查：节点加载失败，使用空 tags 计算 group_key")
+		}
 	}
 	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))
 	if !SharedGrouping.ShouldSend(key) {
