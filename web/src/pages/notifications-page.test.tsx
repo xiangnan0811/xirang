@@ -22,6 +22,7 @@ const {
   mockResolveAlert,
   mockGetAlertDeliveries,
   mockRetryAlertDelivery,
+  mockRetryDelivery,
   mockRetryFailedDeliveries,
   mockGetAlertUnreadCount,
   mockTriggerTask,
@@ -34,6 +35,7 @@ const {
   mockResolveAlert: vi.fn(),
   mockGetAlertDeliveries: vi.fn(),
   mockRetryAlertDelivery: vi.fn(),
+  mockRetryDelivery: vi.fn(),
   mockRetryFailedDeliveries: vi.fn(),
   mockGetAlertUnreadCount: vi.fn(),
   mockTriggerTask: vi.fn(),
@@ -119,6 +121,10 @@ vi.mock("@/lib/api/client", () => ({
   },
 }));
 
+vi.mock("@/lib/api/alert-deliveries", () => ({
+  retryDelivery: mockRetryDelivery,
+}));
+
 /* ---------- default mock return values ---------- */
 
 const defaultAlerts = [
@@ -188,6 +194,7 @@ function setupDefaultMocks() {
       createdAt: "2026-02-24 10:02:00",
     },
   });
+  mockRetryDelivery.mockResolvedValue(undefined);
   mockRetryFailedDeliveries.mockResolvedValue({
     ok: true,
     message: "\u6279\u91CF\u91CD\u53D1\u6210\u529F",
@@ -323,6 +330,7 @@ describe("NotificationsPage", () => {
     mockResolveAlert.mockReset();
     mockGetAlertDeliveries.mockReset();
     mockRetryAlertDelivery.mockReset();
+    mockRetryDelivery.mockReset();
     mockRetryFailedDeliveries.mockReset();
     mockGetAlertUnreadCount.mockReset();
     mockTriggerTask.mockReset();
@@ -428,7 +436,7 @@ describe("NotificationsPage", () => {
     await user.click(retryBtns[0]);
 
     await waitFor(() => {
-      expect(mockRetryAlertDelivery).toHaveBeenCalledWith("test-token", "alert-open", "int-1");
+      expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-1");
     });
     expect(toastSuccessMock).toHaveBeenCalledWith("\u91CD\u53D1\u6210\u529F");
     // 重发后会刷新投递记录列表

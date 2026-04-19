@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/toast";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { apiClient } from "@/lib/api/client";
+import { retryDelivery } from "@/lib/api/alert-deliveries";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -242,12 +243,11 @@ export function AlertCenter({
     }
   };
 
-  const handleRetryDelivery = async (alertId: string, integrationId: string) => {
-    const actionKey = `${alertId}:${integrationId}`;
-    setRetryingDeliveryKey(actionKey);
+  const handleRetryDelivery = async (alertId: string, _integrationId: string, deliveryId: string) => {
+    setRetryingDeliveryKey(String(deliveryId));
     try {
-      const result = await apiClient.retryAlertDelivery(token, alertId, integrationId);
-      toast.success(result.message);
+      await retryDelivery(token, deliveryId);
+      toast.success(t("notifications.resendSuccess", { defaultValue: "重发成功" }));
       refreshDeliveries(alertId);
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -317,7 +317,7 @@ export function AlertCenter({
             onAck={(alert) => void handleAck(alert)}
             onResolve={(alert) => void handleResolve(alert)}
             onToggleDeliveries={toggleDeliveries}
-            onRetryDelivery={(alertId, integrationId) => void handleRetryDelivery(alertId, integrationId)}
+            onRetryDelivery={(alertId, integrationId, deliveryId) => void handleRetryDelivery(alertId, integrationId, deliveryId)}
             onRetryAllFailed={(alertId) => void handleRetryAllFailed(alertId)}
           />
         ) : (
