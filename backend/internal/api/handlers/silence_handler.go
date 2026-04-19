@@ -84,7 +84,7 @@ func (h *SilenceHandler) Create(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, Response{Code: 0, Message: "ok", Data: s})
+	respondCreated(c, s)
 }
 
 // Patch 更新静默规则（admin only）。
@@ -105,6 +105,10 @@ func (h *SilenceHandler) Patch(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if !req.EndsAt.After(req.StartsAt) {
+		respondBadRequest(c, "ends_at 必须晚于 starts_at")
+		return
+	}
 	updates := map[string]any{
 		"name":    req.Name,
 		"ends_at": req.EndsAt,
@@ -114,7 +118,10 @@ func (h *SilenceHandler) Patch(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	h.DB.First(&s, id)
+	if err := h.DB.First(&s, id).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	respondOK(c, s)
 }
 

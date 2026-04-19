@@ -10,16 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
-
-func init() {
-	gin.SetMode(gin.TestMode)
-}
 
 // openSilenceTestDB 返回使用内存 SQLite 的测试数据库，已完成 Silence 表迁移。
 func openSilenceTestDB(t *testing.T) *gorm.DB {
@@ -70,16 +67,9 @@ func doSilenceJSON(r *gin.Engine, method, path, body string) *httptest.ResponseR
 	return w
 }
 
-// TestCreateSilence_RequiresAdmin 验证非 admin 角色收到 403。
+// TestCreateSilence_RequiresAdmin 验证非 admin 角色收到 403（使用真实 middleware.RequireRole）。
 func TestCreateSilence_RequiresAdmin(t *testing.T) {
 	db := openSilenceTestDB(t)
-	// viewer 角色，路由自身不强制 admin——此测试验证我们在路由层会限制；
-	// 因为目前 handler 本身不检查角色（角色校验由 router.go 的 middleware.RequireRole 完成），
-	// 所以这里用 operator 角色调用并检查 handler 是否正常工作（201），
-	// 然后再用一个明确不注入 role 的路由来模拟"未认证/无角色"场景（403）。
-	//
-	// 实际生产路由通过 middleware.RequireRole("admin") 保护写操作。
-	// 单元测试中我们直接测试 middleware.RequireRole 与 handler 的组合。
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		c.Set("role", "viewer") // 非 admin
@@ -87,15 +77,7 @@ func TestCreateSilence_RequiresAdmin(t *testing.T) {
 		c.Next()
 	})
 	h := NewSilenceHandler(db)
-	// 在路由中加入与生产一致的 RequireRole 中间件
-	r.POST("/api/v1/silences", func(c *gin.Context) {
-		if c.GetString("role") != "admin" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
-			c.Abort()
-			return
-		}
-		c.Next()
-	}, h.Create)
+	r.POST("/api/v1/silences", middleware.RequireRole("admin"), h.Create)
 
 	body := `{"name":"maint","starts_at":"2026-04-19T00:00:00Z","ends_at":"2026-04-19T02:00:00Z"}`
 	w := doSilenceJSON(r, "POST", "/api/v1/silences", body)
@@ -269,5 +251,67 @@ func TestDeleteSilence_MarksEnded(t *testing.T) {
 	}
 	if updated.EndsAt.After(time.Now()) {
 		t.Fatalf("期望 ends_at ≤ now（软删除），实际 ends_at: %v", updated.EndsAt)
+	}
+}
+
+// TestCreateSilence_InvalidTimeWindow 验证 ends_at <= starts_at 时返回 400。
+func TestCreateSilence_InvalidTimeWindow(t *testing.T) {
+	db := openSilenceTestDB(t)
+	r := newSilenceRouter(db, "admin", 1)
+
+	// ends_at == starts_at（不合法）
+	body := `{"name":"bad-window","starts_at":"2026-04-19T02:00:00Z","ends_at":"2026-04-19T02:00:00Z"}`
+	w := doSilenceJSON(r, "POST", "/api/v1/silences", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望 400 BadRequest，实际: %d — %s", w.Code, w.Body.String())
+	}
+
+	// ends_at < starts_at（不合法）
+	body2 := `{"name":"bad-window2","starts_at":"2026-04-19T02:00:00Z","ends_at":"2026-04-19T01:00:00Z"}`
+	w2 := doSilenceJSON(r, "POST", "/api/v1/silences", body2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("期望 400 BadRequest（ends_at < starts_at），实际: %d — %s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestPatchSilence_InvalidTimeWindow 验证 PATCH 时 ends_at <= starts_at 返回 400。
+func TestPatchSilence_InvalidTimeWindow(t *testing.T) {
+	db := openSilenceTestDB(t)
+
+	now := time.Now()
+	s := model.Silence{
+		Name:      "patch-window-test",
+		StartsAt:  now.Add(-1 * time.Hour),
+		EndsAt:    now.Add(1 * time.Hour),
+		CreatedBy: 1,
+		MatchTags: "[]",
+	}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("创建静默规则失败: %v", err)
+	}
+
+	r := newSilenceRouter(db, "admin", 1)
+
+	// ends_at == starts_at（不合法）
+	patchBody := map[string]any{
+		"name":      "patch-window-test",
+		"starts_at": now.Add(-1 * time.Hour).Format(time.RFC3339),
+		"ends_at":   now.Add(-1 * time.Hour).Format(time.RFC3339),
+	}
+	bodyBytes, _ := json.Marshal(patchBody)
+	w := doSilenceJSON(r, "PATCH", fmt.Sprintf("/api/v1/silences/%d", s.ID), string(bodyBytes))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望 400 BadRequest，实际: %d — %s", w.Code, w.Body.String())
+	}
+}
+
+// TestGetSilence_NotFound 验证获取不存在的静默规则返回 404。
+func TestGetSilence_NotFound(t *testing.T) {
+	db := openSilenceTestDB(t)
+	r := newSilenceRouter(db, "admin", 1)
+
+	w := doSilenceJSON(r, "GET", "/api/v1/silences/99999", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("期望 404 NotFound，实际: %d — %s", w.Code, w.Body.String())
 	}
 }

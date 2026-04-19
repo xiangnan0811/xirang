@@ -241,9 +241,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	silenceHandler := handlers.NewSilenceHandler(dep.DB)
 	secured.GET("/silences", middleware.RBAC("alerts:read"), silenceHandler.List)
 	secured.GET("/silences/:id", middleware.RBAC("alerts:read"), silenceHandler.Get)
-	secured.POST("/silences", middleware.RequireRole("admin"), silenceHandler.Create)
-	secured.PATCH("/silences/:id", middleware.RequireRole("admin"), silenceHandler.Patch)
-	secured.DELETE("/silences/:id", middleware.RequireRole("admin"), silenceHandler.Delete)
+	secured.POST("/silences", middleware.RBAC("alerts:write"), silenceHandler.Create)
+	secured.PATCH("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Patch)
+	secured.DELETE("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Delete)
 
 	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)
 	secured.GET("/version", versionHandler.Info)
