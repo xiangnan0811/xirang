@@ -12,6 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// Retention windows for the aggregate tiers. Raw (node_metric_samples) is
+// still pruned by prober.cleanupOldMetrics on a 7-day window. These two
+// constants match the P5a design spec ("Raw 7d / Hourly 90d / Daily 2y").
+const (
+	hourlyRetentionDays = 90
+	dailyRetentionDays  = 730
+)
+
 // Aggregator rolls raw node_metric_samples rows into hourly and daily tiers.
 // Methods are safe for concurrent callers guarded by its internal mutex.
 type Aggregator struct {
@@ -282,11 +290,50 @@ func (a *Aggregator) catchUpDaily(ctx context.Context) error {
 	return nil
 }
 
-// Start performs backfill synchronously, then arms the periodic tickers.
-// Blocks on backfill; returns once the background loop is running.
+// cleanupAggregates deletes hourly buckets older than hourlyRetentionDays and
+// daily buckets older than dailyRetentionDays. Takes the mutex to avoid
+// racing with concurrent rollup upserts on the same tables. Safe to call
+// repeatedly — DELETE is idempotent when the window is empty.
+func (a *Aggregator) cleanupAggregates(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	now := time.Now().UTC()
+	hourlyCutoff := now.Add(-time.Duration(hourlyRetentionDays) * 24 * time.Hour)
+	dailyCutoff := now.Add(-time.Duration(dailyRetentionDays) * 24 * time.Hour)
+
+	hourlyResult := a.db.WithContext(ctx).Exec(
+		"DELETE FROM node_metric_samples_hourly WHERE bucket_start < ?", hourlyCutoff,
+	)
+	if hourlyResult.Error != nil {
+		return fmt.Errorf("hourly cleanup: %w", hourlyResult.Error)
+	}
+	dailyResult := a.db.WithContext(ctx).Exec(
+		"DELETE FROM node_metric_samples_daily WHERE bucket_start < ?", dailyCutoff,
+	)
+	if dailyResult.Error != nil {
+		return fmt.Errorf("daily cleanup: %w", dailyResult.Error)
+	}
+	if hourlyResult.RowsAffected > 0 || dailyResult.RowsAffected > 0 {
+		logger.Module("metrics").Info().
+			Int64("hourly_deleted", hourlyResult.RowsAffected).
+			Int64("daily_deleted", dailyResult.RowsAffected).
+			Msg("aggregate retention cleanup")
+	}
+	return nil
+}
+
+// Start performs backfill synchronously, runs one immediate retention pass,
+// then arms the periodic tickers. Blocks on backfill; returns once the
+// background loop is running.
 func (a *Aggregator) Start(ctx context.Context) error {
 	if err := a.backfill(ctx); err != nil {
 		return err
+	}
+	// Enforce retention immediately at startup — a fresh deploy should not
+	// wait 24h for the first cleanup tick to prune stale data from the DB.
+	if err := a.cleanupAggregates(ctx); err != nil {
+		logger.Module("metrics").Warn().Err(err).Msg("initial aggregate cleanup failed")
 	}
 	aggCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
@@ -299,8 +346,10 @@ func (a *Aggregator) loop(ctx context.Context) {
 	defer close(a.done)
 	hourly := time.NewTicker(1 * time.Minute)
 	daily := time.NewTicker(10 * time.Minute)
+	retention := time.NewTicker(24 * time.Hour)
 	defer hourly.Stop()
 	defer daily.Stop()
+	defer retention.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -309,6 +358,10 @@ func (a *Aggregator) loop(ctx context.Context) {
 			a.measureRollup(ctx, "hourly", a.catchUpHourly)
 		case <-daily.C:
 			a.measureRollup(ctx, "daily", a.catchUpDaily)
+		case <-retention.C:
+			if err := a.cleanupAggregates(ctx); err != nil {
+				logger.Module("metrics").Warn().Err(err).Msg("aggregate cleanup failed")
+			}
 		}
 	}
 }

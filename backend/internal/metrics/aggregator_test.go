@@ -177,3 +177,58 @@ func TestAggregator_BackfillsHourlyFromRaw(t *testing.T) {
 		t.Fatalf("expected 3 hourly buckets after backfill, got %d", count)
 	}
 }
+
+func TestAggregator_CleanupAggregatesDropsOldBuckets(t *testing.T) {
+	db := newAggTestDB(t)
+	now := time.Now().UTC().Truncate(time.Hour)
+
+	// Hourly: seed one fresh bucket (within retention) + one ancient bucket
+	// (91 days old — just outside the 90-day window).
+	freshHourly := now.Add(-1 * time.Hour)
+	staleHourly := now.Add(-time.Duration(hourlyRetentionDays+1) * 24 * time.Hour)
+	for _, ts := range []time.Time{freshHourly, staleHourly} {
+		if err := db.Create(&model.NodeMetricSampleHourly{
+			NodeID: 1, BucketStart: ts, SampleCount: 1,
+		}).Error; err != nil {
+			t.Fatalf("seed hourly %v: %v", ts, err)
+		}
+	}
+
+	// Daily: one fresh, one ancient (731 days old — just outside 2y).
+	freshDaily := now.Truncate(24 * time.Hour)
+	staleDaily := now.Add(-time.Duration(dailyRetentionDays+1) * 24 * time.Hour).Truncate(24 * time.Hour)
+	for _, ts := range []time.Time{freshDaily, staleDaily} {
+		if err := db.Create(&model.NodeMetricSampleDaily{
+			NodeID: 1, BucketStart: ts, SampleCount: 1,
+		}).Error; err != nil {
+			t.Fatalf("seed daily %v: %v", ts, err)
+		}
+	}
+
+	agg := NewAggregator(db, "sqlite")
+	if err := agg.cleanupAggregates(context.Background()); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+
+	var hourlyCount int64
+	db.Model(&model.NodeMetricSampleHourly{}).Count(&hourlyCount)
+	if hourlyCount != 1 {
+		t.Fatalf("expected 1 hourly row after cleanup, got %d", hourlyCount)
+	}
+
+	var dailyCount int64
+	db.Model(&model.NodeMetricSampleDaily{}).Count(&dailyCount)
+	if dailyCount != 1 {
+		t.Fatalf("expected 1 daily row after cleanup, got %d", dailyCount)
+	}
+
+	// Idempotent: running again should not fail and should not delete any more.
+	if err := agg.cleanupAggregates(context.Background()); err != nil {
+		t.Fatalf("cleanup 2: %v", err)
+	}
+	db.Model(&model.NodeMetricSampleHourly{}).Count(&hourlyCount)
+	db.Model(&model.NodeMetricSampleDaily{}).Count(&dailyCount)
+	if hourlyCount != 1 || dailyCount != 1 {
+		t.Fatalf("expected counts unchanged on second cleanup, got hourly=%d daily=%d", hourlyCount, dailyCount)
+	}
+}
