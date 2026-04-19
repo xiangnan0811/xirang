@@ -309,17 +309,21 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		go func(ch model.Integration) {
 			defer wg.Done()
 			err := send(ch, *alert)
-			delivery := model.AlertDelivery{
+			d := model.AlertDelivery{
 				AlertID:       alert.ID,
 				IntegrationID: ch.ID,
+				AttemptCount:  1,
 			}
-			if err != nil {
-				delivery.Status = "failed"
-				delivery.Error = util.SanitizeDeliveryError(ch.Type, err)
+			if err == nil {
+				d.Status = "sent"
 			} else {
-				delivery.Status = "sent"
+				next := time.Now().Add(backoffDuration(1))
+				d.Status = "retrying"
+				d.NextRetryAt = &next
+				d.LastError = util.SanitizeDeliveryError(ch.Type, err)
+				d.Error = d.LastError // legacy compat
 			}
-			if saveErr := db.Create(&delivery).Error; saveErr != nil {
+			if saveErr := db.Create(&d).Error; saveErr != nil {
 				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")
 			}
 		}(channel)

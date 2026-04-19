@@ -101,6 +101,9 @@ func main() {
 	reportScheduler := reporting.NewScheduler(hubCtx, db)
 	reportScheduler.Start()
 
+	retryWorker := alerting.NewRetryWorker(db)
+	go retryWorker.Run(hubCtx)
+
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)
 	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
@@ -121,6 +124,7 @@ func main() {
 		LoginRateWindow:           cfg.LoginRateWindow,
 		LoginCaptchaEnabled:       cfg.LoginCaptchaEnabled,
 		LoginSecondCaptchaEnabled: cfg.LoginSecondCaptchaEnabled,
+		RetryWorker:               retryWorker,
 	})
 
 	server := &http.Server{

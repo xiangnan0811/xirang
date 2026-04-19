@@ -160,6 +160,7 @@ go run ./cmd/server
 | POST | /alerts/:id/resolve | 🔒 解决告警 |
 | POST | /alerts/:id/retry-delivery | 🔒 重试投递 |
 | POST | /alerts/:id/retry-failed-deliveries | 🔒 批量重试 |
+| POST | /alert-deliveries/:id/retry | 🔒 手动重试指定投递记录（alerts:write） |
 
 ### 静默规则
 
@@ -266,6 +267,7 @@ go run ./cmd/server
 - `POST   /api/v1/silences` — 创建静默规则（alerts:write）
 - `PATCH  /api/v1/silences/:id` — 更新静默规则（alerts:write）
 - `DELETE /api/v1/silences/:id` — 软删除静默规则，将 ends_at 设为当前时间（alerts:write）
+- `POST   /api/v1/alert-deliveries/:id/retry` — 手动重试指定投递记录（alerts:write，绕过 next_retry_at 调度）
 
 ## 测试
 

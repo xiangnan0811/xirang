@@ -149,9 +149,13 @@ func (w *RetryWorker) ManualRetry(deliveryID uint) error {
 	return nil
 }
 
+// SetSendFn 替换生产发送函数，仅供测试使用。
+func (w *RetryWorker) SetSendFn(fn func(model.Integration, model.Alert) error) {
+	w.sendFn = fn
+}
+
 // dispatchSingle 是生产路径的适配器：将 (Integration, Alert) 路由到 dispatcher.go 中的
-// send() 函数（按 integration.Type 分发到各通道发送器）。Task 5 将把此路径与
-// dispatcher 的完整发送逻辑统一。
+// send() 函数（按 integration.Type 分发到各通道发送器）。
 func dispatchSingle(integ model.Integration, alert model.Alert) error {
 	return send(integ, alert)
 }

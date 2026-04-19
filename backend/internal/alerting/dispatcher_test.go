@@ -288,6 +288,43 @@ func TestRaiseVerificationFailureStoresRunID(t *testing.T) {
 	}
 }
 
+func TestDispatch_FailedSendIsMarkedRetrying(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+
+	// FailThreshold=1: 至少 1 个 open 告警才触发投递；Status 明确设为 "open"
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
+
+	alert := &model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		Message:     "probe failed",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatal(err)
+	}
+
+	// raiseAndDispatch 内部以 wg.Wait() 同步，无需额外等待
+
+	var d model.AlertDelivery
+	if err := db.Where("alert_id = ?", alert.ID).First(&d).Error; err != nil {
+		t.Fatalf("delivery row not found (alert_id=%d): %v", alert.ID, err)
+	}
+	if d.Status != "retrying" {
+		t.Fatalf("expected retrying, got %q (last_error=%q)", d.Status, d.LastError)
+	}
+	if d.AttemptCount != 1 {
+		t.Fatalf("expected attempts=1, got %d", d.AttemptCount)
+	}
+	if d.NextRetryAt == nil {
+		t.Fatal("expected NextRetryAt set")
+	}
+}
+
 func openAlertingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
