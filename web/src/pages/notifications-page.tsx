@@ -43,6 +43,15 @@ export function NotificationsPage() {
     refreshAlertStats();
   }, [refreshAlertStats, refreshVersion]);
 
+  // 投递重试统计
+  const [deliveryFailedCount, setDeliveryFailedCount] = useState(0);
+  useEffect(() => {
+    if (!token) return;
+    fetchAlertDeliveryStats(24)
+      .then((stats) => setDeliveryFailedCount(stats.totalFailed))
+      .catch(() => {});
+  }, [fetchAlertDeliveryStats, token, refreshVersion]);
+
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
   const failedTasks = tasks.filter((task) => task.status === "failed").length;
 
@@ -74,6 +83,12 @@ export function NotificationsPage() {
             value: failedTasks,
             description: t("notifications.statFailedTasks24hDesc"),
             tone: "info",
+          },
+          {
+            title: "投递失败（24h）",
+            value: deliveryFailedCount,
+            description: "近 24 小时内失败的通知投递数",
+            tone: deliveryFailedCount > 0 ? ("warning" as const) : ("success" as const),
           },
         ]}
       />

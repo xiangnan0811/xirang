@@ -115,7 +115,24 @@ export function AlertList({
                   </Badge>
                 </div>
                 <p className="mt-1 text-muted-foreground">{t("notifications.deliveryTime", { time: delivery.createdAt })}</p>
-                {delivery.error ? <p className="mt-1 text-destructive">{t("notifications.deliveryError", { error: delivery.error })}</p> : null}
+                {delivery.attemptCount != null && (
+                  <p className="mt-0.5 text-muted-foreground">尝试 {delivery.attemptCount}/4</p>
+                )}
+                {delivery.nextRetryAt && (
+                  <p className="mt-0.5 text-muted-foreground">
+                    下次重试 {(() => {
+                      const diff = new Date(delivery.nextRetryAt).getTime() - Date.now();
+                      if (diff <= 0) return "即将开始";
+                      const mins = Math.round(diff / 60_000);
+                      return mins < 1 ? "< 1 分钟后" : `${mins} 分钟后`;
+                    })()}
+                  </p>
+                )}
+                {delivery.lastError ? (
+                  <p className="mt-0.5 text-destructive truncate max-w-xs" title={delivery.lastError}>
+                    {delivery.lastError.length > 120 ? delivery.lastError.slice(0, 120) + "…" : delivery.lastError}
+                  </p>
+                ) : delivery.error ? <p className="mt-1 text-destructive">{t("notifications.deliveryError", { error: delivery.error })}</p> : null}
                 {delivery.status === "failed" ? (
                   <Button
                     className="mt-2"

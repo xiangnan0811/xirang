@@ -30,6 +30,10 @@ type AlertDeliveryResponse = {
   status: "sent" | "failed";
   error?: string;
   created_at: string;
+  // retry columns (P5b Task 4)
+  attempt_count?: number;
+  next_retry_at?: string | null;
+  last_error?: string | null;
 };
 
 type RetryAlertDeliveryResponse = {
@@ -87,7 +91,10 @@ function mapAlertDelivery(row: AlertDeliveryResponse): AlertDeliveryRecord {
     integrationId: `int-${row.integration_id}`,
     status: row.status === "failed" ? "failed" : "sent",
     error: row.error || undefined,
-    createdAt: formatTime(row.created_at)
+    createdAt: formatTime(row.created_at),
+    attemptCount: row.attempt_count,
+    nextRetryAt: row.next_retry_at ?? null,
+    lastError: row.last_error ?? null,
   };
 }
 

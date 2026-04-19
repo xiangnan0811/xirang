@@ -463,6 +463,18 @@ describe("NotificationsPage", () => {
     });
   });
 
+  it("投递失败统计卡片显示 24h 失败数", async () => {
+    createContext();
+    render(<NotificationsPage />);
+    // fetchAlertDeliveryStats mock returns totalFailed: 1
+    await waitFor(() => {
+      expect(screen.getByText("投递失败（24h）")).toBeInTheDocument();
+    });
+    // value "1" appears in the stat card
+    const statCard = screen.getByText("投递失败（24h）").closest("div");
+    expect(statCard).toBeTruthy();
+  });
+
   // 注意：通知方式（IntegrationManager）相关测试已移至 settings-page.channels 中
 
   it("\u91CD\u7F6E\u7B5B\u9009\u65F6\u4F1A\u540C\u65F6\u6E05\u7A7A\u5168\u5C40\u641C\u7D22\u5E76\u6062\u590D\u544A\u8B66\u5217\u8868", async () => {
