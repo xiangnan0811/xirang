@@ -1,8 +1,20 @@
 import "@testing-library/jest-dom/vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import { SilencesPanel } from "./settings-page.silences"
+
+const { toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+  toastErrorMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
+}))
+
+vi.mock("@/components/ui/toast", () => ({
+  toast: {
+    error: toastErrorMock,
+    success: toastSuccessMock,
+  },
+}))
 
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),
@@ -31,6 +43,11 @@ vi.mock("@/lib/api/silences", () => ({
 }))
 
 describe("SilencesPanel", () => {
+  beforeEach(() => {
+    toastErrorMock.mockReset()
+    toastSuccessMock.mockReset()
+  })
+
   it("renders the existing silence row", async () => {
     render(<SilencesPanel />)
     await waitFor(() => expect(screen.getByText("maint-A")).toBeInTheDocument())
@@ -40,5 +57,30 @@ describe("SilencesPanel", () => {
     render(<SilencesPanel />)
     await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
     expect(screen.getByLabelText(/名称/)).toBeInTheDocument()
+  })
+
+  it("rejects invalid time window", async () => {
+    const { createSilence } = await import("@/lib/api/silences")
+    const createSilenceMock = vi.mocked(createSilence)
+    createSilenceMock.mockReset()
+
+    render(<SilencesPanel />)
+    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+
+    // Fill in a name
+    await userEvent.type(screen.getByLabelText(/名称/), "test-silence")
+
+    // Set endsAt before startsAt via the datetime-local inputs
+    const startsInput = screen.getByLabelText(/开始/)
+    const endsInput = screen.getByLabelText(/结束/)
+    await userEvent.clear(startsInput)
+    await userEvent.type(startsInput, "2026-04-20T10:00")
+    await userEvent.clear(endsInput)
+    await userEvent.type(endsInput, "2026-04-20T09:00")
+
+    await userEvent.click(screen.getByRole("button", { name: "创建" }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith("结束时间必须晚于开始时间")
+    expect(createSilenceMock).not.toHaveBeenCalled()
   })
 })

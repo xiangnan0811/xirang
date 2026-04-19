@@ -99,6 +99,10 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
       toast.error("请填写名称")
       return
     }
+    if (new Date(endsAt) <= new Date(startsAt)) {
+      toast.error("结束时间必须晚于开始时间")
+      return
+    }
     const input: SilenceInput = {
       name: name.trim(),
       match_node_id: matchNodeId.trim() ? Number(matchNodeId.trim()) : null,
@@ -252,9 +256,10 @@ export function SilencesPanel() {
   }, [refresh])
 
   const handleRevoke = async (id: number) => {
+    if (!token) return
     setRevoking(id)
     try {
-      await deleteSilence(token!, id)
+      await deleteSilence(token, id)
       toast.success("静默规则已删除")
       refresh()
     } catch (err) {

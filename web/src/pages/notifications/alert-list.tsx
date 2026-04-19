@@ -29,7 +29,7 @@ export type AlertListProps = {
   onAck: (alert: AlertRecord) => void;
   onResolve: (alert: AlertRecord) => void;
   onToggleDeliveries: (alertId: string) => void;
-  onRetryDelivery: (alertId: string, integrationId: string, deliveryId: string) => void;
+  onRetryDelivery: (alertId: string, deliveryId: string) => void;
   onRetryAllFailed: (alertId: string) => void;
 };
 
@@ -139,7 +139,7 @@ export function AlertList({
                     size="sm"
                     variant="outline"
                     disabled={retryingDeliveryKey === delivery.id}
-                    onClick={() => onRetryDelivery(alert.id, delivery.integrationId, delivery.id)}
+                    onClick={() => onRetryDelivery(alert.id, delivery.id)}
                   >
                     {retryingDeliveryKey === delivery.id && <Loader2 className="mr-1 size-4 animate-spin" />}
                     {t("notifications.resendNotification")}

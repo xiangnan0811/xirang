@@ -243,7 +243,7 @@ export function AlertCenter({
     }
   };
 
-  const handleRetryDelivery = async (alertId: string, _integrationId: string, deliveryId: string) => {
+  const handleRetryDelivery = async (alertId: string, deliveryId: string) => {
     setRetryingDeliveryKey(String(deliveryId));
     try {
       await retryDelivery(token, deliveryId);
@@ -317,7 +317,7 @@ export function AlertCenter({
             onAck={(alert) => void handleAck(alert)}
             onResolve={(alert) => void handleResolve(alert)}
             onToggleDeliveries={toggleDeliveries}
-            onRetryDelivery={(alertId, integrationId, deliveryId) => void handleRetryDelivery(alertId, integrationId, deliveryId)}
+            onRetryDelivery={(alertId, deliveryId) => void handleRetryDelivery(alertId, deliveryId)}
             onRetryAllFailed={(alertId) => void handleRetryAllFailed(alertId)}
           />
         ) : (
