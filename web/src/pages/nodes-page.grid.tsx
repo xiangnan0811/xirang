@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Terminal, Trash2, Wrench } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -115,7 +115,13 @@ export const NodesGrid = React.memo(function NodesGrid({
               </div>
 
               <div className="mt-2">
-                <p className="font-medium">{node.name}</p>
+                <Link
+                  to={`/app/nodes/${node.id}`}
+                  data-testid={`nodes-list-link-${node.id}`}
+                  className="font-medium hover:underline"
+                >
+                  {node.name}
+                </Link>
                 <p className="text-xs text-muted-foreground">
                   <span className="break-all">{node.host}:{node.port} · {node.username}</span>
                 </p>
@@ -284,7 +290,13 @@ export const NodesGrid = React.memo(function NodesGrid({
               </div>
 
               <div className="mt-2">
-                <p className="font-medium">{node.name}</p>
+                <Link
+                  to={`/app/nodes/${node.id}`}
+                  data-testid={`nodes-list-link-${node.id}`}
+                  className="font-medium hover:underline"
+                >
+                  {node.name}
+                </Link>
                 <p className="text-xs text-muted-foreground">
                   <span className="break-all">{node.host}:{node.port} · {node.username}</span>
                 </p>

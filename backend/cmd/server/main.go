@@ -15,6 +15,7 @@ import (
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/logger"
+	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
@@ -86,8 +87,16 @@ func main() {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
 
-	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency)
+	metricSink := metrics.NewFanSink(metrics.NewDBSink(db))
+	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
 	prober.Start(hubCtx)
+
+	aggregator := metrics.NewAggregator(db, cfg.DBType)
+	if err := aggregator.Start(hubCtx); err != nil {
+		log.Error().Err(err).Msg("启动指标聚合器失败")
+		// Non-fatal: continue without aggregator. Raw samples still accumulate;
+		// the hourly/daily tiers just fall behind until the next restart.
+	}
 
 	reportScheduler := reporting.NewScheduler(hubCtx, db)
 	reportScheduler.Start()
@@ -148,6 +157,9 @@ func main() {
 	}
 	if err := prober.Stop(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("节点探测停止失败")
+	}
+	if err := aggregator.Stop(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("指标聚合器停止失败")
 	}
 	hubCancel()
 }

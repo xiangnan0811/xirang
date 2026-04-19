@@ -16,7 +16,7 @@ const DropdownMenuContent = React.forwardRef<
       className={cn(
         "z-50 min-w-[8rem] rounded-lg bg-card p-1 text-foreground shadow-lg",
         "dark:border dark:border-border",
-        "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1 data-[state=open]:duration-[120ms]",
+        "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1 data-[state=open]:[animation-duration:120ms]",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100",
         className
       )}

@@ -1,8 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { NotificationsPage } from "./notifications-page";
+
+// Router wrapper: AlertList's "查看关联指标" Link needs a router context (added in
+// P5a Task 24). Existing tests predate the link, so we inject MemoryRouter here.
+function render(ui: ReactElement, options?: RenderOptions) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>, options);
+}
 
 /* ---------- hoisted mocks (referenced in vi.mock factories) ---------- */
 
@@ -495,7 +503,7 @@ describe("NotificationsPage", () => {
 
     expect(setGlobalSearchMock).toHaveBeenCalledWith("");
 
-    view.rerender(<NotificationsPage />);
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
 
     expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
     // mobile + desktop 视图各渲染一次，使用 getAllByText

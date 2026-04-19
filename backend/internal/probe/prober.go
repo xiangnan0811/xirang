@@ -10,6 +10,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
+	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -18,19 +19,22 @@ import (
 
 // Prober periodically probes all nodes via SSH to check health and collect metrics.
 type Prober struct {
-	db                   *gorm.DB
-	interval             time.Duration
-	failThreshold        int
-	concurrency          int
-	metricRetentionDays  int
-	cancel               context.CancelFunc
-	done                 chan struct{}
+	db                  *gorm.DB
+	sink                *metrics.FanSink
+	interval            time.Duration
+	failThreshold       int
+	concurrency         int
+	metricRetentionDays int
+	cancel              context.CancelFunc
+	done                chan struct{}
 }
 
-// NewProber creates a new Prober instance.
-func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency int) *Prober {
+// NewProber creates a new Prober instance. Metric samples are written through
+// sink (typically a FanSink containing at least a DBSink); do not pass nil.
+func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency int, sink *metrics.FanSink) *Prober {
 	return &Prober{
 		db:                  db,
+		sink:                sink,
 		interval:            interval,
 		failThreshold:       failThreshold,
 		concurrency:         concurrency,
@@ -183,7 +187,7 @@ func (p *Prober) probeNode(node model.Node) {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(resolveErr).Msg("恢复节点探测告警失败")
 	}
 
-	go p.collectAndSaveMetrics(node)
+	go p.collectAndSaveMetrics(node, result.Latency, float64(diskUsed), float64(diskTotal))
 }
 
 type nodeMetrics struct {
@@ -193,31 +197,43 @@ type nodeMetrics struct {
 	load1m  float64
 }
 
-func (p *Prober) collectAndSaveMetrics(node model.Node) {
+func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, diskGBUsed, diskGBTotal float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	metrics, err := p.collectMetrics(ctx, node)
+	nm, err := p.collectMetrics(ctx, node)
 	if err != nil {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(err).Msg("采集节点资源指标失败")
 		return
 	}
 
-	sample := model.NodeMetricSample{
+	cpuPct, memPct, diskPct, load1 := nm.cpuPct, nm.memPct, nm.diskPct, nm.load1m
+	latency := float64(probeLatencyMs)
+	ms := metrics.Sample{
 		NodeID:    node.ID,
-		CpuPct:    metrics.cpuPct,
-		MemPct:    metrics.memPct,
-		DiskPct:   metrics.diskPct,
-		Load1m:    metrics.load1m,
+		NodeName:  node.Name,
 		SampledAt: time.Now().UTC(),
+		CPUPct:    &cpuPct,
+		MemPct:    &memPct,
+		DiskPct:   &diskPct,
+		Load1:     &load1,
+		LatencyMs: &latency,
+		ProbeOK:   true,
 	}
-	if err := p.db.Create(&sample).Error; err != nil {
+	if diskGBTotal > 0 {
+		used, total := diskGBUsed, diskGBTotal
+		ms.DiskGBUsed = &used
+		ms.DiskGBTotal = &total
+	}
+	if err := p.sink.Write(ctx, ms); err != nil {
+		// FanSink.Write returns nil today, but honour the contract in case the
+		// implementation is swapped for one that returns errors.
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(err).Msg("保存节点资源指标失败")
 		return
 	}
 
-	if metrics.diskPct > 90 {
-		if alertErr := alerting.RaiseDiskUsageAlert(p.db, node, metrics.diskPct); alertErr != nil {
+	if nm.diskPct > 90 {
+		if alertErr := alerting.RaiseDiskUsageAlert(p.db, node, nm.diskPct); alertErr != nil {
 			logger.Module("probe").Warn().Uint("node_id", node.ID).Err(alertErr).Msg("创建磁盘告警失败")
 		}
 	}
