@@ -161,6 +161,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/nodes/:id/log-config", middleware.RBAC("logs:read"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Get)
 	secured.PATCH("/nodes/:id/log-config", middleware.RBAC("logs:write"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Patch)
 
+	nodeLogsHandler := handlers.NewNodeLogsHandler(dep.DB, dep.SettingsService)
+	secured.GET("/node-logs", middleware.RBAC("logs:read"), nodeLogsHandler.Query)
+	secured.GET("/alerts/:id/logs", middleware.RBAC("alerts:read"), nodeLogsHandler.AlertLogs)
+	secured.GET("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.GetSettings)
+	secured.PATCH("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.PatchSettings)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)
