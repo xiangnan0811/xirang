@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/xiangnan0811/xirang/compare/v0.11.0...v0.12.0) (2026-04-20)
+
+
+### Features
+
+* **alerting:** P5b intelligent alerting — silence + grouping + retry ([#42](https://github.com/xiangnan0811/xirang/issues/42)) ([f81c136](https://github.com/xiangnan0811/xirang/commit/f81c136891468d5037f7d3536f582777d030ded9))
+
 ## [0.11.0](https://github.com/xiangnan0811/xirang/compare/v0.10.0...v0.11.0) (2026-04-19)
 
 
