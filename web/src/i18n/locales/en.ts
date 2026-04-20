@@ -2184,6 +2184,49 @@ const en = {
     deleteConfirm: "Delete SLO \"{{name}}\"?",
   },
 
+  // ── nodeLogs ──
+  nodeLogs: {
+    tab: { task: "Task Logs", node: "Node Logs", alert: "Alert Logs" },
+    filters: {
+      nodes: "Nodes", source: "Source", path: "Path", priority: "Priority",
+      timeRange: "Time range", keyword: "Keyword",
+      keywordHint: "Prefix with ! to exclude",
+      apply: "Apply", reset: "Reset",
+    },
+    source: { journalctl: "journalctl", file: "File" },
+    priority: { emerg: "emerg", alert: "alert", crit: "crit", err: "err", warning: "warning", notice: "notice", info: "info", debug: "debug" },
+    columns: { time: "Time", node: "Node", path: "Path", priority: "Priority", message: "Message" },
+    empty: "No matching logs",
+    loading: "Loading...",
+    page: "Page {{page}}",
+    perPage: "{{size}} per page",
+    total: "{{total}} total",
+    preset: { oneHour: "1h", sixHour: "6h", oneDay: "1d", custom: "Custom" },
+    nodeConfig: {
+      tab: "Log Config",
+      journalctlEnabled: "Enable journalctl",
+      logPaths: "File whitelist paths",
+      logPathsHint: "Absolute paths, one per line, max 20",
+      retentionDays: "Retention days",
+      retentionDaysHint: "0 = use global default",
+      save: "Save", saved: "Saved",
+      validation: {
+        notAbsolute: "Path must start with /",
+        deniedPrefix: "Path is in deny list",
+        wildcardNotAllowed: "Wildcards not supported",
+        tooMany: "Max 20 paths",
+        retentionOutOfRange: "Retention days must be 0-365",
+      },
+    },
+    alertJumpButton: "View logs ±5min around alert",
+    alertHeader: "Alert #{{id}} ±5min logs · Node {{node}}",
+    alertPlatformHint: "Platform-level alert has no associated node; switch to Node Logs tab to query by time.",
+    settings: {
+      defaultRetention: "Default log retention (days)",
+      defaultRetentionHint: "Used for nodes not setting their own retention",
+    },
+  },
+
 } as const;
 
 export default en;

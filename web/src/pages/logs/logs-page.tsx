@@ -7,6 +7,7 @@ import { useTasksContext } from "@/context/tasks-context";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
@@ -24,8 +25,12 @@ import { LogsFullscreenDialog } from "../logs-page.fullscreen-dialog";
 import { LogsFilterBar } from "./logs-filter-bar";
 import { LogsViewer } from "./logs-viewer";
 import { LogsHistory } from "./logs-history";
+import { NodeLogsPanel } from "./logs-page.nodes";
+import { AlertLogsPanel } from "./logs-page.alert";
 
 const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
+
+type LogTab = "task" | "node" | "alert";
 
 export function LogsPage() {
   const { t } = useTranslation();
@@ -39,6 +44,14 @@ export function LogsPage() {
   }, [refreshNodes, refreshTasks]);
 
   const [searchParams, setSearchParams] = useSearchParams();
+
+  const activeTab = (searchParams.get("tab") as LogTab | null) ?? "task";
+
+  const setTab = (tab: LogTab) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tab);
+    setSearchParams(next, { replace: true });
+  };
 
   const initialTask = searchParams.get("task") ?? "all";
   const initialNode = searchParams.get("node") ?? "all";
@@ -470,63 +483,87 @@ export function LogsPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="rounded-lg border border-border bg-card">
-        <CardContent className="space-y-4 pt-6">
-          <LogsFilterBar
-            nodes={nodes}
-            tasks={tasks}
-            selectedNode={selectedNode}
-            selectedTask={selectedTask}
-            keyword={keyword}
-            connected={connected}
-            connectionWarning={connectionWarning}
-            progressValue={progressValue}
-            normalizedProgress={normalizedProgress}
-            showProgress={focusedTask !== null || runningTasks.length > 0}
-            filteredCount={filteredLogs.length}
-            totalCount={mergedLogs.length}
-            errorCode={focusedTask?.errorCode}
-            onNodeChange={(value) => {
-              setSelectedNode(value);
-              syncSearchParams({ node: value });
-            }}
-            onTaskChange={(value) => {
-              setSelectedTask(value);
-              syncSearchParams({ task: value });
-            }}
-            onKeywordChange={(value) => {
-              setKeyword(value);
-              syncSearchParams({ q: value });
-            }}
-            onReset={resetFilters}
-            onExport={exportAsText}
-            onFullscreen={() => setFullScreen(true)}
-          />
+      {/* Tab bar */}
+      <div className="flex gap-2" role="tablist" aria-label={t("nodeLogs.tab.task")}>
+        {(["task", "node", "alert"] as LogTab[]).map((tab) => (
+          <Button
+            key={tab}
+            role="tab"
+            aria-selected={activeTab === tab}
+            variant={activeTab === tab ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTab(tab)}
+          >
+            {t(`nodeLogs.tab.${tab}`)}
+          </Button>
+        ))}
+      </div>
 
-          <div className="space-y-3">
-            <LogsViewer
-              filteredLogs={filteredLogs}
-              historyLoading={historyLoading}
-              onReset={resetFilters}
-            />
-
-            {focusedTaskNumber ? (
-              <LogsHistory
-                historyCount={historyLogs.length}
-                historyCursor={historyCursor}
-                historyPaging={historyPaging}
-                onLoadMore={() => void loadMoreHistory()}
+      {activeTab === "task" && (
+        <>
+          <Card className="rounded-lg border border-border bg-card">
+            <CardContent className="space-y-4 pt-6">
+              <LogsFilterBar
+                nodes={nodes}
+                tasks={tasks}
+                selectedNode={selectedNode}
+                selectedTask={selectedTask}
+                keyword={keyword}
+                connected={connected}
+                connectionWarning={connectionWarning}
+                progressValue={progressValue}
+                normalizedProgress={normalizedProgress}
+                showProgress={focusedTask !== null || runningTasks.length > 0}
+                filteredCount={filteredLogs.length}
+                totalCount={mergedLogs.length}
+                errorCode={focusedTask?.errorCode}
+                onNodeChange={(value) => {
+                  setSelectedNode(value);
+                  syncSearchParams({ node: value });
+                }}
+                onTaskChange={(value) => {
+                  setSelectedTask(value);
+                  syncSearchParams({ task: value });
+                }}
+                onKeywordChange={(value) => {
+                  setKeyword(value);
+                  syncSearchParams({ q: value });
+                }}
+                onReset={resetFilters}
+                onExport={exportAsText}
+                onFullscreen={() => setFullScreen(true)}
               />
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
 
-      <LogsFullscreenDialog
-        open={fullScreen}
-        onOpenChange={setFullScreen}
-        filteredLogs={filteredLogs}
-      />
+              <div className="space-y-3">
+                <LogsViewer
+                  filteredLogs={filteredLogs}
+                  historyLoading={historyLoading}
+                  onReset={resetFilters}
+                />
+
+                {focusedTaskNumber ? (
+                  <LogsHistory
+                    historyCount={historyLogs.length}
+                    historyCursor={historyCursor}
+                    historyPaging={historyPaging}
+                    onLoadMore={() => void loadMoreHistory()}
+                  />
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+
+          <LogsFullscreenDialog
+            open={fullScreen}
+            onOpenChange={setFullScreen}
+            filteredLogs={filteredLogs}
+          />
+        </>
+      )}
+
+      {activeTab === "node" && <NodeLogsPanel />}
+
+      {activeTab === "alert" && <AlertLogsPanel />}
     </div>
   );
 }

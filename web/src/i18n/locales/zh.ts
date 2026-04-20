@@ -2184,6 +2184,58 @@ const zh = {
     deleteConfirm: "确定要删除 SLO \"{{name}}\" 吗?",
   },
 
+  // ── nodeLogs ──
+  nodeLogs: {
+    tab: { task: "任务日志", node: "节点日志", alert: "告警联动" },
+    filters: {
+      nodes: "节点",
+      source: "来源",
+      path: "路径",
+      priority: "优先级",
+      timeRange: "时间范围",
+      keyword: "关键字",
+      keywordHint: "以 ! 开头表示排除",
+      apply: "应用筛选",
+      reset: "重置",
+    },
+    source: { journalctl: "journalctl", file: "文件" },
+    priority: {
+      emerg: "emerg", alert: "alert", crit: "crit", err: "err",
+      warning: "warning", notice: "notice", info: "info", debug: "debug",
+    },
+    columns: { time: "时间", node: "节点", path: "路径", priority: "优先级", message: "消息" },
+    empty: "无匹配日志",
+    loading: "加载中...",
+    page: "第 {{page}} 页",
+    perPage: "每页 {{size}} 条",
+    total: "共 {{total}} 条",
+    preset: { oneHour: "1 小时", sixHour: "6 小时", oneDay: "1 天", custom: "自定义" },
+    nodeConfig: {
+      tab: "日志配置",
+      journalctlEnabled: "启用 journalctl",
+      logPaths: "文件白名单路径",
+      logPathsHint: "绝对路径，每行一条，最多 20 条",
+      retentionDays: "保留天数",
+      retentionDaysHint: "0 表示使用全局默认",
+      save: "保存",
+      saved: "已保存",
+      validation: {
+        notAbsolute: "路径必须以 / 开头",
+        deniedPrefix: "路径在黑名单中",
+        wildcardNotAllowed: "不支持通配符",
+        tooMany: "最多 20 条",
+        retentionOutOfRange: "保留天数必须 0-365",
+      },
+    },
+    alertJumpButton: "查看告警前后 ±5 分钟日志",
+    alertHeader: "告警 #{{id}} 前后 ±5 分钟日志 · 节点 {{node}}",
+    alertPlatformHint: "平台告警无关联节点日志，请切换到「节点日志」tab 按时间查询",
+    settings: {
+      defaultRetention: "日志保留默认天数",
+      defaultRetentionHint: "未单独设置的节点使用该天数",
+    },
+  },
+
 } as const;
 
 export default zh;

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { alertStatusMeta } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,7 @@ export function AlertList({
   onRetryAllFailed,
 }: AlertListProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const sortIndicator = (field: SortField) => {
     if (sortBy !== field) return null;
@@ -198,6 +199,18 @@ export function AlertList({
                     </Link>
                   ) : null}
                 </div>
+                {alert.nodeId !== 0 && (
+                  <div className="mt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate(`/app/logs?tab=alert&alert_id=${alert.id}`)}
+                      aria-label={t("nodeLogs.alertJumpButton")}
+                    >
+                      {t("nodeLogs.alertJumpButton")}
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="shrink-0">
                 <AlertBulkActions
