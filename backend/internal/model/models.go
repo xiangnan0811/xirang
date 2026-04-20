@@ -566,3 +566,29 @@ type SystemSetting struct {
 	Value     string    `gorm:"type:text;not null" json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// SLODefinition is a service-level objective target, matched by node tags.
+type SLODefinition struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	Name       string    `gorm:"size:128;not null" json:"name"`
+	MetricType string    `gorm:"size:32;not null" json:"metric_type"` // success_rate | availability
+	MatchTags  string    `gorm:"type:text" json:"match_tags"`         // JSON-encoded []string (nil = all)
+	Threshold  float64   `gorm:"not null" json:"threshold"`           // 0–1 range
+	WindowDays int       `gorm:"not null;default:28" json:"window_days"`
+	Enabled    bool      `gorm:"not null;default:true;index" json:"enabled"`
+	CreatedBy  uint      `gorm:"not null" json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// DecodedMatchTags returns the parsed tag list. Returns nil on NULL/empty/invalid JSON.
+func (s *SLODefinition) DecodedMatchTags() []string {
+	if strings.TrimSpace(s.MatchTags) == "" {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(s.MatchTags), &tags); err != nil {
+		return nil
+	}
+	return tags
+}
