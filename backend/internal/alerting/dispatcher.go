@@ -20,6 +20,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/slo"
 	"xirang/backend/internal/util"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -710,6 +711,29 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 		return fmt.Errorf("STARTTLS 握手失败: %w", err)
 	}
 	return smtpSend(c, auth, from, to, msg)
+}
+
+// RaiseSLOBreach emits a platform-level alert for an SLO burn-rate breach.
+// The alert flows through the standard silence/grouping/retry pipeline with
+// ErrorCode = "XR-SLO-<id>" and NodeID=0 sentinel for "platform" scope.
+func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) error {
+	severity := "warn"
+	if c.ErrorBudgetRemainingPct <= 0 {
+		severity = "critical"
+	}
+	alert := &model.Alert{
+		NodeID:    0,
+		NodeName:  "",
+		ErrorCode: fmt.Sprintf("XR-SLO-%d", def.ID),
+		Severity:  severity,
+		Status:    "open",
+		Message: fmt.Sprintf(
+			"SLO %q: observed %.2f%% < threshold %.2f%%, 1h burn rate %.2f",
+			def.Name, c.Observed*100, def.Threshold*100, c.BurnRate1h,
+		),
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, alert)
 }
 
 func smtpSend(c *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
