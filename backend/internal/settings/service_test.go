@@ -24,8 +24,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func TestRegistry(t *testing.T) {
 	svc := NewService(setupTestDB(t))
 	defs := svc.Registry()
-	if len(defs) != 14 {
-		t.Errorf("expected 14 definitions, got %d", len(defs))
+	if len(defs) != 15 {
+		t.Errorf("expected 15 definitions, got %d", len(defs))
 	}
 	// 确认返回副本，不影响全局 registry
 	defs[0].Key = "mutated"
@@ -162,8 +162,8 @@ func TestGetAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 14 {
-		t.Errorf("expected 14 settings, got %d", len(all))
+	if len(all) != 15 {
+		t.Errorf("expected 15 settings, got %d", len(all))
 	}
 	if all["login.rate_limit"].Source != "db" {
 		t.Errorf("expected source 'db', got '%s'", all["login.rate_limit"].Source)

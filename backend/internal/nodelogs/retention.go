@@ -2,10 +2,13 @@ package nodelogs
 
 import (
 	"context"
+	"strconv"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -19,10 +22,43 @@ func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
 	return &RetentionWorker{db: db, tick: time.Hour}
 }
 
+// settingsSvc 模块级设置服务引用，由 InitSettings 注入
+var (
+	settingsSvc    *settings.Service
+	settingsInitMu sync.Mutex
+)
+
+// InitSettings 注入设置服务（在 main 中调用）
+func InitSettings(svc *settings.Service) {
+	settingsInitMu.Lock()
+	settingsSvc = svc
+	settingsInitMu.Unlock()
+}
+
+func getSettingsSvc() *settings.Service {
+	settingsInitMu.Lock()
+	svc := settingsSvc
+	settingsInitMu.Unlock()
+	return svc
+}
+
 // defaultDaysFromSettings returns the global default retention days.
-// Stubbed to DefaultRetentionDays here; main.go (Task 8) re-points this
-// to the real system_settings service.
-var defaultDaysFromSettings = func(_ *gorm.DB) int { return DefaultRetentionDays }
+// Falls back to DefaultRetentionDays when service not injected or value invalid.
+var defaultDaysFromSettings = func(_ *gorm.DB) int {
+	svc := getSettingsSvc()
+	if svc == nil {
+		return DefaultRetentionDays
+	}
+	v := svc.GetEffective("logs.retention_days_default")
+	if v == "" {
+		return DefaultRetentionDays
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return DefaultRetentionDays
+	}
+	return n
+}
 
 func (r *RetentionWorker) Run(ctx context.Context) {
 	t := time.NewTicker(r.tick)
