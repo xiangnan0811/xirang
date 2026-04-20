@@ -102,8 +102,8 @@ func TestComputeAvailability_InsufficientData(t *testing.T) {
 
 func TestComputeAvailability_TagFilter(t *testing.T) {
 	db := openSLOTestDB(t)
-	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod,web"})
-	db.Create(&model.Node{ID: 2, Name: "n2", Tags: "staging"})
+	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod,web", BackupDir: "/b1"})
+	db.Create(&model.Node{ID: 2, Name: "n2", Tags: "staging", BackupDir: "/b2"})
 	now := time.Now().UTC().Truncate(time.Hour)
 	for h := 0; h < 28*24; h++ {
 		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
@@ -113,6 +113,46 @@ func TestComputeAvailability_TagFilter(t *testing.T) {
 	c, _ := Compute(db, def, now)
 	if c.Status != StatusHealthy {
 		t.Fatalf("expected Healthy (prod only is healthy), got %q Observed=%f", c.Status, c.Observed)
+	}
+}
+
+// TestComputeAvailability_Warning verifies StatusWarning fires when observed >= threshold
+// but error budget remaining < 20%.
+//
+// Seed: 672 buckets × 30 samples = 20160 total. Every 4th bucket has 1 fail → 168 fails.
+// observed = 19992/20160 ≈ 0.9917. budget=1%, consumed≈83%, remaining≈17% < 20% → Warning.
+func TestComputeAvailability_Warning(t *testing.T) {
+	db := openSLOTestDB(t)
+	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod", BackupDir: "/bw"})
+	now := time.Now().UTC().Truncate(time.Hour)
+	for h := 0; h < 28*24; h++ {
+		fails := int64(0)
+		if h%4 == 0 {
+			fails = 1
+		}
+		ok := int64(30) - fails
+		db.Create(&model.NodeMetricSampleHourly{
+			NodeID:      1,
+			BucketStart: now.Add(-time.Duration(h) * time.Hour),
+			ProbeOK:     ok,
+			ProbeFail:   fails,
+			SampleCount: 30,
+		})
+	}
+	def := &model.SLODefinition{ID: 1, Name: "prod availability warning", MetricType: "availability", Threshold: 0.99, WindowDays: 28}
+	c, err := Compute(db, def, now)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	// observed should be above threshold (healthy range) but budget running low
+	if c.Observed < 0.99 {
+		t.Fatalf("expected Observed >= 0.99 (above threshold), got %f", c.Observed)
+	}
+	if c.Observed >= 0.995 {
+		t.Fatalf("expected Observed < 0.995 (budget nearly consumed), got %f", c.Observed)
+	}
+	if c.Status != StatusWarning {
+		t.Fatalf("expected StatusWarning (budget remaining < 20%%), got %q (observed=%f, budgetRemaining=%f%%)", c.Status, c.Observed, c.ErrorBudgetRemainingPct)
 	}
 }
 

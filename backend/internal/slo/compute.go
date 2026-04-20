@@ -32,16 +32,18 @@ func Compute(db *gorm.DB, def *model.SLODefinition, now time.Time) (*Compliance,
 }
 
 // resolveNodeIDs returns node IDs matching def.MatchTags (any-of). Empty tags = all nodes.
-func resolveNodeIDs(db *gorm.DB, def *model.SLODefinition) []uint {
+func resolveNodeIDs(db *gorm.DB, def *model.SLODefinition) ([]uint, error) {
 	var nodes []model.Node
-	db.Find(&nodes)
+	if err := db.Find(&nodes).Error; err != nil {
+		return nil, err
+	}
 	wanted := def.DecodedMatchTags()
 	if len(wanted) == 0 {
 		ids := make([]uint, len(nodes))
 		for i, n := range nodes {
 			ids[i] = n.ID
 		}
-		return ids
+		return ids, nil
 	}
 	var out []uint
 	for _, n := range nodes {
@@ -49,7 +51,7 @@ func resolveNodeIDs(db *gorm.DB, def *model.SLODefinition) []uint {
 			out = append(out, n.ID)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func splitCSVTags(raw string) []string {
@@ -85,7 +87,10 @@ type aggRow struct {
 }
 
 func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance, now time.Time) (*Compliance, error) {
-	nodeIDs := resolveNodeIDs(db, def)
+	nodeIDs, err := resolveNodeIDs(db, def)
+	if err != nil {
+		return nil, err
+	}
 	if len(nodeIDs) == 0 {
 		base.Status = StatusInsufficient
 		return base, nil
@@ -100,7 +105,7 @@ func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance
 	var hour aggRow
 	if err := db.Table("node_metric_samples_hourly").
 		Select("COALESCE(SUM(probe_ok),0) AS ok, COALESCE(SUM(probe_ok + probe_fail),0) AS total").
-		Where("node_id IN ? AND bucket_start >= ?", nodeIDs, now.Add(-time.Hour)).
+		Where("node_id IN ? AND bucket_start >= ? AND bucket_start < ?", nodeIDs, now.Add(-time.Hour), now).
 		Scan(&hour).Error; err != nil {
 		return nil, err
 	}
@@ -113,7 +118,10 @@ func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance
 }
 
 func computeSuccessRate(db *gorm.DB, def *model.SLODefinition, base *Compliance, now time.Time) (*Compliance, error) {
-	nodeIDs := resolveNodeIDs(db, def)
+	nodeIDs, err := resolveNodeIDs(db, def)
+	if err != nil {
+		return nil, err
+	}
 	if len(nodeIDs) == 0 {
 		base.Status = StatusInsufficient
 		return base, nil
@@ -130,7 +138,7 @@ func computeSuccessRate(db *gorm.DB, def *model.SLODefinition, base *Compliance,
 	if err := db.Table("task_runs").
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
 		Select("COALESCE(SUM(CASE WHEN task_runs.status = 'success' THEN 1 ELSE 0 END), 0) AS ok, COUNT(*) AS total").
-		Where("tasks.node_id IN ? AND task_runs.created_at >= ?", nodeIDs, now.Add(-time.Hour)).
+		Where("tasks.node_id IN ? AND task_runs.created_at >= ? AND task_runs.created_at < ?", nodeIDs, now.Add(-time.Hour), now).
 		Scan(&hour).Error; err != nil {
 		return nil, err
 	}
@@ -166,11 +174,13 @@ func classify(observed, threshold float64, total int) Status {
 	if total < insufficientSampleThreshold {
 		return StatusInsufficient
 	}
-	if observed >= threshold {
-		return StatusHealthy
+	if observed < threshold {
+		return StatusBreached
 	}
-	if budgetRemainingPct(observed, threshold) > 0 {
+	// observed >= threshold → check budget consumption
+	remaining := budgetRemainingPct(observed, threshold)
+	if remaining < 20 { // within 20% of exhausting budget
 		return StatusWarning
 	}
-	return StatusBreached
+	return StatusHealthy
 }
