@@ -438,3 +438,41 @@ export interface HookTemplate {
   postHook: string;
   description: string;
 }
+
+export type SLOMetricType = "availability" | "success_rate";
+export type SLOStatus = "healthy" | "warning" | "breached" | "insufficient_data";
+
+export type SLODefinition = {
+  id: number;
+  name: string;
+  metric_type: SLOMetricType;
+  match_tags: string | string[] | null;
+  threshold: number;
+  window_days: number;
+  enabled: boolean;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SLOComplianceResult = {
+  slo_id: number;
+  name: string;
+  metric_type: SLOMetricType;
+  window_start: string;
+  window_end: string;
+  threshold: number;
+  observed: number;
+  sample_count: number;
+  error_budget_remaining_pct: number;
+  burn_rate_1h: number;
+  status: SLOStatus;
+};
+
+export type SLOSummary = {
+  total: number;
+  healthy: number;
+  warning: number;
+  breached: number;
+  insufficient: number;
+};
