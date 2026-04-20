@@ -7,8 +7,6 @@ import (
 	"xirang/backend/internal/model"
 )
 
-func tptr(t time.Time) *time.Time { return &t }
-
 func TestMatchSilence_NoActiveSilences(t *testing.T) {
 	alert := model.Alert{NodeID: 1, ErrorCode: "probe_down"}
 	node := model.Node{ID: 1, Tags: "prod,web"}
