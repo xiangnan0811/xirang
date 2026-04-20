@@ -172,6 +172,16 @@ go run ./cmd/server
 | PATCH | /silences/:id | 🔒 更新静默规则（alerts:write） |
 | DELETE | /silences/:id | 🔒 软删除静默规则（alerts:write） |
 
+### SLO 定义
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /slos | 🔒 SLO 定义列表（alerts:read） |
+| GET | /slos/:id | 🔒 SLO 定义详情（alerts:read） |
+| POST | /slos | 🔒 创建 SLO 定义（admin） |
+| PATCH | /slos/:id | 🔒 更新 SLO 定义（admin） |
+| DELETE | /slos/:id | 🔒 硬删除 SLO 定义（admin） |
+
 ### 审计日志
 
 | 方法 | 路径 | 说明 |
@@ -259,7 +269,7 @@ go run ./cmd/server
 
 支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000030_task_run_progress`。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
 
 新增接口（P5b 智能告警）：
 - `GET    /api/v1/silences` — 列出静默规则（?active=true 仅返回生效中，alerts:read）
@@ -268,6 +278,13 @@ go run ./cmd/server
 - `PATCH  /api/v1/silences/:id` — 更新静默规则（alerts:write）
 - `DELETE /api/v1/silences/:id` — 软删除静默规则，将 ends_at 设为当前时间（alerts:write）
 - `POST   /api/v1/alert-deliveries/:id/retry` — 手动重试指定投递记录（alerts:write，绕过 next_retry_at 调度；不存在返回 404）
+
+新增接口（P5d-1 SLO 引擎）：
+- `GET    /api/v1/slos` — 列出 SLO 定义（alerts:read）
+- `GET    /api/v1/slos/:id` — 获取单条 SLO 定义（alerts:read）
+- `POST   /api/v1/slos` — 创建 SLO 定义（admin）
+- `PATCH  /api/v1/slos/:id` — 更新 SLO 定义（admin）
+- `DELETE /api/v1/slos/:id` — 硬删除 SLO 定义（admin）
 
 ## 测试
 
