@@ -177,7 +177,9 @@ go run ./cmd/server
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /slos | 🔒 SLO 定义列表（alerts:read） |
+| GET | /slos/compliance-summary | 🔒 所有已启用 SLO 合规汇总（alerts:read） |
 | GET | /slos/:id | 🔒 SLO 定义详情（alerts:read） |
+| GET | /slos/:id/compliance | 🔒 单条 SLO 合规状态（alerts:read） |
 | POST | /slos | 🔒 创建 SLO 定义（admin） |
 | PATCH | /slos/:id | 🔒 更新 SLO 定义（admin） |
 | DELETE | /slos/:id | 🔒 硬删除 SLO 定义（admin） |
@@ -281,7 +283,9 @@ go run ./cmd/server
 
 新增接口（P5d-1 SLO 引擎）：
 - `GET    /api/v1/slos` — 列出 SLO 定义（alerts:read）
+- `GET    /api/v1/slos/compliance-summary` — 所有已启用 SLO 合规汇总（alerts:read）
 - `GET    /api/v1/slos/:id` — 获取单条 SLO 定义（alerts:read）
+- `GET    /api/v1/slos/:id/compliance` — 单条 SLO 合规状态（alerts:read）
 - `POST   /api/v1/slos` — 创建 SLO 定义（admin）
 - `PATCH  /api/v1/slos/:id` — 更新 SLO 定义（admin）
 - `DELETE /api/v1/slos/:id` — 硬删除 SLO 定义（admin）

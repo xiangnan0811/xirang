@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/slo"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -27,8 +29,8 @@ func openSLOHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.SLODefinition{}); err != nil {
-		t.Fatalf("迁移 slo_definitions 表失败: %v", err)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SLODefinition{}, &model.NodeMetricSampleHourly{}); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }
@@ -44,8 +46,10 @@ func newSLORouter(db *gorm.DB, role string, userID uint) *gin.Engine {
 	})
 	h := NewSLOHandler(db)
 	r.GET("/api/v1/slos", middleware.RBAC("alerts:read"), h.List)
+	r.GET("/api/v1/slos/compliance-summary", middleware.RBAC("alerts:read"), h.ComplianceSummary)
 	r.POST("/api/v1/slos", middleware.RequireRole("admin"), h.Create)
 	r.GET("/api/v1/slos/:id", middleware.RBAC("alerts:read"), h.Get)
+	r.GET("/api/v1/slos/:id/compliance", middleware.RBAC("alerts:read"), h.Compliance)
 	r.PATCH("/api/v1/slos/:id", middleware.RequireRole("admin"), h.Update)
 	r.DELETE("/api/v1/slos/:id", middleware.RequireRole("admin"), h.Delete)
 	return r
@@ -311,5 +315,63 @@ func TestDeleteSLO_HardDelete(t *testing.T) {
 	db.Model(&model.SLODefinition{}).Where("id = ?", s.ID).Count(&count)
 	if count != 0 {
 		t.Fatalf("期望记录已从数据库删除，实际 count=%d", count)
+	}
+}
+
+// TestSLOCompliance_ReturnsStructure 验证单条 SLO 合规端点返回正确结构与 healthy 状态。
+func TestSLOCompliance_ReturnsStructure(t *testing.T) {
+	db := openSLOHandlerTestDB(t)
+	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
+	s := model.SLODefinition{Name: "prod avail", MetricType: "availability", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	db.Create(&s)
+	now := time.Now().UTC().Truncate(time.Hour)
+	for h := 0; h < 28*24; h++ {
+		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	}
+	r := newSLORouter(db, "viewer", 2)
+	w := doSLOJSON(r, "GET", "/api/v1/slos/"+sloIDStr(s.ID)+"/compliance", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data slo.Compliance `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Data.Status != slo.StatusHealthy {
+		t.Fatalf("expected healthy, got %q", resp.Data.Status)
+	}
+}
+
+// TestSLOComplianceSummary_ReturnsCounts 验证汇总端点只计入已启用 SLO，且计数正确。
+func TestSLOComplianceSummary_ReturnsCounts(t *testing.T) {
+	db := openSLOHandlerTestDB(t)
+	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
+	now := time.Now().UTC().Truncate(time.Hour)
+	// seed enough samples to get healthy status
+	for h := 0; h < 28*24; h++ {
+		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	}
+	// one enabled
+	db.Create(&model.SLODefinition{Name: "a", MetricType: "availability", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1})
+	// one disabled — use raw SQL to bypass GORM default:true for zero bool
+	db.Exec("INSERT INTO slo_definitions (name, metric_type, match_tags, threshold, window_days, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+		"b", "availability", `["prod"]`, 0.99, 28, 0, 1)
+
+	r := newSLORouter(db, "viewer", 2)
+	w := doSLOJSON(r, "GET", "/api/v1/slos/compliance-summary", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Total, Healthy, Warning, Breached, Insufficient int
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Data.Total != 1 {
+		t.Fatalf("expected Total=1 (only enabled healthy), got %d; body=%s", resp.Data.Total, w.Body.String())
+	}
+	if resp.Data.Healthy != 1 {
+		t.Fatalf("expected Healthy=1, got %d", resp.Data.Healthy)
 	}
 }

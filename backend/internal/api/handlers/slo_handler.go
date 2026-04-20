@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/slo"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -164,4 +166,66 @@ func (h *SLOHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// Compliance 计算单条 SLO 的合规状态（alerts:read）。
+func (h *SLOHandler) Compliance(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var s model.SLODefinition
+	if err := h.db.First(&s, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "SLO 定义不存在")
+			return
+		}
+		respondInternalError(c, err)
+		return
+	}
+	result, err := slo.Compute(h.db, &s, time.Now().UTC())
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondOK(c, result)
+}
+
+type sloSummaryResponse struct {
+	Total        int `json:"total"`
+	Healthy      int `json:"healthy"`
+	Warning      int `json:"warning"`
+	Breached     int `json:"breached"`
+	Insufficient int `json:"insufficient"`
+}
+
+// ComplianceSummary 汇总所有已启用 SLO 的合规状态计数（alerts:read）。
+func (h *SLOHandler) ComplianceSummary(c *gin.Context) {
+	var defs []model.SLODefinition
+	if err := h.db.Where("enabled = ?", true).Find(&defs).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	now := time.Now().UTC()
+	summary := sloSummaryResponse{}
+	for i := range defs {
+		result, err := slo.Compute(h.db, &defs[i], now)
+		if err != nil {
+			continue
+		}
+		switch result.Status {
+		case slo.StatusHealthy:
+			summary.Total++
+			summary.Healthy++
+		case slo.StatusWarning:
+			summary.Total++
+			summary.Warning++
+		case slo.StatusBreached:
+			summary.Total++
+			summary.Breached++
+		case slo.StatusInsufficient:
+			summary.Insufficient++
+		}
+	}
+	respondOK(c, summary)
 }
