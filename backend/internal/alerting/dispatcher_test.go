@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/slo"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -425,6 +426,31 @@ func TestDispatch_SecondAlertInGroupWindowIsSuppressed(t *testing.T) {
 	db.Model(&model.AlertDelivery{}).Count(&deliveries)
 	if deliveries != 1 {
 		t.Fatalf("expected 1 delivery (second grouped-out), got %d", deliveries)
+	}
+}
+
+func TestDispatch_SLOBreachUsesXRSLOPrefix(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	// Seed an integration so delivery would otherwise happen
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1"})
+	sloDef := &model.SLODefinition{ID: 1, Name: "test slo", MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	c := &slo.Compliance{SLOID: 1, Observed: 0.97, Threshold: 0.99, BurnRate1h: 3.0, ErrorBudgetRemainingPct: 25}
+	if err := RaiseSLOBreach(db, sloDef, c); err != nil {
+		t.Fatal(err)
+	}
+	var a model.Alert
+	if err := db.Order("id DESC").First(&a).Error; err != nil {
+		t.Fatal(err)
+	}
+	if a.ErrorCode != "XR-SLO-1" {
+		t.Fatalf("expected ErrorCode=XR-SLO-1, got %q", a.ErrorCode)
+	}
+	if a.NodeID != 0 {
+		t.Fatalf("expected NodeID=0 (platform), got %d", a.NodeID)
+	}
+	if a.Severity == "" {
+		t.Fatalf("expected severity set, got empty")
 	}
 }
 

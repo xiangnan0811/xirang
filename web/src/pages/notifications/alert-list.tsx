@@ -162,6 +162,7 @@ export function AlertList({
         const severity = getSeverityMeta(alert.severity);
         const status = alertStatusMeta(alert.status);
         const toneClass = alert.severity === "critical" ? "bg-destructive" : alert.severity === "warning" ? "bg-warning" : "bg-info";
+        const displayNode = alert.nodeId === 0 ? t("slo.platformAlert") : alert.nodeName;
         return (
           <div
             key={alert.id}
@@ -173,7 +174,7 @@ export function AlertList({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-foreground/90 truncate">
-                    {alert.nodeName}
+                    {displayNode}
                   </span>
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                   <Badge tone={status.variant}>{status.label}</Badge>
@@ -245,6 +246,7 @@ export function AlertList({
           {items.map((alert) => {
             const severity = getSeverityMeta(alert.severity);
             const status = alertStatusMeta(alert.status);
+            const displayNode = alert.nodeId === 0 ? t("slo.platformAlert") : alert.nodeName;
             return (
               <tr
                 key={alert.id}
@@ -254,7 +256,7 @@ export function AlertList({
                 <td className="px-3 py-2.5">
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                 </td>
-                <td className="px-3 py-2.5 font-medium">{alert.nodeName}</td>
+                <td className="px-3 py-2.5 font-medium">{displayNode}</td>
                 <td className="px-3 py-2.5 max-w-[300px] truncate" title={alert.message}>{alert.message}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.policyName}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.triggeredAt}</td>

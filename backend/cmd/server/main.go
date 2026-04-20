@@ -16,9 +16,11 @@ import (
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
+	"xirang/backend/internal/model"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/slo"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -103,6 +105,12 @@ func main() {
 
 	retryWorker := alerting.NewRetryWorker(db)
 	go retryWorker.Run(hubCtx)
+
+	sloEvaluator := slo.NewEvaluator(db)
+	sloEvaluator.SetRaiseFn(func(_ any, def *model.SLODefinition, c *slo.Compliance) error {
+		return alerting.RaiseSLOBreach(db, def, c)
+	})
+	go sloEvaluator.Run(hubCtx)
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)

@@ -247,6 +247,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PATCH("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Patch)
 	secured.DELETE("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Delete)
 
+	sloHandler := handlers.NewSLOHandler(dep.DB)
+	secured.GET("/slos", middleware.RBAC("alerts:read"), sloHandler.List)
+	secured.GET("/slos/compliance-summary", middleware.RBAC("alerts:read"), sloHandler.ComplianceSummary)
+	secured.GET("/slos/:id", middleware.RBAC("alerts:read"), sloHandler.Get)
+	secured.GET("/slos/:id/compliance", middleware.RBAC("alerts:read"), sloHandler.Compliance)
+	secured.POST("/slos", middleware.RequireRole("admin"), sloHandler.Create)
+	secured.PATCH("/slos/:id", middleware.RequireRole("admin"), sloHandler.Update)
+	secured.DELETE("/slos/:id", middleware.RequireRole("admin"), sloHandler.Delete)
+
 	if dep.RetryWorker != nil {
 		alertDeliveryHandler := handlers.NewAlertDeliveryHandler(dep.RetryWorker)
 		secured.POST("/alert-deliveries/:id/retry", middleware.RBAC("alerts:write"), alertDeliveryHandler.Retry)
