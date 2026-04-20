@@ -1,0 +1,176 @@
+package slo
+
+import (
+	"strings"
+	"time"
+
+	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
+)
+
+// Compute evaluates an SLO at time `now`.
+func Compute(db *gorm.DB, def *model.SLODefinition, now time.Time) (*Compliance, error) {
+	windowStart := now.AddDate(0, 0, -def.WindowDays)
+	base := &Compliance{
+		SLOID:       def.ID,
+		Name:        def.Name,
+		MetricType:  def.MetricType,
+		WindowStart: windowStart,
+		WindowEnd:   now,
+		Threshold:   def.Threshold,
+	}
+	switch def.MetricType {
+	case "availability":
+		return computeAvailability(db, def, base, now)
+	case "success_rate":
+		return computeSuccessRate(db, def, base, now)
+	default:
+		base.Status = StatusInsufficient
+		return base, nil
+	}
+}
+
+// resolveNodeIDs returns node IDs matching def.MatchTags (any-of). Empty tags = all nodes.
+func resolveNodeIDs(db *gorm.DB, def *model.SLODefinition) []uint {
+	var nodes []model.Node
+	db.Find(&nodes)
+	wanted := def.DecodedMatchTags()
+	if len(wanted) == 0 {
+		ids := make([]uint, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return ids
+	}
+	var out []uint
+	for _, n := range nodes {
+		if anyTagMatch(wanted, splitCSVTags(n.Tags)) {
+			out = append(out, n.ID)
+		}
+	}
+	return out
+}
+
+func splitCSVTags(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func anyTagMatch(wanted, have []string) bool {
+	idx := make(map[string]struct{}, len(have))
+	for _, t := range have {
+		idx[t] = struct{}{}
+	}
+	for _, t := range wanted {
+		if _, ok := idx[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+type aggRow struct {
+	OK    int64
+	Total int64
+}
+
+func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance, now time.Time) (*Compliance, error) {
+	nodeIDs := resolveNodeIDs(db, def)
+	if len(nodeIDs) == 0 {
+		base.Status = StatusInsufficient
+		return base, nil
+	}
+	var win aggRow
+	if err := db.Table("node_metric_samples_hourly").
+		Select("COALESCE(SUM(probe_ok),0) AS ok, COALESCE(SUM(probe_ok + probe_fail),0) AS total").
+		Where("node_id IN ? AND bucket_start >= ? AND bucket_start < ?", nodeIDs, base.WindowStart, now).
+		Scan(&win).Error; err != nil {
+		return nil, err
+	}
+	var hour aggRow
+	if err := db.Table("node_metric_samples_hourly").
+		Select("COALESCE(SUM(probe_ok),0) AS ok, COALESCE(SUM(probe_ok + probe_fail),0) AS total").
+		Where("node_id IN ? AND bucket_start >= ?", nodeIDs, now.Add(-time.Hour)).
+		Scan(&hour).Error; err != nil {
+		return nil, err
+	}
+	base.Observed = safeRatio(win.OK, win.Total)
+	base.SampleCount = int(win.Total)
+	base.BurnRate1h = burnRate(safeRatio(hour.OK, hour.Total), def.Threshold)
+	base.ErrorBudgetRemainingPct = budgetRemainingPct(base.Observed, def.Threshold)
+	base.Status = classify(base.Observed, def.Threshold, int(win.Total))
+	return base, nil
+}
+
+func computeSuccessRate(db *gorm.DB, def *model.SLODefinition, base *Compliance, now time.Time) (*Compliance, error) {
+	nodeIDs := resolveNodeIDs(db, def)
+	if len(nodeIDs) == 0 {
+		base.Status = StatusInsufficient
+		return base, nil
+	}
+	var win aggRow
+	if err := db.Table("task_runs").
+		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
+		Select("COALESCE(SUM(CASE WHEN task_runs.status = 'success' THEN 1 ELSE 0 END), 0) AS ok, COUNT(*) AS total").
+		Where("tasks.node_id IN ? AND task_runs.created_at >= ? AND task_runs.created_at < ?", nodeIDs, base.WindowStart, now).
+		Scan(&win).Error; err != nil {
+		return nil, err
+	}
+	var hour aggRow
+	if err := db.Table("task_runs").
+		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
+		Select("COALESCE(SUM(CASE WHEN task_runs.status = 'success' THEN 1 ELSE 0 END), 0) AS ok, COUNT(*) AS total").
+		Where("tasks.node_id IN ? AND task_runs.created_at >= ?", nodeIDs, now.Add(-time.Hour)).
+		Scan(&hour).Error; err != nil {
+		return nil, err
+	}
+	base.Observed = safeRatio(win.OK, win.Total)
+	base.SampleCount = int(win.Total)
+	base.BurnRate1h = burnRate(safeRatio(hour.OK, hour.Total), def.Threshold)
+	base.ErrorBudgetRemainingPct = budgetRemainingPct(base.Observed, def.Threshold)
+	base.Status = classify(base.Observed, def.Threshold, int(win.Total))
+	return base, nil
+}
+
+func safeRatio(num, den int64) float64 {
+	if den == 0 {
+		return 0
+	}
+	return float64(num) / float64(den)
+}
+
+func budgetRemainingPct(observed, threshold float64) float64 {
+	if threshold >= 1.0 {
+		return 0
+	}
+	budget := 1.0 - threshold
+	consumed := (1.0 - observed)
+	remaining := 1.0 - (consumed / budget)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining * 100
+}
+
+func classify(observed, threshold float64, total int) Status {
+	if total < insufficientSampleThreshold {
+		return StatusInsufficient
+	}
+	if observed >= threshold {
+		return StatusHealthy
+	}
+	if budgetRemainingPct(observed, threshold) > 0 {
+		return StatusWarning
+	}
+	return StatusBreached
+}
