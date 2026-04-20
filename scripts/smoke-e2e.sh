@@ -276,3 +276,37 @@ api_call GET "/slos" ""
 assert_status 200
 
 log "PASS: SLO smoke"
+
+# === P5c: node log config + global log settings smoke test ===
+log "=== P5c: node log config smoke test ==="
+
+log "P5c: GET /nodes/\$NODE_ID/log-config → 200"
+api_call GET "/nodes/${NODE_ID}/log-config"
+assert_status 200
+
+log "P5c: PATCH /nodes/\$NODE_ID/log-config 有效配置 → 200，并验证 log_retention_days=14"
+api_call PATCH "/nodes/${NODE_ID}/log-config" \
+  "{\"log_paths\":[\"/var/log/app.log\"],\"log_journalctl_enabled\":false,\"log_retention_days\":14}"
+assert_status 200
+ACTUAL_RETENTION="$(json_get log_retention_days)"
+if [[ "$ACTUAL_RETENTION" != "14" ]]; then
+  echo "[smoke][error] FAIL: log_retention_days 期望 14，实际 ${ACTUAL_RETENTION}"
+  echo "[smoke][error] 响应体: $HTTP_BODY"
+  exit 1
+fi
+log "P5c: log_retention_days 验证通过（实际值 ${ACTUAL_RETENTION}）"
+
+log "P5c: PATCH /nodes/\$NODE_ID/log-config 黑名单路径 /etc/passwd → 400"
+api_call PATCH "/nodes/${NODE_ID}/log-config" \
+  "{\"log_paths\":[\"/etc/passwd\"],\"log_journalctl_enabled\":false,\"log_retention_days\":7}"
+assert_status 400
+
+log "P5c: GET /settings/logs → 200"
+api_call GET "/settings/logs"
+assert_status 200
+
+log "P5c: PATCH /settings/logs default_retention_days=45 → 200"
+api_call PATCH "/settings/logs" "{\"default_retention_days\":45}"
+assert_status 200
+
+log "PASS: P5c node log config smoke"

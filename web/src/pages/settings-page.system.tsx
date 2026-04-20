@@ -3,8 +3,11 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
+import { getLogsSettings, updateLogsSettings } from "@/lib/api/node-logs";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
 
 const CATEGORY_ORDER = ["security", "node_monitor", "retention", "storage", "alert"];
@@ -19,10 +22,16 @@ export function SystemTab() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const [logRetentionDays, setLogRetentionDays] = useState(30);
+  const [logRetentionSaving, setLogRetentionSaving] = useState(false);
+
   const loadSettings = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await apiClient.getSettings(token);
+      const [res, logSettings] = await Promise.all([
+        apiClient.getSettings(token),
+        getLogsSettings(token),
+      ]);
       setDefinitions(res.definitions);
       setValues(res.values);
       const edits: Record<string, string> = {};
@@ -30,12 +39,27 @@ export function SystemTab() {
         edits[key] = val.value;
       }
       setEditValues(edits);
+      setLogRetentionDays(logSettings.default_retention_days);
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
   }, [token]);
+
+  const handleSaveLogRetention = async () => {
+    if (!token) return;
+    setLogRetentionSaving(true);
+    try {
+      const updated = await updateLogsSettings(token, { default_retention_days: logRetentionDays });
+      setLogRetentionDays(updated.default_retention_days);
+      toast.success(t("settings.system.saved"));
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setLogRetentionSaving(false);
+    }
+  };
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
@@ -173,6 +197,27 @@ export function SystemTab() {
       <Button onClick={handleSave} disabled={saving}>
         {saving ? t("common.loading") : t("common.save")}
       </Button>
+
+      <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4">
+        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
+        <h3 className="text-sm font-semibold">{t("nodeLogs.settings.defaultRetention")}</h3>
+        <div className="space-y-1.5">
+          <Input
+            id="log-default-retention"
+            type="number"
+            min={1}
+            max={365}
+            value={logRetentionDays}
+            onChange={(e) => setLogRetentionDays(Number(e.target.value))}
+            className="w-32"
+            aria-label={t("nodeLogs.settings.defaultRetention")}
+          />
+          <p className="text-xs text-muted-foreground">{t("nodeLogs.settings.defaultRetentionHint")}</p>
+        </div>
+        <Button size="sm" onClick={handleSaveLogRetention} disabled={logRetentionSaving}>
+          {logRetentionSaving ? t("common.loading") : t("common.save")}
+        </Button>
+      </div>
     </div>
   );
 }
