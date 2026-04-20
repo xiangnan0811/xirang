@@ -61,7 +61,7 @@ func (h *SLOHandler) Get(c *gin.Context) {
 	var s model.SLODefinition
 	if err := h.db.First(&s, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respondNotFound(c, "slo not found")
+			respondNotFound(c, "SLO 定义不存在")
 			return
 		}
 		respondInternalError(c, err)
@@ -108,7 +108,7 @@ func (h *SLOHandler) Update(c *gin.Context) {
 	var existing model.SLODefinition
 	if err := h.db.First(&existing, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respondNotFound(c, "slo not found")
+			respondNotFound(c, "SLO 定义不存在")
 			return
 		}
 		respondInternalError(c, err)
@@ -138,6 +138,10 @@ func (h *SLOHandler) Update(c *gin.Context) {
 	}
 	var updated model.SLODefinition
 	if err := h.db.First(&updated, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "SLO 定义不存在")
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
@@ -156,7 +160,7 @@ func (h *SLOHandler) Delete(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		respondNotFound(c, "slo not found")
+		respondNotFound(c, "SLO 定义不存在")
 		return
 	}
 	c.Status(http.StatusNoContent)
