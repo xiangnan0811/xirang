@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -130,14 +131,30 @@ func (h *AlertHandler) List(c *gin.Context) {
 	respondPaginated(c, alerts, total, pg.Page, pg.PageSize)
 }
 
+// alertGroupInfo 表示告警在内存分组窗口内的计数信息。
+type alertGroupInfo struct {
+	// Count 是当前分组窗口内（含本次）累计出现的同类告警次数。
+	Count int `json:"count"`
+	// SiblingNodeIDs 刻意留空：渐进式内存分组只追踪计数，不保留单条告警标识。
+	// SiblingNodeIDs is intentionally empty: progressive in-memory grouping
+	// only tracks counts by key, not individual alert identity.
+	SiblingNodeIDs []uint `json:"sibling_node_ids,omitempty"`
+}
+
+// alertWithGroupInfo 在 Alert 模型基础上附加分组信息。
+type alertWithGroupInfo struct {
+	model.Alert
+	GroupInfo alertGroupInfo `json:"group_info"`
+}
+
 // Get godoc
 // @Summary      获取告警详情
-// @Description  返回单个告警的详细信息
+// @Description  返回单个告警的详细信息（含内存分组计数）
 // @Tags         alerts
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "告警 ID"
-// @Success      200  {object}  handlers.Response{data=model.Alert}
+// @Success      200  {object}  handlers.Response{data=alertWithGroupInfo}
 // @Failure      401  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
@@ -147,19 +164,43 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var alert model.Alert
-	if err := h.db.First(&alert, id).Error; err != nil {
+	var a model.Alert
+	if err := h.db.First(&a, id).Error; err != nil {
 		respondNotFound(c, "告警不存在")
 		return
 	}
-	if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+	if allowed, err := authorizeNodeOwnership(c, h.db, a.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
 		respondForbidden(c, "无权访问该告警")
 		return
 	}
-	respondOK(c, alert)
+
+	var node model.Node
+	if res := h.db.First(&node, a.NodeID); res.Error != nil {
+		logger.Module("api").Warn().
+			Uint("alert_id", a.ID).
+			Uint("node_id", a.NodeID).
+			Err(res.Error).
+			Msg("alert detail: 节点加载失败，group_count 将为 0")
+	}
+	tags := strings.Split(node.Tags, ",")
+	cleanTags := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if v := strings.TrimSpace(t); v != "" {
+			cleanTags = append(cleanTags, v)
+		}
+	}
+	key := alerting.GroupKey(a.ErrorCode, a.NodeID, cleanTags)
+
+	respondOK(c, alertWithGroupInfo{
+		Alert: a,
+		GroupInfo: alertGroupInfo{
+			Count:          alerting.GetSharedGrouping().Count(key),
+			SiblingNodeIDs: nil,
+		},
+	})
 }
 
 // Ack godoc

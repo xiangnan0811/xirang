@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
@@ -36,6 +37,7 @@ type Dependencies struct {
 	LoginCaptchaEnabled       bool
 	LoginSecondCaptchaEnabled bool
 	SettingsService           *settings.Service
+	RetryWorker               *alerting.RetryWorker
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -237,6 +239,18 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/config/export", middleware.RequireRole("admin"), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
+
+	silenceHandler := handlers.NewSilenceHandler(dep.DB)
+	secured.GET("/silences", middleware.RBAC("alerts:read"), silenceHandler.List)
+	secured.GET("/silences/:id", middleware.RBAC("alerts:read"), silenceHandler.Get)
+	secured.POST("/silences", middleware.RBAC("alerts:write"), silenceHandler.Create)
+	secured.PATCH("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Patch)
+	secured.DELETE("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Delete)
+
+	if dep.RetryWorker != nil {
+		alertDeliveryHandler := handlers.NewAlertDeliveryHandler(dep.RetryWorker)
+		secured.POST("/alert-deliveries/:id/retry", middleware.RBAC("alerts:write"), alertDeliveryHandler.Retry)
+	}
 
 	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)
 	secured.GET("/version", versionHandler.Info)

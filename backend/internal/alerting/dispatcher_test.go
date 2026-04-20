@@ -288,6 +288,43 @@ func TestRaiseVerificationFailureStoresRunID(t *testing.T) {
 	}
 }
 
+func TestDispatch_FailedSendIsMarkedRetrying(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+
+	// FailThreshold=1: 至少 1 个 open 告警才触发投递；Status 明确设为 "open"
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
+
+	alert := &model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		Message:     "probe failed",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatal(err)
+	}
+
+	// raiseAndDispatch 内部以 wg.Wait() 同步，无需额外等待
+
+	var d model.AlertDelivery
+	if err := db.Where("alert_id = ?", alert.ID).First(&d).Error; err != nil {
+		t.Fatalf("delivery row not found (alert_id=%d): %v", alert.ID, err)
+	}
+	if d.Status != "retrying" {
+		t.Fatalf("expected retrying, got %q (last_error=%q)", d.Status, d.LastError)
+	}
+	if d.AttemptCount != 1 {
+		t.Fatalf("expected attempts=1, got %d", d.AttemptCount)
+	}
+	if d.NextRetryAt == nil {
+		t.Fatal("expected NextRetryAt set")
+	}
+}
+
 func openAlertingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
@@ -297,4 +334,137 @@ func openAlertingTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+
+// setupTestDB 初始化包含静默规则所需全部表的测试数据库
+func setupTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := openAlertingTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Alert{},
+		&model.AlertDelivery{},
+		&model.Integration{},
+		&model.Node{},
+		&model.Silence{},
+	); err != nil {
+		t.Fatalf("初始化测试表失败: %v", err)
+	}
+	return db
+}
+
+func TestDispatch_SilencedAlertIsNotDelivered(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	now := time.Now()
+
+	// 创建节点
+	node := model.Node{ID: 1, Name: "node-a", Host: "1.2.3.4", Port: 22, Tags: "prod"}
+	db.Create(&node)
+
+	// 创建匹配 node 1 + error_code "probe_down" 的静默规则
+	nodeID := uint(1)
+	db.Create(&model.Silence{
+		Name:          "maint",
+		MatchNodeID:   &nodeID,
+		MatchCategory: "probe_down",
+		StartsAt:      now.Add(-time.Hour),
+		EndsAt:        now.Add(time.Hour),
+		CreatedBy:     1,
+	})
+
+	// 创建通道（使用本地 httptest server，快速响应）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL})
+
+	// 直接调用内部函数（同包内测试可访问），不预先创建 alert
+	alert := model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		Message:     "probe failed",
+		TriggeredAt: now,
+	}
+	_ = raiseAndDispatch(db, &alert)
+
+	// alert 由 raiseAndDispatch 写入，ID 已被填充
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("期望 0 条投递记录（已静默），实际 %d", count)
+	}
+}
+
+func TestDispatch_SecondAlertInGroupWindowIsSuppressed(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	db.Create(&model.Node{ID: 1, Name: "node-a"})
+	// FailThreshold=1：openCount 需 >= 1 才触发投递（与其他 dispatcher 测试保持一致）
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
+
+	// 重置包级分组状态，确保测试幂等
+	SetSharedGroupingForTest(NewGrouping(5 * time.Minute))
+	t.Cleanup(func() { SetSharedGroupingForTest(NewGrouping(5 * time.Minute)) })
+
+	// Status 必须为 "open"，openCount 查询才能命中并满足 FailThreshold>=1
+	alert1 := &model.Alert{NodeID: 1, NodeName: "node-a", ErrorCode: "probe_down", Severity: "warn", Status: "open", Message: "first", TriggeredAt: time.Now()}
+	if err := raiseAndDispatch(db, alert1); err != nil {
+		t.Fatal(err)
+	}
+
+	alert2 := &model.Alert{NodeID: 1, NodeName: "node-a", ErrorCode: "probe_down", Severity: "warn", Status: "open", Message: "second", TriggeredAt: time.Now()}
+	if err := raiseAndDispatch(db, alert2); err != nil {
+		t.Fatal(err)
+	}
+
+	var deliveries int64
+	db.Model(&model.AlertDelivery{}).Count(&deliveries)
+	if deliveries != 1 {
+		t.Fatalf("expected 1 delivery (second grouped-out), got %d", deliveries)
+	}
+}
+
+func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+	now := time.Now()
+
+	// 静默规则指向另一个节点（999），不应匹配 node 1
+	otherNode := uint(999)
+	db.Create(&model.Silence{
+		Name:        "other",
+		MatchNodeID: &otherNode,
+		StartsAt:    now.Add(-time.Hour),
+		EndsAt:      now.Add(time.Hour),
+		CreatedBy:   1,
+	})
+
+	node := model.Node{ID: 1, Name: "node-a", Host: "1.2.3.4", Port: 22}
+	db.Create(&node)
+
+	// 使用本地 httptest server，确保 webhook 调用能快速完成
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL})
+
+	alert := model.Alert{
+		NodeID:      1,
+		ErrorCode:   "probe_down",
+		Severity:    "warn",
+		Status:      "open",
+		TriggeredAt: now,
+	}
+	_ = raiseAndDispatch(db, &alert)
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count == 0 {
+		t.Fatal("期望至少 1 条投递记录（静默未命中，不应拦截）")
+	}
 }

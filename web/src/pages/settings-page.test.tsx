@@ -97,7 +97,7 @@ describe("SettingsPage", () => {
   it("each tab has aria-controls pointing to its own panel id", () => {
     renderSettingsPage();
     const tabs = screen.getAllByRole("tab");
-    const tabIds = ["personal", "account", "users", "channels", "system", "maintenance"];
+    const tabIds = ["personal", "account", "users", "channels", "silences", "system", "maintenance"];
     tabs.forEach((tab, i) => {
       expect(tab).toHaveAttribute("id", `settings-tab-${tabIds[i]}`);
       expect(tab).toHaveAttribute("aria-controls", `settings-panel-${tabIds[i]}`);

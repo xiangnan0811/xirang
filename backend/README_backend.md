@@ -160,6 +160,17 @@ go run ./cmd/server
 | POST | /alerts/:id/resolve | 🔒 解决告警 |
 | POST | /alerts/:id/retry-delivery | 🔒 重试投递 |
 | POST | /alerts/:id/retry-failed-deliveries | 🔒 批量重试 |
+| POST | /alert-deliveries/:id/retry | 🔒 手动重试指定投递记录（alerts:write；不存在返回 404） |
+
+### 静默规则
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /silences | 🔒 静默规则列表（?active=true 仅返回生效中） |
+| GET | /silences/:id | 🔒 静默规则详情 |
+| POST | /silences | 🔒 创建静默规则（alerts:write） |
+| PATCH | /silences/:id | 🔒 更新静默规则（alerts:write） |
+| DELETE | /silences/:id | 🔒 软删除静默规则（alerts:write） |
 
 ### 审计日志
 
@@ -248,7 +259,15 @@ go run ./cmd/server
 
 支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000030_task_run_progress`。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence
+
+新增接口（P5b 智能告警）：
+- `GET    /api/v1/silences` — 列出静默规则（?active=true 仅返回生效中，alerts:read）
+- `GET    /api/v1/silences/:id` — 获取单条静默规则（alerts:read）
+- `POST   /api/v1/silences` — 创建静默规则（alerts:write）
+- `PATCH  /api/v1/silences/:id` — 更新静默规则（alerts:write）
+- `DELETE /api/v1/silences/:id` — 软删除静默规则，将 ends_at 设为当前时间（alerts:write）
+- `POST   /api/v1/alert-deliveries/:id/retry` — 手动重试指定投递记录（alerts:write，绕过 next_retry_at 调度；不存在返回 404）
 
 ## 测试
 

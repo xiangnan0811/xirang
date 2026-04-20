@@ -282,6 +282,48 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	now := time.Now()
+
+	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
+	silences, _ := ActiveSilences(db, now)
+	var node model.Node
+	nodeLoadAttempted := false
+	if len(silences) > 0 {
+		if res := db.First(&node, alert.NodeID); res.Error != nil {
+			logger.Module("alerting").Warn().
+				Uint("alert_id", alert.ID).
+				Uint("node_id", alert.NodeID).
+				Err(res.Error).
+				Msg("静默检查：节点加载失败，使用空 tags 计算 group_key")
+		}
+		nodeLoadAttempted = true
+		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
+			logger.Module("alerting").Info().
+				Uint("alert_id", alert.ID).
+				Uint("silence_id", matched.ID).
+				Msg("告警已静默，跳过投递")
+			return nil
+		}
+	}
+
+	// 分组检查：同一 (category, nodeID, tags) 组合在窗口内只投递首次告警
+	if !nodeLoadAttempted {
+		if res := db.First(&node, alert.NodeID); res.Error != nil {
+			logger.Module("alerting").Warn().
+				Uint("alert_id", alert.ID).
+				Uint("node_id", alert.NodeID).
+				Err(res.Error).
+				Msg("分组检查：节点加载失败，使用空 tags 计算 group_key")
+		}
+	}
+	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))
+	if !GetSharedGrouping().ShouldSend(key) {
+		logger.Module("alerting").Info().
+			Uint("alert_id", alert.ID).
+			Int("group_count", GetSharedGrouping().Count(key)).
+			Msg("告警已被分组，跳过投递")
+		return nil
+	}
+
 	var wg sync.WaitGroup
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {
@@ -295,17 +337,21 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		go func(ch model.Integration) {
 			defer wg.Done()
 			err := send(ch, *alert)
-			delivery := model.AlertDelivery{
+			d := model.AlertDelivery{
 				AlertID:       alert.ID,
 				IntegrationID: ch.ID,
+				AttemptCount:  1,
 			}
-			if err != nil {
-				delivery.Status = "failed"
-				delivery.Error = util.SanitizeDeliveryError(ch.Type, err)
+			if err == nil {
+				d.Status = "sent"
 			} else {
-				delivery.Status = "sent"
+				next := time.Now().Add(backoffDuration(1))
+				d.Status = "retrying"
+				d.NextRetryAt = &next
+				d.LastError = util.SanitizeDeliveryError(ch.Type, err)
+				d.Error = d.LastError // legacy compat
 			}
-			if saveErr := db.Create(&delivery).Error; saveErr != nil {
+			if saveErr := db.Create(&d).Error; saveErr != nil {
 				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")
 			}
 		}(channel)

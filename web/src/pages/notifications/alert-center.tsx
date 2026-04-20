@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/toast";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { apiClient } from "@/lib/api/client";
+import { retryDelivery } from "@/lib/api/alert-deliveries";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -242,12 +243,11 @@ export function AlertCenter({
     }
   };
 
-  const handleRetryDelivery = async (alertId: string, integrationId: string) => {
-    const actionKey = `${alertId}:${integrationId}`;
-    setRetryingDeliveryKey(actionKey);
+  const handleRetryDelivery = async (alertId: string, deliveryId: string) => {
+    setRetryingDeliveryKey(String(deliveryId));
     try {
-      const result = await apiClient.retryAlertDelivery(token, alertId, integrationId);
-      toast.success(result.message);
+      await retryDelivery(token, deliveryId);
+      toast.success(t("notifications.resendSuccess", { defaultValue: "重发成功" }));
       refreshDeliveries(alertId);
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -257,16 +257,20 @@ export function AlertCenter({
   };
 
   const handleRetryAllFailed = async (alertId: string) => {
+    const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed");
+    if (!failedDeliveries.length) return;
     setRetryingAllAlertId(alertId);
-    try {
-      const result = await apiClient.retryFailedDeliveries(token, alertId);
-      toast.success(result.message);
-      refreshDeliveries(alertId);
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    } finally {
-      setRetryingAllAlertId(null);
+    const results = await Promise.allSettled(
+      failedDeliveries.map((d) => retryDelivery(token, d.id))
+    );
+    const failed = results.filter(r => r.status === "rejected").length;
+    if (failed === 0) {
+      toast.success("批量重发成功");
+    } else {
+      toast.error(`批量重发：${results.length - failed} 成功，${failed} 失败`);
     }
+    refreshDeliveries(alertId);
+    setRetryingAllAlertId(null);
   };
 
   // --- 合并高亮告警和普通列表 ---
@@ -317,7 +321,7 @@ export function AlertCenter({
             onAck={(alert) => void handleAck(alert)}
             onResolve={(alert) => void handleResolve(alert)}
             onToggleDeliveries={toggleDeliveries}
-            onRetryDelivery={(alertId, integrationId) => void handleRetryDelivery(alertId, integrationId)}
+            onRetryDelivery={(alertId, deliveryId) => void handleRetryDelivery(alertId, deliveryId)}
             onRetryAllFailed={(alertId) => void handleRetryAllFailed(alertId)}
           />
         ) : (

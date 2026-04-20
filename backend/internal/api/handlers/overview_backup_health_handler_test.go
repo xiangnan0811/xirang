@@ -309,11 +309,18 @@ func TestBackupHealth_DegradedPolicy_DisabledPolicyIgnored(t *testing.T) {
 
 // ---------- 7 天趋势聚合 ----------
 
+// todayNoon 返回当前日的正午，确保 now-1h / now-2h / now-3h 等相对偏移不会跨越日界。
+// 避免 UTC 午夜附近的 CI 运行导致的时区边界 flake。
+func todayNoon() time.Time {
+	t := time.Now()
+	return time.Date(t.Year(), t.Month(), t.Day(), 12, 0, 0, 0, t.Location())
+}
+
 func TestBackupHealth_Trend_SevenDayAggregation(t *testing.T) {
 	db := openBackupHealthTestDB(t)
 	migrateBackupHealthTables(t, db)
 
-	now := time.Now()
+	now := todayNoon()
 	today := now.Format("2006-01-02")
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 
@@ -494,7 +501,7 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 	db := openBackupHealthTestDB(t)
 	migrateBackupHealthTables(t, db)
 
-	now := time.Now()
+	now := todayNoon()
 	freshTime := now.Add(-2 * time.Hour)
 	staleTime := now.Add(-96 * time.Hour)
 

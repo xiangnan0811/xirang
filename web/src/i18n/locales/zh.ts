@@ -2080,6 +2080,56 @@ const zh = {
     },
   },
 
+  // ── silences ──
+  silences: {
+    title: "静默规则",
+    new: "新建静默规则",
+    name: "名称",
+    node: "节点",
+    nodeAll: "全部节点",
+    nodeHint: "留空表示全部节点",
+    category: "告警类型",
+    categoryAll: "全部类别",
+    categoryHint: "留空匹配全部类别",
+    tags: "标签",
+    tagsHint: "输入标签后按 Enter 或点击添加",
+    addTag: "添加",
+    window: "静默窗口",
+    preset1h: "1 小时",
+    preset4h: "4 小时",
+    preset1d: "1 天",
+    startsAt: "开始",
+    endsAt: "结束",
+    note: "备注",
+    noteHint: "可选备注",
+    create: "创建",
+    creating: "创建中...",
+    revoke: "立即结束",
+    empty: "暂无静默规则",
+    validationWindowInvalid: "结束时间必须晚于开始时间",
+    types: {
+      exec: "任务执行失败",
+      vrfy: "任务校验失败",
+      node: "节点探测失败",
+      nodeExpiry: "节点到期",
+      retn: "保留清理失败",
+      intg: "通知渠道失败",
+      report: "报告生成失败",
+    },
+    columns: {
+      name: "名称",
+      match: "匹配",
+      window: "窗口",
+      remaining: "剩余",
+      actions: "操作",
+    },
+    remaining: {
+      expired: "已过期",
+      hours: "{{hours}} 小时",
+      minutes: "{{minutes}} 分钟",
+    },
+  },
+
 } as const;
 
 export default zh;

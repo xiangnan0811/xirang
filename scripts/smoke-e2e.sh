@@ -208,3 +208,41 @@ if ! head -n1 "$EXPORT_BODY" | grep -q "^id,created_at,username,role,method,path
 fi
 
 log "✅ 冒烟验证通过：登录/节点/SSHKey/策略/任务/通知统计/审计导出链路正常"
+
+# === P5b: silence smoke test ===
+log "=== P5b: silence smoke test ==="
+
+# Compute timestamps (portable across macOS BSD date and Linux GNU date)
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+HOUR_LATER=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+
+# Create silence for node 1, category probe_down, next hour
+api_call POST "/silences" \
+  "{\"name\":\"smoke\",\"match_node_id\":1,\"match_category\":\"probe_down\",\"match_tags\":[],\"starts_at\":\"${NOW}\",\"ends_at\":\"${HOUR_LATER}\",\"note\":\"smoke\"}"
+assert_status 201
+SILENCE_ID="$(json_get data.id)"
+if [[ -z "$SILENCE_ID" ]]; then
+  echo "[smoke][error] FAIL: silence create — response: $HTTP_BODY"
+  exit 1
+fi
+trap 'if [ -n "${SILENCE_ID:-}" ]; then api_call DELETE "/silences/${SILENCE_ID}" >/dev/null 2>&1 || true; fi' EXIT
+log "  created silence $SILENCE_ID"
+
+# Revoke silence (DELETE → soft-delete, sets ends_at=now)
+api_call DELETE "/silences/${SILENCE_ID}"
+assert_status 200
+log "  revoked silence $SILENCE_ID"
+
+# Verify silence no longer appears in the active list
+api_call GET "/silences?active=true"
+assert_status 200
+# Use json_get to check whether the revoked id still appears among active silences.
+# Project envelope is {Code, Message, Data:[{id,...},...]}; we search the raw body
+# for the id string rather than parsing nested arrays (portable, no jq needed).
+if printf '%s' "$HTTP_BODY" | grep -q "\"id\":${SILENCE_ID}[^0-9]"; then
+  echo "[smoke][error] FAIL: silence $SILENCE_ID still active after revoke"
+  echo "[smoke][error] response: $HTTP_BODY"
+  exit 1
+fi
+
+log "PASS: silence smoke"

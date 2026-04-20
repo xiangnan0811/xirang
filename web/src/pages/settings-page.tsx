@@ -10,8 +10,9 @@ import { UsersTab } from "./settings-page.users";
 import { ChannelsTab } from "./settings-page.channels";
 import { SystemTab } from "./settings-page.system";
 import { MaintenanceTab } from "./settings-page.maintenance";
+import { SilencesPanel } from "./settings-page.silences";
 
-const TABS = ["personal", "account", "users", "channels", "system", "maintenance"] as const;
+const TABS = ["personal", "account", "users", "channels", "silences", "system", "maintenance"] as const;
 type TabId = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -66,6 +67,7 @@ export function SettingsPage() {
     account: t("settings.tabs.account"),
     users: t("settings.tabs.users"),
     channels: t("settings.tabs.channels"),
+    silences: "静默规则",
     system: t("settings.tabs.system"),
     maintenance: t("settings.tabs.maintenance"),
   };
@@ -105,6 +107,7 @@ export function SettingsPage() {
         {activeTab === "account" && <AccountTab />}
         {activeTab === "users" && isAdmin && <UsersTab />}
         {activeTab === "channels" && isAdmin && <ChannelsTab />}
+        {activeTab === "silences" && isAdmin && <SilencesPanel />}
         {activeTab === "system" && isAdmin && <SystemTab />}
         {activeTab === "maintenance" && isAdmin && <MaintenanceTab />}
       </div>

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -197,12 +198,17 @@ type Alert struct {
 }
 
 type AlertDelivery struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	AlertID       uint      `gorm:"index;not null" json:"alert_id"`
-	IntegrationID uint      `gorm:"index;not null" json:"integration_id"`
-	Status        string    `gorm:"size:16;not null" json:"status"`
-	Error         string    `gorm:"type:text" json:"error"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	AlertID       uint       `gorm:"index;not null" json:"alert_id"`
+	IntegrationID uint       `gorm:"index;not null" json:"integration_id"`
+	Status        string     `gorm:"size:16;not null" json:"status"` // pending|sent|retrying|failed
+	// Error is a legacy field preserved for backward compatibility with existing admin UIs.
+	// TODO(post-0.12): remove after one release cycle; replaced by LastError.
+	Error         string     `gorm:"type:text" json:"error"`
+	AttemptCount  int        `gorm:"not null;default:0" json:"attempt_count"`
+	NextRetryAt   *time.Time `json:"next_retry_at"`
+	LastError     string     `gorm:"type:text" json:"last_error"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type Task struct {
@@ -417,6 +423,33 @@ type Report struct {
 	GeneratedAt   time.Time `gorm:"not null" json:"generated_at"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// Silence 告警静默规则：在指定时间窗口内抑制匹配的告警
+type Silence struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	Name          string    `gorm:"size:128;not null" json:"name"`
+	MatchNodeID   *uint     `gorm:"index" json:"match_node_id"`
+	MatchCategory string    `gorm:"size:64;index" json:"match_category"`
+	MatchTags     string    `gorm:"type:text" json:"match_tags"` // JSON-encoded []string
+	StartsAt      time.Time `gorm:"not null;index:idx_silences_active" json:"starts_at"`
+	EndsAt        time.Time `gorm:"not null;index:idx_silences_active;index:idx_silences_cleanup" json:"ends_at"`
+	CreatedBy     uint      `gorm:"not null" json:"created_by"`
+	Note          string    `gorm:"type:text" json:"note"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// DecodedMatchTags 返回解析后的标签列表（JSON 为空或无效时返回 nil）。
+func (s *Silence) DecodedMatchTags() []string {
+	if strings.TrimSpace(s.MatchTags) == "" {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(s.MatchTags), &tags); err != nil {
+		return nil
+	}
+	return tags
 }
 
 func (s *SSHKey) BeforeSave(_ *gorm.DB) error {
