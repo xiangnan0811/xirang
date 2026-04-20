@@ -71,6 +71,14 @@ func (w *RetryWorker) tick(now time.Time) {
 	}
 }
 
+// attempt performs a single delivery attempt and updates the delivery row state machine.
+//
+// Semantics:
+//   - Retries do NOT re-evaluate silences. Once an alert has been dispatched and a retry
+//     is scheduled, the retry continues to terminal state (sent|failed) regardless of
+//     silences created afterward. Silences suppress NEW dispatches, not pending retries.
+//   - ErrRecordNotFound on integration/alert lookup → mark delivery failed with descriptive
+//     LastError. Other DB errors → warn log and skip this tick (retry scheduler will try again).
 func (w *RetryWorker) attempt(d model.AlertDelivery) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

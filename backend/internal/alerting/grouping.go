@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,5 +68,21 @@ func GroupKey(category string, nodeID uint, nodeTags []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SharedGrouping 是分发器使用的包级分组实例。导出以便 alert handler 读取分组计数。
-var SharedGrouping = NewGrouping(5 * time.Minute)
+var sharedGrouping atomic.Pointer[Grouping]
+
+func init() {
+	sharedGrouping.Store(NewGrouping(5 * time.Minute))
+}
+
+// GetSharedGrouping returns the current package-level Grouping instance.
+// Safe to call concurrently; tests may replace the instance atomically.
+func GetSharedGrouping() *Grouping {
+	return sharedGrouping.Load()
+}
+
+// SetSharedGroupingForTest atomically replaces SharedGrouping. Intended for tests.
+// Keep exported-ness minimal — this should live in a _test.go if possible, but
+// dispatcher_test.go and handler tests need cross-package access so export.
+func SetSharedGroupingForTest(g *Grouping) {
+	sharedGrouping.Store(g)
+}

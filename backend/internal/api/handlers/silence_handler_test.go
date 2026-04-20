@@ -315,3 +315,64 @@ func TestGetSilence_NotFound(t *testing.T) {
 		t.Fatalf("期望 404 NotFound，实际: %d — %s", w.Code, w.Body.String())
 	}
 }
+
+// TestPatchSilence_DoesNotChangeMatchFields 验证 PATCH 请求中携带 match_node_id /
+// match_category 等匹配字段时，这些字段不会被修改（silencePatchRequest 不含匹配字段，
+// Go JSON 解码器会静默丢弃未知字段）。
+func TestPatchSilence_DoesNotChangeMatchFields(t *testing.T) {
+	db := openSilenceTestDB(t)
+
+	now := time.Now()
+	origNodeID := uint(1)
+	s := model.Silence{
+		Name:          "immutable-match",
+		MatchNodeID:   &origNodeID,
+		MatchCategory: "XR-NODE-5",
+		StartsAt:      now.Add(-1 * time.Hour),
+		EndsAt:        now.Add(1 * time.Hour),
+		CreatedBy:     1,
+		MatchTags:     "[]",
+	}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("创建静默规则失败: %v", err)
+	}
+
+	newEndsAt := now.Add(4 * time.Hour)
+	// 故意在 PATCH body 中携带 match_node_id=99 和 match_category="XR-OTHER"
+	// 期望它们被静默丢弃，原值不变。
+	patchBody := map[string]any{
+		"name":            "new-name",
+		"starts_at":       s.StartsAt.Format(time.RFC3339),
+		"ends_at":         newEndsAt.Format(time.RFC3339),
+		"match_node_id":   uint(99),
+		"match_category":  "XR-OTHER",
+	}
+	bodyBytes, _ := json.Marshal(patchBody)
+
+	r := newSilenceRouter(db, "admin", 1)
+	w := doSilenceJSON(r, "PATCH", fmt.Sprintf("/api/v1/silences/%d", s.ID), string(bodyBytes))
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d — %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data model.Silence `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	out := resp.Data
+
+	// name 应已更新
+	if out.Name != "new-name" {
+		t.Fatalf("name 期望 new-name，实际: %s", out.Name)
+	}
+	// match_node_id 必须保持原值 1，不能变成 99
+	if out.MatchNodeID == nil || *out.MatchNodeID != origNodeID {
+		t.Fatalf("match_node_id 不应被 PATCH 修改，期望 %d，实际: %v", origNodeID, out.MatchNodeID)
+	}
+	// match_category 必须保持原值
+	if out.MatchCategory != "XR-NODE-5" {
+		t.Fatalf("match_category 不应被 PATCH 修改，期望 XR-NODE-5，实际: %s", out.MatchCategory)
+	}
+}

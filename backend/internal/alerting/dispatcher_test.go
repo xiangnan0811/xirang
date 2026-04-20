@@ -407,8 +407,8 @@ func TestDispatch_SecondAlertInGroupWindowIsSuppressed(t *testing.T) {
 	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
 
 	// 重置包级分组状态，确保测试幂等
-	SharedGrouping = NewGrouping(5 * time.Minute)
-	t.Cleanup(func() { SharedGrouping = NewGrouping(5 * time.Minute) })
+	SetSharedGroupingForTest(NewGrouping(5 * time.Minute))
+	t.Cleanup(func() { SetSharedGroupingForTest(NewGrouping(5 * time.Minute)) })
 
 	// Status 必须为 "open"，openCount 查询才能命中并满足 FailThreshold>=1
 	alert1 := &model.Alert{NodeID: 1, NodeName: "node-a", ErrorCode: "probe_down", Severity: "warn", Status: "open", Message: "first", TriggeredAt: time.Now()}

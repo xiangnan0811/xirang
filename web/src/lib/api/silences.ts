@@ -41,8 +41,5 @@ export const listSilences = (token: string, activeOnly = false) =>
 export const createSilence = (token: string, s: SilenceInput) =>
   request<Silence>("/silences", { method: "POST", token, body: s })
 
-export const patchSilence = (token: string, id: number, s: Partial<SilenceInput>) =>
-  request<Silence>(`/silences/${id}`, { method: "PATCH", token, body: s })
-
 export const deleteSilence = (token: string, id: number) =>
   request<void>(`/silences/${id}`, { method: "DELETE", token })

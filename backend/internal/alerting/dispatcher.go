@@ -286,7 +286,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
 	silences, _ := ActiveSilences(db, now)
 	var node model.Node
-	nodeLoaded := false
+	nodeLoadAttempted := false
 	if len(silences) > 0 {
 		if res := db.First(&node, alert.NodeID); res.Error != nil {
 			logger.Module("alerting").Warn().
@@ -295,7 +295,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 				Err(res.Error).
 				Msg("静默检查：节点加载失败，使用空 tags 计算 group_key")
 		}
-		nodeLoaded = true
+		nodeLoadAttempted = true
 		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
 			logger.Module("alerting").Info().
 				Uint("alert_id", alert.ID).
@@ -306,7 +306,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	// 分组检查：同一 (category, nodeID, tags) 组合在窗口内只投递首次告警
-	if !nodeLoaded {
+	if !nodeLoadAttempted {
 		if res := db.First(&node, alert.NodeID); res.Error != nil {
 			logger.Module("alerting").Warn().
 				Uint("alert_id", alert.ID).
@@ -316,10 +316,10 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		}
 	}
 	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))
-	if !SharedGrouping.ShouldSend(key) {
+	if !GetSharedGrouping().ShouldSend(key) {
 		logger.Module("alerting").Info().
 			Uint("alert_id", alert.ID).
-			Int("group_count", SharedGrouping.Count(key)).
+			Int("group_count", GetSharedGrouping().Count(key)).
 			Msg("告警已被分组，跳过投递")
 		return nil
 	}

@@ -64,7 +64,10 @@ func anyTagMatches(silenceTags, nodeTags []string) bool {
 	return false
 }
 
-// ActiveSilences 加载 now 时刻处于活跃窗口的静默规则，供告警分发热路径使用。
+// ActiveSilences loads silences whose window covers `now`. Intended for dispatcher hot path.
+// Current implementation is a linear scan over all active rows; expected working set is <100
+// silences at this deployment scale (1-50 nodes). Upgrade to an indexed lookup if the alert
+// dispatch rate ever dominates this path.
 func ActiveSilences(db *gorm.DB, now time.Time) ([]model.Silence, error) {
 	var out []model.Silence
 	err := db.Where("starts_at <= ? AND ends_at > ?", now, now).Find(&out).Error

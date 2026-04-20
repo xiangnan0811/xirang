@@ -197,7 +197,7 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	respondOK(c, alertWithGroupInfo{
 		Alert: a,
 		GroupInfo: alertGroupInfo{
-			Count:          alerting.SharedGrouping.Count(key),
+			Count:          alerting.GetSharedGrouping().Count(key),
 			SiblingNodeIDs: nil,
 		},
 	})

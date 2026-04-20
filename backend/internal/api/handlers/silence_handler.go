@@ -28,6 +28,18 @@ type silenceRequest struct {
 	Note          string    `json:"note"`
 }
 
+// silencePatchRequest is the dedicated request type for PATCH /silences/:id.
+// Match fields (match_node_id, match_category, match_tags) are intentionally
+// absent: clients sending them will have them silently ignored by Go's JSON
+// unmarshaller (unknown fields are discarded), keeping match criteria immutable
+// after creation.
+type silencePatchRequest struct {
+	Name     string    `json:"name" binding:"required"`
+	EndsAt   time.Time `json:"ends_at" binding:"required"`
+	StartsAt time.Time `json:"starts_at" binding:"required"` // required for end>start validation
+	Note     string    `json:"note"`
+}
+
 // List 列出静默规则。?active=true 仅返回当前生效的规则。
 func (h *SilenceHandler) List(c *gin.Context) {
 	q := h.DB.Model(&model.Silence{})
@@ -100,7 +112,7 @@ func (h *SilenceHandler) Patch(c *gin.Context) {
 		return
 	}
 
-	var req silenceRequest
+	var req silencePatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
 		return
