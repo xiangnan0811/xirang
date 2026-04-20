@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
-import { Plus, Trash2, X } from "lucide-react"
+import { Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
+import { TagChips } from "@/components/ui/tag-chips"
 import { toast } from "@/components/ui/toast"
 import { useAuth } from "@/context/auth-context"
 import { apiClient } from "@/lib/api/client"
@@ -89,14 +90,12 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   const [matchNodeId, setMatchNodeId] = useState("")
   const [matchCategory, setMatchCategory] = useState("")
   const [tags, setTags] = useState<string[]>([])
-  const [tagInput, setTagInput] = useState("")
   const [startsAt, setStartsAt] = useState(() => nowPlusHours(0))
   const [endsAt, setEndsAt] = useState(() => nowPlusHours(1))
   const [note, setNote] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   const [nodes, setNodes] = useState<NodeRecord[]>([])
-  const tagInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (open) {
@@ -104,7 +103,6 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
       setMatchNodeId("")
       setMatchCategory("")
       setTags([])
-      setTagInput("")
       setStartsAt(nowPlusHours(0))
       setEndsAt(nowPlusHours(1))
       setNote("")
@@ -117,27 +115,6 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   const applyPreset = (hours: number) => {
     setStartsAt(nowPlusHours(0))
     setEndsAt(nowPlusHours(hours))
-  }
-
-  const addTag = () => {
-    const v = tagInput.trim()
-    if (!v || tags.includes(v)) {
-      setTagInput("")
-      return
-    }
-    setTags([...tags, v])
-    setTagInput("")
-  }
-
-  const removeTag = (tag: string) => {
-    setTags(tags.filter((x) => x !== tag))
-  }
-
-  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault()
-      addTag()
-    }
   }
 
   const handleSubmit = async () => {
@@ -239,38 +216,11 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
       {/* 标签 chip picker */}
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("silences.tags")}</label>
-        {tags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pb-1">
-            {tags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-[3px] text-xs font-medium text-foreground"
-              >
-                {tag}
-                <button
-                  type="button"
-                  aria-label={`移除标签 ${tag}`}
-                  onClick={() => removeTag(tag)}
-                  className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Input
-            ref={tagInputRef}
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={handleTagKeyDown}
-            placeholder={t("silences.tagsHint")}
-          />
-          <Button type="button" variant="outline" size="sm" onClick={addTag}>
-            {t("silences.addTag")}
-          </Button>
-        </div>
+        <TagChips
+          value={tags}
+          onChange={setTags}
+          placeholder={t("silences.tagsHint")}
+        />
       </div>
 
       {/* 静默窗口 */}
