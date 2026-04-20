@@ -75,6 +75,3 @@ func (e *Evaluator) evaluateAll(now time.Time) {
 	}
 }
 
-// recordPromMetrics is a placeholder for Task 8 (prom.go). Task 8 will DELETE
-// this stub and move the real implementation to prom.go.
-func recordPromMetrics(_ *model.SLODefinition, _ *Compliance) {}
