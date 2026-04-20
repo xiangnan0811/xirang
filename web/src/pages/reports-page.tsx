@@ -420,7 +420,7 @@ export function ReportsPage() {
   const setTab = (next: "sla" | "slo") => setParams({ tab: next });
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-5 animate-fade-in">
       <div className="flex gap-2">
         <Button
           variant={tab === "sla" ? "default" : "outline"}

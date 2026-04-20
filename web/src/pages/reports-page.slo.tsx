@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Plus, Pencil, Target, Trash2 } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select } from "@/components/ui/select";
@@ -73,75 +75,89 @@ export function SLOPanel() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>{t("slo.tabSLO")}</span>
-          {isAdmin && (
-            <Button onClick={() => setCreateOpen(true)}>{t("slo.new")}</Button>
+    <>
+      {/* Header row: title + subtitle + actions */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">{t("slo.tabSLO")}</h1>
+          {summary && (
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {t("slo.summary.total")}: {summary.total} · {t("slo.summary.healthy")}: {summary.healthy} · {t("slo.summary.warning")}: {summary.warning} · {t("slo.summary.breached")}: {summary.breached}
+            </p>
           )}
-        </CardTitle>
-        {summary && (
-          <div className="flex gap-4 text-sm text-muted-foreground">
-            <span>{t("slo.summary.total")}: {summary.total}</span>
-            <span>{t("slo.summary.healthy")}: {summary.healthy}</span>
-            <span>{t("slo.summary.warning")}: {summary.warning}</span>
-            <span>{t("slo.summary.breached")}: {summary.breached}</span>
-          </div>
+        </div>
+        {isAdmin && (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="mr-1.5 size-4" />
+            {t("slo.new")}
+          </Button>
         )}
-      </CardHeader>
-      <CardContent>
-        {rows.length === 0 ? (
-          <p className="text-muted-foreground">{t("slo.panelEmpty")}</p>
-        ) : (
+      </div>
+
+      {/* Empty state or table */}
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={Target}
+          title={t("slo.panelEmpty")}
+        />
+      ) : (
+        <Card>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.name")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.type")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.threshold")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.observed")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.budget")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("slo.columns.status")}</th>
-                  {isAdmin && <th className="pb-2 font-medium">{t("slo.columns.actions")}</th>}
+                <tr className="border-b border-border/40 text-left text-xs uppercase text-muted-foreground">
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.name")}</th>
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.type")}</th>
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.threshold")}</th>
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.observed")}</th>
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.budget")}</th>
+                  <th className="px-4 py-2 font-medium">{t("slo.columns.status")}</th>
+                  {isAdmin && <th className="px-4 py-2 font-medium">{t("slo.columns.actions")}</th>}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => {
                   const c = compliance[row.id];
                   return (
-                    <tr key={row.id} className="border-b border-border/50 last:border-0">
-                      <td className="py-2 pr-4 font-medium">{row.name}</td>
-                      <td className="py-2 pr-4 text-muted-foreground">
+                    <tr key={row.id} className="border-b border-border/20 last:border-0">
+                      <td className="px-4 py-2">{row.name}</td>
+                      <td className="px-4 py-2 text-muted-foreground">
                         {t(METRIC_TYPES.find((m) => m.value === row.metric_type)?.i18nKey ?? "")}
                       </td>
-                      <td className="py-2 pr-4 tabular-nums">{(row.threshold * 100).toFixed(2)}%</td>
-                      <td className="py-2 pr-4 tabular-nums">
+                      <td className="px-4 py-2 tabular-nums">{(row.threshold * 100).toFixed(2)}%</td>
+                      <td className="px-4 py-2 tabular-nums">
                         {c ? `${(c.observed * 100).toFixed(2)}%` : "—"}
                       </td>
-                      <td className="py-2 pr-4 tabular-nums">
+                      <td className="px-4 py-2 tabular-nums">
                         {c ? `${c.error_budget_remaining_pct.toFixed(0)}%` : "—"}
                       </td>
-                      <td className="py-2 pr-4">
+                      <td className="px-4 py-2">
                         <StatusBadge status={c?.status ?? "insufficient_data"} />
                       </td>
                       {isAdmin && (
-                        <td className="py-2 space-x-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditing(row)}
-                          >
-                            {t("common.edit")}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void handleDelete(row)}
-                          >
-                            {t("slo.delete")}
-                          </Button>
+                        <td className="px-4 py-2">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-muted-foreground hover:text-foreground"
+                              title={t("common.edit")}
+                              aria-label={t("common.edit")}
+                              onClick={() => setEditing(row)}
+                            >
+                              <Pencil className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-destructive/80 hover:text-destructive"
+                              title={t("slo.delete")}
+                              aria-label={t("slo.delete")}
+                              onClick={() => void handleDelete(row)}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </div>
                         </td>
                       )}
                     </tr>
@@ -150,9 +166,10 @@ export function SLOPanel() {
               </tbody>
             </table>
           </div>
-        )}
-      </CardContent>
+        </Card>
+      )}
 
+      {/* Dialogs */}
       <SLODialog
         open={createOpen}
         onOpenChange={setCreateOpen}
@@ -172,7 +189,7 @@ export function SLOPanel() {
           void refresh();
         }}
       />
-    </Card>
+    </>
   );
 }
 
