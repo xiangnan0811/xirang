@@ -31,6 +31,10 @@ type nodeLogConfigResponse struct {
 
 var logPathDenyPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/boot/", "/root/"}
 
+// shell metacharacters that enable command substitution / quote-break inside
+// the remote SSH script (buildScript uses double-quoted path args).
+const logPathShellMetaChars = "$`\\\n\r\"'"
+
 func validateLogPaths(paths []string) error {
 	if len(paths) > 20 {
 		return errors.New("log_paths: 最多 20 条")
@@ -41,6 +45,9 @@ func validateLogPaths(paths []string) error {
 		}
 		if strings.ContainsAny(p, "*?[]") {
 			return errors.New("log_paths: 不支持通配符 (" + p + ")")
+		}
+		if strings.ContainsAny(p, logPathShellMetaChars) {
+			return errors.New("log_paths: 路径包含非法字符 (" + p + ")")
 		}
 		for _, deny := range logPathDenyPrefixes {
 			if strings.HasPrefix(p, deny) {

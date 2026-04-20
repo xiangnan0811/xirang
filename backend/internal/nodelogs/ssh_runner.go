@@ -2,6 +2,7 @@ package nodelogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
+	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 )
 
@@ -58,8 +60,14 @@ func (r *sshRunner) Run(ctx context.Context, node model.Node, cmd string, timeou
 		return "", fmt.Errorf("read: %w", err)
 	}
 	if err := session.Wait(); err != nil {
-		// Partial output is useful; some shells return nonzero even on success.
-		return string(buf), nil
+		var exitErr *ssh.ExitError
+		if errors.As(err, &exitErr) {
+			// Clean remote exit with non-zero status; output is still usable
+			// (some shells / tail return nonzero even when stdout is complete).
+			return string(buf), nil
+		}
+		// Missing exit status / transport error → session broke mid-stream.
+		return string(buf), fmt.Errorf("wait: %w", err)
 	}
 	return string(buf), nil
 }

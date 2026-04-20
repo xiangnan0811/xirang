@@ -87,7 +87,10 @@ type alertLogsResponse struct {
 	WindowStart time.Time       `json:"window_start"`
 	WindowEnd   time.Time       `json:"window_end"`
 	Hint        string          `json:"hint,omitempty"`
+	HasMore     bool            `json:"has_more"`
 }
+
+const alertLogsMaxRows = 500
 
 func (h *NodeLogsHandler) AlertLogs(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -111,9 +114,16 @@ func (h *NodeLogsHandler) AlertLogs(c *gin.Context) {
 		return
 	}
 	var rows []model.NodeLog
-	h.db.Where("node_id = ? AND timestamp >= ? AND timestamp < ?",
+	if err := h.db.Where("node_id = ? AND timestamp >= ? AND timestamp < ?",
 		alert.NodeID, resp.WindowStart, resp.WindowEnd).
-		Order("timestamp DESC").Limit(500).Find(&rows)
+		Order("timestamp DESC").Limit(alertLogsMaxRows + 1).Find(&rows).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if len(rows) > alertLogsMaxRows {
+		resp.HasMore = true
+		rows = rows[:alertLogsMaxRows]
+	}
 	resp.Data = rows
 	respondOK(c, resp)
 }

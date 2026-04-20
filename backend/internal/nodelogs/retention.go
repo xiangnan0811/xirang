@@ -83,8 +83,7 @@ func (r *RetentionWorker) pruneAll() {
 	for _, n := range nodes {
 		r.pruneNode(n, defaultDays)
 	}
-	// Orphan cleanup (defensive; ON DELETE CASCADE normally handles this).
-	r.db.Exec("DELETE FROM node_logs WHERE node_id NOT IN (SELECT id FROM nodes)")
+	// Orphan cleanup not needed: ON DELETE CASCADE on node_logs (migration 000039) handles it.
 }
 
 func (r *RetentionWorker) pruneNode(node model.Node, defaultDays int) {

@@ -126,6 +126,25 @@ func TestNodeLogConfig_RejectsDenyListPath(t *testing.T) {
 	}
 }
 
+func TestNodeLogConfig_RejectsShellMetaChars(t *testing.T) {
+	db := openLogCfgTestDB(t)
+	db.Create(&model.Node{Name: "n", Host: "h", Username: "u"})
+	r := newLogCfgRouter(t, db, "operator")
+	for _, p := range []string{
+		"/var/log/$(id).log",
+		"/var/log/`whoami`.log",
+		"/var/log/foo\"bar",
+		"/var/log/foo\\bar",
+		"/var/log/foo'bar",
+	} {
+		body := fmt.Sprintf(`{"log_paths":[%q],"log_journalctl_enabled":true,"log_retention_days":0}`, p)
+		w := doLogCfg(r, "PATCH", "/api/v1/nodes/1/log-config", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("path %q: %d", p, w.Code)
+		}
+	}
+}
+
 func TestNodeLogConfig_RejectsWildcards(t *testing.T) {
 	db := openLogCfgTestDB(t)
 	db.Create(&model.Node{Name: "n", Host: "h", Username: "u"})
