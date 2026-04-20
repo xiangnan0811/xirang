@@ -1,4 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3,
@@ -11,6 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
+import { SLOPanel } from "./reports-page.slo";
 import { formatDateOnly } from "@/lib/api/core";
 import {
   createReportsApi,
@@ -279,7 +281,7 @@ function ConfigCard({
   );
 }
 
-export function ReportsPage() {
+function SLAContent() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
@@ -332,7 +334,7 @@ export function ReportsPage() {
   };
 
   return (
-    <div className="space-y-4 p-4">
+    <>
       {confirmDialog}
       <div className="flex items-center justify-between">
         <div>
@@ -407,6 +409,35 @@ export function ReportsPage() {
           />
         </Suspense>
       )}
+    </>
+  );
+}
+
+export function ReportsPage() {
+  const { t } = useTranslation();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "slo" ? "slo" : "sla";
+  const setTab = (next: "sla" | "slo") => setParams({ tab: next });
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex gap-2">
+        <Button
+          variant={tab === "sla" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setTab("sla")}
+        >
+          {t("slo.tabSLA")}
+        </Button>
+        <Button
+          variant={tab === "slo" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setTab("slo")}
+        >
+          {t("slo.tabSLO")}
+        </Button>
+      </div>
+      {tab === "sla" ? <SLAContent /> : <SLOPanel />}
     </div>
   );
 }

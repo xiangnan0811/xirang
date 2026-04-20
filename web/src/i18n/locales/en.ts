@@ -2115,6 +2115,7 @@ const en = {
       retn: "Retention cleanup failed",
       intg: "Notification channel failed",
       report: "Report generation failed",
+      slo: "SLO breach",
     },
     columns: {
       name: "Name",
@@ -2128,6 +2129,59 @@ const en = {
       hours: "{{hours}}h",
       minutes: "{{minutes}}m",
     },
+  },
+
+  // ── slo ──
+  slo: {
+    tabSLA: "SLA Reports",
+    tabSLO: "SLO Targets",
+    new: "New SLO Target",
+    edit: "Edit SLO Target",
+    panelEmpty: "No SLO targets yet. Create one to start tracking SLA.",
+    columns: {
+      name: "Name",
+      type: "Type",
+      threshold: "Target",
+      observed: "Observed",
+      budget: "Budget",
+      status: "Status",
+      actions: "Actions",
+    },
+    status: {
+      healthy: "Healthy",
+      warning: "At risk",
+      breached: "Breached",
+      insufficient: "Insufficient data",
+    },
+    metricType: {
+      successRate: "Task success rate",
+      availability: "Node availability",
+    },
+    dialog: {
+      name: "Name",
+      metricType: "Metric type",
+      tags: "Tags",
+      tagsPlaceholder: "Type a tag then press Enter or click Add",
+      tagsHint: "Leave empty to match all nodes",
+      threshold: "Target",
+      thresholdSuffix: "%",
+      windowDays: "Window (days)",
+      enabled: "Enabled",
+      create: "Create",
+      creating: "Creating...",
+      save: "Save",
+      saving: "Saving...",
+    },
+    summary: {
+      total: "Total",
+      healthy: "Healthy",
+      warning: "At risk",
+      breached: "Breached",
+    },
+    platformAlert: "Platform",
+    validationThreshold: "Threshold must be between 0 and 1",
+    delete: "Delete",
+    deleteConfirm: "Delete SLO \"{{name}}\"?",
   },
 
 } as const;

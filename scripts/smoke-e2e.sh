@@ -246,3 +246,33 @@ if printf '%s' "$HTTP_BODY" | grep -q "\"id\":${SILENCE_ID}[^0-9]"; then
 fi
 
 log "PASS: silence smoke"
+
+# === P5d-1: SLO smoke test ===
+log "=== P5d-1: SLO smoke test ==="
+
+api_call POST "/slos" '{"name":"smoke-slo","metric_type":"availability","match_tags":[],"threshold":0.99,"window_days":28,"enabled":true}'
+assert_status 201
+SLO_ID=$(json_get data.id)
+if [ -z "${SLO_ID:-}" ] || [ "$SLO_ID" = "null" ]; then
+  echo "[smoke][error] FAIL: slo create — response: $HTTP_BODY"
+  exit 1
+fi
+log "  created slo $SLO_ID"
+
+# Register cleanup trap (chains with any existing trap)
+trap 'if [ -n "${SLO_ID:-}" ]; then api_call DELETE "/slos/${SLO_ID}" "" >/dev/null 2>&1 || true; fi' EXIT
+
+api_call GET "/slos/$SLO_ID/compliance" ""
+assert_status 200
+
+api_call GET "/slos/compliance-summary" ""
+assert_status 200
+
+api_call DELETE "/slos/$SLO_ID" ""
+assert_status 204
+SLO_ID=""  # Clear so trap doesn't double-delete
+
+api_call GET "/slos" ""
+assert_status 200
+
+log "PASS: SLO smoke"

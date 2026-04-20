@@ -32,6 +32,7 @@ const ALERT_TYPES = [
   { value: "XR-RETN",        i18nKey: "silences.types.retn" },
   { value: "XR-INTG",        i18nKey: "silences.types.intg" },
   { value: "XR-REPORT",      i18nKey: "silences.types.report" },
+  { value: "XR-SLO",         i18nKey: "silences.types.slo" },
 ] as const
 
 // ---------- helpers ----------

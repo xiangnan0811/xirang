@@ -2115,6 +2115,7 @@ const zh = {
       retn: "保留清理失败",
       intg: "通知渠道失败",
       report: "报告生成失败",
+      slo: "SLO 违反",
     },
     columns: {
       name: "名称",
@@ -2128,6 +2129,59 @@ const zh = {
       hours: "{{hours}} 小时",
       minutes: "{{minutes}} 分钟",
     },
+  },
+
+  // ── slo ──
+  slo: {
+    tabSLA: "SLA 报告",
+    tabSLO: "SLO 目标",
+    new: "新建 SLO 目标",
+    edit: "编辑 SLO 目标",
+    panelEmpty: "还没有 SLO 目标，新建一条开始跟踪 SLA",
+    columns: {
+      name: "名称",
+      type: "类型",
+      threshold: "目标",
+      observed: "实际",
+      budget: "错误预算",
+      status: "状态",
+      actions: "操作",
+    },
+    status: {
+      healthy: "健康",
+      warning: "警告",
+      breached: "违反",
+      insufficient: "数据不足",
+    },
+    metricType: {
+      successRate: "任务成功率",
+      availability: "节点可用性",
+    },
+    dialog: {
+      name: "名称",
+      metricType: "指标类型",
+      tags: "匹配标签",
+      tagsPlaceholder: "输入标签后按 Enter 或点击添加",
+      tagsHint: "留空匹配全部节点",
+      threshold: "目标阈值",
+      thresholdSuffix: "%",
+      windowDays: "窗口(天)",
+      enabled: "启用",
+      create: "创建",
+      creating: "创建中...",
+      save: "保存",
+      saving: "保存中...",
+    },
+    summary: {
+      total: "总计",
+      healthy: "健康",
+      warning: "警告",
+      breached: "违反",
+    },
+    platformAlert: "平台",
+    validationThreshold: "阈值必须在 0 到 1 之间",
+    delete: "删除",
+    deleteConfirm: "确定要删除 SLO \"{{name}}\" 吗?",
   },
 
 } as const;
