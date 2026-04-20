@@ -30,6 +30,8 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) process(ctx context.Context, job CollectJob) {
+	queueDepth.Set(float64(len(w.jobs)))
+
 	cursors, err := w.curRepo.LoadForNode(job.Node.ID)
 	if err != nil {
 		logger.Module("nodelogs").Warn().
@@ -50,7 +52,15 @@ func (w *Worker) process(ctx context.Context, job CollectJob) {
 				Uint("node_id", job.Node.ID).Err(err).
 				Int("count", len(entries)).
 				Msg("insert logs failed")
+			fetchErrors.WithLabelValues(nodeIDLabel(job.Node.ID), "insert").Inc()
 			return
+		}
+		counts := map[string]int{}
+		for _, e := range entries {
+			counts[e.Source]++
+		}
+		for src, n := range counts {
+			logsIngested.WithLabelValues(nodeIDLabel(job.Node.ID), src).Add(float64(n))
 		}
 	}
 	if len(newCursors) > 0 {

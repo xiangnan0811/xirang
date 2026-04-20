@@ -57,5 +57,8 @@ func (r *RetentionWorker) pruneNode(node model.Node, defaultDays int) {
 		days = defaultDays
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
-	r.db.Where("node_id = ? AND created_at < ?", node.ID, cutoff).Delete(&model.NodeLog{})
+	res := r.db.Where("node_id = ? AND created_at < ?", node.ID, cutoff).Delete(&model.NodeLog{})
+	if res.RowsAffected > 0 {
+		retentionDeleted.WithLabelValues(nodeIDLabel(node.ID)).Add(float64(res.RowsAffected))
+	}
 }

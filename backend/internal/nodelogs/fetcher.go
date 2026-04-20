@@ -2,6 +2,7 @@ package nodelogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -30,8 +31,15 @@ func (f *Fetcher) Fetch(ctx context.Context, node model.Node, cursors map[Cursor
 		return nil, nil, nil
 	}
 	script := buildScript(node, cursors)
+	start := time.Now()
 	out, err := f.runner.Run(ctx, node, script, FetchTimeout, MaxFetchBytes)
+	fetchDuration.WithLabelValues(nodeIDLabel(node.ID)).Observe(time.Since(start).Seconds())
 	if err != nil {
+		reason := "ssh_error"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		fetchErrors.WithLabelValues(nodeIDLabel(node.ID), reason).Inc()
 		return nil, nil, err
 	}
 
