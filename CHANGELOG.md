@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/xiangnan0811/xirang/compare/v0.12.0...v0.13.0) (2026-04-20)
+
+
+### Features
+
+* **slo:** P5d-1 SLO engine — availability + success rate ([#44](https://github.com/xiangnan0811/xirang/issues/44)) ([5cc7de8](https://github.com/xiangnan0811/xirang/commit/5cc7de819da026d3402d44cdf9e606999b3ae857))
+
 ## [0.12.0](https://github.com/xiangnan0811/xirang/compare/v0.11.0...v0.12.0) (2026-04-20)
 
 
