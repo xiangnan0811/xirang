@@ -1,0 +1,3 @@
+ALTER TABLE nodes ADD COLUMN log_paths TEXT;
+ALTER TABLE nodes ADD COLUMN log_journalctl_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE nodes ADD COLUMN log_retention_days INTEGER NOT NULL DEFAULT 0;

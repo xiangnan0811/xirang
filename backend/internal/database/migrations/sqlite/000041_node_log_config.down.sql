@@ -1,0 +1,1 @@
+-- SQLite: columns remain per project convention. No-op on rollback.
