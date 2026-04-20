@@ -26,10 +26,10 @@ func NewFetcher(r Runner) *Fetcher { return &Fetcher{runner: r} }
 // entries, new cursor state (for ALL configured sources, even empty results), and error.
 // On error, cursors are NOT touched (caller should not persist).
 func (f *Fetcher) Fetch(ctx context.Context, node model.Node, cursors map[CursorKey]Cursor) ([]LogEntry, []Cursor, error) {
-	script := buildScript(node, cursors)
-	if script == "" {
+	if !node.LogJournalctlEnabled && len(node.DecodedLogPaths()) == 0 {
 		return nil, nil, nil
 	}
+	script := buildScript(node, cursors)
 	out, err := f.runner.Run(ctx, node, script, FetchTimeout, MaxFetchBytes)
 	if err != nil {
 		return nil, nil, err
@@ -110,6 +110,7 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 
 	for _, path := range node.DecodedLogPaths() {
 		prev := cursors[CursorKey{SourceFile, path}]
+		// tail -c uses 1-based indexing; FileOffset=0 → "+1" reads the full file.
 		offsetArg := prev.FileOffset + 1
 		b.WriteString(fmt.Sprintf(
 			`( stat -c "INODE=%%i SIZE=%%s" "%s" 2>/dev/null; tail -c +%d "%s" 2>/dev/null ) || true`+"\n",

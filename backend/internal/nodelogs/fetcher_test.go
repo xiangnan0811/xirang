@@ -165,3 +165,34 @@ func TestBuildScript_FileWithOffset(t *testing.T) {
 		t.Fatalf("file end delim missing")
 	}
 }
+
+func TestBuildScript_JournalDisabledOmitsJournalctl(t *testing.T) {
+	n := model.Node{LogJournalctlEnabled: false, LogPaths: `["/var/log/a.log"]`}
+	cs := map[CursorKey]Cursor{}
+	script := buildScript(n, cs)
+	if strings.Contains(script, "journalctl") {
+		t.Fatalf("journalctl should be omitted when disabled, got %q", script)
+	}
+	// Delimiter still emitted so Fetch can split cleanly.
+	if !strings.Contains(script, JournalDelim) {
+		t.Fatalf("JournalDelim must remain for splitter, got %q", script)
+	}
+	if !strings.Contains(script, "/var/log/a.log") {
+		t.Fatalf("file path missing, got %q", script)
+	}
+}
+
+func TestFetch_NoSourcesReturnsEmpty(t *testing.T) {
+	f := &Fetcher{runner: &fakeRunner{out: "should not be read"}}
+	n := model.Node{ID: 1, LogJournalctlEnabled: false, LogPaths: ""}
+	entries, newCursors, err := f.Fetch(context.Background(), n, map[CursorKey]Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(entries))
+	}
+	if len(newCursors) != 0 {
+		t.Fatalf("expected 0 cursors, got %d", len(newCursors))
+	}
+}
