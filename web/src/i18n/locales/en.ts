@@ -2080,6 +2080,56 @@ const en = {
     },
   },
 
+  // ── silences ──
+  silences: {
+    title: "Silence Rules",
+    new: "New Silence Rule",
+    name: "Name",
+    node: "Node",
+    nodeAll: "All nodes",
+    nodeHint: "Leave empty for all nodes",
+    category: "Alert type",
+    categoryAll: "All types",
+    categoryHint: "Leave empty to match all types",
+    tags: "Tags",
+    tagsHint: "Type a tag then press Enter or click Add",
+    addTag: "Add",
+    window: "Silence window",
+    preset1h: "1 hour",
+    preset4h: "4 hours",
+    preset1d: "1 day",
+    startsAt: "Start",
+    endsAt: "End",
+    note: "Note",
+    noteHint: "Optional note",
+    create: "Create",
+    creating: "Creating...",
+    revoke: "End now",
+    empty: "No silence rules yet",
+    validationWindowInvalid: "End time must be after start time",
+    types: {
+      exec: "Task execution failed",
+      vrfy: "Task verification failed",
+      node: "Node probe failed",
+      nodeExpiry: "Node expiring",
+      retn: "Retention cleanup failed",
+      intg: "Notification channel failed",
+      report: "Report generation failed",
+    },
+    columns: {
+      name: "Name",
+      match: "Match",
+      window: "Window",
+      remaining: "Remaining",
+      actions: "Actions",
+    },
+    remaining: {
+      expired: "Expired",
+      hours: "{{hours}}h",
+      minutes: "{{minutes}}m",
+    },
+  },
+
 } as const;
 
 export default en;

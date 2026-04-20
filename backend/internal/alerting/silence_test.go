@@ -31,18 +31,20 @@ func TestMatchSilence_NodeOnly(t *testing.T) {
 
 func TestMatchSilence_CategoryOnly(t *testing.T) {
 	now := time.Now()
-	s := model.Silence{ID: 8, MatchCategory: "backup_failed", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
-	alert := model.Alert{NodeID: 5, ErrorCode: "backup_failed"}
+	// prefix "XR-NODE" matches instance code "XR-NODE-5"
+	s := model.Silence{ID: 8, MatchCategory: "XR-NODE", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
+	alert := model.Alert{NodeID: 5, ErrorCode: "XR-NODE-5"}
 	node := model.Node{ID: 5}
 	if got := MatchSilence(alert, node, []model.Silence{s}, now); got == nil {
-		t.Fatal("expected category match")
+		t.Fatal("expected category prefix match")
 	}
 }
 
 func TestMatchSilence_CategoryMismatch(t *testing.T) {
 	now := time.Now()
-	s := model.Silence{ID: 8, MatchCategory: "backup_failed", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
-	alert := model.Alert{NodeID: 5, ErrorCode: "probe_down"}
+	// "XR-NODE" must NOT match "XR-EXEC-5" (different type)
+	s := model.Silence{ID: 8, MatchCategory: "XR-NODE", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
+	alert := model.Alert{NodeID: 5, ErrorCode: "XR-EXEC-5"}
 	node := model.Node{ID: 5}
 	if got := MatchSilence(alert, node, []model.Silence{s}, now); got != nil {
 		t.Fatalf("expected no match, got %+v", got)
@@ -90,12 +92,12 @@ func TestMatchSilence_CombinedAllFields(t *testing.T) {
 	s := model.Silence{
 		ID:            12,
 		MatchNodeID:   uptr(1),
-		MatchCategory: "probe_down",
+		MatchCategory: "XR-NODE",
 		MatchTags:     `["prod"]`,
 		StartsAt:      now.Add(-time.Hour),
 		EndsAt:        now.Add(time.Hour),
 	}
-	alert := model.Alert{NodeID: 1, ErrorCode: "probe_down"}
+	alert := model.Alert{NodeID: 1, ErrorCode: "XR-NODE-42"}
 	node := model.Node{ID: 1, Tags: "prod,web"}
 	if got := MatchSilence(alert, node, []model.Silence{s}, now); got == nil {
 		t.Fatal("expected combined match")
@@ -104,6 +106,41 @@ func TestMatchSilence_CombinedAllFields(t *testing.T) {
 	alertBad.NodeID = 2
 	if got := MatchSilence(alertBad, node, []model.Silence{s}, now); got != nil {
 		t.Fatal("expected no match when node_id differs")
+	}
+}
+
+func TestMatchSilence_CategoryPrefixDoesNotMatchSiblingPrefix(t *testing.T) {
+	now := time.Now()
+	// "XR-NODE" must NOT match "XR-NODE-EXPIRY-5" — tail "EXPIRY-5" is not purely numeric
+	s := model.Silence{MatchCategory: "XR-NODE", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
+	alert := model.Alert{NodeID: 1, ErrorCode: "XR-NODE-EXPIRY-5"}
+	if got := MatchSilence(alert, model.Node{ID: 1}, []model.Silence{s}, now); got != nil {
+		t.Fatal("XR-NODE prefix must NOT match XR-NODE-EXPIRY-5")
+	}
+}
+
+func TestMatchSilence_CategoryPrefixMatchesInstance(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		cat         string
+		code        string
+		shouldMatch bool
+	}{
+		{"XR-NODE", "XR-NODE-1", true},
+		{"XR-NODE", "XR-NODE-42", true},
+		{"XR-NODE", "XR-NODE-EXPIRY-5", false},  // sibling prefix, must not match
+		{"XR-NODE-EXPIRY", "XR-NODE-EXPIRY-5", true},
+		{"XR-EXEC", "XR-EXEC-100", true},
+		{"XR-EXEC", "XR-NODE-100", false},
+	}
+	for _, tc := range cases {
+		s := model.Silence{MatchCategory: tc.cat, StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)}
+		alert := model.Alert{NodeID: 1, ErrorCode: tc.code}
+		got := MatchSilence(alert, model.Node{ID: 1}, []model.Silence{s}, now)
+		matched := got != nil
+		if matched != tc.shouldMatch {
+			t.Errorf("cat=%q code=%q: got match=%v want=%v", tc.cat, tc.code, matched, tc.shouldMatch)
+		}
 	}
 }
 

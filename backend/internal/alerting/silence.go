@@ -20,8 +20,17 @@ func MatchSilence(alert model.Alert, node model.Node, silences []model.Silence, 
 		if s.MatchNodeID != nil && *s.MatchNodeID != alert.NodeID {
 			continue
 		}
-		if s.MatchCategory != "" && s.MatchCategory != alert.ErrorCode {
-			continue
+		if s.MatchCategory != "" {
+			// match_category is a type prefix (e.g. "XR-NODE") that matches any ErrorCode
+			// of that category (e.g. "XR-NODE-5", "XR-NODE-42"). Exact equality is a subset.
+			// To avoid "XR-NODE" incorrectly matching sibling prefix "XR-NODE-EXPIRY-5",
+			// the tail after the "-" separator must be purely numeric (instance ID only).
+			if alert.ErrorCode != s.MatchCategory {
+				tail, ok := strings.CutPrefix(alert.ErrorCode, s.MatchCategory+"-")
+				if !ok || !isAllDigits(tail) {
+					continue
+				}
+			}
 		}
 		if tags := s.DecodedMatchTags(); len(tags) > 0 {
 			if !anyTagMatches(tags, splitNodeTags(node.Tags)) {
@@ -31,6 +40,19 @@ func MatchSilence(alert model.Alert, node model.Node, silences []model.Silence, 
 		return s
 	}
 	return nil
+}
+
+// isAllDigits reports whether s is non-empty and consists entirely of ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isActive(s *model.Silence, now time.Time) bool {

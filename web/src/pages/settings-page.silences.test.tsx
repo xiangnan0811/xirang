@@ -34,7 +34,7 @@ vi.mock("@/lib/api/silences", () => ({
       id: 1,
       name: "maint-A",
       match_node_id: 1,
-      match_category: "",
+      match_category: "XR-NODE",
       match_tags: ["prod"],
       starts_at: "2026-04-19T00:00:00Z",
       ends_at: "2026-04-19T02:00:00Z",
@@ -56,7 +56,6 @@ vi.mock("@/lib/api/client", () => ({
       { id: 1, name: "node-1" },
       { id: 2, name: "node-2" },
     ]),
-    getAlerts: vi.fn().mockResolvedValue([]),
   },
 }))
 
@@ -73,8 +72,8 @@ describe("SilencesPanel", () => {
 
   it("opens create dialog", async () => {
     render(<SilencesPanel />)
-    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
-    expect(screen.getByLabelText(/名称/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
+    expect(screen.getByLabelText(/silences.name/)).toBeInTheDocument()
   })
 
   it("rejects invalid time window", async () => {
@@ -83,31 +82,31 @@ describe("SilencesPanel", () => {
     createSilenceMock.mockReset()
 
     render(<SilencesPanel />)
-    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
 
     // Fill in a name
-    await userEvent.type(screen.getByLabelText(/名称/), "test-silence")
+    await userEvent.type(screen.getByLabelText(/silences.name/), "test-silence")
 
     // Set endsAt before startsAt via the datetime-local inputs
-    const startsInput = screen.getByLabelText(/开始/)
-    const endsInput = screen.getByLabelText(/结束/)
+    const startsInput = screen.getByLabelText(/silences.startsAt/)
+    const endsInput = screen.getByLabelText(/silences.endsAt/)
     await userEvent.clear(startsInput)
     await userEvent.type(startsInput, "2026-04-20T10:00")
     await userEvent.clear(endsInput)
     await userEvent.type(endsInput, "2026-04-20T09:00")
 
-    await userEvent.click(screen.getByRole("button", { name: "创建" }))
+    await userEvent.click(screen.getByRole("button", { name: "silences.create" }))
 
-    expect(toastErrorMock).toHaveBeenCalledWith("结束时间必须晚于开始时间")
+    expect(toastErrorMock).toHaveBeenCalledWith("silences.validationWindowInvalid")
     expect(createSilenceMock).not.toHaveBeenCalled()
   })
 
   it("shows node options in dropdown when dialog opens", async () => {
     render(<SilencesPanel />)
-    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
     // Wait for nodes to load (apiClient.getNodes is mocked)
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "全部节点" })).toBeInTheDocument()
+      expect(screen.getByRole("option", { name: "silences.nodeAll" })).toBeInTheDocument()
     })
     expect(screen.getByRole("option", { name: "node-1" })).toBeInTheDocument()
     expect(screen.getByRole("option", { name: "node-2" })).toBeInTheDocument()
@@ -115,9 +114,9 @@ describe("SilencesPanel", () => {
 
   it("adds and removes tags via chip picker", async () => {
     render(<SilencesPanel />)
-    await userEvent.click(screen.getByRole("button", { name: /新建静默规则/ }))
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
 
-    const tagInput = screen.getByPlaceholderText(/输入标签后按 Enter/)
+    const tagInput = screen.getByPlaceholderText(/silences.tagsHint/)
     await userEvent.type(tagInput, "prod")
     await userEvent.keyboard("{Enter}")
 
@@ -127,5 +126,32 @@ describe("SilencesPanel", () => {
     // Remove it via ✕ button
     await userEvent.click(screen.getByRole("button", { name: "移除标签 prod" }))
     expect(screen.queryByText("prod")).not.toBeInTheDocument()
+  })
+
+  it("category dropdown renders all alert types and stores value on selection", async () => {
+    render(<SilencesPanel />)
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
+
+    // The category <select> should contain "silences.categoryAll" option (empty value)
+    const categorySelect = screen.getByRole("combobox", { name: /silences.category/ })
+    expect(categorySelect).toBeInTheDocument()
+
+    // All 7 known type options must be present
+    const expectedKeys = [
+      "silences.types.exec",
+      "silences.types.vrfy",
+      "silences.types.node",
+      "silences.types.nodeExpiry",
+      "silences.types.retn",
+      "silences.types.intg",
+      "silences.types.report",
+    ]
+    for (const key of expectedKeys) {
+      expect(screen.getByRole("option", { name: key })).toBeInTheDocument()
+    }
+
+    // Selecting "XR-NODE" type option should reflect on the select element value
+    await userEvent.selectOptions(categorySelect, "XR-NODE")
+    expect((categorySelect as HTMLSelectElement).value).toBe("XR-NODE")
   })
 })
