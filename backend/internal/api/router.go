@@ -157,6 +157,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
 	secured.POST("/nodes/:id/emergency-backup", middleware.RBAC("tasks:trigger"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.EmergencyBackup)
 
+	logCfgHandler := handlers.NewNodeLogConfigHandler(dep.DB)
+	secured.GET("/nodes/:id/log-config", middleware.RBAC("logs:read"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Get)
+	secured.PATCH("/nodes/:id/log-config", middleware.RBAC("logs:write"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Patch)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)

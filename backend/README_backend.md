@@ -78,6 +78,8 @@ go run ./cmd/server
 | POST | /nodes/:id/emergency-backup | 🔒 紧急备份 |
 | POST | /nodes/:id/migrate | 🔒 节点迁移 |
 | POST | /nodes/:id/migrate/preflight | 🔒 迁移预检 |
+| GET | /nodes/:id/log-config | 🔒 获取节点日志采集配置 |
+| PATCH | /nodes/:id/log-config | 🔒 更新节点日志采集配置 |
 
 ### SSH 密钥
 
