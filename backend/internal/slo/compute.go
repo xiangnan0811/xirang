@@ -32,21 +32,27 @@ func Compute(db *gorm.DB, def *model.SLODefinition, now time.Time) (*Compliance,
 }
 
 // resolveNodeIDs returns node IDs matching def.MatchTags (any-of). Empty tags = all nodes.
+// Projects only id and tags to avoid triggering GORM AfterFind hooks that decrypt
+// sensitive credentials (password, private_key) — unnecessary for SLO computation.
 func resolveNodeIDs(db *gorm.DB, def *model.SLODefinition) ([]uint, error) {
-	var nodes []model.Node
-	if err := db.Find(&nodes).Error; err != nil {
+	type nodeTagRow struct {
+		ID   uint   `gorm:"column:id"`
+		Tags string `gorm:"column:tags"`
+	}
+	var rows []nodeTagRow
+	if err := db.Table("nodes").Select("id, tags").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	wanted := def.DecodedMatchTags()
 	if len(wanted) == 0 {
-		ids := make([]uint, len(nodes))
-		for i, n := range nodes {
+		ids := make([]uint, len(rows))
+		for i, n := range rows {
 			ids[i] = n.ID
 		}
 		return ids, nil
 	}
 	var out []uint
-	for _, n := range nodes {
+	for _, n := range rows {
 		if anyTagMatch(wanted, splitCSVTags(n.Tags)) {
 			out = append(out, n.ID)
 		}
@@ -179,7 +185,7 @@ func classify(observed, threshold float64, total int) Status {
 	}
 	// observed >= threshold → check budget consumption
 	remaining := budgetRemainingPct(observed, threshold)
-	if remaining < 20 { // within 20% of exhausting budget
+	if remaining < warningBudgetRemainingPct {
 		return StatusWarning
 	}
 	return StatusHealthy

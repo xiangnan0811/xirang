@@ -31,3 +31,8 @@ type Compliance struct {
 // to consider a compliance value meaningful. Below this, Compute returns
 // StatusInsufficient and evaluator skips alerting.
 const insufficientSampleThreshold = 100
+
+// warningBudgetRemainingPct is the error-budget threshold below which an SLO
+// meeting its threshold still surfaces as StatusWarning. Expressed as a percent
+// (0-100) to match Compliance.ErrorBudgetRemainingPct.
+const warningBudgetRemainingPct = 20.0

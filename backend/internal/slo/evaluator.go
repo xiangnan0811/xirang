@@ -32,7 +32,9 @@ func NewEvaluator(db *gorm.DB) *Evaluator {
 	}
 }
 
-// SetRaiseFn replaces the breach callback (main.go wires this to alerting.RaiseSLOBreach).
+// SetRaiseFn replaces the breach callback.
+// MUST be called before Run() starts; mutation during Run is racy.
+// In production this is set once in main.go during bootstrap.
 func (e *Evaluator) SetRaiseFn(fn func(db any, slo *model.SLODefinition, c *Compliance) error) {
 	e.raiseFn = fn
 }

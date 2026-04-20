@@ -209,6 +209,7 @@ function SLODialog({
   const [metricType, setMetricType] = useState<"availability" | "success_rate">("availability");
   const [tags, setTags] = useState<string[]>([]);
   const [threshold, setThreshold] = useState("99");
+  const [windowDays, setWindowDays] = useState(28);
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -218,12 +219,14 @@ function SLODialog({
       setMetricType(existing.metric_type);
       setTags(parseSLOTags(existing));
       setThreshold((existing.threshold * 100).toString());
+      setWindowDays(existing.window_days);
       setEnabled(existing.enabled);
     } else {
       setName("");
       setMetricType("availability");
       setTags([]);
       setThreshold("99");
+      setWindowDays(28);
       setEnabled(true);
     }
   }, [existing, open]);
@@ -240,7 +243,7 @@ function SLODialog({
       metric_type: metricType,
       match_tags: tags,
       threshold: n / 100,
-      window_days: 28,
+      window_days: windowDays,
       enabled,
     };
     setSaving(true);

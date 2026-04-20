@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/slo"
@@ -30,6 +31,9 @@ type sloCreateRequest struct {
 }
 
 func (req *sloCreateRequest) validate() error {
+	if len(req.Name) == 0 || len(req.Name) > 128 {
+		return errors.New("name must be 1-128 characters")
+	}
 	switch req.MetricType {
 	case "availability", "success_rate":
 	default:
@@ -38,7 +42,10 @@ func (req *sloCreateRequest) validate() error {
 	if req.Threshold <= 0 || req.Threshold >= 1 {
 		return errors.New("threshold must be in (0, 1)")
 	}
-	if req.WindowDays <= 0 {
+	if req.WindowDays < 0 || req.WindowDays > 365 {
+		return errors.New("window_days must be 0-365")
+	}
+	if req.WindowDays == 0 {
 		req.WindowDays = 28
 	}
 	return nil
@@ -165,6 +172,7 @@ func (h *SLOHandler) Delete(c *gin.Context) {
 		respondNotFound(c, "SLO 定义不存在")
 		return
 	}
+	slo.ClearPromMetricsForSLO(uint(id))
 	c.Status(http.StatusNoContent)
 }
 
@@ -211,6 +219,10 @@ func (h *SLOHandler) ComplianceSummary(c *gin.Context) {
 	for i := range defs {
 		result, err := slo.Compute(h.db, &defs[i], now)
 		if err != nil {
+			logger.Module("slo").Warn().
+				Uint("slo_id", defs[i].ID).
+				Err(err).
+				Msg("SLO compliance summary: compute failed, row skipped")
 			continue
 		}
 		switch result.Status {

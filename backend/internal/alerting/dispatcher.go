@@ -717,13 +717,13 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 // The alert flows through the standard silence/grouping/retry pipeline with
 // ErrorCode = "XR-SLO-<id>" and NodeID=0 sentinel for "platform" scope.
 func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) error {
-	severity := "warn"
+	severity := "warning"
 	if c.ErrorBudgetRemainingPct <= 0 {
 		severity = "critical"
 	}
 	alert := &model.Alert{
 		NodeID:    0,
-		NodeName:  "",
+		NodeName:  "platform",
 		ErrorCode: fmt.Sprintf("XR-SLO-%d", def.ID),
 		Severity:  severity,
 		Status:    "open",
