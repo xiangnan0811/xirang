@@ -2227,6 +2227,71 @@ const en = {
     },
   },
 
+  dashboards: {
+    pageTitle: "Dashboards",
+    newButton: "New dashboard",
+    empty: { title: "No dashboards yet", hint: "Create your first dashboard to start visualizing monitoring data" },
+    deleteConfirm: "Delete \"{{name}}\"? This cannot be undone.",
+    fields: {
+      name: "Name",
+      description: "Description",
+      timeRange: "Time range",
+      autoRefresh: "Auto refresh",
+      customStart: "Start",
+      customEnd: "End",
+    },
+    timeRange: { "1h": "Last 1h", "6h": "Last 6h", "24h": "Last 24h", "7d": "Last 7d", custom: "Custom" },
+    autoRefresh: { off: "Off", "10": "10s", "30": "30s", "60": "1min", "300": "5min" },
+    editToggle: { on: "Editing", off: "Read-only" },
+    panel: {
+      addButton: "Add panel",
+      editButton: "Edit",
+      deleteButton: "Delete",
+      deleteConfirm: "Delete this panel?",
+      emptyState: "No data",
+      timeout: "Query timeout, retry please",
+      retry: "Retry",
+      savingLayout: "Saving layout...",
+      layoutSaved: "Layout saved",
+      unsavedLayoutConfirm: "Layout unsaved, leave anyway?",
+    },
+    editor: {
+      title: { create: "New Panel", edit: "Edit Panel" },
+      fields: {
+        title: "Title",
+        chartType: "Chart type",
+        metric: "Metric",
+        aggregation: "Aggregation",
+        nodeIds: "Filter nodes",
+        taskIds: "Filter tasks",
+      },
+      chartType: { line: "Line", area: "Area", bar: "Bar", number: "Number", table: "Table" },
+      aggregation: { avg: "avg", max: "max", min: "min", sum: "sum", p50: "p50", p95: "p95", p99: "p99" },
+      save: "Save",
+      cancel: "Cancel",
+      preview: "Preview",
+      validation: {
+        titleRequired: "Title required",
+        metricRequired: "Metric required",
+      },
+    },
+    metrics: {
+      "node.cpu": "CPU usage",
+      "node.memory": "Memory usage",
+      "node.disk_pct": "Disk usage",
+      "node.load": "Load 1m",
+      "node.latency_ms": "SSH latency (ms)",
+      "task.success_rate": "Task success rate",
+      "task.throughput": "Task throughput (Mbps)",
+      "task.duration_p95": "Task duration quantile",
+    },
+    errors: {
+      notFound: "Dashboard not found",
+      conflict: "Dashboard name already exists",
+      unknown: "Operation failed",
+    },
+  },
+
 } as const;
 
 export default en;

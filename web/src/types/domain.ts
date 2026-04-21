@@ -523,3 +523,52 @@ export type AlertLogsResult = {
 export type NodeLogsSettings = {
   default_retention_days: number;
 };
+
+export type DashboardTimeRange = "1h" | "6h" | "24h" | "7d" | "custom";
+export type ChartType = "line" | "area" | "bar" | "number" | "table";
+export type Aggregation = "avg" | "max" | "min" | "sum" | "p50" | "p95" | "p99";
+
+export type PanelFilters = {
+  node_ids?: number[];
+  task_ids?: number[];
+};
+
+export type Panel = {
+  id: number;
+  dashboard_id: number;
+  title: string;
+  chart_type: ChartType;
+  metric: string;
+  filters: PanelFilters;
+  aggregation: Aggregation;
+  layout_x: number;
+  layout_y: number;
+  layout_w: number;
+  layout_h: number;
+};
+
+export type Dashboard = {
+  id: number;
+  owner_id: number;
+  name: string;
+  description: string;
+  time_range: DashboardTimeRange;
+  custom_start?: string | null;
+  custom_end?: string | null;
+  auto_refresh_seconds: number;
+  created_at: string;
+  updated_at: string;
+  panels?: Panel[];
+};
+
+export type MetricDescriptor = {
+  key: string;
+  label: string;
+  family: "node" | "task";
+  default_aggregation: Aggregation;
+  supported_aggregations: Aggregation[];
+};
+
+export type PanelQueryPoint = { ts: string; value: number };
+export type PanelQuerySeries = { name: string; points: PanelQueryPoint[] };
+export type PanelQueryResult = { series: PanelQuerySeries[]; step_seconds: number };
