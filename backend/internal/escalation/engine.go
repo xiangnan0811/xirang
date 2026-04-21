@@ -127,7 +127,7 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	}
 
 	integrationIDs := level.IntegrationIDs
-	integrationSnapshot := integrationIDs
+	integrationSnapshot := append([]uint(nil), integrationIDs...)
 	if silenced {
 		integrationSnapshot = nil
 	}

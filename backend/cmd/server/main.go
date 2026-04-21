@@ -104,7 +104,9 @@ func main() {
 	// Engine
 	escEngine := escalation.NewEngine(
 		db, escSvc,
-		// silence checker — load active silences and match against projected alert state
+		// Silence check is gated by the delay-elapsed guard in engine.evaluate, so
+		// ActiveSilences is only queried when a level is actually ready to fire, not
+		// per tick per alert. The N+1 is therefore bounded to firing events only.
 		func(alert model.Alert) *model.Silence {
 			sils, err := alerting.ActiveSilences(db, time.Now())
 			if err != nil {

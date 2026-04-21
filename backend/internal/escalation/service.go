@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"xirang/backend/internal/model"
@@ -180,8 +181,9 @@ func (s *Service) ResolvePolicyForAlert(ctx context.Context, alert model.Alert) 
 	// SLO (RaiseSLOBreach) — alert.PolicyName holds the SLO name; safer path is: look up by alert.TaskID==nil && alert.ErrorCode prefix "XR-SLO-"
 	// We use a heuristic: ErrorCode begins with "XR-SLO-" → parse id from code; if malformed, skip.
 	if pid == nil && strings.HasPrefix(alert.ErrorCode, "XR-SLO-") {
-		var sloID uint
-		if _, err := fmt.Sscanf(alert.ErrorCode, "XR-SLO-%d", &sloID); err == nil && sloID > 0 {
+		rest := strings.TrimPrefix(alert.ErrorCode, "XR-SLO-")
+		if sloIDU, err := strconv.ParseUint(rest, 10, 64); err == nil && sloIDU > 0 {
+			sloID := uint(sloIDU)
 			var sloDef model.SLODefinition
 			if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&sloDef, sloID).Error; err == nil {
 				pid = sloDef.EscalationPolicyID
@@ -189,7 +191,9 @@ func (s *Service) ResolvePolicyForAlert(ctx context.Context, alert model.Alert) 
 		}
 	}
 
-	// Node fallback (RaiseNodeProbeFailure / RaiseDiskUsageAlert / RaiseNodeExpiryWarning)
+	// Node fallback — only when alert carries a NodeID. Platform-level alerts
+	// (RaiseStorageSpaceAlert with NodeID=0) skip this branch and return nil,
+	// correctly causing them to use legacy immediate-dispatch.
 	if pid == nil && alert.NodeID > 0 {
 		var n model.Node
 		if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&n, alert.NodeID).Error; err == nil {
