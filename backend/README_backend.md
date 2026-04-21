@@ -193,6 +193,20 @@ go run ./cmd/server
 |------|------|------|
 | GET | /node-logs | 🔒 节点日志查询（logs:read；支持 node_ids/source/path/priority/q/time） |
 
+### 自定义看板
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /dashboards | 🔒 看板列表（当前用户） |
+| POST | /dashboards | 🔒 创建看板 |
+| GET | /dashboards/:id | 🔒 看板详情（含 panels） |
+| PATCH | /dashboards/:id | 🔒 更新看板设置 |
+| DELETE | /dashboards/:id | 🔒 删除看板 |
+| POST | /dashboards/:id/panels | 🔒 添加面板 |
+| PATCH | /dashboards/:id/panels/:pid | 🔒 更新面板 |
+| DELETE | /dashboards/:id/panels/:pid | 🔒 删除面板 |
+| PUT | /dashboards/:id/panels/layout | 🔒 批量更新布局 |
+
 ### 审计日志
 
 | 方法 | 路径 | 说明 |
