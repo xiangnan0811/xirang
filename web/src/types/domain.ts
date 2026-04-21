@@ -572,3 +572,33 @@ export type MetricDescriptor = {
 export type PanelQueryPoint = { ts: string; value: number };
 export type PanelQuerySeries = { name: string; points: PanelQueryPoint[] };
 export type PanelQueryResult = { series: PanelQuerySeries[]; step_seconds: number };
+
+export type EscalationLevel = {
+  delay_seconds: number;
+  integration_ids: number[];
+  severity_override: "" | "info" | "warning" | "critical";
+  tags: string[];
+};
+
+export type EscalationPolicy = {
+  id: number;
+  name: string;
+  description: string;
+  min_severity: "info" | "warning" | "critical";
+  enabled: boolean;
+  levels: EscalationLevel[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type EscalationEvent = {
+  id: number;
+  alert_id: number;
+  escalation_policy_id: number | null;
+  level_index: number;
+  integration_ids: number[];
+  severity_before: "info" | "warning" | "critical";
+  severity_after: "info" | "warning" | "critical";
+  tags_added: string[];
+  fired_at: string;
+};
