@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/xiangnan0811/xirang/compare/v0.15.0...v0.15.1) (2026-04-21)
+
+
+### Bug Fixes
+
+* **deps:** bump pgx/v5 to v5.9.2 (CVE-2026-33816) ([#50](https://github.com/xiangnan0811/xirang/issues/50)) ([183dacd](https://github.com/xiangnan0811/xirang/commit/183dacdfc69801ba9914f91379dc452c541eb012))
+
 ## [0.15.0](https://github.com/xiangnan0811/xirang/compare/v0.14.0...v0.15.0) (2026-04-21)
 
 
