@@ -75,7 +75,8 @@ func (p *NodeMetricsProvider) Query(ctx context.Context, req dashboards.QueryReq
 		Table("node_metric_samples").
 		Select("node_id, "+col+" AS value, sampled_at").
 		Where("sampled_at >= ? AND sampled_at < ? AND probe_ok = ?", req.Start, req.End, true).
-		Order("node_id ASC, sampled_at ASC")
+		Order("node_id ASC, sampled_at ASC").
+		Limit(500000)
 	if len(nodeIDs) > 0 {
 		q = q.Where("node_id IN ?", nodeIDs)
 	}

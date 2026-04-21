@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/model"
 
@@ -23,12 +24,12 @@ func NewService(db *gorm.DB) *Service { return &Service{db: db} }
 
 // DashboardInput is the payload accepted by Create/Update.
 type DashboardInput struct {
-	Name               string  `json:"name"`
-	Description        string  `json:"description"`
-	TimeRange          string  `json:"time_range"`
-	CustomStart        *string `json:"custom_start"`
-	CustomEnd          *string `json:"custom_end"`
-	AutoRefreshSeconds int     `json:"auto_refresh_seconds"`
+	Name               string     `json:"name"`
+	Description        string     `json:"description"`
+	TimeRange          string     `json:"time_range"`
+	CustomStart        *time.Time `json:"custom_start"`
+	CustomEnd          *time.Time `json:"custom_end"`
+	AutoRefreshSeconds int        `json:"auto_refresh_seconds"`
 }
 
 // PanelInput is the payload accepted by AddPanel/UpdatePanel.
@@ -81,6 +82,8 @@ func (s *Service) Create(ctx context.Context, userID uint, in DashboardInput) (*
 		Name:               strings.TrimSpace(in.Name),
 		Description:        in.Description,
 		TimeRange:          in.TimeRange,
+		CustomStart:        in.CustomStart,
+		CustomEnd:          in.CustomEnd,
 		AutoRefreshSeconds: in.AutoRefreshSeconds,
 	}
 	if err := s.db.WithContext(ctx).Create(&d).Error; err != nil {
@@ -105,11 +108,8 @@ func (s *Service) Update(ctx context.Context, userID, id uint, in DashboardInput
 		"description":          in.Description,
 		"time_range":           in.TimeRange,
 		"auto_refresh_seconds": in.AutoRefreshSeconds,
-		"custom_start":         nil,
-		"custom_end":           nil,
-	}
-	if in.TimeRange == "custom" {
-		// Parsing handled at handler layer; values passed through.
+		"custom_start":         in.CustomStart,
+		"custom_end":           in.CustomEnd,
 	}
 	if err := s.db.WithContext(ctx).Model(d).Updates(updates).Error; err != nil {
 		if isUniqueConstraintErr(err) {
@@ -229,6 +229,14 @@ func validateDashboardInput(in *DashboardInput) error {
 	case "1h", "6h", "24h", "7d", "custom":
 	default:
 		return errors.New("time_range: 仅支持 1h/6h/24h/7d/custom")
+	}
+	if in.TimeRange == "custom" {
+		if in.CustomStart == nil || in.CustomEnd == nil {
+			return errors.New("custom time_range: 必须同时提供 custom_start 和 custom_end")
+		}
+		if !in.CustomStart.Before(*in.CustomEnd) {
+			return errors.New("custom time_range: custom_start 必须早于 custom_end")
+		}
 	}
 	switch in.AutoRefreshSeconds {
 	case 0, 10, 30, 60, 300:

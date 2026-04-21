@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, RefreshCw, Plus, Save } from "lucide-react";
@@ -80,16 +80,18 @@ export function DashboardDetailPage() {
   const [editingPanel, setEditingPanel] = useState<Panel | undefined>(undefined);
 
   // ── 404 处理 ────────────────────────────────────────────────────
-  if (error) {
-    const is404 =
-      error.includes("404") ||
-      error.toLowerCase().includes("not found") ||
-      error.includes(t("dashboards.errors.notFound"));
-    toast.error(is404 ? t("dashboards.errors.notFound") : error);
-    navigate("/app/dashboards");
-    return null;
-  }
+  useEffect(() => {
+    if (error) {
+      const is404 =
+        error.includes("404") ||
+        error.toLowerCase().includes("not found") ||
+        error.includes(t("dashboards.errors.notFound"));
+      toast.error(is404 ? t("dashboards.errors.notFound") : error);
+      navigate("/app/dashboards");
+    }
+  }, [error, navigate, t]);
 
+  if (error) return null;
   if (loading || !dashboard) {
     return <DetailPageSkeleton />;
   }

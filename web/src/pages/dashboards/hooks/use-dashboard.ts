@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { getDashboard, updateDashboard } from "@/lib/api/dashboards";
 import type { Dashboard, DashboardTimeRange } from "@/types/domain";
 import type { DashboardInput } from "@/lib/api/dashboards";
@@ -36,6 +38,7 @@ export type UseDashboardReturn = {
 };
 
 export function useDashboard(id: string | undefined, token: string): UseDashboardReturn {
+  const { t } = useTranslation();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,27 +71,32 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
   const updateAutoRefresh = useCallback(
     (seconds: number) => {
       if (!dashboard || !token) return;
-      const input: DashboardInput = {
+      const prevSeconds = dashboard.auto_refresh_seconds;
+      // optimistic update
+      setDashboard((prev) =>
+        prev ? { ...prev, auto_refresh_seconds: seconds } : prev
+      );
+      updateDashboard(token, dashboard.id, {
         name: dashboard.name,
         description: dashboard.description,
         time_range: dashboard.time_range,
         custom_start: dashboard.custom_start,
         custom_end: dashboard.custom_end,
         auto_refresh_seconds: seconds,
-      };
-      updateDashboard(token, dashboard.id, input)
+      } as DashboardInput)
         .then((updated) => {
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setDashboard(updated);
         })
         .catch(() => {
-          // 静默失败，保持本地状态
+          // revert on failure
+          setDashboard((prev) =>
+            prev ? { ...prev, auto_refresh_seconds: prevSeconds } : prev
+          );
+          toast.error(t("dashboards.errors.unknown"));
         });
-      setDashboard((prev) =>
-        prev ? { ...prev, auto_refresh_seconds: seconds } : prev
-      );
     },
-    [dashboard, token]
+    [dashboard, token, t]
   );
 
   // 初始化时同步 dashboard.time_range

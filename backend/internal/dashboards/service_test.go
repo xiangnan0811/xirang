@@ -3,6 +3,7 @@ package dashboards
 import (
 	"context"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
 
@@ -148,5 +149,34 @@ func TestService_List_SortedByUpdatedAtDesc(t *testing.T) {
 	list, _ := s.List(context.Background(), 1)
 	if len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
 		t.Fatalf("order: %+v", list)
+	}
+}
+
+func TestService_Create_CustomTimeRangePersists(t *testing.T) {
+	s := NewService(openSvcDB(t))
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	d, err := s.Create(context.Background(), 1, DashboardInput{
+		Name: "c", TimeRange: "custom", AutoRefreshSeconds: 30,
+		CustomStart: &start, CustomEnd: &end,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if d.CustomStart == nil || !d.CustomStart.Equal(start) {
+		t.Fatalf("start: %v", d.CustomStart)
+	}
+	if d.CustomEnd == nil || !d.CustomEnd.Equal(end) {
+		t.Fatalf("end: %v", d.CustomEnd)
+	}
+}
+
+func TestService_Create_CustomMissingBounds_Rejected(t *testing.T) {
+	s := NewService(openSvcDB(t))
+	_, err := s.Create(context.Background(), 1, DashboardInput{
+		Name: "c", TimeRange: "custom", AutoRefreshSeconds: 30,
+	})
+	if err == nil {
+		t.Fatal("expected error for custom range without bounds")
 	}
 }

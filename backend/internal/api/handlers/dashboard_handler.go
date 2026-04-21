@@ -66,6 +66,7 @@ func (h *DashboardHandler) Create(c *gin.Context) {
 	}
 	d, err := h.svc.Create(c.Request.Context(), uid, dashboards.DashboardInput{
 		Name: req.Name, Description: req.Description, TimeRange: req.TimeRange,
+		CustomStart: req.CustomStart, CustomEnd: req.CustomEnd,
 		AutoRefreshSeconds: req.AutoRefreshSeconds,
 	})
 	if err != nil {
@@ -88,6 +89,7 @@ func (h *DashboardHandler) Update(c *gin.Context) {
 	}
 	d, err := h.svc.Update(c.Request.Context(), uid, id, dashboards.DashboardInput{
 		Name: req.Name, Description: req.Description, TimeRange: req.TimeRange,
+		CustomStart: req.CustomStart, CustomEnd: req.CustomEnd,
 		AutoRefreshSeconds: req.AutoRefreshSeconds,
 	})
 	if err != nil {

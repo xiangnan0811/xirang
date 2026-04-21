@@ -70,7 +70,8 @@ func (p *TaskStatsProvider) querySuccessRate(ctx context.Context, req dashboards
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, status, finished_at").
 		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", req.Start, req.End).
-		Order("task_id ASC, finished_at ASC")
+		Order("task_id ASC, finished_at ASC").
+		Limit(500000)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
@@ -112,7 +113,8 @@ func (p *TaskStatsProvider) queryThroughput(ctx context.Context, req dashboards.
 	q := p.db.WithContext(ctx).Table("task_traffic_samples").
 		Select("task_id, throughput_mbps, sampled_at").
 		Where("sampled_at >= ? AND sampled_at < ?", req.Start, req.End).
-		Order("task_id ASC, sampled_at ASC")
+		Order("task_id ASC, sampled_at ASC").
+		Limit(500000)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
@@ -149,7 +151,8 @@ func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.Qu
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, duration_ms, finished_at").
 		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ? AND duration_ms > 0", req.Start, req.End).
-		Order("task_id ASC, finished_at ASC")
+		Order("task_id ASC, finished_at ASC").
+		Limit(500000)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}

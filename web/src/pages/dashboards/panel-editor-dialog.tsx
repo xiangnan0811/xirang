@@ -233,6 +233,10 @@ export function PanelEditorDialog({
 
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+        previewAbortRef.current = null;
+      }
     };
   }, [open, metricKey, aggregation, selectedNodeIds, selectedTaskIds, start, end, token]);
 
