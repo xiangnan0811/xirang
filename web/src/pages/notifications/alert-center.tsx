@@ -304,6 +304,7 @@ export function AlertCenter({
           </div>
         ) : displayAlerts.length ? (
           <AlertList
+            token={token}
             alerts={displayAlerts}
             highlightedAlertId={highlightedAlert?.id ?? null}
             highlightRef={highlightRef}

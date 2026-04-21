@@ -112,6 +112,7 @@ export interface PolicyRecord {
   maxRetries?: number;
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
+  escalation_policy_id?: number | null;
 }
 
 export interface NewPolicyInput {
@@ -130,6 +131,7 @@ export interface NewPolicyInput {
   maxRetries?: number;
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
+  escalation_policy_id?: number | null;
 }
 
 export interface TaskRecord {
@@ -453,6 +455,7 @@ export type SLODefinition = {
   created_by: number;
   created_at: string;
   updated_at: string;
+  escalation_policy_id?: number | null;
 };
 
 export type SLOComplianceResult = {

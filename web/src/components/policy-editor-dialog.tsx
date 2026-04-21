@@ -3,14 +3,16 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, Clock3 } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
+import { listEscalationPolicies } from "@/lib/api/escalation";
 import { useAuth } from "@/context/auth-context";
-import type { HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
+import type { EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -32,6 +34,7 @@ const emptyDraft: PolicyDraft = {
   maxRetries: 2,
   retryBaseSeconds: 30,
   bandwidthSchedule: "",
+  escalation_policy_id: null,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -60,6 +63,7 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     maxRetries: policy.maxRetries ?? 2,
     retryBaseSeconds: policy.retryBaseSeconds ?? 30,
     bandwidthSchedule: policy.bandwidthSchedule ?? "",
+    escalation_policy_id: policy.escalation_policy_id ?? null,
   };
 }
 
@@ -84,10 +88,14 @@ export function PolicyEditorDialog({
   const [saving, setSaving] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [hookTemplates, setHookTemplates] = useState<HookTemplate[]>([]);
+  const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
 
   useEffect(() => {
     if (!open || !token) return;
     apiClient.getHookTemplates(token).then(setHookTemplates).catch(() => {});
+    listEscalationPolicies(token)
+      .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
+      .catch(() => {});
   }, [open, token]);
 
   const isEditing = Boolean(draft.id);
@@ -288,6 +296,30 @@ export function PolicyEditorDialog({
             />
           </div>
         ) : null}
+      </div>
+
+      {/* 升级策略 */}
+      <div>
+        <label htmlFor="policy-edit-escalation" className="mb-1 block text-sm font-medium">
+          {t("escalation.tabTitle")}
+        </label>
+        <Select
+          id="policy-edit-escalation"
+          value={draft.escalation_policy_id == null ? "" : String(draft.escalation_policy_id)}
+          onChange={(e) =>
+            setDraft((prev) => ({
+              ...prev,
+              escalation_policy_id: e.target.value === "" ? null : Number(e.target.value),
+            }))
+          }
+        >
+          <option value="">无升级策略 / None</option>
+          {escalationPolicies.map((p) => (
+            <option key={p.id} value={String(p.id)}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
       </div>
 
       {/* 高级设置 */}
