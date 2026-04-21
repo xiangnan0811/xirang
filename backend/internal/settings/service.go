@@ -83,6 +83,7 @@ var registry = []SettingDef{
 	{Key: "storage.min_free_gb", EnvVar: "BACKUP_STORAGE_MIN_FREE_GB", CodeDefault: "10", Type: TypeInt, Category: "storage", Description: "备份存储最小可用空间 (GB)", Min: "0", Max: "10000"},
 	{Key: "storage.max_usage_pct", EnvVar: "BACKUP_STORAGE_MAX_USAGE_PCT", CodeDefault: "90", Type: TypeInt, Category: "storage", Description: "备份存储最大使用率 (%)", Min: "0", Max: "100"},
 	{Key: "alert.dedup_window", EnvVar: "ALERT_DEDUP_WINDOW", CodeDefault: "10m", Type: TypeDuration, Category: "alert", Description: "告警去重时间窗口"},
+	{Key: "logs.retention_days_default", EnvVar: "LOG_RETENTION_DAYS_DEFAULT", CodeDefault: "30", Type: TypeInt, Category: "logs", Description: "节点日志默认保留天数（节点未单独配置时生效）", Min: "1", Max: "365"},
 }
 
 // registryMap O(1) key 查找（init 时构建）

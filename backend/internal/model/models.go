@@ -75,9 +75,12 @@ type Node struct {
 	MaintenanceStart    *time.Time `json:"maintenance_start,omitempty"`
 	MaintenanceEnd      *time.Time `json:"maintenance_end,omitempty"`
 	ExpiryDate          *time.Time `gorm:"" json:"expiry_date,omitempty"`
-	Archived            bool       `gorm:"not null;default:false" json:"archived"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	Archived                bool       `gorm:"not null;default:false" json:"archived"`
+	LogPaths                string     `gorm:"type:text" json:"log_paths"`
+	LogJournalctlEnabled    bool       `gorm:"not null;default:true" json:"log_journalctl_enabled"`
+	LogRetentionDays        int        `gorm:"not null;default:0" json:"log_retention_days"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 type Policy struct {
@@ -591,4 +594,40 @@ func (s *SLODefinition) DecodedMatchTags() []string {
 		return nil
 	}
 	return tags
+}
+
+// NodeLog is a single log line ingested from a node.
+type NodeLog struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	NodeID    uint      `gorm:"not null;index:idx_node_logs_node_time,priority:1" json:"node_id"`
+	Source    string    `gorm:"size:16;not null" json:"source"`
+	Path      string    `gorm:"type:text;not null" json:"path"`
+	Timestamp time.Time `gorm:"not null;index:idx_node_logs_node_time,priority:2,sort:desc" json:"timestamp"`
+	Priority  string    `gorm:"size:16" json:"priority"`
+	Message   string    `gorm:"type:text;not null" json:"message"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
+// NodeLogCursor tracks incremental collection position per (node, source, path).
+type NodeLogCursor struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	NodeID     uint      `gorm:"not null;uniqueIndex:uk_node_log_cursors,priority:1" json:"node_id"`
+	Source     string    `gorm:"size:16;not null;uniqueIndex:uk_node_log_cursors,priority:2" json:"source"`
+	Path       string    `gorm:"type:text;not null;uniqueIndex:uk_node_log_cursors,priority:3" json:"path"`
+	CursorText string    `gorm:"type:text" json:"cursor_text"`
+	FileOffset int64     `json:"file_offset"`
+	FileInode  int64     `json:"file_inode"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// DecodedLogPaths returns the parsed whitelist. nil on empty/invalid JSON.
+func (n *Node) DecodedLogPaths() []string {
+	if strings.TrimSpace(n.LogPaths) == "" {
+		return nil
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(n.LogPaths), &paths); err != nil {
+		return nil
+	}
+	return paths
 }

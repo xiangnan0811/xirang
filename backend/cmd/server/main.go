@@ -17,6 +17,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodelogs"
 	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
@@ -111,6 +112,14 @@ func main() {
 		return alerting.RaiseSLOBreach(db, def, c)
 	})
 	go sloEvaluator.Run(hubCtx)
+
+	nodelogs.InitSettings(settingsSvc)
+	nodeLogRunner := nodelogs.NewSSHRunner(db)
+	nodeLogScheduler := nodelogs.NewScheduler(db, nodeLogRunner)
+	go nodeLogScheduler.Run(hubCtx)
+
+	nodeLogRetention := nodelogs.NewRetentionWorker(db)
+	go nodeLogRetention.Run(hubCtx)
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)

@@ -476,3 +476,50 @@ export type SLOSummary = {
   breached: number;
   insufficient: number;
 };
+
+export type NodeLogSource = "journalctl" | "file";
+export type NodeLogPriority =
+  | "emerg"
+  | "alert"
+  | "crit"
+  | "err"
+  | "warning"
+  | "notice"
+  | "info"
+  | "debug"
+  | "";
+
+export type NodeLogEntry = {
+  id: number;
+  node_id: number;
+  source: NodeLogSource;
+  path: string;
+  timestamp: string;
+  priority: NodeLogPriority;
+  message: string;
+  created_at: string;
+};
+
+export type NodeLogQueryResult = {
+  data: NodeLogEntry[];
+  total: number;
+  has_more: boolean;
+};
+
+export type NodeLogConfig = {
+  log_paths: string[];
+  log_journalctl_enabled: boolean;
+  log_retention_days: number;
+};
+
+export type AlertLogsResult = {
+  data: NodeLogEntry[];
+  node_id: number;
+  window_start: string;
+  window_end: string;
+  hint?: string;
+};
+
+export type NodeLogsSettings = {
+  default_retention_days: number;
+};

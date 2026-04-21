@@ -78,6 +78,8 @@ go run ./cmd/server
 | POST | /nodes/:id/emergency-backup | 🔒 紧急备份 |
 | POST | /nodes/:id/migrate | 🔒 节点迁移 |
 | POST | /nodes/:id/migrate/preflight | 🔒 迁移预检 |
+| GET | /nodes/:id/log-config | 🔒 获取节点日志采集配置 |
+| PATCH | /nodes/:id/log-config | 🔒 更新节点日志采集配置 |
 
 ### SSH 密钥
 
@@ -161,6 +163,7 @@ go run ./cmd/server
 | POST | /alerts/:id/retry-delivery | 🔒 重试投递 |
 | POST | /alerts/:id/retry-failed-deliveries | 🔒 批量重试 |
 | POST | /alert-deliveries/:id/retry | 🔒 手动重试指定投递记录（alerts:write；不存在返回 404） |
+| GET | /alerts/:id/logs | 🔒 告警触发前后 ±5min 节点日志（alerts:read） |
 
 ### 静默规则
 
@@ -183,6 +186,12 @@ go run ./cmd/server
 | POST | /slos | 🔒 创建 SLO 定义（admin） |
 | PATCH | /slos/:id | 🔒 更新 SLO 定义（admin） |
 | DELETE | /slos/:id | 🔒 硬删除 SLO 定义（admin） |
+
+### 节点日志
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /node-logs | 🔒 节点日志查询（logs:read；支持 node_ids/source/path/priority/q/time） |
 
 ### 审计日志
 
@@ -219,6 +228,8 @@ go run ./cmd/server
 | GET | /settings | 🔒 全部设置 |
 | PUT | /settings | 🔒 批量更新 |
 | DELETE | /settings/:key | 🔒 删除设置 |
+| GET | /settings/logs | 🔒 节点日志保留默认天数（admin） |
+| PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
 | GET | /config/export | 🔒 导出配置 |
 | POST | /config/import | 🔒 导入配置 |
 | GET | /hook-templates | 🔒 钩子模板列表 |

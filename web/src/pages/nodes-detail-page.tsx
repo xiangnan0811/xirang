@@ -1,38 +1,44 @@
 import { useParams, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import OverviewTab from "@/features/nodes-detail/overview-tab";
 import MetricsTab from "@/features/nodes-detail/metrics-tab";
 import TasksTab from "@/features/nodes-detail/tasks-tab";
 import AlertsTab from "@/features/nodes-detail/alerts-tab";
 import ProfileTab from "@/features/nodes-detail/profile-tab";
+import LogConfigTab from "@/features/nodes-detail/log-config-tab";
 import { useNodeStatus } from "@/features/nodes-detail/use-node-status";
 
-const TABS = [
-  { id: "overview", label: "概览" },
-  { id: "metrics", label: "指标" },
-  { id: "tasks", label: "任务" },
-  { id: "alerts", label: "告警" },
-  { id: "profile", label: "属性" },
-] as const;
-type TabId = typeof TABS[number]["id"];
+const TAB_IDS = ["overview", "metrics", "tasks", "alerts", "profile", "log-config"] as const;
+type TabId = typeof TAB_IDS[number];
 
 function isTabId(v: string | null): v is TabId {
-  return TABS.some((t) => t.id === v);
+  return TAB_IDS.includes(v as TabId);
 }
 
 export function NodesDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
+  const { t } = useTranslation();
   const nodeId = Number(id ?? 0);
 
   const tabParam = params.get("tab");
   const activeTab: TabId = isTabId(tabParam) ? tabParam : "overview";
   const { data: status, isLoading } = useNodeStatus(nodeId);
 
-  const setTab = (t: TabId) => {
+  const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params);
-    next.set("tab", t);
+    next.set("tab", tab);
     setParams(next, { replace: true });
   };
+
+  const TABS: { id: TabId; label: string }[] = [
+    { id: "overview", label: "概览" },
+    { id: "metrics", label: "指标" },
+    { id: "tasks", label: "任务" },
+    { id: "alerts", label: "告警" },
+    { id: "profile", label: "属性" },
+    { id: "log-config", label: t("nodeLogs.nodeConfig.tab") },
+  ];
 
   const statusBadge = isLoading ? "加载中" : status?.online ? "在线" : "离线";
   const badgeClass = status?.online
@@ -81,6 +87,7 @@ export function NodesDetailPage() {
         {activeTab === "tasks" && <TasksTab nodeId={nodeId} />}
         {activeTab === "alerts" && <AlertsTab nodeId={nodeId} />}
         {activeTab === "profile" && <ProfileTab nodeId={nodeId} />}
+        {activeTab === "log-config" && <LogConfigTab nodeId={nodeId} />}
       </div>
     </div>
   );
