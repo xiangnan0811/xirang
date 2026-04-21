@@ -183,6 +183,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/dashboards/panel-query", middleware.RBAC("dashboards:read"), panelQueryHandler.Query)
 	secured.GET("/dashboards/metrics", middleware.RBAC("dashboards:read"), panelQueryHandler.ListMetrics)
 
+	escalationHandler := handlers.NewEscalationHandler(dep.DB)
+	secured.GET("/escalation-policies", middleware.RBAC("escalation:read"), escalationHandler.List)
+	secured.POST("/escalation-policies", middleware.RBAC("escalation:write"), escalationHandler.Create)
+	secured.GET("/escalation-policies/:id", middleware.RBAC("escalation:read"), escalationHandler.Get)
+	secured.PATCH("/escalation-policies/:id", middleware.RBAC("escalation:write"), escalationHandler.Update)
+	secured.DELETE("/escalation-policies/:id", middleware.RBAC("escalation:write"), escalationHandler.Delete)
+
+	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)
