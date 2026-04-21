@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/xiangnan0811/xirang/compare/v0.13.0...v0.14.0) (2026-04-21)
+
+
+### Features
+
+* **nodelogs:** P5c node log aggregation ([#46](https://github.com/xiangnan0811/xirang/issues/46)) ([aeef24b](https://github.com/xiangnan0811/xirang/commit/aeef24b4258ca524c113c82d490fb8f84810e837))
+
 ## [0.13.0](https://github.com/xiangnan0811/xirang/compare/v0.12.0...v0.13.0) (2026-04-20)
 
 
