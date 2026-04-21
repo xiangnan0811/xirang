@@ -92,6 +92,7 @@ func TestFetch_FilesWithRotation(t *testing.T) {
 	}
 	if fileCursor == nil {
 		t.Fatal("no file cursor")
+		return
 	}
 	if fileCursor.FileInode != 42 {
 		t.Fatalf("inode=%d want 42", fileCursor.FileInode)
@@ -121,6 +122,7 @@ func TestFetch_InodeChangeResetsOffset(t *testing.T) {
 	}
 	if fc == nil {
 		t.Fatal("no file cursor")
+		return
 	}
 	if fc.FileInode != 99 {
 		t.Fatalf("inode=%d want 99 (new)", fc.FileInode)
