@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/xiangnan0811/xirang/compare/v0.15.1...v0.16.0) (2026-04-21)
+
+
+### Features
+
+* **escalation:** P5e alert escalation ([#52](https://github.com/xiangnan0811/xirang/issues/52)) ([f1d2e63](https://github.com/xiangnan0811/xirang/commit/f1d2e63ab84d8421d6065891e3857229f8585db6))
+
 ## [0.15.1](https://github.com/xiangnan0811/xirang/compare/v0.15.0...v0.15.1) (2026-04-21)
 
 
