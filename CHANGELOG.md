@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/xiangnan0811/xirang/compare/v0.14.0...v0.15.0) (2026-04-21)
+
+
+### Features
+
+* **dashboards:** P5d-2 custom dashboards ([#48](https://github.com/xiangnan0811/xirang/issues/48)) ([02652a5](https://github.com/xiangnan0811/xirang/commit/02652a5bf9c21f726c57798e2e3872b9700e76bf))
+
 ## [0.14.0](https://github.com/xiangnan0811/xirang/compare/v0.13.0...v0.14.0) (2026-04-21)
 
 
