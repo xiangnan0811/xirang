@@ -161,7 +161,7 @@ func (h *NodeLogsHandler) PatchSettings(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, logsSettingsResponse{DefaultRetentionDays: req.DefaultRetentionDays})
+	respondOK(c, logsSettingsResponse(req))
 }
 
 // Helpers

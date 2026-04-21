@@ -38,13 +38,13 @@ func (r *sshRunner) Run(ctx context.Context, node model.Node, cmd string, timeou
 	if err != nil {
 		return "", fmt.Errorf("dial: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {

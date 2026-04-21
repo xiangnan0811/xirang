@@ -104,10 +104,10 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 	if node.LogJournalctlEnabled {
 		prev := cursors[CursorKey{SourceJournalctl, ""}].CursorText
 		if prev != "" {
-			b.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&b,
 				`( journalctl --after-cursor="%s" --output=json --output-fields=__REALTIME_TIMESTAMP,__CURSOR,PRIORITY,_SYSTEMD_UNIT,MESSAGE --no-pager 2>/dev/null ) || true`+"\n",
 				shellEscape(prev),
-			))
+			)
 		} else {
 			b.WriteString(
 				`( journalctl -n 200 --output=json --output-fields=__REALTIME_TIMESTAMP,__CURSOR,PRIORITY,_SYSTEMD_UNIT,MESSAGE --no-pager 2>/dev/null ) || true` + "\n",
@@ -120,10 +120,10 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 		prev := cursors[CursorKey{SourceFile, path}]
 		// tail -c uses 1-based indexing; FileOffset=0 → "+1" reads the full file.
 		offsetArg := prev.FileOffset + 1
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			`( stat -c "INODE=%%i SIZE=%%s" "%s" 2>/dev/null; tail -c +%d "%s" 2>/dev/null ) || true`+"\n",
 			shellEscape(path), offsetArg, shellEscape(path),
-		))
+		)
 		b.WriteString(FileEnd + "\n")
 	}
 

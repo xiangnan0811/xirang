@@ -116,9 +116,5 @@ func (h *NodeLogConfigHandler) Patch(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, nodeLogConfigResponse{
-		LogPaths:             req.LogPaths,
-		LogJournalctlEnabled: req.LogJournalctlEnabled,
-		LogRetentionDays:     req.LogRetentionDays,
-	})
+	respondOK(c, nodeLogConfigResponse(req))
 }
