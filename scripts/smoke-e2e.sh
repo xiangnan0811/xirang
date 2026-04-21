@@ -367,3 +367,62 @@ assert_status 200
 DASHBOARD_ID=""  # 防止重复清理
 
 log "PASS: P5d-2 custom dashboards smoke"
+
+# === P5e: escalation policy smoke test ===
+log "=== P5e: escalation policy smoke test ==="
+
+ESCALATION_ID=""
+
+# 1. Create escalation policy
+log "P5e: POST /escalation-policies → 201"
+api_call POST "/escalation-policies" \
+  "{\"name\":\"smoke-esc-${RUN_ID}\",\"description\":\"smoke\",\"min_severity\":\"warning\",\"enabled\":true,\"levels\":[{\"delay_minutes\":1,\"integration_ids\":[],\"severity_override\":\"\",\"tags\":[]}]}"
+assert_status 201
+ESCALATION_ID="$(json_get data.id)"
+if [[ -z "$ESCALATION_ID" || "$ESCALATION_ID" == "null" ]]; then
+  echo "[smoke][error] FAIL: escalation policy create — response: $HTTP_BODY"
+  exit 1
+fi
+log "  created escalation policy $ESCALATION_ID"
+
+# Register cleanup trap
+trap 'if [ -n "${ESCALATION_ID:-}" ]; then api_call DELETE "/escalation-policies/${ESCALATION_ID}" "" >/dev/null 2>&1 || true; fi' EXIT
+
+# 2. GET escalation policy by ID
+log "P5e: GET /escalation-policies/\$ESCALATION_ID → 200"
+api_call GET "/escalation-policies/${ESCALATION_ID}"
+assert_status 200
+
+# 4. List escalation policies
+log "P5e: GET /escalation-policies → 200"
+api_call GET "/escalation-policies"
+assert_status 200
+
+# 5. Wait >30s for engine tick then check alert escalation events (if any open alerts exist)
+log "P5e: sleeping 35s for engine tick..."
+sleep 35
+
+api_call GET "/alerts?node_id=${NODE_ID}&status=open"
+assert_status 200
+# If any open alerts exist, verify the escalation-events endpoint is reachable
+if printf '%s' "$HTTP_BODY" | grep -q '"id":[0-9]'; then
+  ALERT_ID="$(json_get data.0.id 2>/dev/null || true)"
+  if [[ -n "$ALERT_ID" && "$ALERT_ID" != "null" && "$ALERT_ID" != "" ]]; then
+    log "P5e: GET /alerts/\$ALERT_ID/escalation-events → 200"
+    api_call GET "/alerts/${ALERT_ID}/escalation-events"
+    assert_status 200
+  fi
+fi
+
+# 6. Malformed body → 400
+log "P5e: POST /escalation-policies with malformed body → 400"
+api_call POST "/escalation-policies" "{\"name\":\"\"}"
+assert_status 400
+
+# 7. DELETE escalation policy
+log "P5e: DELETE /escalation-policies/\$ESCALATION_ID → 200"
+api_call DELETE "/escalation-policies/${ESCALATION_ID}"
+assert_status 200
+ESCALATION_ID=""  # prevent double-cleanup
+
+log "PASS: P5e escalation policy smoke"

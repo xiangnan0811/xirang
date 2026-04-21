@@ -567,6 +567,24 @@ func SendAlert(channel model.Integration, alert model.Alert) error {
 	return send(channel, alert)
 }
 
+// DispatchToIntegrations fan-outs an alert to the given integration IDs.
+// Exposed for the escalation engine; peer of the inline dispatch in raiseAndDispatch.
+func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
+	if len(ids) == 0 {
+		return
+	}
+	var integrations []model.Integration
+	if err := db.Where("id IN ? AND enabled = ?", ids, true).Find(&integrations).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Msg("DispatchToIntegrations: load integrations failed")
+		return
+	}
+	for _, ch := range integrations {
+		if err := send(ch, alert); err != nil {
+			logger.Module("alerting").Warn().Err(err).Uint("integration_id", ch.ID).Msg("send failed")
+		}
+	}
+}
+
 func postJSON(client *http.Client, targetURL string, body interface{}) error {
 	payloadBytes, err := json.Marshal(body)
 	if err != nil {
