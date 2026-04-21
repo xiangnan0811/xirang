@@ -63,6 +63,10 @@ vi.mock("./settings-page.maintenance", () => ({
   MaintenanceTab: () => <div>settings.maintenance.title</div>,
 }));
 
+vi.mock("./settings-page.escalation", () => ({
+  SettingsPageEscalation: () => <div>escalation.tabTitle</div>,
+}));
+
 function renderSettingsPage(initialEntries: string[] = ["/app/settings"]) {
   const router = createMemoryRouter(
     [{ path: "/app/settings", element: <SettingsPage /> }],
@@ -79,7 +83,7 @@ describe("SettingsPage", () => {
     vi.clearAllMocks();
   });
 
-  it("renders 6 tabs for admin", () => {
+  it("renders 8 tabs for admin", () => {
     renderSettingsPage();
     expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "settings.tabs.account" })).toBeDefined();
@@ -97,7 +101,7 @@ describe("SettingsPage", () => {
   it("each tab has aria-controls pointing to its own panel id", () => {
     renderSettingsPage();
     const tabs = screen.getAllByRole("tab");
-    const tabIds = ["personal", "account", "users", "channels", "silences", "system", "maintenance"];
+    const tabIds = ["personal", "account", "users", "channels", "silences", "escalation", "system", "maintenance"];
     tabs.forEach((tab, i) => {
       expect(tab).toHaveAttribute("id", `settings-tab-${tabIds[i]}`);
       expect(tab).toHaveAttribute("aria-controls", `settings-panel-${tabIds[i]}`);
