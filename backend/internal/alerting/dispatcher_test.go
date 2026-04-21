@@ -454,6 +454,172 @@ func TestDispatch_SLOBreachUsesXRSLOPrefix(t *testing.T) {
 	}
 }
 
+// openDispatcherDBForEscalation opens an in-memory SQLite DB with tables needed for
+// escalation-split tests (superset of setupTestDB, adds model.Policy).
+func openDispatcherDBForEscalation(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := openAlertingTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Alert{},
+		&model.AlertDelivery{},
+		&model.Integration{},
+		&model.Node{},
+		&model.Policy{},
+	); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return db
+}
+
+func TestRaiseAndDispatch_WithEscalation_SkipsImmediateDispatch(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := openDispatcherDBForEscalation(t)
+
+	// Seed an enabled integration so legacy dispatch would create a delivery row.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
+	db.Create(&model.Node{ID: 10, Name: "node-esc"})
+
+	// Install resolver: enabled policy, min_severity=warning; alert is critical → qualifies.
+	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+		return &EscalationPolicySummary{Enabled: true, MinSeverity: "warning"}, nil
+	})
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	alert := &model.Alert{
+		NodeID:      10,
+		NodeName:    "node-esc",
+		ErrorCode:   "XR-ESC-1",
+		Severity:    "critical",
+		Status:      "open",
+		Message:     "escalated alert",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatalf("raiseAndDispatch failed: %v", err)
+	}
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("expected 0 deliveries (deferred to escalation engine), got %d", count)
+	}
+}
+
+func TestRaiseAndDispatch_BelowMinSeverity_UsesLegacyPath(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := openDispatcherDBForEscalation(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
+	db.Create(&model.Node{ID: 11, Name: "node-low"})
+
+	// Resolver: enabled policy requires critical; alert is only warning → below threshold.
+	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+		return &EscalationPolicySummary{Enabled: true, MinSeverity: "critical"}, nil
+	})
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	alert := &model.Alert{
+		NodeID:      11,
+		NodeName:    "node-low",
+		ErrorCode:   "XR-ESC-2",
+		Severity:    "warning",
+		Status:      "open",
+		Message:     "low severity alert",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatalf("raiseAndDispatch failed: %v", err)
+	}
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count == 0 {
+		t.Fatalf("expected >0 deliveries (below min_severity, legacy path), got 0")
+	}
+}
+
+func TestRaiseAndDispatch_DisabledPolicy_UsesLegacyPath(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := openDispatcherDBForEscalation(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
+	db.Create(&model.Node{ID: 12, Name: "node-disabled"})
+
+	// Resolver: policy is disabled → legacy path.
+	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+		return &EscalationPolicySummary{Enabled: false, MinSeverity: "warning"}, nil
+	})
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	alert := &model.Alert{
+		NodeID:      12,
+		NodeName:    "node-disabled",
+		ErrorCode:   "XR-ESC-3",
+		Severity:    "critical",
+		Status:      "open",
+		Message:     "disabled policy alert",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatalf("raiseAndDispatch failed: %v", err)
+	}
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count == 0 {
+		t.Fatalf("expected >0 deliveries (disabled policy, legacy path), got 0")
+	}
+}
+
+func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := openDispatcherDBForEscalation(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
+	db.Create(&model.Node{ID: 13, Name: "node-err"})
+
+	// Resolver: returns an error → fail-open, use legacy dispatch.
+	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+		return nil, fmt.Errorf("resolver temporarily unavailable")
+	})
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	alert := &model.Alert{
+		NodeID:      13,
+		NodeName:    "node-err",
+		ErrorCode:   "XR-ESC-4",
+		Severity:    "critical",
+		Status:      "open",
+		Message:     "resolver error alert",
+		TriggeredAt: time.Now(),
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatalf("raiseAndDispatch failed: %v", err)
+	}
+
+	var count int64
+	db.Model(&model.AlertDelivery{}).Count(&count)
+	if count == 0 {
+		t.Fatalf("expected >0 deliveries (resolver error → fail-open, legacy path), got 0")
+	}
+}
+
 func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 	db := setupTestDB(t)

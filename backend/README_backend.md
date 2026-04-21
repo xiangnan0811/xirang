@@ -317,6 +317,17 @@ go run ./cmd/server
 - `PATCH  /api/v1/slos/:id` — 更新 SLO 定义（admin）
 - `DELETE /api/v1/slos/:id` — 硬删除 SLO 定义（admin）
 
+### 升级策略
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /escalation-policies | 🔒 策略列表 |
+| POST | /escalation-policies | 🔒 创建策略（admin） |
+| GET | /escalation-policies/:id | 🔒 策略详情 |
+| PATCH | /escalation-policies/:id | 🔒 更新策略（admin） |
+| DELETE | /escalation-policies/:id | 🔒 删除策略（admin，级联 SET NULL 到 task/policy/slo/node） |
+| GET | /alerts/:id/escalation-events | 🔒 单告警升级历史（alerts:read） |
+
 ## 测试
 
 ```bash

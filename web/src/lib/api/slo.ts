@@ -12,6 +12,7 @@ export type SLOInput = {
   threshold: number
   window_days: number
   enabled: boolean
+  escalation_policy_id?: number | null
 }
 
 export const listSLOs = (token: string) =>

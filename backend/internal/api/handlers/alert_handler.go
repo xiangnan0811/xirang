@@ -613,6 +613,23 @@ func (h *AlertHandler) UnreadCount(c *gin.Context) {
 	})
 }
 
+// EscalationEvents returns the escalation timeline for one alert, ordered by level.
+func (h *AlertHandler) EscalationEvents(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var evs []model.AlertEscalationEvent
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("alert_id = ?", id).
+		Order("level_index ASC").
+		Find(&evs).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondOK(c, evs)
+}
+
 func parseDeliveryStatsHours(raw string) int {
 	value := 24
 	if strings.TrimSpace(raw) == "" {

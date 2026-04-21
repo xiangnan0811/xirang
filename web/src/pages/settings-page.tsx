@@ -11,8 +11,9 @@ import { ChannelsTab } from "./settings-page.channels";
 import { SystemTab } from "./settings-page.system";
 import { MaintenanceTab } from "./settings-page.maintenance";
 import { SilencesPanel } from "./settings-page.silences";
+import { SettingsPageEscalation } from "./settings-page.escalation";
 
-const TABS = ["personal", "account", "users", "channels", "silences", "system", "maintenance"] as const;
+const TABS = ["personal", "account", "users", "channels", "silences", "escalation", "system", "maintenance"] as const;
 type TabId = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -68,6 +69,7 @@ export function SettingsPage() {
     users: t("settings.tabs.users"),
     channels: t("settings.tabs.channels"),
     silences: "静默规则",
+    escalation: t("escalation.tabTitle"),
     system: t("settings.tabs.system"),
     maintenance: t("settings.tabs.maintenance"),
   };
@@ -108,6 +110,7 @@ export function SettingsPage() {
         {activeTab === "users" && isAdmin && <UsersTab />}
         {activeTab === "channels" && isAdmin && <ChannelsTab />}
         {activeTab === "silences" && isAdmin && <SilencesPanel />}
+        {activeTab === "escalation" && isAdmin && <SettingsPageEscalation />}
         {activeTab === "system" && isAdmin && <SystemTab />}
         {activeTab === "maintenance" && isAdmin && <MaintenanceTab />}
       </div>

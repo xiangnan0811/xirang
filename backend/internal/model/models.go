@@ -79,6 +79,7 @@ type Node struct {
 	LogPaths                string     `gorm:"type:text" json:"log_paths"`
 	LogJournalctlEnabled    bool       `gorm:"not null;default:true" json:"log_journalctl_enabled"`
 	LogRetentionDays        int        `gorm:"not null;default:0" json:"log_retention_days"`
+	EscalationPolicyID      *uint      `gorm:"index" json:"escalation_policy_id"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 }
@@ -104,6 +105,7 @@ type Policy struct {
 	MaxRetries         int       `gorm:"not null;default:2" json:"max_retries"`
 	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
 	BandwidthSchedule  string    `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
+	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`
 	Nodes              []Node    `gorm:"many2many:policy_nodes" json:"-"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -196,6 +198,8 @@ type Alert struct {
 	Retryable      bool       `gorm:"not null;default:false" json:"retryable"`
 	TriggeredAt    time.Time  `gorm:"index" json:"triggered_at"`
 	LastNotifiedAt *time.Time `json:"last_notified_at"`
+	Tags           string     `gorm:"type:text;not null;default:'[]'" json:"tags"`
+	LastLevelFired int        `gorm:"not null;default:-1" json:"last_level_fired"`
 	CreatedAt      time.Time  `gorm:"index:idx_alerts_dedup" json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
@@ -238,9 +242,10 @@ type Task struct {
 	LastError        string     `gorm:"type:text" json:"last_error"`
 	LastRunAt        *time.Time `json:"last_run_at"`
 	NextRunAt        *time.Time `json:"next_run_at"`
-	Progress         *int       `gorm:"-" json:"progress,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	Progress           *int       `gorm:"-" json:"progress,omitempty"`
+	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 func (t *Task) BeforeSave(_ *gorm.DB) error {
@@ -578,7 +583,8 @@ type SLODefinition struct {
 	MatchTags  string    `gorm:"type:text" json:"match_tags"`         // JSON-encoded []string (nil = all)
 	Threshold  float64   `gorm:"not null" json:"threshold"`           // 0–1 range
 	WindowDays int       `gorm:"not null;default:28" json:"window_days"`
-	Enabled    bool      `gorm:"not null;default:true;index" json:"enabled"`
+	Enabled            bool      `gorm:"not null;default:true;index" json:"enabled"`
+	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`
 	CreatedBy  uint      `gorm:"not null" json:"created_by"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -679,4 +685,78 @@ func (p *DashboardPanel) DecodedFilters() PanelFilters {
 	}
 	_ = json.Unmarshal([]byte(s), &f)
 	return f
+}
+
+// EscalationPolicy defines a chain of 1-5 escalation levels.
+type EscalationPolicy struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"size:100;not null;uniqueIndex:uk_escalation_policies_name" json:"name"`
+	Description string    `gorm:"type:text;not null;default:''" json:"description"`
+	MinSeverity string    `gorm:"size:16;not null" json:"min_severity"`
+	Enabled     bool      `gorm:"not null;default:true" json:"enabled"`
+	Levels      string    `gorm:"type:text;not null" json:"levels"` // JSON-encoded []EscalationLevel
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// EscalationLevel is a single step in a policy's chain.
+type EscalationLevel struct {
+	DelaySeconds     int      `json:"delay_seconds"`
+	IntegrationIDs   []uint   `json:"integration_ids"`
+	SeverityOverride string   `json:"severity_override"`
+	Tags             []string `json:"tags"`
+}
+
+// DecodedLevels returns the parsed levels; empty slice on invalid JSON.
+func (p *EscalationPolicy) DecodedLevels() []EscalationLevel {
+	var levels []EscalationLevel
+	s := strings.TrimSpace(p.Levels)
+	if s == "" {
+		return nil
+	}
+	_ = json.Unmarshal([]byte(s), &levels)
+	return levels
+}
+
+// AlertEscalationEvent records one level firing (real or silenced-skip).
+type AlertEscalationEvent struct {
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	AlertID            uint      `gorm:"not null;uniqueIndex:uk_escalation_events_alert_level,priority:1" json:"alert_id"`
+	EscalationPolicyID *uint     `json:"escalation_policy_id"`
+	LevelIndex         int       `gorm:"not null;uniqueIndex:uk_escalation_events_alert_level,priority:2" json:"level_index"`
+	IntegrationIDs     string    `gorm:"type:text;not null;default:'[]'" json:"integration_ids"`
+	SeverityBefore     string    `gorm:"size:16;not null" json:"severity_before"`
+	SeverityAfter      string    `gorm:"size:16;not null" json:"severity_after"`
+	TagsAdded          string    `gorm:"type:text;not null;default:'[]'" json:"tags_added"`
+	FiredAt            time.Time `gorm:"not null" json:"fired_at"`
+}
+
+// DecodedIntegrationIDs returns the parsed snapshot; empty slice on invalid JSON.
+func (e *AlertEscalationEvent) DecodedIntegrationIDs() []uint {
+	var ids []uint
+	if strings.TrimSpace(e.IntegrationIDs) == "" {
+		return nil
+	}
+	_ = json.Unmarshal([]byte(e.IntegrationIDs), &ids)
+	return ids
+}
+
+// DecodedTagsAdded returns the parsed tags snapshot.
+func (e *AlertEscalationEvent) DecodedTagsAdded() []string {
+	var tags []string
+	if strings.TrimSpace(e.TagsAdded) == "" {
+		return nil
+	}
+	_ = json.Unmarshal([]byte(e.TagsAdded), &tags)
+	return tags
+}
+
+// DecodedTags returns the parsed tags; empty on invalid.
+func (a *Alert) DecodedTags() []string {
+	var tags []string
+	if strings.TrimSpace(a.Tags) == "" {
+		return nil
+	}
+	_ = json.Unmarshal([]byte(a.Tags), &tags)
+	return tags
 }

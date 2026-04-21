@@ -22,7 +22,8 @@ import {
   parseSLOTags,
   type SLOInput,
 } from "@/lib/api/slo";
-import type { SLODefinition, SLOComplianceResult, SLOSummary } from "@/types/domain";
+import { listEscalationPolicies } from "@/lib/api/escalation";
+import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOSummary } from "@/types/domain";
 
 const METRIC_TYPES = [
   { value: "availability", i18nKey: "slo.metricType.availability" },
@@ -228,7 +229,16 @@ function SLODialog({
   const [threshold, setThreshold] = useState("99");
   const [windowDays, setWindowDays] = useState(28);
   const [enabled, setEnabled] = useState(true);
+  const [escalationPolicyId, setEscalationPolicyId] = useState<number | null>(null);
+  const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open || !token) return;
+    listEscalationPolicies(token)
+      .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
+      .catch(() => {});
+  }, [open, token]);
 
   useEffect(() => {
     if (existing) {
@@ -238,6 +248,7 @@ function SLODialog({
       setThreshold((existing.threshold * 100).toString());
       setWindowDays(existing.window_days);
       setEnabled(existing.enabled);
+      setEscalationPolicyId(existing.escalation_policy_id ?? null);
     } else {
       setName("");
       setMetricType("availability");
@@ -245,6 +256,7 @@ function SLODialog({
       setThreshold("99");
       setWindowDays(28);
       setEnabled(true);
+      setEscalationPolicyId(null);
     }
   }, [existing, open]);
 
@@ -262,6 +274,7 @@ function SLODialog({
       threshold: n / 100,
       window_days: windowDays,
       enabled,
+      escalation_policy_id: escalationPolicyId,
     };
     setSaving(true);
     try {
@@ -339,6 +352,25 @@ function SLODialog({
           value={threshold}
           onChange={(e) => setThreshold(e.target.value)}
         />
+      </div>
+      <div className="space-y-1">
+        <label htmlFor="slo-escalation" className="text-sm font-medium">
+          {t("escalation.tabTitle")}
+        </label>
+        <Select
+          id="slo-escalation"
+          value={escalationPolicyId == null ? "" : String(escalationPolicyId)}
+          onChange={(e) =>
+            setEscalationPolicyId(e.target.value === "" ? null : Number(e.target.value))
+          }
+        >
+          <option value="">无升级策略 / None</option>
+          {escalationPolicies.map((p) => (
+            <option key={p.id} value={String(p.id)}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
       </div>
       <div className="flex items-center gap-2">
         <Switch id="slo-enabled" checked={enabled} onCheckedChange={setEnabled} />

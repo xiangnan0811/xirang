@@ -55,6 +55,35 @@ func getSettingsSvc() *settings.Service {
 	return svc
 }
 
+// EscalationPolicySummary is a view of an escalation policy sufficient for dispatcher routing.
+// Exported so main.go can construct resolver results without importing the escalation package.
+type EscalationPolicySummary struct {
+	Enabled     bool
+	MinSeverity string
+}
+
+// EscalationResolverFn returns the escalation policy summary for an alert, or nil if none applies.
+// Injected from main.go (lives there to avoid import cycle with escalation package).
+type EscalationResolverFn func(alert model.Alert) (*EscalationPolicySummary, error)
+
+var (
+	escResolverMu sync.Mutex
+	escResolver   EscalationResolverFn
+)
+
+// InitEscalationResolver injects the resolver. Pass nil to disable (tests use this).
+func InitEscalationResolver(fn EscalationResolverFn) {
+	escResolverMu.Lock()
+	escResolver = fn
+	escResolverMu.Unlock()
+}
+
+func getEscalationResolver() EscalationResolverFn {
+	escResolverMu.Lock()
+	defer escResolverMu.Unlock()
+	return escResolver
+}
+
 var defaultHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 type payload struct {
@@ -266,6 +295,18 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		return err
 	}
 	alertsTotal.WithLabelValues(alert.Severity).Inc()
+
+	// Escalation split: if the alert is linked to an enabled policy whose min_severity
+	// is satisfied, defer first-level dispatch to the escalation engine (engine picks
+	// the alert up on next tick, ≤30s). Otherwise fall through to legacy dispatch.
+	if resolver := getEscalationResolver(); resolver != nil {
+		if summary, rerr := resolver(*alert); rerr == nil && summary != nil && summary.Enabled {
+			if severityAtLeastForDispatch(alert.Severity, summary.MinSeverity) {
+				// Deferred; engine will dispatch and record AlertEscalationEvent.
+				return nil
+			}
+		}
+	}
 
 	var integrations []model.Integration
 	if err := db.Where("enabled = ?", true).Find(&integrations).Error; err != nil {
@@ -526,6 +567,24 @@ func SendAlert(channel model.Integration, alert model.Alert) error {
 	return send(channel, alert)
 }
 
+// DispatchToIntegrations fan-outs an alert to the given integration IDs.
+// Exposed for the escalation engine; peer of the inline dispatch in raiseAndDispatch.
+func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
+	if len(ids) == 0 {
+		return
+	}
+	var integrations []model.Integration
+	if err := db.Where("id IN ? AND enabled = ?", ids, true).Find(&integrations).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Msg("DispatchToIntegrations: load integrations failed")
+		return
+	}
+	for _, ch := range integrations {
+		if err := send(ch, alert); err != nil {
+			logger.Module("alerting").Warn().Err(err).Uint("integration_id", ch.ID).Msg("send failed")
+		}
+	}
+}
+
 func postJSON(client *http.Client, targetURL string, body interface{}) error {
 	payloadBytes, err := json.Marshal(body)
 	if err != nil {
@@ -734,6 +793,13 @@ func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) er
 		TriggeredAt: time.Now(),
 	}
 	return raiseAndDispatch(db, alert)
+}
+
+// severityAtLeastForDispatch mirrors escalation.SeverityAtLeast without importing the escalation package
+// (avoids import cycle: alerting ← escalation would block cleanly, but this local helper is simpler).
+func severityAtLeastForDispatch(got, threshold string) bool {
+	rank := map[string]int{"info": 1, "warning": 2, "critical": 3}
+	return rank[got] >= rank[threshold]
 }
 
 func smtpSend(c *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {

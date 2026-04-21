@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/dashboards"
 	"xirang/backend/internal/dashboards/providers"
 	"xirang/backend/internal/database"
+	"xirang/backend/internal/escalation"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
@@ -85,6 +86,44 @@ func main() {
 
 	settingsSvc := settings.NewService(db)
 	alerting.InitSettings(settingsSvc)
+
+	escSvc := escalation.NewService(db)
+
+	// Inject resolver into alerting so RaiseXxx functions know whether to defer to engine
+	alerting.InitEscalationResolver(func(alert model.Alert) (*alerting.EscalationPolicySummary, error) {
+		policy, err := escSvc.ResolvePolicyForAlert(hubCtx, alert)
+		if err != nil {
+			return nil, err
+		}
+		if policy == nil {
+			return nil, nil
+		}
+		return &alerting.EscalationPolicySummary{Enabled: policy.Enabled, MinSeverity: policy.MinSeverity}, nil
+	})
+
+	// Engine
+	escEngine := escalation.NewEngine(
+		db, escSvc,
+		// Silence check is gated by the delay-elapsed guard in engine.evaluate, so
+		// ActiveSilences is only queried when a level is actually ready to fire, not
+		// per tick per alert. The N+1 is therefore bounded to firing events only.
+		func(alert model.Alert) *model.Silence {
+			sils, err := alerting.ActiveSilences(db, time.Now())
+			if err != nil {
+				return nil
+			}
+			var node model.Node
+			if alert.NodeID > 0 {
+				_ = db.First(&node, alert.NodeID).Error
+			}
+			return alerting.MatchSilence(alert, node, sils, time.Now())
+		},
+		// sender — dispatch to the level's integrations
+		func(alert model.Alert, ids []uint) {
+			alerting.DispatchToIntegrations(db, alert, ids)
+		},
+	)
+	go escEngine.Run(hubCtx)
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
