@@ -10,6 +10,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { useDashboard } from "./hooks/use-dashboard";
 import { PanelGrid, type LayoutItem } from "./panel-grid";
 import { PanelCard } from "./panel-card";
+import { PanelEditorDialog } from "./panel-editor-dialog";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -74,6 +75,10 @@ export function DashboardDetailPage() {
   const [pendingLayout, setPendingLayout] = useState<LayoutItem[]>([]);
   const [savingLayout, setSavingLayout] = useState(false);
 
+  // ── 面板编辑器状态 ──────────────────────────────────────────────
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingPanel, setEditingPanel] = useState<Panel | undefined>(undefined);
+
   // ── 404 处理 ────────────────────────────────────────────────────
   if (error) {
     const is404 =
@@ -123,14 +128,22 @@ export function DashboardDetailPage() {
     }
   }
 
-  // ── 编辑面板（T12 实现） ──────────────────────────────────────────
-  function handleEditPanel(_panel: Panel) {
-    toast.info("coming in T12");
+  // ── 编辑面板 ──────────────────────────────────────────────────────
+  function handleEditPanel(panel: Panel) {
+    setEditingPanel(panel);
+    setEditorOpen(true);
   }
 
-  // ── 添加面板（T12 实现） ──────────────────────────────────────────
+  // ── 添加面板 ──────────────────────────────────────────────────────
   function handleAddPanel() {
-    toast.info("coming in T12");
+    setEditingPanel(undefined);
+    setEditorOpen(true);
+  }
+
+  // ── 面板编辑器保存回调 ────────────────────────────────────────────
+  function handlePanelSaved(_saved: Panel) {
+    setEditorOpen(false);
+    refresh();
   }
 
   const panels = dashboard.panels ?? [];
@@ -281,6 +294,18 @@ export function DashboardDetailPage() {
           </Button>
         </div>
       )}
+
+      {/* ── 面板编辑器对话框 ─────────────────────────────────────── */}
+      <PanelEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        dashboardID={dashboard.id}
+        start={start}
+        end={end}
+        panel={editingPanel}
+        onSaved={handlePanelSaved}
+        token={token ?? ""}
+      />
     </div>
   );
 }

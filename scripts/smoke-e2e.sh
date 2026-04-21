@@ -310,3 +310,60 @@ api_call PATCH "/settings/logs" "{\"default_retention_days\":45}"
 assert_status 200
 
 log "PASS: P5c node log config smoke"
+
+# === P5d-2: custom dashboards smoke test ===
+log "=== P5d-2: custom dashboards smoke test ==="
+
+DASHBOARD_ID=""
+PANEL_ID=""
+
+# 1. 创建看板
+log "P5d-2: POST /dashboards → 200"
+api_call POST "/dashboards" "{\"name\":\"smoke-dash-${RUN_ID}\",\"description\":\"smoke\",\"time_range\":\"1h\",\"auto_refresh_seconds\":30}"
+assert_status 200
+DASHBOARD_ID="$(json_get data.id)"
+if [[ -z "$DASHBOARD_ID" || "$DASHBOARD_ID" == "null" ]]; then
+  echo "[smoke][error] FAIL: dashboard create — response: $HTTP_BODY"
+  exit 1
+fi
+log "  created dashboard $DASHBOARD_ID"
+
+# 2. 新增面板
+log "P5d-2: POST /dashboards/:id/panels → 200"
+api_call POST "/dashboards/${DASHBOARD_ID}/panels" \
+  "{\"title\":\"CPU smoke\",\"chart_type\":\"line\",\"metric\":\"node.cpu\",\"filters\":{\"node_ids\":[${NODE_ID}]},\"aggregation\":\"avg\",\"layout_x\":0,\"layout_y\":0,\"layout_w\":6,\"layout_h\":4}"
+assert_status 200
+PANEL_ID="$(json_get data.id)"
+if [[ -z "$PANEL_ID" || "$PANEL_ID" == "null" ]]; then
+  echo "[smoke][error] FAIL: panel create — response: $HTTP_BODY"
+  exit 1
+fi
+log "  created panel $PANEL_ID"
+
+# 3. 面板查询（合法指标）
+log "P5d-2: POST /dashboards/panel-query node.cpu → 200"
+NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+HOUR_AGO="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+api_call POST "/dashboards/panel-query" \
+  "{\"metric\":\"node.cpu\",\"filters\":{\"node_ids\":[${NODE_ID}]},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
+assert_status 200
+
+# 4. 更新布局
+log "P5d-2: PUT /dashboards/:id/panels/layout → 200"
+api_call PUT "/dashboards/${DASHBOARD_ID}/panels/layout" \
+  "{\"items\":[{\"id\":${PANEL_ID},\"layout_x\":2,\"layout_y\":0,\"layout_w\":8,\"layout_h\":5}]}"
+assert_status 200
+
+# 5. 面板查询（无效指标）→ 400
+log "P5d-2: POST /dashboards/panel-query bogus metric → 400"
+api_call POST "/dashboards/panel-query" \
+  "{\"metric\":\"bogus.metric\",\"filters\":{},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
+assert_status 400
+
+# 6. 删除看板
+log "P5d-2: DELETE /dashboards/:id → 200"
+api_call DELETE "/dashboards/${DASHBOARD_ID}"
+assert_status 200
+DASHBOARD_ID=""  # 防止重复清理
+
+log "PASS: P5d-2 custom dashboards smoke"
