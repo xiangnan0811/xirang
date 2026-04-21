@@ -631,3 +631,52 @@ func (n *Node) DecodedLogPaths() []string {
 	}
 	return paths
 }
+
+// Dashboard is a user-owned collection of panels.
+type Dashboard struct {
+	ID                 uint             `gorm:"primaryKey" json:"id"`
+	OwnerID            uint             `gorm:"not null;uniqueIndex:uk_dashboards_owner_name,priority:1" json:"owner_id"`
+	Name               string           `gorm:"size:100;not null;uniqueIndex:uk_dashboards_owner_name,priority:2" json:"name"`
+	Description        string           `gorm:"type:text;not null;default:''" json:"description"`
+	TimeRange          string           `gorm:"size:16;not null;default:'1h'" json:"time_range"`
+	CustomStart        *time.Time       `json:"custom_start,omitempty"`
+	CustomEnd          *time.Time       `json:"custom_end,omitempty"`
+	AutoRefreshSeconds int              `gorm:"not null;default:30" json:"auto_refresh_seconds"`
+	CreatedAt          time.Time        `json:"created_at"`
+	UpdatedAt          time.Time        `json:"updated_at"`
+	Panels             []DashboardPanel `gorm:"foreignKey:DashboardID;constraint:OnDelete:CASCADE" json:"panels,omitempty"`
+}
+
+// DashboardPanel is a single chart configuration inside a dashboard.
+type DashboardPanel struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	DashboardID uint      `gorm:"not null;index:idx_dashboard_panels_dashboard" json:"dashboard_id"`
+	Title       string    `gorm:"size:100;not null" json:"title"`
+	ChartType   string    `gorm:"size:16;not null" json:"chart_type"`
+	Metric      string    `gorm:"size:32;not null" json:"metric"`
+	Filters     string    `gorm:"type:text;not null;default:'{}'" json:"filters"`
+	Aggregation string    `gorm:"size:16;not null" json:"aggregation"`
+	LayoutX     int       `gorm:"not null;default:0" json:"layout_x"`
+	LayoutY     int       `gorm:"not null;default:0" json:"layout_y"`
+	LayoutW     int       `gorm:"not null;default:6" json:"layout_w"`
+	LayoutH     int       `gorm:"not null;default:4" json:"layout_h"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// PanelFilters is the decoded shape of DashboardPanel.Filters.
+type PanelFilters struct {
+	NodeIDs []uint `json:"node_ids,omitempty"`
+	TaskIDs []uint `json:"task_ids,omitempty"`
+}
+
+// DecodedFilters returns the parsed filters; zero-value PanelFilters on empty/invalid JSON.
+func (p *DashboardPanel) DecodedFilters() PanelFilters {
+	var f PanelFilters
+	s := strings.TrimSpace(p.Filters)
+	if s == "" {
+		return f
+	}
+	_ = json.Unmarshal([]byte(s), &f)
+	return f
+}
