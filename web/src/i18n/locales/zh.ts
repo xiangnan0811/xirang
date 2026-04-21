@@ -2236,6 +2236,71 @@ const zh = {
     },
   },
 
+  dashboards: {
+    pageTitle: "看板",
+    newButton: "新建看板",
+    empty: { title: "还没有看板", hint: "创建第一个看板以开始可视化监控数据" },
+    deleteConfirm: "确定要删除「{{name}}」吗？此操作不可撤销。",
+    fields: {
+      name: "名称",
+      description: "描述",
+      timeRange: "时间范围",
+      autoRefresh: "自动刷新",
+      customStart: "起始时间",
+      customEnd: "结束时间",
+    },
+    timeRange: { "1h": "近 1 小时", "6h": "近 6 小时", "24h": "近 24 小时", "7d": "近 7 天", custom: "自定义" },
+    autoRefresh: { off: "关", "10": "10s", "30": "30s", "60": "1min", "300": "5min" },
+    editToggle: { on: "编辑中", off: "只读" },
+    panel: {
+      addButton: "添加面板",
+      editButton: "编辑",
+      deleteButton: "删除",
+      deleteConfirm: "确定要删除此面板吗？",
+      emptyState: "无数据",
+      timeout: "查询超时，请重试",
+      retry: "重试",
+      savingLayout: "保存布局...",
+      layoutSaved: "布局已保存",
+      unsavedLayoutConfirm: "布局未保存，确认离开？",
+    },
+    editor: {
+      title: { create: "新建面板", edit: "编辑面板" },
+      fields: {
+        title: "面板标题",
+        chartType: "图表类型",
+        metric: "指标",
+        aggregation: "聚合方式",
+        nodeIds: "筛选节点",
+        taskIds: "筛选任务",
+      },
+      chartType: { line: "折线", area: "面积", bar: "柱状", number: "数字", table: "表格" },
+      aggregation: { avg: "平均", max: "最大", min: "最小", sum: "求和", p50: "p50", p95: "p95", p99: "p99" },
+      save: "保存",
+      cancel: "取消",
+      preview: "预览",
+      validation: {
+        titleRequired: "标题不能为空",
+        metricRequired: "请选择指标",
+      },
+    },
+    metrics: {
+      "node.cpu": "CPU 使用率",
+      "node.memory": "内存使用率",
+      "node.disk_pct": "磁盘使用率",
+      "node.load": "负载 1m",
+      "node.latency_ms": "SSH 延迟 (ms)",
+      "task.success_rate": "任务成功率",
+      "task.throughput": "任务吞吐量 (Mbps)",
+      "task.duration_p95": "任务时长分位",
+    },
+    errors: {
+      notFound: "看板不存在",
+      conflict: "看板名称已存在",
+      unknown: "操作失败",
+    },
+  },
+
 } as const;
 
 export default zh;

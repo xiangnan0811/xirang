@@ -167,6 +167,22 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.GetSettings)
 	secured.PATCH("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.PatchSettings)
 
+	dashboardHandler := handlers.NewDashboardHandler(dep.DB)
+	secured.GET("/dashboards", middleware.RBAC("dashboards:read"), dashboardHandler.List)
+	secured.POST("/dashboards", middleware.RBAC("dashboards:write"), dashboardHandler.Create)
+	secured.GET("/dashboards/:id", middleware.RBAC("dashboards:read"), dashboardHandler.Get)
+	secured.PATCH("/dashboards/:id", middleware.RBAC("dashboards:write"), dashboardHandler.Update)
+	secured.DELETE("/dashboards/:id", middleware.RBAC("dashboards:write"), dashboardHandler.Delete)
+
+	secured.POST("/dashboards/:id/panels", middleware.RBAC("dashboards:write"), dashboardHandler.AddPanel)
+	secured.PATCH("/dashboards/:id/panels/:pid", middleware.RBAC("dashboards:write"), dashboardHandler.UpdatePanel)
+	secured.DELETE("/dashboards/:id/panels/:pid", middleware.RBAC("dashboards:write"), dashboardHandler.DeletePanel)
+	secured.PUT("/dashboards/:id/panels/layout", middleware.RBAC("dashboards:write"), dashboardHandler.UpdateLayout)
+
+	panelQueryHandler := handlers.NewPanelQueryHandler(dep.DB)
+	secured.POST("/dashboards/panel-query", middleware.RBAC("dashboards:read"), panelQueryHandler.Query)
+	secured.GET("/dashboards/metrics", middleware.RBAC("dashboards:read"), panelQueryHandler.ListMetrics)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)

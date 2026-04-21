@@ -45,6 +45,12 @@ const MorePage = lazy(() =>
 const NodesDetailPage = lazy(() =>
   import("@/pages/nodes-detail-page").then((m) => ({ default: m.NodesDetailPage }))
 );
+const DashboardsPage = lazy(() =>
+  import("@/pages/dashboards/dashboards-page").then((m) => ({ default: m.DashboardsPage }))
+);
+const DashboardDetailPage = lazy(() =>
+  import("@/pages/dashboards/dashboard-detail-page").then((m) => ({ default: m.DashboardDetailPage }))
+);
 
 function PageLoader() {
   return (
@@ -82,6 +88,14 @@ export const AppRouter = createBrowserRouter([
       {
         path: "overview",
         element: <LazyPage><OverviewPage /></LazyPage>
+      },
+      {
+        path: "dashboards",
+        element: <LazyPage><DashboardsPage /></LazyPage>
+      },
+      {
+        path: "dashboards/:id",
+        element: <LazyPage><DashboardDetailPage /></LazyPage>
       },
       {
         path: "nodes",

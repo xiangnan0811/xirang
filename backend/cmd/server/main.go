@@ -13,6 +13,8 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/dashboards"
+	"xirang/backend/internal/dashboards/providers"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
@@ -120,6 +122,9 @@ func main() {
 
 	nodeLogRetention := nodelogs.NewRetentionWorker(db)
 	go nodeLogRetention.Run(hubCtx)
+
+	dashboards.Register(providers.NewNodeProvider(db))
+	dashboards.Register(providers.NewTaskProvider(db))
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)

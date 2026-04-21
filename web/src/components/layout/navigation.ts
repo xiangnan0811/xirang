@@ -12,6 +12,7 @@ import {
   Settings,
   type LucideIcon
 } from "lucide-react";
+
 import type { UserRecord } from "@/types/domain";
 
 export type NavGroup = "operate" | "automate" | "observe" | "pinned";
@@ -38,6 +39,13 @@ export const navItems: NavItem[] = [
     icon: LayoutDashboard,
     group: "operate",
     mobileTab: true
+  },
+  {
+    titleKey: "dashboards.pageTitle",
+    path: "/app/dashboards",
+    icon: LayoutDashboard,
+    group: "operate",
+    mobileTab: false
   },
   {
     titleKey: "nav.nodes",
