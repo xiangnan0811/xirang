@@ -206,6 +206,8 @@ go run ./cmd/server
 | PATCH | /dashboards/:id/panels/:pid | 🔒 更新面板 |
 | DELETE | /dashboards/:id/panels/:pid | 🔒 删除面板 |
 | PUT | /dashboards/:id/panels/layout | 🔒 批量更新布局 |
+| POST | /dashboards/panel-query | 🔒 执行面板查询（不绑定 panel） |
+| GET | /dashboards/metrics | 🔒 获取可用 metric 清单 |
 
 ### 审计日志
 

@@ -179,6 +179,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/dashboards/:id/panels/:pid", middleware.RBAC("dashboards:write"), dashboardHandler.DeletePanel)
 	secured.PUT("/dashboards/:id/panels/layout", middleware.RBAC("dashboards:write"), dashboardHandler.UpdateLayout)
 
+	panelQueryHandler := handlers.NewPanelQueryHandler(dep.DB)
+	secured.POST("/dashboards/panel-query", middleware.RBAC("dashboards:read"), panelQueryHandler.Query)
+	secured.GET("/dashboards/metrics", middleware.RBAC("dashboards:read"), panelQueryHandler.ListMetrics)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)
