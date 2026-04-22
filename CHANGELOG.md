@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/xiangnan0811/xirang/compare/v0.16.0...v0.17.0) (2026-04-22)
+
+
+### Features
+
+* **anomaly:** P5f baseline anomaly detection ([#54](https://github.com/xiangnan0811/xirang/issues/54)) ([0587445](https://github.com/xiangnan0811/xirang/commit/058744540e13246774bafd4164936c9b61079eaf))
+
 ## [0.16.0](https://github.com/xiangnan0811/xirang/compare/v0.15.1...v0.16.0) (2026-04-21)
 
 
