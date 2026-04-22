@@ -6,9 +6,10 @@ import TasksTab from "@/features/nodes-detail/tasks-tab";
 import AlertsTab from "@/features/nodes-detail/alerts-tab";
 import ProfileTab from "@/features/nodes-detail/profile-tab";
 import LogConfigTab from "@/features/nodes-detail/log-config-tab";
+import AnomalyTab from "@/features/nodes-detail/anomaly-tab";
 import { useNodeStatus } from "@/features/nodes-detail/use-node-status";
 
-const TAB_IDS = ["overview", "metrics", "tasks", "alerts", "profile", "log-config"] as const;
+const TAB_IDS = ["overview", "metrics", "tasks", "alerts", "profile", "log-config", "anomaly"] as const;
 type TabId = typeof TAB_IDS[number];
 
 function isTabId(v: string | null): v is TabId {
@@ -38,6 +39,7 @@ export function NodesDetailPage() {
     { id: "alerts", label: "告警" },
     { id: "profile", label: "属性" },
     { id: "log-config", label: t("nodeLogs.nodeConfig.tab") },
+    { id: "anomaly", label: t("anomaly.tab.title") },
   ];
 
   const statusBadge = isLoading ? "加载中" : status?.online ? "在线" : "离线";
@@ -88,6 +90,7 @@ export function NodesDetailPage() {
         {activeTab === "alerts" && <AlertsTab nodeId={nodeId} />}
         {activeTab === "profile" && <ProfileTab nodeId={nodeId} />}
         {activeTab === "log-config" && <LogConfigTab nodeId={nodeId} />}
+        {activeTab === "anomaly" && <AnomalyTab nodeId={nodeId} />}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { getSeverityMeta } from "@/lib/status";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
-import { AlertEscalationTimeline } from "./alert-detail";
+import { AlertEscalationTimeline, AnomalyAlertContext } from "./alert-detail";
 import { buildAlertJumpHref } from "@/features/nodes-detail/alert-jump";
 
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
@@ -156,6 +156,7 @@ export function AlertList({
           <p className="text-xs text-muted-foreground">{t("notifications.noDeliveryRecords")}</p>
         )}
         <AlertEscalationTimeline token={token} alertId={Number(alert.id)} />
+        <AnomalyAlertContext token={token} errorCode={alert.errorCode} nodeId={alert.nodeId} />
       </div>
     );
   };

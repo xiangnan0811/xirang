@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/toast";
 import { cn, getErrorMessage } from "@/lib/utils";
 import type { SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
 
-const CATEGORY_ORDER = ["security", "node_monitor", "retention", "storage", "alert"];
+const CATEGORY_ORDER = ["security", "node_monitor", "retention", "storage", "alert", "anomaly"];
 
 export function SystemTab() {
   const { t } = useTranslation();
@@ -113,6 +113,7 @@ export function SystemTab() {
     retention: t("settings.system.catRetention"),
     storage: t("settings.system.catStorage"),
     alert: t("settings.system.catAlert"),
+    anomaly: t("anomaly.settings.sectionTitle"),
   };
 
   const sourceBadge = (source: string) => {
