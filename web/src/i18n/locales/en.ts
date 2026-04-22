@@ -2344,6 +2344,61 @@ const en = {
     },
   },
 
+  anomaly: {
+    detector: {
+      ewma: "Baseline anomaly",
+      disk_forecast: "Disk forecast",
+    },
+    severity: {
+      warning: "Warning",
+      critical: "Critical",
+    },
+    tab: {
+      title: "Anomaly events",
+      empty: "No anomaly events for this node",
+    },
+    table: {
+      firedAt: "Time",
+      detector: "Detector",
+      metric: "Metric",
+      severity: "Severity",
+      baselineObserved: "Baseline → Observed",
+      extra: "Details",
+      alert: "Alert",
+    },
+    extra: {
+      sigmaSuffix: "σ",
+      forecastPrefix: "{{days}} days to full",
+    },
+    alertDetail: {
+      anomalyBadge: "Baseline anomaly",
+      diskForecastBadge: "Disk forecast",
+      header: "Anomaly detection context",
+      baseline: "Baseline",
+      observed: "Observed",
+      sigma: "Deviation (σ)",
+      forecastDays: "Days until full",
+      latestEvent: "Latest event",
+      noEvent: "No related anomaly event found",
+    },
+    settings: {
+      sectionTitle: "Anomaly detection",
+      enabled: "Enable anomaly detection",
+      enabledHint: "When off, both detectors stop",
+      ewmaSigma: "EWMA threshold (k·σ)",
+      ewmaSigmaHint: "Recommended 2.5–4.0",
+      ewmaWindowHours: "EWMA lookback window (hours)",
+      ewmaWindowHoursHint: "1–6",
+      diskForecastDays: "Disk forecast threshold (days)",
+      diskForecastDaysHint: "Alerts when ≤ this many days to full, 1–30",
+      eventsRetentionDays: "Event retention (days)",
+      eventsRetentionDaysHint: "7–365",
+    },
+    errors: {
+      loadFailed: "Failed to load anomaly events",
+    },
+  },
+
 } as const;
 
 export default en;
