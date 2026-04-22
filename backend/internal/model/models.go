@@ -760,3 +760,32 @@ func (a *Alert) DecodedTags() []string {
 	_ = json.Unmarshal([]byte(a.Tags), &tags)
 	return tags
 }
+
+// AnomalyEvent records one detector finding; written whether or not a new
+// alert was raised (dedup hits still persist an event with RaisedAlert=false).
+type AnomalyEvent struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	NodeID        uint      `gorm:"not null;index:idx_anomaly_events_node_fired,priority:1" json:"node_id"`
+	Detector      string    `gorm:"size:32;not null;index:idx_anomaly_events_detector_fired,priority:1" json:"detector"`
+	Metric        string    `gorm:"size:32;not null" json:"metric"`
+	Severity      string    `gorm:"size:16;not null" json:"severity"`
+	ObservedValue float64   `gorm:"not null" json:"observed_value"`
+	BaselineValue float64   `gorm:"not null" json:"baseline_value"`
+	Sigma         *float64  `json:"sigma,omitempty"`
+	ForecastDays  *float64  `json:"forecast_days,omitempty"`
+	AlertID       *uint     `json:"alert_id,omitempty"`
+	RaisedAlert   bool      `gorm:"not null;default:false" json:"raised_alert"`
+	Details       string    `gorm:"type:text;not null;default:'{}'" json:"details"`
+	FiredAt       time.Time `gorm:"not null;index:idx_anomaly_events_node_fired,priority:2,sort:desc;index:idx_anomaly_events_detector_fired,priority:2,sort:desc" json:"fired_at"`
+}
+
+// DecodedDetails returns the parsed details map; empty on invalid JSON.
+func (e *AnomalyEvent) DecodedDetails() map[string]any {
+	out := map[string]any{}
+	s := strings.TrimSpace(e.Details)
+	if s == "" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(s), &out)
+	return out
+}
