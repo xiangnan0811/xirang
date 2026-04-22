@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -155,7 +154,7 @@ func TestAnomalyHandler_Pagination(t *testing.T) {
 		seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "warning", base.Add(-time.Duration(i)*time.Minute))
 	}
 	r := newAnomalyRouter(t, db, "viewer")
-	w := doAnomaly(r, "GET", fmt.Sprintf("/api/v1/anomaly-events?page=1&page_size=10"))
+	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?page=1&page_size=10")
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d", w.Code)
 	}
