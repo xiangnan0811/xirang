@@ -620,6 +620,72 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 	}
 }
 
+func seedIntegrationAndNode(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n1', 'h1', 'u', '/b1')")
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "http://127.0.0.1:1", FailThreshold: 1})
+}
+
+func TestRaiseAnomalyAlert_NewAlert(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "10m")
+	db := openDispatcherDBForEscalation(t)
+	seedIntegrationAndNode(t, db)
+	InitEscalationResolver(nil)
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	id, raised, err := RaiseAnomalyAlert(db, AnomalyAlertInput{
+		NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
+	})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if !raised || id == 0 {
+		t.Fatalf("expected raised=true, got id=%d raised=%v", id, raised)
+	}
+}
+
+func TestRaiseAnomalyAlert_DedupReturnsExistingID(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "10m")
+	db := openDispatcherDBForEscalation(t)
+	seedIntegrationAndNode(t, db)
+	InitEscalationResolver(nil)
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	id1, raised1, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{
+		NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "first",
+	})
+	id2, raised2, err := RaiseAnomalyAlert(db, AnomalyAlertInput{
+		NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "second",
+	})
+	if err != nil {
+		t.Fatalf("second raise: %v", err)
+	}
+	if !raised1 || raised2 {
+		t.Fatalf("expected raised=(true,false), got (%v,%v)", raised1, raised2)
+	}
+	if id1 != id2 {
+		t.Fatalf("expected same id, got %d != %d", id1, id2)
+	}
+}
+
+func TestRaiseAnomalyAlert_DifferentNodeDifferentAlert(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "10m")
+	db := openDispatcherDBForEscalation(t)
+	seedIntegrationAndNode(t, db)
+	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (2, 'n2', 'h2', 'u', '/b2')")
+	InitEscalationResolver(nil)
+	t.Cleanup(func() { InitEscalationResolver(nil) })
+
+	id1, r1, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "n1"})
+	id2, r2, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{NodeID: 2, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-2", Message: "n2"})
+	if !r1 || !r2 {
+		t.Fatalf("both should be new: %v / %v", r1, r2)
+	}
+	if id1 == id2 {
+		t.Fatalf("different nodes must produce different alerts")
+	}
+}
+
 func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 	db := setupTestDB(t)

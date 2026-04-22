@@ -605,3 +605,27 @@ export type EscalationEvent = {
   tags_added: string[];
   fired_at: string;
 };
+
+export type AnomalyDetector = "ewma" | "disk_forecast";
+
+export type AnomalyEvent = {
+  id: number;
+  node_id: number;
+  detector: AnomalyDetector;
+  metric: string;
+  severity: "warning" | "critical";
+  observed_value: number;
+  baseline_value: number;
+  sigma?: number | null;
+  forecast_days?: number | null;
+  alert_id?: number | null;
+  raised_alert: boolean;
+  details?: string;
+  fired_at: string;
+};
+
+export type AnomalyListResult = {
+  data: AnomalyEvent[];
+  total: number;
+  has_more: boolean;
+};

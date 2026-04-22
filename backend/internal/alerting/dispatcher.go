@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -770,6 +771,74 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 		return fmt.Errorf("STARTTLS 握手失败: %w", err)
 	}
 	return smtpSend(c, auth, from, to, msg)
+}
+
+// AnomalyAlertInput is the minimal payload needed to raise an anomaly alert.
+// Kept separate from task/SLO/node raises to avoid coupling the anomaly package
+// to every RaiseXxx signature.
+type AnomalyAlertInput struct {
+	NodeID    uint
+	NodeName  string
+	Severity  string
+	ErrorCode string
+	Message   string
+}
+
+// RaiseAnomalyAlert constructs and dispatches an Alert for an anomaly finding.
+// Returns (alertID, raisedNew, error). When raisedNew is false, the alert was
+// deduped against an existing open alert (same NodeID+ErrorCode within the
+// alert.dedup_window); the returned alertID is the existing row's ID.
+func RaiseAnomalyAlert(db *gorm.DB, in AnomalyAlertInput) (uint, bool, error) {
+	nodeName := in.NodeName
+	if nodeName == "" && in.NodeID > 0 {
+		var n model.Node
+		if err := db.Select("id, name").First(&n, in.NodeID).Error; err == nil {
+			nodeName = n.Name
+		}
+	}
+	alert := &model.Alert{
+		NodeID:         in.NodeID,
+		NodeName:       nodeName,
+		Severity:       in.Severity,
+		Status:         "open",
+		ErrorCode:      in.ErrorCode,
+		Message:        in.Message,
+		Retryable:      false,
+		TriggeredAt:    time.Now(),
+		Tags:           "[]",
+		LastLevelFired: -1,
+	}
+	// Pre-commit dedup check to return (existingID, false) without inserting.
+	existing, deduped, err := checkDedupWindow(db, alert)
+	if err != nil {
+		return 0, false, err
+	}
+	if deduped {
+		return existing, false, nil
+	}
+	if err := raiseAndDispatch(db, alert); err != nil {
+		return 0, false, err
+	}
+	return alert.ID, true, nil
+}
+
+// checkDedupWindow returns (existingID, true, nil) when an open alert with the
+// same NodeID+ErrorCode was created inside the current alert.dedup_window.
+func checkDedupWindow(db *gorm.DB, alert *model.Alert) (uint, bool, error) {
+	window := readAlertDedupWindow()
+	now := time.Now()
+	var existing model.Alert
+	err := db.Where(
+		"node_id = ? AND error_code = ? AND status = ? AND created_at >= ?",
+		alert.NodeID, alert.ErrorCode, "open", now.Add(-window),
+	).Order("created_at DESC").First(&existing).Error
+	if err == nil {
+		return existing.ID, true, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, false, nil
+	}
+	return 0, false, err
 }
 
 // RaiseSLOBreach emits a platform-level alert for an SLO burn-rate breach.

@@ -2353,6 +2353,61 @@ const zh = {
     },
   },
 
+  anomaly: {
+    detector: {
+      ewma: "基线异常",
+      disk_forecast: "磁盘预测",
+    },
+    severity: {
+      warning: "告警",
+      critical: "严重",
+    },
+    tab: {
+      title: "异常事件",
+      empty: "该节点尚无异常记录",
+    },
+    table: {
+      firedAt: "时间",
+      detector: "检测器",
+      metric: "指标",
+      severity: "严重度",
+      baselineObserved: "基线 → 观测",
+      extra: "附加",
+      alert: "告警",
+    },
+    extra: {
+      sigmaSuffix: "σ",
+      forecastPrefix: "预计 {{days}} 天爆满",
+    },
+    alertDetail: {
+      anomalyBadge: "基线异常",
+      diskForecastBadge: "磁盘预测",
+      header: "异常检测上下文",
+      baseline: "基线",
+      observed: "观测",
+      sigma: "偏离 (σ)",
+      forecastDays: "预计 X 天后爆满",
+      latestEvent: "最新事件",
+      noEvent: "未找到关联异常事件",
+    },
+    settings: {
+      sectionTitle: "异常检测",
+      enabled: "启用异常检测",
+      enabledHint: "关闭后两个检测器都停止",
+      ewmaSigma: "EWMA 阈值 (k×σ)",
+      ewmaSigmaHint: "建议 2.5–4.0",
+      ewmaWindowHours: "EWMA 回看窗口 (小时)",
+      ewmaWindowHoursHint: "1–6",
+      diskForecastDays: "磁盘预测阈值 (天)",
+      diskForecastDaysHint: "预计 ≤ 此值爆满则告警，1–30",
+      eventsRetentionDays: "事件保留天数",
+      eventsRetentionDaysHint: "7–365",
+    },
+    errors: {
+      loadFailed: "加载异常事件失败",
+    },
+  },
+
 } as const;
 
 export default zh;

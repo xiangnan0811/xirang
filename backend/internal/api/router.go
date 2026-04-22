@@ -192,6 +192,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
+	anomalyHandler := handlers.NewAnomalyHandler(dep.DB)
+	secured.GET("/anomaly-events", middleware.RBAC("nodes:read"), anomalyHandler.List)
+	secured.GET("/nodes/:id/anomaly-events", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), anomalyHandler.ListForNode)
+
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)

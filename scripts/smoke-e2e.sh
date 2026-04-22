@@ -426,3 +426,28 @@ assert_status 200
 ESCALATION_ID=""  # prevent double-cleanup
 
 log "PASS: P5e escalation policy smoke"
+
+# === P5f: anomaly detection smoke test ===
+log "=== P5f: anomaly detection ==="
+
+# Toggle via settings
+api_call PATCH "/settings" '{"anomaly.enabled":"true"}'
+assert_status 200
+
+# Per-node events (should respond 200 even if empty)
+api_call GET "/nodes/${NODE_ID}/anomaly-events" ""
+assert_status 200
+
+# Global list with severity filter
+api_call GET "/anomaly-events?severity=critical&limit=10" ""
+assert_status 200
+
+# Invalid severity → 400
+api_call GET "/anomaly-events?severity=bogus" ""
+assert_status 400
+
+# Invalid detector → 400
+api_call GET "/anomaly-events?detector=bogus" ""
+assert_status 400
+
+log "PASS: anomaly"
