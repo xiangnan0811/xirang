@@ -8,7 +8,10 @@ import (
 	"syscall"
 	"time"
 
+	"gorm.io/gorm"
+
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/api"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/bootstrap"
@@ -124,6 +127,22 @@ func main() {
 		},
 	)
 	go escEngine.Run(hubCtx)
+
+	// Anomaly detection engine + retention
+	anomalyEngine := anomaly.NewEngine(
+		db, settingsSvc,
+		anomaly.NewEWMADetector(db, settingsSvc),
+		anomaly.NewDiskForecastDetector(db, settingsSvc),
+	)
+	anomalyEngine.SetRaiseFn(anomaly.NewRaiseFn(db, func(rdb *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
+		return alerting.RaiseAnomalyAlert(rdb, alerting.AnomalyAlertInput{
+			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
+		})
+	}))
+	go anomalyEngine.Run(hubCtx)
+
+	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
+	go anomalyRetention.Run(hubCtx)
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
