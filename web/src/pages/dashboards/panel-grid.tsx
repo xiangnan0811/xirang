@@ -1,13 +1,14 @@
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
+import type { ComponentType } from "react";
+// react-grid-layout v2 exports ResponsiveGridLayout as a named ESM export.
+// @types/react-grid-layout is for v1 and has a conflicting namespace; we
+// import as unknown and cast to our local ResponsiveProps type below.
+import { ResponsiveGridLayout as RawResponsiveGridLayout } from "react-grid-layout";
 import type { Panel } from "@/types/domain";
 
-// react-grid-layout v2 exports ResponsiveGridLayout directly (no WidthProvider).
-// @types/react-grid-layout is for v1 — we use require + local types to avoid conflicts.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { ResponsiveGridLayout } = require("react-grid-layout") as {
-  ResponsiveGridLayout: React.ComponentType<ResponsiveProps>;
-};
+const ResponsiveGridLayout =
+  RawResponsiveGridLayout as unknown as ComponentType<ResponsiveProps>;
 
 // ─── 本地类型定义（避免引用 @types/react-grid-layout v1 命名空间） ──
 
