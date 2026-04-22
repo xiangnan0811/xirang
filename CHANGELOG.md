@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.2](https://github.com/xiangnan0811/xirang/compare/v0.17.1...v0.17.2) (2026-04-22)
+
+
+### Bug Fixes
+
+* **dashboards:** emit panel.filters as object on wire ([#58](https://github.com/xiangnan0811/xirang/issues/58)) ([9c46fe3](https://github.com/xiangnan0811/xirang/commit/9c46fe35adf63590d4e68e616413ab27cf74ea46))
+
 ## [0.17.1](https://github.com/xiangnan0811/xirang/compare/v0.17.0...v0.17.1) (2026-04-22)
 
 
