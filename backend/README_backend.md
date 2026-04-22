@@ -328,6 +328,13 @@ go run ./cmd/server
 | DELETE | /escalation-policies/:id | 🔒 删除策略（admin，级联 SET NULL 到 task/policy/slo/node） |
 | GET | /alerts/:id/escalation-events | 🔒 单告警升级历史（alerts:read） |
 
+### 异常检测
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /anomaly-events | 🔒 异常事件全局列表（detector/metric/severity/node_id 过滤 + 分页） |
+| GET | /nodes/:id/anomaly-events | 🔒 单节点异常事件（OwnershipNodeCheck） |
+
 ## 测试
 
 ```bash
