@@ -24,7 +24,10 @@ func EWMAMeanStddev(xs []float64, alpha float64) (mean, stddev float64) {
 	for i := 1; i < len(xs); i++ {
 		diff := xs[i] - mean
 		mean = mean + alpha*diff
-		variance = (1-alpha)*(variance + alpha*diff*diff)
+		// Standard EWMA variance update: retain (1-alpha) of prior variance and
+		// add alpha of the new squared deviation. Distributing (1-alpha) over
+		// both terms would systematically under-report spread.
+		variance = (1-alpha)*variance + alpha*diff*diff
 	}
 	if variance < 0 {
 		variance = 0

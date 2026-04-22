@@ -81,7 +81,7 @@ describe("AnomalyEventRow", () => {
 
     const link = screen.getByTestId("anomaly-alert-link-3");
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/n?alert=42");
+    expect(link).toHaveAttribute("href", "/app/notifications?alert=42");
   });
 
   it("does not render alert link when alert_id is null", () => {

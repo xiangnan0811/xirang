@@ -73,7 +73,7 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
       <td className="px-3 py-2 text-xs">
         {event.alert_id != null ? (
           <Link
-            to={`/n?alert=${event.alert_id}`}
+            to={`/app/notifications?alert=${event.alert_id}`}
             data-testid={`anomaly-alert-link-${event.id}`}
             className="text-primary hover:underline whitespace-nowrap"
           >
