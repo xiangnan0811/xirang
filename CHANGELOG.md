@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/xiangnan0811/xirang/compare/v0.17.0...v0.17.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* **dashboards:** replace require() with ESM import in panel-grid ([#56](https://github.com/xiangnan0811/xirang/issues/56)) ([7b0ba64](https://github.com/xiangnan0811/xirang/commit/7b0ba64b4f2f2b26aa0e23d9221afee19eb0b8f1))
+
 ## [0.17.0](https://github.com/xiangnan0811/xirang/compare/v0.16.0...v0.17.0) (2026-04-22)
 
 
