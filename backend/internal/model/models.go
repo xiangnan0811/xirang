@@ -654,13 +654,16 @@ type Dashboard struct {
 }
 
 // DashboardPanel is a single chart configuration inside a dashboard.
+// Filters is stored as a JSON string in the DB but serialized as a structured
+// object on the wire (see MarshalJSON). This keeps the TS contract clean and
+// lets the frontend round-trip filters through `panel-query` without re-encoding.
 type DashboardPanel struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	DashboardID uint      `gorm:"not null;index:idx_dashboard_panels_dashboard" json:"dashboard_id"`
 	Title       string    `gorm:"size:100;not null" json:"title"`
 	ChartType   string    `gorm:"size:16;not null" json:"chart_type"`
 	Metric      string    `gorm:"size:32;not null" json:"metric"`
-	Filters     string    `gorm:"type:text;not null;default:'{}'" json:"filters"`
+	Filters     string    `gorm:"type:text;not null;default:'{}'" json:"-"`
 	Aggregation string    `gorm:"size:16;not null" json:"aggregation"`
 	LayoutX     int       `gorm:"not null;default:0" json:"layout_x"`
 	LayoutY     int       `gorm:"not null;default:0" json:"layout_y"`
@@ -685,6 +688,19 @@ func (p *DashboardPanel) DecodedFilters() PanelFilters {
 	}
 	_ = json.Unmarshal([]byte(s), &f)
 	return f
+}
+
+// MarshalJSON emits `filters` as the decoded object so clients don't need to
+// re-parse a JSON string when round-tripping through /dashboards/panel-query.
+func (p DashboardPanel) MarshalJSON() ([]byte, error) {
+	type alias DashboardPanel
+	return json.Marshal(&struct {
+		alias
+		Filters PanelFilters `json:"filters"`
+	}{
+		alias:   alias(p),
+		Filters: p.DecodedFilters(),
+	})
 }
 
 // EscalationPolicy defines a chain of 1-5 escalation levels.
