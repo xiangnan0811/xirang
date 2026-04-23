@@ -6,6 +6,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogBody,
   DialogFooter,
   DialogCloseButton,
@@ -321,6 +322,11 @@ export function PanelEditorDialog({
               ? t("dashboards.editor.title.edit")
               : t("dashboards.editor.title.create")}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            {isEdit
+              ? t("dashboards.editor.title.edit")
+              : t("dashboards.editor.title.create")}
+          </DialogDescription>
         </DialogHeader>
 
         <DialogBody className="flex flex-col gap-4">

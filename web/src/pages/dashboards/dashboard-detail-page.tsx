@@ -138,6 +138,8 @@ export function DashboardDetailPage() {
 
   // ── 添加面板 ──────────────────────────────────────────────────────
   function handleAddPanel() {
+    // Auto-enable edit mode so follow-up drag/resize affordances appear.
+    if (!editMode) setEditMode(true);
     setEditingPanel(undefined);
     setEditorOpen(true);
   }
@@ -257,12 +259,12 @@ export function DashboardDetailPage() {
             <p className="text-sm text-muted-foreground">
               {t("dashboards.panel.emptyState")}
             </p>
-            {editMode && (
-              <Button size="sm" onClick={handleAddPanel}>
-                <Plus className="mr-1.5 size-3.5" />
-                {t("dashboards.panel.addButton")}
-              </Button>
-            )}
+            {/* Always show on empty state so new dashboards are actionable
+                without discovering the 只读/编辑中 toggle first. */}
+            <Button size="sm" onClick={handleAddPanel}>
+              <Plus className="mr-1.5 size-3.5" />
+              {t("dashboards.panel.addButton")}
+            </Button>
           </div>
         ) : (
           <PanelGrid
