@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.4](https://github.com/xiangnan0811/xirang/compare/v0.17.3...v0.17.4) (2026-04-23)
+
+
+### Bug Fixes
+
+* **dashboards:** show Add Panel on empty state + Dialog a11y ([#62](https://github.com/xiangnan0811/xirang/issues/62)) ([314fbb1](https://github.com/xiangnan0811/xirang/commit/314fbb1da91e20bad879f0e0b7c111e683bc32f7))
+
 ## [0.17.3](https://github.com/xiangnan0811/xirang/compare/v0.17.2...v0.17.3) (2026-04-23)
 
 
