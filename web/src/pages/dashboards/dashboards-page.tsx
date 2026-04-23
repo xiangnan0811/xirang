@@ -20,6 +20,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -60,6 +61,11 @@ function DeleteDialog({ dashboard, onClose, onConfirm }: DeleteDialogProps) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("common.confirmAction")}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {dashboard
+              ? t("dashboards.deleteConfirm", { name: dashboard.name })
+              : t("common.confirmAction")}
+          </DialogDescription>
         </DialogHeader>
         <p className="px-6 py-3 text-sm text-muted-foreground">
           {dashboard
@@ -167,6 +173,9 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("dashboards.newButton")}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("dashboards.newButton")}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="px-6 pb-0 pt-3 space-y-4">
           {/* 名称 */}
