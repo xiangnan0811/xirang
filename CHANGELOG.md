@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.3](https://github.com/xiangnan0811/xirang/compare/v0.17.2...v0.17.3) (2026-04-23)
+
+
+### Bug Fixes
+
+* dashboard panel width + nodelogs table name ([#60](https://github.com/xiangnan0811/xirang/issues/60)) ([5955666](https://github.com/xiangnan0811/xirang/commit/59556667962546a2b21ba7011342da3c51e7f702))
+
 ## [0.17.2](https://github.com/xiangnan0811/xirang/compare/v0.17.1...v0.17.2) (2026-04-22)
 
 
