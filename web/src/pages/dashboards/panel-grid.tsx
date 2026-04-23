@@ -1,14 +1,27 @@
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import type { ComponentType } from "react";
-// react-grid-layout v2 exports ResponsiveGridLayout as a named ESM export.
-// @types/react-grid-layout is for v1 and has a conflicting namespace; we
-// import as unknown and cast to our local ResponsiveProps type below.
-import { ResponsiveGridLayout as RawResponsiveGridLayout } from "react-grid-layout";
+import type { ComponentType, RefObject } from "react";
+// react-grid-layout v2 exports ResponsiveGridLayout + useContainerWidth.
+// v2 removed the auto WidthProvider — callers must measure the container
+// and pass `width` explicitly, so we use the official useContainerWidth hook.
+// @types/react-grid-layout is v1 and has a conflicting namespace; cast to
+// local types below.
+import {
+  ResponsiveGridLayout as RawResponsiveGridLayout,
+  useContainerWidth as rawUseContainerWidth,
+} from "react-grid-layout";
 import type { Panel } from "@/types/domain";
 
 const ResponsiveGridLayout =
   RawResponsiveGridLayout as unknown as ComponentType<ResponsiveProps>;
+
+const useContainerWidth = rawUseContainerWidth as unknown as (
+  options?: { debounceMs?: number },
+) => {
+  width: number;
+  containerRef: RefObject<HTMLDivElement | null>;
+  mounted: boolean;
+};
 
 // ─── 本地类型定义（避免引用 @types/react-grid-layout v1 命名空间） ──
 
@@ -36,6 +49,10 @@ type ResponsiveProps = {
   isResizable?: boolean;
   onLayoutChange?: (currentLayout: RGLLayout[], allLayouts: Record<string, RGLLayout[]>) => void;
   draggableHandle?: string;
+  // v2 requires explicit container width; no auto WidthProvider.
+  width: number;
+  margin?: readonly [number, number];
+  containerPadding?: readonly [number, number];
   children?: React.ReactNode;
 };
 
@@ -74,6 +91,11 @@ export function PanelGrid({
   onLayoutChange,
   children,
 }: PanelGridProps) {
+  const { width, containerRef } = useContainerWidth();
+  // Cast to RefObject<HTMLDivElement> — useContainerWidth returns a nullable
+  // ref, but React 18's JSX ref prop accepts that shape at runtime.
+  const divRef = containerRef as unknown as RefObject<HTMLDivElement>;
+
   const layouts: Record<string, RGLLayout[]> = {
     lg: panels.map(panelToLayout),
   };
@@ -90,23 +112,39 @@ export function PanelGrid({
   }
 
   return (
-    <ResponsiveGridLayout
-      className="layout"
-      layouts={layouts}
-      breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-      cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
-      rowHeight={60}
-      compactType="vertical"
-      isDraggable={editMode}
-      isResizable={editMode}
-      onLayoutChange={handleLayoutChange}
-      draggableHandle=".drag-handle"
-    >
-      {panels.map((panel) => (
-        <div key={String(panel.id)}>
-          {children(panel)}
+    <div ref={divRef} className="w-full">
+      {width > 0 ? (
+        <ResponsiveGridLayout
+          className="layout"
+          width={width}
+          layouts={layouts}
+          breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
+          cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
+          rowHeight={60}
+          margin={[12, 12]}
+          containerPadding={[0, 0]}
+          compactType="vertical"
+          isDraggable={editMode}
+          isResizable={editMode}
+          onLayoutChange={handleLayoutChange}
+          draggableHandle=".drag-handle"
+        >
+          {panels.map((panel) => (
+            <div key={String(panel.id)}>{children(panel)}</div>
+          ))}
+        </ResponsiveGridLayout>
+      ) : (
+        // Fallback when container width is unknown (e.g. jsdom test environment
+        // or pre-measure render): stack panels vertically so children still
+        // mount — useContainerWidth will re-render with a real width shortly.
+        <div className="flex flex-col gap-3">
+          {panels.map((panel) => (
+            <div key={String(panel.id)} className="min-h-[240px]">
+              {children(panel)}
+            </div>
+          ))}
         </div>
-      ))}
-    </ResponsiveGridLayout>
+      )}
+    </div>
   );
 }

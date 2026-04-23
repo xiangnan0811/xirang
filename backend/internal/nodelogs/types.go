@@ -12,7 +12,9 @@ const (
 	SourceFile       = "file"
 )
 
-// LogEntry is a parsed log line ready for insertion.
+// LogEntry is a parsed log line ready for insertion into the node_logs table.
+// The table name is explicit because GORM's default pluralization would emit
+// `log_entries`, but migration 000039 created the canonical table `node_logs`.
 type LogEntry struct {
 	NodeID    uint
 	Source    string
@@ -21,6 +23,9 @@ type LogEntry struct {
 	Priority  string
 	Message   string
 }
+
+// TableName binds LogEntry writes to the node_logs table (populated by migration 000039).
+func (LogEntry) TableName() string { return "node_logs" }
 
 // CollectJob is a scheduler -> worker handoff: "please fetch logs from this node".
 type CollectJob struct {
