@@ -57,6 +57,11 @@ func (e *Engine) Run(ctx context.Context) {
 // tickBatchSize caps one Tick's open-alert fetch so a runaway queue can't
 // stall the escalation loop for minutes per pass. At 1000 alerts/30s the
 // engine still drains ~30/s which is far above any realistic fire rate.
+//
+// Pagination relies on alert.ID being monotonically increasing and never
+// reused — both hold with GORM's AUTOINCREMENT PK + our soft-delete (status
+// flip) retention strategy. If a future change ever reuses IDs, replace the
+// cursor scheme with offset-by-id-set or LIMIT/OFFSET.
 const tickBatchSize = 1000
 
 // Tick performs one scan+fire pass. Exposed for tests. Processes in batches

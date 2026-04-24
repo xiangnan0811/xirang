@@ -127,6 +127,11 @@ func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance
 	// computing BurnRate1h. Below that the denominator is too small to
 	// distinguish real breach from a freshly-restarted node; returning 0
 	// keeps the evaluator from raising bogus breach alerts.
+	//
+	// CALIBRATION NOTE: 10 assumes the prober's 30s tick. If probe cadence
+	// ever becomes configurable this should scale with it (targeting the
+	// "~5 min" window, not a fixed sample count) — today changing cadence
+	// without touching this constant would silently shift the threshold.
 	const minRawSamplesFor1h = 10
 	if hour.Total >= minRawSamplesFor1h {
 		base.BurnRate1h = burnRate(safeRatio(hour.OK, hour.Total), def.Threshold)

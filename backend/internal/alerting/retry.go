@@ -154,7 +154,12 @@ func (w *RetryWorker) attempt(ctx context.Context, d model.AlertDelivery) {
 // finalizeTerminal marks a delivery failed because the referenced integration
 // or alert no longer exists. Caller provides a human-readable reason and a
 // log emitter closure so the caller's context (integration_id / alert_id)
-// stays attached. Wraps the save in mu to match attempt()'s invariants.
+// stays attached.
+//
+// CONTRACT: caller MUST NOT already hold w.mu. finalizeTerminal acquires it
+// itself; a caller that wraps this in another Lock() would deadlock. The
+// only callsites today are the two ErrRecordNotFound branches in attempt(),
+// which run before attempt() takes the lock.
 func (w *RetryWorker) finalizeTerminal(d model.AlertDelivery, reason string, logFn func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -231,8 +236,12 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
 }
 
-// redactURLs drops query strings and user:pass credentials from any http(s)/ws
-// URL embedded in msg while keeping scheme+host+path for actionable debugging.
+// redactURLs drops credentials, query strings, and path-segment secrets from
+// any http(s)/ws URL embedded in msg. Webhook targets (Slack /services/T/B/X,
+// Feishu /open-apis/bot/v2/hook/<token>, DingTalk /robot/send?access_token=...,
+// Telegram /bot<token>/sendMessage, etc.) routinely carry bearer tokens in the
+// URL *path*, so keeping scheme+host alone is what's safe to persist. Query
+// strings are also redacted (DingTalk's access_token lives there).
 func redactURLs(msg string) string {
 	return urlLike.ReplaceAllStringFunc(msg, func(match string) string {
 		u, err := url.Parse(match)
@@ -244,6 +253,11 @@ func redactURLs(msg string) string {
 		}
 		if u.RawQuery != "" {
 			u.RawQuery = "***"
+		}
+		// Path can contain tokens — truncate to "/…" when non-trivial. A bare
+		// "/" or empty path is fine (no secrets).
+		if u.Path != "" && u.Path != "/" {
+			u.Path = "/***"
 		}
 		return strings.TrimSuffix(u.String(), "?")
 	})

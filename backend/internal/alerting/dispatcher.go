@@ -343,7 +343,11 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 					Msg("dispatch: 节点加载失败，跳过本次分发")
 				return err
 			}
-			logger.Module("alerting").Warn().
+			// Node deleted mid-alert is an expected terminal state, not an
+			// error worth waking oncall for. High-frequency alerts would
+			// otherwise flood the log every tick. Continue with empty tags;
+			// tag-based silences simply won't match.
+			logger.Module("alerting").Info().
 				Uint("alert_id", alert.ID).
 				Uint("node_id", alert.NodeID).
 				Msg("dispatch: 节点已删除，使用空 tags 继续")

@@ -141,8 +141,15 @@ func (d *DiskForecastDetector) evaluateNode(ctx context.Context, node model.Node
 		ErrorCode:     errorCode,
 		Message:       msg,
 		Details: map[string]any{
-			"samples_used":   len(xs),
-			"history_span_h": int((xs[len(xs)-1] - xs[0]) / 3600),
+			"samples_used": len(xs),
+			// Defensive: len(xs) >= minHistoryHours >= 24 in practice, but
+			// hedge against a future config that weakens the guard.
+			"history_span_h": func() int {
+				if len(xs) < 2 {
+					return 0
+				}
+				return int((xs[len(xs)-1] - xs[0]) / 3600)
+			}(),
 			"slope_per_day":  slope * 86400,
 			"r2":             r2,
 			"threshold_days": thresholdDays,

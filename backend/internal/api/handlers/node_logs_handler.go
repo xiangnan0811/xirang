@@ -43,14 +43,35 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 
 	q := h.db.Model(&model.NodeLog{})
 
-	if s := c.Query("node_ids"); s != "" {
-		ids := splitInts(s)
-		if len(ids) > maxNodeIDsInQuery {
-			ids = ids[:maxNodeIDsInQuery]
-		}
-		q = q.Where("node_id IN ?", ids)
+	requestedIDs := splitInts(c.Query("node_ids"))
+	if len(requestedIDs) > maxNodeIDsInQuery {
+		requestedIDs = requestedIDs[:maxNodeIDsInQuery]
 	}
-	if needOwnerFilter {
+	if needOwnerFilter && len(requestedIDs) > 0 {
+		// operator asked for specific node ids — must all be owned. Compute
+		// intersection so the caller sees 403 (not empty-with-no-reason) if
+		// they asked for nodes they don't own. Existence-timing leaks are
+		// avoided because we only check set membership against ownedIDs,
+		// not against the live nodes table.
+		ownedSet := make(map[int]struct{}, len(ownedIDs))
+		for _, id := range ownedIDs {
+			ownedSet[int(id)] = struct{}{}
+		}
+		allowed := requestedIDs[:0]
+		for _, id := range requestedIDs {
+			if _, ok := ownedSet[id]; ok {
+				allowed = append(allowed, id)
+			}
+		}
+		if len(allowed) == 0 {
+			respondForbidden(c, "无权访问请求的节点")
+			return
+		}
+		requestedIDs = allowed
+	}
+	if len(requestedIDs) > 0 {
+		q = q.Where("node_id IN ?", requestedIDs)
+	} else if needOwnerFilter {
 		q = q.Where("node_id IN ?", ownedIDs)
 	}
 	if s := c.Query("source"); s != "" {
@@ -72,11 +93,14 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 			kw = kw[1:]
 		}
 		// Escape LIKE metacharacters so `100%` / `id_42` search literally.
+		// We use `!` as the escape char — a bare backslash would fall under
+		// Postgres' standard_conforming_strings rules and change meaning
+		// depending on session state. `!` is dialect-neutral.
 		pattern := "%" + escapeLike(kw) + "%"
 		if negate {
-			q = q.Where(`message NOT LIKE ? ESCAPE '\'`, pattern)
+			q = q.Where("message NOT LIKE ? ESCAPE '!'", pattern)
 		} else {
-			q = q.Where(`message LIKE ? ESCAPE '\'`, pattern)
+			q = q.Where("message LIKE ? ESCAPE '!'", pattern)
 		}
 	}
 
@@ -214,11 +238,12 @@ func splitInts(s string) []int {
 }
 
 // escapeLike escapes SQL LIKE metacharacters so user input matches literally.
-// Uses `\` as the escape char; callers must pair the query with `ESCAPE '\'`.
+// Uses `!` as the escape char (avoids Postgres' standard_conforming_strings
+// footgun with backslash); callers must pair the query with `ESCAPE '!'`.
 func escapeLike(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, "%", `\%`)
-	s = strings.ReplaceAll(s, "_", `\_`)
+	s = strings.ReplaceAll(s, "!", "!!")
+	s = strings.ReplaceAll(s, "%", "!%")
+	s = strings.ReplaceAll(s, "_", "!_")
 	return s
 }
 

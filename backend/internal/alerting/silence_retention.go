@@ -2,10 +2,13 @@ package alerting
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -17,33 +20,31 @@ import (
 //
 // Paired with idx_silences_cleanup (migrations/000036). Without this worker
 // the index exists but is never used — silences table grows unbounded.
+//
+// Grace days come from `alerts.silence_retention_days` via settings.Service
+// (three-tier resolution: DB → env → code default), matching the convention
+// anomaly retention already uses. A stored default of 30 days means day-to-
+// day ops can tune without a deploy.
 type SilenceRetentionWorker struct {
-	db        *gorm.DB
-	tick      time.Duration
-	graceDays int
+	db       *gorm.DB
+	settings *settings.Service
+	tick     time.Duration
 }
 
-// DefaultSilenceRetentionGraceDays is the fallback keep-expired window.
+// DefaultSilenceRetentionGraceDays is the fallback when settings lookup fails
+// or the configured value is invalid. Kept in sync with the registry entry.
 const DefaultSilenceRetentionGraceDays = 30
 
+const silenceRetentionKey = "alerts.silence_retention_days"
+
 // NewSilenceRetentionWorker creates a worker running every 6 hours by default.
-func NewSilenceRetentionWorker(db *gorm.DB) *SilenceRetentionWorker {
-	return &SilenceRetentionWorker{
-		db:        db,
-		tick:      6 * time.Hour,
-		graceDays: DefaultSilenceRetentionGraceDays,
-	}
+// settings may be nil (e.g. in tests) — grace_days falls back to the default.
+func NewSilenceRetentionWorker(db *gorm.DB, s *settings.Service) *SilenceRetentionWorker {
+	return &SilenceRetentionWorker{db: db, settings: s, tick: 6 * time.Hour}
 }
 
 // SetTickInterval overrides for tests.
 func (w *SilenceRetentionWorker) SetTickInterval(d time.Duration) { w.tick = d }
-
-// SetGraceDays overrides the expired-silence keep window.
-func (w *SilenceRetentionWorker) SetGraceDays(days int) {
-	if days > 0 {
-		w.graceDays = days
-	}
-}
 
 // Run drives the worker until ctx cancels.
 func (w *SilenceRetentionWorker) Run(ctx context.Context) {
@@ -64,7 +65,8 @@ func (w *SilenceRetentionWorker) Run(ctx context.Context) {
 
 // Prune runs one retention pass. Exposed for tests.
 func (w *SilenceRetentionWorker) Prune(ctx context.Context) {
-	cutoff := time.Now().UTC().Add(-time.Duration(w.graceDays) * 24 * time.Hour)
+	days := w.graceDays()
+	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	res := w.db.WithContext(ctx).
 		Where("ends_at < ?", cutoff).
 		Delete(&model.Silence{})
@@ -75,7 +77,24 @@ func (w *SilenceRetentionWorker) Prune(ctx context.Context) {
 	if res.RowsAffected > 0 {
 		logger.Module("alerting").Info().
 			Int64("rows", res.RowsAffected).
-			Int("grace_days", w.graceDays).
+			Int("grace_days", days).
 			Msg("silence retention pruned expired silences")
 	}
+}
+
+// graceDays resolves the current grace window. Invalid or missing config
+// falls back to DefaultSilenceRetentionGraceDays so we never prune to zero.
+func (w *SilenceRetentionWorker) graceDays() int {
+	if w.settings == nil {
+		return DefaultSilenceRetentionGraceDays
+	}
+	v := strings.TrimSpace(w.settings.GetEffective(silenceRetentionKey))
+	if v == "" {
+		return DefaultSilenceRetentionGraceDays
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return DefaultSilenceRetentionGraceDays
+	}
+	return n
 }

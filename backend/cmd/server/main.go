@@ -167,7 +167,7 @@ func main() {
 	retryWorker := alerting.NewRetryWorker(db)
 	go retryWorker.Run(hubCtx)
 
-	silenceRetention := alerting.NewSilenceRetentionWorker(db)
+	silenceRetention := alerting.NewSilenceRetentionWorker(db, settingsSvc)
 	go silenceRetention.Run(hubCtx)
 
 	sloEvaluator := slo.NewEvaluator(db)
