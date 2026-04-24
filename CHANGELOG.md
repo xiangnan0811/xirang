@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.6](https://github.com/xiangnan0811/xirang/compare/v0.17.5...v0.17.6) (2026-04-24)
+
+
+### Bug Fixes
+
+* **metrics:** make aggregator backfill test time-independent ([#67](https://github.com/xiangnan0811/xirang/issues/67)) ([3381f3f](https://github.com/xiangnan0811/xirang/commit/3381f3fd0752abd9b8c318b0cbceb8e2deb905af))
+
 ## [0.17.5](https://github.com/xiangnan0811/xirang/compare/v0.17.4...v0.17.5) (2026-04-24)
 
 
