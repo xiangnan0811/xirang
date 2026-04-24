@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -74,15 +75,16 @@ func (p *NodeMetricsProvider) Query(ctx context.Context, req dashboards.QueryReq
 	q := p.db.WithContext(ctx).
 		Table("node_metric_samples").
 		Select("node_id, "+col+" AS value, sampled_at").
-		Where("sampled_at >= ? AND sampled_at < ? AND probe_ok = ?", req.Start, req.End, true).
-		Order("node_id ASC, sampled_at ASC").
-		Limit(500000)
+		Where("sampled_at >= ? AND sampled_at < ? AND probe_ok = ?", req.Start, req.End, true)
 	if len(nodeIDs) > 0 {
 		q = q.Where("node_id IN ?", nodeIDs)
 	}
-	if err := q.Find(&rows).Error; err != nil {
+	if err := q.Order("node_id ASC, sampled_at ASC").
+		Limit(dashboards.MaxRowsPerQuery).
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query samples: %w", err)
 	}
+	truncated := len(rows) >= dashboards.MaxRowsPerQuery
 
 	// If filter was empty, populate with all node IDs that appeared in rows
 	// (so empty filter = "all nodes with data in window").
@@ -131,7 +133,7 @@ func (p *NodeMetricsProvider) Query(ctx context.Context, req dashboards.QueryReq
 		series = append(series, dashboards.Series{Name: name, Points: pts})
 	}
 
-	return &dashboards.QueryResponse{Series: series, StepSeconds: stepSeconds}, nil
+	return &dashboards.QueryResponse{Series: series, StepSeconds: stepSeconds, Truncated: truncated}, nil
 }
 
 // aggregationSQL returns (SQL fragment, needInMemoryPercentile).
@@ -213,7 +215,8 @@ func percentile(xs []float64, p float64) float64 {
 	}
 	sorted := append([]float64(nil), xs...)
 	sort.Float64s(sorted)
-	rank := int(float64(len(sorted))*p + 0.9999)
+	// Nearest-rank percentile: rank = ceil(p * N), clamped to [1, N].
+	rank := int(math.Ceil(float64(len(sorted)) * p))
 	if rank < 1 {
 		rank = 1
 	}

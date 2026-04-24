@@ -30,8 +30,9 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) process(ctx context.Context, job CollectJob) {
-	queueDepth.Set(float64(len(w.jobs)))
-
+	// queueDepth is updated by the scheduler on enqueue (see scheduler.go);
+	// concurrent workers reading len(channel) here previously made the
+	// gauge jitter under load.
 	cursors, err := w.curRepo.LoadForNode(job.Node.ID)
 	if err != nil {
 		logger.Module("nodelogs").Warn().

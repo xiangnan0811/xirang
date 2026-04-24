@@ -574,7 +574,40 @@ export type MetricDescriptor = {
 
 export type PanelQueryPoint = { ts: string; value: number };
 export type PanelQuerySeries = { name: string; points: PanelQueryPoint[] };
-export type PanelQueryResult = { series: PanelQuerySeries[]; step_seconds: number };
+export type PanelQueryResult = {
+  series: PanelQuerySeries[];
+  step_seconds: number;
+  /** Set when the backend fetch hit MaxRowsPerQuery. UI should warn the user
+   *  their series is incomplete and suggest narrowing the range/filters. */
+  truncated?: boolean;
+};
+
+/** Silence matches the backend shape at `/silences`. match_tags arrives from
+ *  older records as a JSON-encoded string, from newer ones as an array, and
+ *  from either as null. parseSilenceTags (lib/api/silences) normalizes. */
+export interface Silence {
+  id: number;
+  name: string;
+  match_node_id: number | null;
+  match_category: string;
+  match_tags: string | string[] | null;
+  starts_at: string;
+  ends_at: string;
+  created_by: number;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SilenceInput {
+  name: string;
+  match_node_id: number | null;
+  match_category: string;
+  match_tags: string[];
+  starts_at: string;
+  ends_at: string;
+  note?: string;
+}
 
 export type EscalationLevel = {
   delay_seconds: number;

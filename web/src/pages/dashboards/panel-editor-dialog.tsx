@@ -133,7 +133,34 @@ export function PanelEditorDialog({
   // ── 保存状态 ────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
 
+  // Gate PanelRenderer until the dialog's layout has settled so recharts'
+  // ResponsiveContainer reads real pixel dimensions instead of 0. Without
+  // this the browser console warns
+  //   "The width(-1) and height(-1) of chart should be greater than 0"
+  // because Radix's enter animation transforms the dialog from scale(0.95),
+  // and RC's first measurement catches the pre-transform state. Two RAFs
+  // pushes the mount past the initial paint where the dialog is settled.
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    if (!open) {
+      setChartReady(false);
+      return;
+    }
+    const id1 = requestAnimationFrame(() => {
+      const id2 = requestAnimationFrame(() => setChartReady(true));
+      (setChartReady as unknown as { _raf?: number })._raf = id2;
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      const pending = (setChartReady as unknown as { _raf?: number })._raf;
+      if (pending) cancelAnimationFrame(pending);
+    };
+  }, [open]);
+
   // ── 初始化：打开时加载元数据 + 回填编辑值 ─────────────────────
+  // Depend on `panel?.id` too — without it, reopening the dialog for a
+  // different panel while it was already open (e.g. quick switch from "new"
+  // → "edit") kept stale form state.
   useEffect(() => {
     if (!open) return;
 
@@ -168,18 +195,35 @@ export function PanelEditorDialog({
             setAggregation(list[0].default_aggregation as Aggregation);
           }
         })
-        .catch(() => {/* 静默失败 */});
+        .catch((err) => {
+          // Failing to load metrics leaves the editor unusable; surface it
+          // rather than showing an empty dropdown with no explanation.
+          toast.error(t("dashboards.editor.metricsLoadFailed", {
+            defaultValue: "指标列表加载失败：{{msg}}",
+            msg: getErrorMessage(err),
+          }));
+        });
     }
 
     // 加载节点和任务列表
     createNodesApi().getNodes(token)
       .then((list) => setNodes(list.map((n) => ({ id: n.id, label: n.name ?? String(n.id) }))))
-      .catch(() => {/* 静默失败 */});
+      .catch((err) => {
+        toast.error(t("dashboards.editor.nodesLoadFailed", {
+          defaultValue: "节点列表加载失败：{{msg}}",
+          msg: getErrorMessage(err),
+        }));
+      });
 
     createTasksApi().getTasks(token)
       .then((list) => setTasks(list.map((t) => ({ id: t.id, label: t.name ?? String(t.id) }))))
-      .catch(() => {/* 静默失败 */});
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch((err) => {
+        toast.error(t("dashboards.editor.tasksLoadFailed", {
+          defaultValue: "任务列表加载失败：{{msg}}",
+          msg: getErrorMessage(err),
+        }));
+      });
+  }, [open, panel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 指标变化时更新聚合默认值 ─────────────────────────────────
   const currentMetric = metrics.find((m) => m.key === metricKey);
@@ -252,9 +296,23 @@ export function PanelEditorDialog({
   const isValid = !titleError && !metricError;
 
   // ── 确保聚合在当前指标允许范围内 ────────────────────────────
+  // Keep UI and persisted state in sync: if the user switches to a metric
+  // that doesn't support the current aggregation, fold the fallback back
+  // into state so reads of `aggregation` elsewhere agree with what renders.
+  //
+  // IMPORTANT: only sync when we actually know what the metric supports
+  // (currentMetric != undefined). During initial mount the metrics list
+  // is still loading; running the sync then would clobber the value that
+  // the init effect just restored from the panel prop.
   const supportedAggs: Aggregation[] = (currentMetric?.supported_aggregations ?? []) as Aggregation[];
   const safeAggregation: Aggregation =
     supportedAggs.includes(aggregation) ? aggregation : ((supportedAggs[0] ?? "avg") as Aggregation);
+  useEffect(() => {
+    if (!currentMetric) return;
+    if (safeAggregation !== aggregation) {
+      setAggregation(safeAggregation);
+    }
+  }, [currentMetric, safeAggregation, aggregation]);
 
   // ── 保存 ─────────────────────────────────────────────────────
   async function handleSave() {
@@ -446,7 +504,7 @@ export function PanelEditorDialog({
                   {previewError}
                 </div>
               )}
-              {!previewLoading && !previewError && previewData && (
+              {!previewLoading && !previewError && previewData && chartReady && (
                 <PanelRenderer panel={previewPanel} data={previewData} />
               )}
               {!previewLoading && !previewError && !previewData && (

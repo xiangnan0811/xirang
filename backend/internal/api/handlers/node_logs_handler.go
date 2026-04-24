@@ -27,11 +27,52 @@ type nodeLogsResponse struct {
 	HasMore bool            `json:"has_more"`
 }
 
+// maxNodeIDsInQuery caps `?node_ids=` length to avoid a 10k-item IN clause.
+const maxNodeIDsInQuery = 200
+
 func (h *NodeLogsHandler) Query(c *gin.Context) {
+	ownedIDs, needOwnerFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if needOwnerFilter && len(ownedIDs) == 0 {
+		respondOK(c, nodeLogsResponse{Data: []model.NodeLog{}, Total: 0, HasMore: false})
+		return
+	}
+
 	q := h.db.Model(&model.NodeLog{})
 
-	if s := c.Query("node_ids"); s != "" {
-		q = q.Where("node_id IN ?", splitInts(s))
+	requestedIDs := splitInts(c.Query("node_ids"))
+	if len(requestedIDs) > maxNodeIDsInQuery {
+		requestedIDs = requestedIDs[:maxNodeIDsInQuery]
+	}
+	if needOwnerFilter && len(requestedIDs) > 0 {
+		// operator asked for specific node ids — must all be owned. Compute
+		// intersection so the caller sees 403 (not empty-with-no-reason) if
+		// they asked for nodes they don't own. Existence-timing leaks are
+		// avoided because we only check set membership against ownedIDs,
+		// not against the live nodes table.
+		ownedSet := make(map[int]struct{}, len(ownedIDs))
+		for _, id := range ownedIDs {
+			ownedSet[int(id)] = struct{}{}
+		}
+		allowed := requestedIDs[:0]
+		for _, id := range requestedIDs {
+			if _, ok := ownedSet[id]; ok {
+				allowed = append(allowed, id)
+			}
+		}
+		if len(allowed) == 0 {
+			respondForbidden(c, "无权访问请求的节点")
+			return
+		}
+		requestedIDs = allowed
+	}
+	if len(requestedIDs) > 0 {
+		q = q.Where("node_id IN ?", requestedIDs)
+	} else if needOwnerFilter {
+		q = q.Where("node_id IN ?", ownedIDs)
 	}
 	if s := c.Query("source"); s != "" {
 		q = q.Where("source IN ?", strings.Split(s, ","))
@@ -47,10 +88,19 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 	q = q.Where("timestamp >= ? AND timestamp < ?", start, end)
 
 	if kw := c.Query("q"); kw != "" {
-		if strings.HasPrefix(kw, "!") {
-			q = q.Where("message NOT LIKE ?", "%"+kw[1:]+"%")
+		negate := strings.HasPrefix(kw, "!")
+		if negate {
+			kw = kw[1:]
+		}
+		// Escape LIKE metacharacters so `100%` / `id_42` search literally.
+		// We use `!` as the escape char — a bare backslash would fall under
+		// Postgres' standard_conforming_strings rules and change meaning
+		// depending on session state. `!` is dialect-neutral.
+		pattern := "%" + escapeLike(kw) + "%"
+		if negate {
+			q = q.Where("message NOT LIKE ? ESCAPE '!'", pattern)
 		} else {
-			q = q.Where("message LIKE ?", "%"+kw+"%")
+			q = q.Where("message LIKE ? ESCAPE '!'", pattern)
 		}
 	}
 
@@ -101,6 +151,15 @@ func (h *NodeLogsHandler) AlertLogs(c *gin.Context) {
 	if err := h.db.First(&alert, id).Error; err != nil {
 		respondNotFound(c, "告警不存在")
 		return
+	}
+	if alert.NodeID != 0 {
+		if allowed, err := authorizeNodeOwnership(c, h.db, alert.NodeID); err != nil {
+			respondInternalError(c, err)
+			return
+		} else if !allowed {
+			respondForbidden(c, "无权访问该告警")
+			return
+		}
 	}
 	resp := alertLogsResponse{
 		NodeID:      alert.NodeID,
@@ -176,6 +235,16 @@ func splitInts(s string) []int {
 		}
 	}
 	return out
+}
+
+// escapeLike escapes SQL LIKE metacharacters so user input matches literally.
+// Uses `!` as the escape char (avoids Postgres' standard_conforming_strings
+// footgun with backslash); callers must pair the query with `ESCAPE '!'`.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "!", "!!")
+	s = strings.ReplaceAll(s, "%", "!%")
+	s = strings.ReplaceAll(s, "_", "!_")
+	return s
 }
 
 func parseLogWindow(startStr, endStr string) (time.Time, time.Time) {

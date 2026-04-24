@@ -179,6 +179,27 @@ export function createAlertsApi() {
       return mapAlert(row);
     },
 
+    /**
+     * Fetch the `group_info` block emitted by GET /alerts/:id — the in-memory
+     * grouping window counter. `count > 1` means the in-memory dispatcher has
+     * seen ≥2 alerts sharing the same (error_code, node, tags) key within the
+     * dedup window, and the UI should render a "+N 条同类" badge so operators
+     * know they're looking at one symptom of a cluster, not a single event.
+     */
+    async getAlertGroupInfo(
+      token: string,
+      alertId: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ count: number; siblingNodeIds: number[] }> {
+      const numericId = parseNumericId(alertId, "alert");
+      const row = await request<AlertResponse & { group_info?: { count?: number; sibling_node_ids?: number[] } }>(
+        `/alerts/${numericId}`,
+        { token, signal: options?.signal },
+      );
+      const gi = row.group_info ?? {};
+      return { count: gi.count ?? 1, siblingNodeIds: gi.sibling_node_ids ?? [] };
+    },
+
     async getAlertDeliveries(token: string, alertId: string): Promise<AlertDeliveryRecord[]> {
       const numericId = parseNumericId(alertId, "alert");
       const rows = (await request<AlertDeliveryResponse[]>(`/alerts/${numericId}/deliveries`, { token })) ?? [];

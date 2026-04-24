@@ -9,6 +9,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func configurePool(db *gorm.DB) error {
@@ -52,9 +53,14 @@ func configureSQLitePool(db *gorm.DB) error {
 }
 
 func Open(cfg config.Config) (*gorm.DB, error) {
+	// Wrap GORM's default logger so client-aborted queries (ctx canceled /
+	// deadline exceeded) don't get logged at Error level. The panel-query
+	// endpoint fires an AbortController on every keystroke by design; those
+	// cancellations must not show up as server errors.
+	gormCfg := &gorm.Config{Logger: newCtxAwareLogger(logger.Default)}
 	switch cfg.DBType {
 	case "sqlite":
-		db, err := gorm.Open(sqlite.Open(cfg.SQLitePath), &gorm.Config{})
+		db, err := gorm.Open(sqlite.Open(cfg.SQLitePath), gormCfg)
 		if err != nil {
 			return nil, fmt.Errorf("连接 sqlite 失败: %w", err)
 		}
@@ -67,7 +73,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		RegisterMetricsCallbacks(db)
 		return db, nil
 	case "postgres":
-		db, err := gorm.Open(postgres.Open(cfg.PostgresDSN), &gorm.Config{})
+		db, err := gorm.Open(postgres.Open(cfg.PostgresDSN), gormCfg)
 		if err != nil {
 			return nil, fmt.Errorf("连接 postgres 失败: %w", err)
 		}

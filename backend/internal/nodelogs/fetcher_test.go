@@ -146,8 +146,29 @@ func TestBuildScript_JournalAfterCursor(t *testing.T) {
 		{SourceJournalctl, ""}: {CursorText: "abc123"},
 	}
 	script := buildScript(n, cs)
-	if !strings.Contains(script, "--after-cursor=\"abc123\"") {
+	if !strings.Contains(script, "--after-cursor='abc123'") {
 		t.Fatalf("missing after-cursor in script: %q", script)
+	}
+}
+
+// TestBuildScript_QuoteInjectionNeutralized verifies that $, `, \, and " in a
+// cursor or path are wrapped in single quotes so no command substitution fires.
+func TestBuildScript_QuoteInjectionNeutralized(t *testing.T) {
+	n := model.Node{
+		LogJournalctlEnabled: true,
+		LogPaths:             `["/var/log/$(id).log"]`,
+	}
+	cs := map[CursorKey]Cursor{
+		{SourceJournalctl, ""}: {CursorText: `abc"$(hostname)` + "`pwd`"},
+	}
+	script := buildScript(n, cs)
+	// The whole cursor payload must sit inside single quotes with the only
+	// single quote rewritten — no raw $(...), backticks, or unescaped quotes.
+	if !strings.Contains(script, `--after-cursor='abc"$(hostname)`+"`pwd`'") {
+		t.Fatalf("shellQuote failed to neutralize metacharacters: %q", script)
+	}
+	if !strings.Contains(script, `'/var/log/$(id).log'`) {
+		t.Fatalf("path must be single-quoted, got %q", script)
 	}
 }
 

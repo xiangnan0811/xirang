@@ -178,8 +178,11 @@ func (s *Service) ResolvePolicyForAlert(ctx context.Context, alert model.Alert) 
 		}
 	}
 
-	// SLO (RaiseSLOBreach) — alert.PolicyName holds the SLO name; safer path is: look up by alert.TaskID==nil && alert.ErrorCode prefix "XR-SLO-"
-	// We use a heuristic: ErrorCode begins with "XR-SLO-" → parse id from code; if malformed, skip.
+	// SLO (RaiseSLOBreach): resolve the policy by parsing the SLO id out of
+	// the ErrorCode. This couples ErrorCode format ("XR-SLO-<id>") to the
+	// resolver — a follow-up should add a dedicated alert.SLOID column and
+	// rely on that instead; once wired, drop this heuristic. Schema change
+	// deferred out of P5 hardening scope to avoid a migration.
 	if pid == nil && strings.HasPrefix(alert.ErrorCode, "XR-SLO-") {
 		rest := strings.TrimPrefix(alert.ErrorCode, "XR-SLO-")
 		if sloIDU, err := strconv.ParseUint(rest, 10, 64); err == nil && sloIDU > 0 {

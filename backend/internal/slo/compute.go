@@ -108,16 +108,34 @@ func computeAvailability(db *gorm.DB, def *model.SLODefinition, base *Compliance
 		Scan(&win).Error; err != nil {
 		return nil, err
 	}
+	// 1h burn rate reads raw samples, not the hourly rollup. The hourly
+	// aggregator runs with a 5-minute cushion (see metrics/aggregator.go
+	// catchUpHourly: end = now - 5min), so at any moment the most recent
+	// ~60 minutes live only in the raw table. Querying hourly for "last
+	// hour" returns 0-1 buckets; safeRatio on such small totals amplifies
+	// per-sample noise above BreachAlertTriggerThreshold=2.0.
 	var hour aggRow
-	if err := db.Table("node_metric_samples_hourly").
-		Select("COALESCE(SUM(probe_ok),0) AS ok, COALESCE(SUM(probe_ok + probe_fail),0) AS total").
-		Where("node_id IN ? AND bucket_start >= ? AND bucket_start < ?", nodeIDs, now.Add(-time.Hour), now).
+	if err := db.Table("node_metric_samples").
+		Select("COALESCE(SUM(CASE WHEN probe_ok THEN 1 ELSE 0 END),0) AS ok, COUNT(*) AS total").
+		Where("node_id IN ? AND sampled_at >= ? AND sampled_at < ?", nodeIDs, now.Add(-time.Hour), now).
 		Scan(&hour).Error; err != nil {
 		return nil, err
 	}
 	base.Observed = safeRatio(win.OK, win.Total)
 	base.SampleCount = int(win.Total)
-	base.BurnRate1h = burnRate(safeRatio(hour.OK, hour.Total), def.Threshold)
+	// Require a minimum raw-sample count (~5 min at 30s cadence) before
+	// computing BurnRate1h. Below that the denominator is too small to
+	// distinguish real breach from a freshly-restarted node; returning 0
+	// keeps the evaluator from raising bogus breach alerts.
+	//
+	// CALIBRATION NOTE: 10 assumes the prober's 30s tick. If probe cadence
+	// ever becomes configurable this should scale with it (targeting the
+	// "~5 min" window, not a fixed sample count) — today changing cadence
+	// without touching this constant would silently shift the threshold.
+	const minRawSamplesFor1h = 10
+	if hour.Total >= minRawSamplesFor1h {
+		base.BurnRate1h = burnRate(safeRatio(hour.OK, hour.Total), def.Threshold)
+	}
 	base.ErrorBudgetRemainingPct = budgetRemainingPct(base.Observed, def.Threshold)
 	base.Status = classify(base.Observed, def.Threshold, int(win.Total))
 	return base, nil

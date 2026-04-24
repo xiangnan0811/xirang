@@ -3,6 +3,9 @@ package alerting
 import (
 	"context"
 	"errors"
+	"net/url"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +41,10 @@ func backoffDuration(attempt int) time.Duration {
 }
 
 // RetryWorker 定期扫描 status='retrying' 的告警投递记录并重新发送。
+//
+// 并发约束: tick 由单 ticker 驱动, 不会自我并发。mu 仅保护 attempt 的"状态转移"
+// 段（DB 读取-决策-写入），让慢速的 HTTP send() 落在锁外，避免 ManualRetry 与
+// tick 的状态写入撞车。
 type RetryWorker struct {
 	mu     sync.Mutex
 	db     *gorm.DB
@@ -58,16 +65,24 @@ func (w *RetryWorker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			w.tick(now)
+			w.tick(ctx, now)
 		}
 	}
 }
 
-func (w *RetryWorker) tick(now time.Time) {
+func (w *RetryWorker) tick(ctx context.Context, now time.Time) {
 	var rows []model.AlertDelivery
-	w.db.Where("status = ? AND next_retry_at <= ?", "retrying", now).Find(&rows)
+	if err := w.db.WithContext(ctx).
+		Where("status = ? AND next_retry_at <= ?", "retrying", now).
+		Find(&rows).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Msg("retry tick: load deliveries failed")
+		return
+	}
 	for _, d := range rows {
-		w.attempt(d)
+		if ctx.Err() != nil {
+			return
+		}
+		w.attempt(ctx, d)
 	}
 }
 
@@ -79,22 +94,13 @@ func (w *RetryWorker) tick(now time.Time) {
 //     silences created afterward. Silences suppress NEW dispatches, not pending retries.
 //   - ErrRecordNotFound on integration/alert lookup → mark delivery failed with descriptive
 //     LastError. Other DB errors → warn log and skip this tick (retry scheduler will try again).
-func (w *RetryWorker) attempt(d model.AlertDelivery) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
+//   - The mutex wraps only the state-transition section; the HTTP send is deliberately
+//     unguarded so one slow channel cannot serialize the retry queue.
+func (w *RetryWorker) attempt(ctx context.Context, d model.AlertDelivery) {
 	var integ model.Integration
-	if err := w.db.First(&integ, d.IntegrationID).Error; err != nil {
+	if err := w.db.WithContext(ctx).First(&integ, d.IntegrationID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			d.Status = "failed"
-			d.NextRetryAt = nil
-			d.LastError = "integration deleted"
-			d.AttemptCount++
-			w.db.Save(&d)
-			logger.Module("alerting").Warn().
-				Uint("delivery_id", d.ID).
-				Uint("integration_id", d.IntegrationID).
-				Msg("integration 已删除，投递标记为 failed")
+			w.finalizeTerminal(d, "integration deleted", integrationDeletedLogger(d))
 		} else {
 			logger.Module("alerting").Warn().
 				Uint("delivery_id", d.ID).Err(err).
@@ -103,17 +109,9 @@ func (w *RetryWorker) attempt(d model.AlertDelivery) {
 		return
 	}
 	var alert model.Alert
-	if err := w.db.First(&alert, d.AlertID).Error; err != nil {
+	if err := w.db.WithContext(ctx).First(&alert, d.AlertID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			d.Status = "failed"
-			d.NextRetryAt = nil
-			d.LastError = "alert deleted"
-			d.AttemptCount++
-			w.db.Save(&d)
-			logger.Module("alerting").Warn().
-				Uint("delivery_id", d.ID).
-				Uint("alert_id", d.AlertID).
-				Msg("alert 已删除，投递标记为 failed")
+			w.finalizeTerminal(d, "alert deleted", alertDeletedLogger(d))
 		} else {
 			logger.Module("alerting").Warn().
 				Uint("delivery_id", d.ID).Err(err).
@@ -121,27 +119,76 @@ func (w *RetryWorker) attempt(d model.AlertDelivery) {
 		}
 		return
 	}
-	err := w.sendFn(integ, alert)
+
+	// Slow path: HTTP send, intentionally NOT holding mu.
+	sendErr := w.sendFn(integ, alert)
+
+	// State transition is guarded so ManualRetry and tick cannot race.
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	d.AttemptCount++
-	if err == nil {
+	switch {
+	case sendErr == nil:
 		d.Status = "sent"
 		d.NextRetryAt = nil
 		d.LastError = ""
-	} else if d.AttemptCount >= maxAttempts {
+	case d.AttemptCount >= maxAttempts:
 		d.Status = "failed"
 		d.NextRetryAt = nil
-		d.LastError = err.Error()
+		d.LastError = sanitizeDeliveryError(sendErr)
 		logger.Module("alerting").Warn().
 			Uint("delivery_id", d.ID).
-			Err(err).
+			Err(sendErr).
 			Msg("告警投递重试达到上限，终止")
-	} else {
+	default:
 		next := time.Now().Add(backoffDuration(d.AttemptCount))
 		d.Status = "retrying"
 		d.NextRetryAt = &next
-		d.LastError = err.Error()
+		d.LastError = sanitizeDeliveryError(sendErr)
 	}
-	w.db.Save(&d)
+	if err := w.db.Save(&d).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Uint("delivery_id", d.ID).Msg("save delivery failed")
+	}
+}
+
+// finalizeTerminal marks a delivery failed because the referenced integration
+// or alert no longer exists. Caller provides a human-readable reason and a
+// log emitter closure so the caller's context (integration_id / alert_id)
+// stays attached.
+//
+// CONTRACT: caller MUST NOT already hold w.mu. finalizeTerminal acquires it
+// itself; a caller that wraps this in another Lock() would deadlock. The
+// only callsites today are the two ErrRecordNotFound branches in attempt(),
+// which run before attempt() takes the lock.
+func (w *RetryWorker) finalizeTerminal(d model.AlertDelivery, reason string, logFn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d.Status = "failed"
+	d.NextRetryAt = nil
+	d.LastError = reason
+	d.AttemptCount++
+	if err := w.db.Save(&d).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Uint("delivery_id", d.ID).Msg("save terminal delivery failed")
+	}
+	logFn()
+}
+
+func integrationDeletedLogger(d model.AlertDelivery) func() {
+	return func() {
+		logger.Module("alerting").Warn().
+			Uint("delivery_id", d.ID).
+			Uint("integration_id", d.IntegrationID).
+			Msg("integration 已删除，投递标记为 failed")
+	}
+}
+
+func alertDeletedLogger(d model.AlertDelivery) func() {
+	return func() {
+		logger.Module("alerting").Warn().
+			Uint("delivery_id", d.ID).
+			Uint("alert_id", d.AlertID).
+			Msg("alert 已删除，投递标记为 failed")
+	}
 }
 
 // ManualRetry 立即强制重试指定投递记录，绕过 NextRetryAt 调度。供管理员 API 调用。
@@ -153,7 +200,7 @@ func (w *RetryWorker) ManualRetry(deliveryID uint) error {
 	if d.Status == "sent" {
 		return errors.New("already sent")
 	}
-	w.attempt(d)
+	w.attempt(context.Background(), d)
 	return nil
 }
 
@@ -161,4 +208,57 @@ func (w *RetryWorker) ManualRetry(deliveryID uint) error {
 // send() 函数（按 integration.Type 分发到各通道发送器）。
 func dispatchSingle(integ model.Integration, alert model.Alert) error {
 	return send(integ, alert)
+}
+
+// sanitizeDeliveryError redacts URL credentials and scrubs common token/key
+// patterns from a sender error message before it is persisted to
+// alert_deliveries.last_error. Stored LastError is readable by any user with
+// alerts:deliveries permission (viewer included), so leaking webhook URLs
+// that embed bearer tokens or API keys is a direct A09 risk.
+func sanitizeDeliveryError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	msg = redactURLs(msg)
+	for _, re := range sensitivePatterns {
+		msg = re.ReplaceAllString(msg, "$1=***")
+	}
+	if len(msg) > 500 {
+		msg = msg[:500] + "…"
+	}
+	return msg
+}
+
+var urlLike = regexp.MustCompile(`(https?|wss?)://[^\s"'<>]+`)
+
+var sensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
+}
+
+// redactURLs drops credentials, query strings, and path-segment secrets from
+// any http(s)/ws URL embedded in msg. Webhook targets (Slack /services/T/B/X,
+// Feishu /open-apis/bot/v2/hook/<token>, DingTalk /robot/send?access_token=...,
+// Telegram /bot<token>/sendMessage, etc.) routinely carry bearer tokens in the
+// URL *path*, so keeping scheme+host alone is what's safe to persist. Query
+// strings are also redacted (DingTalk's access_token lives there).
+func redactURLs(msg string) string {
+	return urlLike.ReplaceAllStringFunc(msg, func(match string) string {
+		u, err := url.Parse(match)
+		if err != nil {
+			return match
+		}
+		if u.User != nil {
+			u.User = url.User("***")
+		}
+		if u.RawQuery != "" {
+			u.RawQuery = "***"
+		}
+		// Path can contain tokens — truncate to "/…" when non-trivial. A bare
+		// "/" or empty path is fine (no secrets).
+		if u.Path != "" && u.Path != "/" {
+			u.Path = "/***"
+		}
+		return strings.TrimSuffix(u.String(), "?")
+	})
 }

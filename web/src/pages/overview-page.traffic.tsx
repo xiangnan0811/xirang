@@ -147,8 +147,11 @@ export function OverviewTrafficChart({
                         border: chartTheme.tooltip.border,
                         fontSize: 11,
                         borderRadius: 6,
+                        padding: "6px 10px",
+                        boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
                       }}
-                      labelStyle={{ color: chartTheme.axis }}
+                      labelStyle={{ color: chartTheme.axis, marginBottom: 2, fontSize: 10 }}
+                      itemStyle={{ padding: "1px 0" }}
                       formatter={(value, name) => {
                         if (name === t("overview.chartThroughput")) return [`${value} Mbps`, name];
                         return [value, name];

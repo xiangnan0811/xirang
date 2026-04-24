@@ -188,29 +188,32 @@ func (a *Aggregator) backfill(ctx context.Context) error {
 	return a.catchUpDaily(ctx)
 }
 
-// scanNullableTime scans a MAX/MIN aggregate that may be NULL into a time.Time.
-// Returns the zero value when the column is NULL (empty table).
+// scanNullableTime scans a MAX/MIN aggregate (Postgres native timestamptz or
+// SQLite TEXT affinity) into a time.Time.
 //
-// Postgres returns native timestamptz values; sql.NullTime handles both the
-// NULL and the value case correctly via the pgx/lib-pq drivers.
+//   - (zero, nil)   — column is NULL (empty table)
+//   - (value, nil)  — parsed successfully
+//   - (zero, err)   — DB query failed OR SQLite returned an unparseable string
 //
-// SQLite stores datetime columns as strings (TEXT affinity). go-sqlite3
-// returns them as driver.Value type string, and NULL aggregates come back
-// as nil. Direct *time.Time scan fails on both cases, so for SQLite we scan
-// into *string and parse with a set of known datetime layouts.
-func (a *Aggregator) scanNullableTime(db *gorm.DB, query string, args ...interface{}) time.Time {
+// Treating a query error as "empty table" silently stalls rollup (lag metric
+// goes to 0 and no new buckets are filled), so callers must distinguish.
+func (a *Aggregator) scanNullableTime(db *gorm.DB, query string, args ...interface{}) (time.Time, error) {
 	if a.dialect == "postgres" {
 		var t sql.NullTime
-		db.Raw(query, args...).Scan(&t)
-		if t.Valid {
-			return t.Time.UTC()
+		if err := db.Raw(query, args...).Scan(&t).Error; err != nil {
+			return time.Time{}, err
 		}
-		return time.Time{}
+		if t.Valid {
+			return t.Time.UTC(), nil
+		}
+		return time.Time{}, nil
 	}
 	var raw *string
-	db.Raw(query, args...).Scan(&raw)
+	if err := db.Raw(query, args...).Scan(&raw).Error; err != nil {
+		return time.Time{}, err
+	}
 	if raw == nil || *raw == "" {
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	// SQLite emits datetimes in several formats depending on how they were stored.
 	formats := []string{
@@ -223,10 +226,10 @@ func (a *Aggregator) scanNullableTime(db *gorm.DB, query string, args ...interfa
 	}
 	for _, f := range formats {
 		if t, err := time.Parse(f, *raw); err == nil {
-			return t.UTC()
+			return t.UTC(), nil
 		}
 	}
-	return time.Time{}
+	return time.Time{}, fmt.Errorf("unparseable datetime from SQLite: %q", *raw)
 }
 
 // catchUpHourly walks every uncovered hourly bucket from MAX(bucket_start)+1h
@@ -234,10 +237,16 @@ func (a *Aggregator) scanNullableTime(db *gorm.DB, query string, args ...interfa
 // rollupHourly on each. The 5-minute cushion avoids picking up an in-flight
 // hour. Does NOT acquire a.mu — rollupHourly locks each call individually.
 func (a *Aggregator) catchUpHourly(ctx context.Context) error {
-	lastBucket := a.scanNullableTime(a.db.WithContext(ctx),
+	lastBucket, err := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MAX(bucket_start) FROM node_metric_samples_hourly")
-	oldestSample := a.scanNullableTime(a.db.WithContext(ctx),
+	if err != nil {
+		return fmt.Errorf("catchUpHourly: read last bucket: %w", err)
+	}
+	oldestSample, err := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MIN(sampled_at) FROM node_metric_samples")
+	if err != nil {
+		return fmt.Errorf("catchUpHourly: read oldest sample: %w", err)
+	}
 
 	var from time.Time
 	if lastBucket.IsZero() {
@@ -263,10 +272,16 @@ func (a *Aggregator) catchUpHourly(ctx context.Context) error {
 
 // catchUpDaily does the same for daily buckets, sourcing from hourly.
 func (a *Aggregator) catchUpDaily(ctx context.Context) error {
-	lastBucket := a.scanNullableTime(a.db.WithContext(ctx),
+	lastBucket, err := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MAX(bucket_start) FROM node_metric_samples_daily")
-	oldestHourly := a.scanNullableTime(a.db.WithContext(ctx),
+	if err != nil {
+		return fmt.Errorf("catchUpDaily: read last bucket: %w", err)
+	}
+	oldestHourly, err := a.scanNullableTime(a.db.WithContext(ctx),
 		"SELECT MIN(bucket_start) FROM node_metric_samples_hourly")
+	if err != nil {
+		return fmt.Errorf("catchUpDaily: read oldest hourly bucket: %w", err)
+	}
 
 	var from time.Time
 	if lastBucket.IsZero() {

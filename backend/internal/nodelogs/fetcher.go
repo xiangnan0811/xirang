@@ -105,8 +105,8 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 		prev := cursors[CursorKey{SourceJournalctl, ""}].CursorText
 		if prev != "" {
 			fmt.Fprintf(&b,
-				`( journalctl --after-cursor="%s" --output=json --output-fields=__REALTIME_TIMESTAMP,__CURSOR,PRIORITY,_SYSTEMD_UNIT,MESSAGE --no-pager 2>/dev/null ) || true`+"\n",
-				shellEscape(prev),
+				`( journalctl --after-cursor=%s --output=json --output-fields=__REALTIME_TIMESTAMP,__CURSOR,PRIORITY,_SYSTEMD_UNIT,MESSAGE --no-pager 2>/dev/null ) || true`+"\n",
+				shellQuote(prev),
 			)
 		} else {
 			b.WriteString(
@@ -120,9 +120,10 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 		prev := cursors[CursorKey{SourceFile, path}]
 		// tail -c uses 1-based indexing; FileOffset=0 → "+1" reads the full file.
 		offsetArg := prev.FileOffset + 1
+		quoted := shellQuote(path)
 		fmt.Fprintf(&b,
-			`( stat -c "INODE=%%i SIZE=%%s" "%s" 2>/dev/null; tail -c +%d "%s" 2>/dev/null ) || true`+"\n",
-			shellEscape(path), offsetArg, shellEscape(path),
+			`( stat -c "INODE=%%i SIZE=%%s" %s 2>/dev/null; tail -c +%d %s 2>/dev/null ) || true`+"\n",
+			quoted, offsetArg, quoted,
 		)
 		b.WriteString(FileEnd + "\n")
 	}
@@ -130,8 +131,12 @@ func buildScript(node model.Node, cursors map[CursorKey]Cursor) string {
 	return b.String()
 }
 
-func shellEscape(s string) string {
-	return strings.ReplaceAll(s, `"`, `\"`)
+// shellQuote wraps s in single quotes and escapes embedded single quotes via
+// the canonical close-quote + backslash-quote + reopen sequence. This renders
+// the value as a single opaque shell token, neutralizing $(...), `...`, \, $,
+// "", and newlines in one stroke. Callers must NOT add their own quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 var statLineRE = regexp.MustCompile(`^INODE=(\d+) SIZE=(\d+)\s*\n`)

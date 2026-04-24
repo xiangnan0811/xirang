@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
 	"time"
 
 	"xirang/backend/internal/middleware"
@@ -11,6 +13,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// silenceCategoryRE accepts A-Z, 0-9, dot, dash and underscore up to 64
+// chars. This is a sanity guard, not a closed whitelist: new detector
+// categories (XR-NODE-*, XR-SLO-*, kubernetes.probe.* for future integrations)
+// are added without a handler change. Empty string is allowed and means
+// "match any category", per MatchSilence's prefix-or-empty semantics in
+// silence.go. Dot is included so hierarchical external categories don't
+// require a handler change.
+var silenceCategoryRE = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,64}$`)
+
+func validateSilenceCategory(s string) error {
+	if s == "" {
+		return nil
+	}
+	if !silenceCategoryRE.MatchString(s) {
+		return errors.New("match_category: 仅允许字母/数字/下划线/连字符，长度 1-64")
+	}
+	return nil
+}
 
 type SilenceHandler struct{ DB *gorm.DB }
 
@@ -78,6 +99,10 @@ func (h *SilenceHandler) Create(c *gin.Context) {
 	}
 	if !req.EndsAt.After(req.StartsAt) {
 		respondBadRequest(c, "ends_at 必须晚于 starts_at")
+		return
+	}
+	if err := validateSilenceCategory(req.MatchCategory); err != nil {
+		respondBadRequest(c, err.Error())
 		return
 	}
 	tagsJSON, _ := json.Marshal(req.MatchTags)

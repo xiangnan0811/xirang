@@ -34,7 +34,19 @@ func Query(ctx context.Context, _ *gorm.DB, req QueryRequest) (*QueryResponse, e
 		return nil, ErrInvalidMetric
 	}
 	step := ComputeStepSeconds(req.End.Sub(req.Start))
-	return provider.Query(ctx, req, step)
+	family := string(provider.Family())
+
+	started := time.Now()
+	resp, err := provider.Query(ctx, req, step)
+	PanelQueryDuration.WithLabelValues(family).Observe(time.Since(started).Seconds())
+	if err != nil {
+		PanelQueryErrors.WithLabelValues(family).Inc()
+		return nil, err
+	}
+	if resp != nil && resp.Truncated {
+		PanelQueryTruncated.WithLabelValues(family).Inc()
+	}
+	return resp, nil
 }
 
 // ComputeStepSeconds returns the bucket size for a given window, targeting ~100 points.

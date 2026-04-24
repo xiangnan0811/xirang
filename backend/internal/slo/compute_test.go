@@ -20,12 +20,29 @@ func openSLOTestDB(t *testing.T) *gorm.DB {
 		&model.Node{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.NodeMetricSample{},
 		&model.NodeMetricSampleHourly{},
 		&model.SLODefinition{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
+}
+
+// seedRawSamples fills node_metric_samples for the 1h burn-rate query.
+// computeAvailability reads the most recent 60 minutes from the raw table
+// (not the hourly rollup) because the rollup has a 5-minute cushion, so
+// SLO tests that only populate hourly would fail with "no such table" or
+// bogus BurnRate1h values.
+func seedRawSamples(db *gorm.DB, nodeID uint, now time.Time, probeOK bool, count int) {
+	step := time.Hour / time.Duration(count)
+	for i := 0; i < count; i++ {
+		db.Create(&model.NodeMetricSample{
+			NodeID:    nodeID,
+			SampledAt: now.Add(-time.Duration(i+1) * step),
+			ProbeOK:   probeOK,
+		})
+	}
 }
 
 func TestComputeAvailability_AllOK(t *testing.T) {
@@ -41,6 +58,7 @@ func TestComputeAvailability_AllOK(t *testing.T) {
 			SampleCount: 10,
 		})
 	}
+	seedRawSamples(db, 1, now, true, 10)
 	def := &model.SLODefinition{ID: 1, Name: "prod availability", MetricType: "availability", Threshold: 0.99, WindowDays: 28}
 	c, err := Compute(db, def, now)
 	if err != nil {
@@ -70,8 +88,16 @@ func TestComputeAvailability_BelowThreshold(t *testing.T) {
 			SampleCount: 10,
 		})
 	}
+	// 1h raw samples fail at 9/10 so BurnRate1h matches the SLO violation.
+	for i := 0; i < 9; i++ {
+		db.Create(&model.NodeMetricSample{NodeID: 1, SampledAt: now.Add(-time.Duration(i+1) * 6 * time.Minute), ProbeOK: true})
+	}
+	db.Create(&model.NodeMetricSample{NodeID: 1, SampledAt: now.Add(-54 * time.Minute), ProbeOK: false})
 	def := &model.SLODefinition{ID: 1, MetricType: "availability", Threshold: 0.99, WindowDays: 28}
-	c, _ := Compute(db, def, now)
+	c, err := Compute(db, def, now)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
 	if c.Observed > 0.92 || c.Observed < 0.88 {
 		t.Fatalf("expected Observed ≈ 0.9, got %f", c.Observed)
 	}

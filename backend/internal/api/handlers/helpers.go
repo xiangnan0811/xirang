@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,19 +16,35 @@ import (
 	"gorm.io/gorm"
 )
 
+// errUnknownRole is returned by ownershipNodeFilter when the gin context has
+// no role set (or an unknown role). Treated as an internal error by handlers —
+// production routes always attach AuthMiddleware + RBAC, so this is never a
+// user-facing condition; tripping it means a route is misconfigured.
+var errUnknownRole = errors.New("ownership filter: unknown or missing role")
+
 // ownershipNodeFilter 返回当前 operator 拥有的节点 ID 列表。
 // admin/viewer 返回 nil, false（无需过滤）。operator 返回 owned IDs, true。
+//
+// Fail-closed on unknown roles, matching middleware/ownership.go. The previous
+// "role == '' → admin" shortcut was removed after a security review: if any
+// future middleware misconfiguration leaves role unset, operators would silently
+// see every node's data. Tests must set role explicitly via c.Set(CtxRole, ...).
 func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
-	role := middleware.CurrentRole(c)
-	if role == "admin" || role == "viewer" {
+	switch middleware.CurrentRole(c) {
+	case "admin", "viewer":
 		return nil, false, nil
+	case "operator":
+		userID := middleware.CurrentUserID(c)
+		ids, err := middleware.OwnedNodeIDs(db, userID)
+		if err != nil {
+			return nil, false, err
+		}
+		return ids, true, nil
+	default:
+		// Unknown or empty role → deny. Callers that want "skip filter in tests"
+		// must seed role explicitly before exercising the handler.
+		return nil, false, errUnknownRole
 	}
-	userID := middleware.CurrentUserID(c)
-	ids, err := middleware.OwnedNodeIDs(db, userID)
-	if err != nil {
-		return nil, false, err
-	}
-	return ids, true, nil
 }
 
 func authorizeNodeOwnership(c *gin.Context, db *gorm.DB, nodeID uint) (bool, error) {

@@ -167,6 +167,9 @@ func main() {
 	retryWorker := alerting.NewRetryWorker(db)
 	go retryWorker.Run(hubCtx)
 
+	silenceRetention := alerting.NewSilenceRetentionWorker(db, settingsSvc)
+	go silenceRetention.Run(hubCtx)
+
 	sloEvaluator := slo.NewEvaluator(db)
 	sloEvaluator.SetRaiseFn(func(_ any, def *model.SLODefinition, c *slo.Compliance) error {
 		return alerting.RaiseSLOBreach(db, def, c)

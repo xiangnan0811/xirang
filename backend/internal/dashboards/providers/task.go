@@ -69,15 +69,16 @@ func (p *TaskStatsProvider) querySuccessRate(ctx context.Context, req dashboards
 	var rows []row
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, status, finished_at").
-		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", req.Start, req.End).
-		Order("task_id ASC, finished_at ASC").
-		Limit(500000)
+		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", req.Start, req.End)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
-	if err := q.Find(&rows).Error; err != nil {
+	if err := q.Order("task_id ASC, finished_at ASC").
+		Limit(dashboards.MaxRowsPerQuery).
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("success_rate query: %w", err)
 	}
+	truncated := len(rows) >= dashboards.MaxRowsPerQuery
 
 	grouped := make(map[uint]map[int64][2]int) // taskID -> bucket -> [successes, total]
 	for _, r := range rows {
@@ -100,7 +101,9 @@ func (p *TaskStatsProvider) querySuccessRate(ctx context.Context, req dashboards
 	}
 
 	taskNames := taskNameMap(ctx, p.db, keysOf(grouped))
-	return buildSuccessSeries(grouped, taskNames, step), nil
+	resp := buildSuccessSeries(grouped, taskNames, step)
+	resp.Truncated = truncated
+	return resp, nil
 }
 
 func (p *TaskStatsProvider) queryThroughput(ctx context.Context, req dashboards.QueryRequest, step int) (*dashboards.QueryResponse, error) {
@@ -112,15 +115,16 @@ func (p *TaskStatsProvider) queryThroughput(ctx context.Context, req dashboards.
 	var rows []row
 	q := p.db.WithContext(ctx).Table("task_traffic_samples").
 		Select("task_id, throughput_mbps, sampled_at").
-		Where("sampled_at >= ? AND sampled_at < ?", req.Start, req.End).
-		Order("task_id ASC, sampled_at ASC").
-		Limit(500000)
+		Where("sampled_at >= ? AND sampled_at < ?", req.Start, req.End)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
-	if err := q.Find(&rows).Error; err != nil {
+	if err := q.Order("task_id ASC, sampled_at ASC").
+		Limit(dashboards.MaxRowsPerQuery).
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("throughput query: %w", err)
 	}
+	truncated := len(rows) >= dashboards.MaxRowsPerQuery
 
 	grouped := make(map[uint]map[int64][]float64)
 	for _, r := range rows {
@@ -138,7 +142,9 @@ func (p *TaskStatsProvider) queryThroughput(ctx context.Context, req dashboards.
 	}
 
 	taskNames := taskNameMap(ctx, p.db, keysOfFloat(grouped))
-	return buildReduceSeries(grouped, taskNames, step, req.Aggregation), nil
+	resp := buildReduceSeries(grouped, taskNames, step, req.Aggregation)
+	resp.Truncated = truncated
+	return resp, nil
 }
 
 func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.QueryRequest, step int) (*dashboards.QueryResponse, error) {
@@ -150,15 +156,16 @@ func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.Qu
 	var rows []row
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, duration_ms, finished_at").
-		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ? AND duration_ms > 0", req.Start, req.End).
-		Order("task_id ASC, finished_at ASC").
-		Limit(500000)
+		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ? AND duration_ms > 0", req.Start, req.End)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
-	if err := q.Find(&rows).Error; err != nil {
+	if err := q.Order("task_id ASC, finished_at ASC").
+		Limit(dashboards.MaxRowsPerQuery).
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("duration query: %w", err)
 	}
+	truncated := len(rows) >= dashboards.MaxRowsPerQuery
 
 	grouped := make(map[uint]map[int64][]float64)
 	for _, r := range rows {
@@ -176,7 +183,9 @@ func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.Qu
 	}
 
 	taskNames := taskNameMap(ctx, p.db, keysOfFloat(grouped))
-	return buildReduceSeries(grouped, taskNames, step, req.Aggregation), nil
+	resp := buildReduceSeries(grouped, taskNames, step, req.Aggregation)
+	resp.Truncated = truncated
+	return resp, nil
 }
 
 func keysOf(m map[uint]map[int64][2]int) []uint {

@@ -23,7 +23,10 @@ func NewRaiseFn(db *gorm.DB, raiser AlertRaiser) RaiseFn {
 		// Always write the event even if the alert call errored; the event captures
 		// the detection moment regardless of alert pipeline state.
 		detailsJSON, _ := json.Marshal(f.Details)
-		if detailsJSON == nil {
+		// json.Marshal on a nil map returns []byte("null"), never nil. Normalize
+		// "null" to "{}" so downstream JSON consumers can unconditionally parse
+		// as object.
+		if len(detailsJSON) == 0 || string(detailsJSON) == "null" {
 			detailsJSON = []byte("{}")
 		}
 		evt := model.AnomalyEvent{
