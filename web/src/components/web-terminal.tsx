@@ -5,6 +5,40 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
+// Terminal color palette is intentionally decoupled from the Xirang site
+// theme. Two reasons:
+//   1. The 16 ANSI colors (red/green/yellow/blue/…) are a protocol — remote
+//      scripts emit `\e[31m` expecting "red", and the terminal must render
+//      them consistently regardless of OS light/dark preference. Changing
+//      these across themes would break muscle memory and script output.
+//   2. Every popular terminal app (VS Code integrated terminal, iTerm,
+//      GitHub Codespaces web IDE, Termius) keeps the terminal pane dark by
+//      default even under a light OS chrome, matching operator expectation.
+//
+// If a future release wants a user-selectable "light terminal" option, add
+// it as an explicit preference, not by routing through the site theme.
+const TERMINAL_PALETTE = {
+  background: "#0d1117",
+  foreground: "#c9d1d9",
+  cursor: "#c9d1d9",
+  black: "#0d1117",
+  red: "#ff7b72",
+  green: "#3fb950",
+  yellow: "#d29922",
+  blue: "#58a6ff",
+  magenta: "#bc8cff",
+  cyan: "#39c5cf",
+  white: "#b1bac4",
+  brightBlack: "#6e7681",
+  brightRed: "#ffa198",
+  brightGreen: "#56d364",
+  brightYellow: "#e3b341",
+  brightBlue: "#79c0ff",
+  brightMagenta: "#d2a8ff",
+  brightCyan: "#56d4dd",
+  brightWhite: "#f0f6fc",
+} as const;
+
 type WebTerminalProps = {
   nodeId: number;
   token: string;
@@ -37,27 +71,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         cursorBlink: true,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         fontSize: 14,
-        theme: {
-          background: "#0d1117",
-          foreground: "#c9d1d9",
-          cursor: "#c9d1d9",
-          black: "#0d1117",
-          red: "#ff7b72",
-          green: "#3fb950",
-          yellow: "#d29922",
-          blue: "#58a6ff",
-          magenta: "#bc8cff",
-          cyan: "#39c5cf",
-          white: "#b1bac4",
-          brightBlack: "#6e7681",
-          brightRed: "#ffa198",
-          brightGreen: "#56d364",
-          brightYellow: "#e3b341",
-          brightBlue: "#79c0ff",
-          brightMagenta: "#d2a8ff",
-          brightCyan: "#56d4dd",
-          brightWhite: "#f0f6fc",
-        },
+        theme: TERMINAL_PALETTE,
       });
 
       fitAddon = new FitAddon();
@@ -146,8 +160,8 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
   return (
     <div
       ref={containerRef}
-      className="h-full w-full overflow-hidden rounded-md bg-[#0d1117]"
-      style={{ minHeight: "400px" }}
+      className="h-full w-full overflow-hidden rounded-md"
+      style={{ minHeight: "400px", backgroundColor: TERMINAL_PALETTE.background }}
     />
   );
 };

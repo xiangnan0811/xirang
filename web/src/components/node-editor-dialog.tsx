@@ -416,13 +416,13 @@ export function NodeEditorDialog({
           </p>
         )}
         {isEditing && draft.backupDir && (
-          <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400">
+          <p className="mt-0.5 text-xs text-warning-foreground dark:text-warning">
             {t('nodeEditor.backupDirChangeWarning')}
           </p>
         )}
         {/* eslint-disable-next-line no-control-regex -- intentional: detect non-ASCII chars in node name */}
         {!backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name) && (
-          <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400">
+          <p className="mt-0.5 text-xs text-warning-foreground dark:text-warning">
             {t('nodeEditor.backupDirNonAsciiWarning')}
           </p>
         )}

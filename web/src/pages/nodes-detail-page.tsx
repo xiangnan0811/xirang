@@ -44,8 +44,8 @@ export function NodesDetailPage() {
 
   const statusBadge = isLoading ? "加载中" : status?.online ? "在线" : "离线";
   const badgeClass = status?.online
-    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-    : "bg-stone-500/10 text-stone-500 dark:text-stone-400";
+    ? "bg-success/10 text-success"
+    : "bg-muted text-muted-foreground";
 
   return (
     <div className="flex flex-col gap-6">
