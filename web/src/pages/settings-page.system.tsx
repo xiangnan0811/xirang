@@ -118,9 +118,9 @@ export function SystemTab() {
 
   const sourceBadge = (source: string) => {
     const colors: Record<string, string> = {
-      db: "bg-blue-500/10 text-blue-600",
-      env: "bg-amber-500/10 text-amber-600",
-      default: "bg-zinc-500/10 text-zinc-500",
+      db: "bg-info/10 text-info",
+      env: "bg-warning/10 text-warning-foreground dark:text-warning",
+      default: "bg-muted text-muted-foreground",
     };
     return (
       <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase", colors[source] || colors.default)}>
@@ -145,7 +145,7 @@ export function SystemTab() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium truncate">{def.description}</p>
                     {def.requires_restart && (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600" title={t("settings.system.requiresRestart")}>
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-warning-foreground dark:text-warning" title={t("settings.system.requiresRestart")}>
                         <AlertTriangle className="size-3" />
                         {t("settings.system.restart")}
                       </span>

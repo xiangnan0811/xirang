@@ -22,12 +22,12 @@ export default function StatCard({ label, value, unit, sparkline, warnAt }: Stat
   const containerClass =
     "rounded-md border p-4 flex flex-col gap-1 " +
     (variant === "warn"
-      ? "border-amber-400/40 bg-amber-50 dark:bg-amber-950/20"
+      ? "border-warning/40 bg-warning/10"
       : "border-border bg-card");
 
   const valueClass =
     "text-3xl font-semibold leading-none " +
-    (variant === "warn" ? "text-amber-700 dark:text-amber-300" : "text-foreground");
+    (variant === "warn" ? "text-warning-foreground dark:text-warning" : "text-foreground");
 
   return (
     <div data-testid="stat-card" data-variant={variant} className={containerClass}>

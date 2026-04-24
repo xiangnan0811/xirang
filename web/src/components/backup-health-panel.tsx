@@ -171,7 +171,7 @@ export function BackupHealthPanel() {
                       border: "1px solid hsl(var(--border))",
                       fontSize: 12,
                       borderRadius: 8,
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                      boxShadow: "var(--shadow-md)",
                     }}
                     labelStyle={{ color: "hsl(var(--muted-foreground))", fontWeight: 600, marginBottom: 4 }}
                   />
