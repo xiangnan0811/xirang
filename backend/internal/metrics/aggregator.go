@@ -28,12 +28,21 @@ type Aggregator struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	done    chan struct{}
+	// nowFn resolves "current time" for all rollup/cleanup windows. Overridable
+	// for tests so backfill behavior doesn't depend on wall-clock alignment
+	// (the 5-minute cushion in catchUpHourly is flaky when CI lands in the
+	// first 5 minutes of an hour and the test's seeded samples straddle the
+	// current hour boundary).
+	nowFn func() time.Time
 }
 
 // NewAggregator builds an Aggregator. dialect must be "sqlite" or "postgres".
 func NewAggregator(db *gorm.DB, dialect string) *Aggregator {
-	return &Aggregator{db: db, dialect: dialect, done: make(chan struct{})}
+	return &Aggregator{db: db, dialect: dialect, done: make(chan struct{}), nowFn: func() time.Time { return time.Now().UTC() }}
 }
+
+// SetNowFn overrides the clock source (tests only). Not safe to call after Start.
+func (a *Aggregator) SetNowFn(fn func() time.Time) { a.nowFn = fn }
 
 // bucketExpr returns dialect-specific SQL to truncate a time column to the given unit.
 // unit: "hour" or "day". col: the source column name (e.g. "sampled_at", "bucket_start").
@@ -258,7 +267,7 @@ func (a *Aggregator) catchUpHourly(ctx context.Context) error {
 	} else {
 		from = lastBucket.Add(time.Hour)
 	}
-	end := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Hour)
+	end := a.nowFn().Add(-5 * time.Minute).Truncate(time.Hour)
 	for from.Before(end) {
 		to := from.Add(time.Hour)
 		if _, err := a.rollupHourly(ctx, from, to); err != nil {
@@ -293,7 +302,7 @@ func (a *Aggregator) catchUpDaily(ctx context.Context) error {
 	} else {
 		from = lastBucket.Add(24 * time.Hour)
 	}
-	end := time.Now().UTC().Truncate(24 * time.Hour)
+	end := a.nowFn().Truncate(24 * time.Hour)
 	for from.Before(end) {
 		to := from.Add(24 * time.Hour)
 		if _, err := a.rollupDaily(ctx, from, to); err != nil {
@@ -313,7 +322,7 @@ func (a *Aggregator) cleanupAggregates(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	now := time.Now().UTC()
+	now := a.nowFn()
 	hourlyCutoff := now.Add(-time.Duration(hourlyRetentionDays) * 24 * time.Hour)
 	dailyCutoff := now.Add(-time.Duration(dailyRetentionDays) * 24 * time.Hour)
 

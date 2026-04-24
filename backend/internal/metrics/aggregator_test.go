@@ -155,7 +155,11 @@ func TestRollupDaily_FromHourly(t *testing.T) {
 
 func TestAggregator_BackfillsHourlyFromRaw(t *testing.T) {
 	db := newAggTestDB(t)
-	now := time.Now().UTC().Truncate(time.Hour)
+	// Anchor "now" at a fixed instant well past any hour boundary so the
+	// 5-minute cushion in catchUpHourly doesn't discard the most recent
+	// bucket. Previously this used time.Now() and failed in CI whenever the
+	// job launched within the first 5 minutes of an hour.
+	now := time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
 	// Seed 3 raw samples at h-3, h-2, h-1 relative to now.
 	for h := -3; h <= -1; h++ {
 		if err := db.Create(&model.NodeMetricSample{
@@ -168,6 +172,7 @@ func TestAggregator_BackfillsHourlyFromRaw(t *testing.T) {
 		}
 	}
 	agg := NewAggregator(db, "sqlite")
+	agg.SetNowFn(func() time.Time { return now })
 	if err := agg.backfill(context.Background()); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
