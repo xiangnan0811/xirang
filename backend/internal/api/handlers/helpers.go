@@ -17,9 +17,11 @@ import (
 
 // ownershipNodeFilter 返回当前 operator 拥有的节点 ID 列表。
 // admin/viewer 返回 nil, false（无需过滤）。operator 返回 owned IDs, true。
+// 空 role（单元测试未挂认证中间件时）按 admin 处理，与 authorizeNodeOwnership
+// 的约定一致。
 func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
 	role := middleware.CurrentRole(c)
-	if role == "admin" || role == "viewer" {
+	if role == "" || role == "admin" || role == "viewer" {
 		return nil, false, nil
 	}
 	userID := middleware.CurrentUserID(c)

@@ -3,15 +3,26 @@ package anomaly
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"gorm.io/gorm"
 )
+
+// ewmaEvaluateErrors counts per-metric evaluate failures so a rising error
+// rate shows up in dashboards even though individual errors log at Debug.
+var ewmaEvaluateErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "xirang_anomaly_ewma_evaluate_errors_total",
+	Help: "Count of EWMADetector.evaluateNodeMetric failures, labeled by metric key.",
+}, []string{"metric"})
 
 // EWMADetector evaluates CPU/mem/load EWMA anomaly for each node every tick.
 type EWMADetector struct {
@@ -74,7 +85,15 @@ func (d *EWMADetector) Evaluate(ctx context.Context) ([]Finding, error) {
 		for _, m := range ewmaMetrics {
 			f, err := d.evaluateNodeMetric(ctx, n, m.Key, m.Column, m.UpperLabel, alpha, sigmaK, since, minSamples)
 			if err != nil {
-				continue // log would clutter; tests already cover error paths via direct calls
+				// One flaky node must not flood the log. Log at Debug for
+				// forensic traces and let the counter drive alerts.
+				ewmaEvaluateErrors.WithLabelValues(m.Key).Inc()
+				logger.Module("anomaly").Debug().
+					Uint("node_id", n.ID).
+					Str("metric", m.Key).
+					Err(err).
+					Msg("ewma: evaluate failed")
+				continue
 			}
 			if f != nil {
 				findings = append(findings, *f)
@@ -98,6 +117,16 @@ func (d *EWMADetector) evaluateNodeMetric(ctx context.Context, node model.Node,
 	if err := d.db.WithContext(ctx).Raw(query, node.ID, since, true).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
+	// Filter NaN/Inf defensively. The prober should already sanitize, but a
+	// single polluted row here would propagate through EWMA mean → detector
+	// stays silent (NaN comparisons are always false) or false-fires forever.
+	cleaned := rows[:0]
+	for _, r := range rows {
+		if !math.IsNaN(r.Value) && !math.IsInf(r.Value, 0) {
+			cleaned = append(cleaned, r)
+		}
+	}
+	rows = cleaned
 	if len(rows) < minSamples {
 		return nil, nil
 	}

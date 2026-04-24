@@ -105,6 +105,10 @@ vi.mock("@/lib/api/client", () => ({
     triggerTask: mockTriggerTask,
     getAlerts: mockGetAlerts,
     getAlert: vi.fn().mockRejectedValue(new Error("not found")),
+    // Lazy-fetched for the "+N 条同类" badge when a delivery panel opens.
+    // Default resolves with count=1 so badge never renders in existing
+    // tests; individual tests can override via mockResolvedValueOnce.
+    getAlertGroupInfo: vi.fn().mockResolvedValue({ count: 1, siblingNodeIds: [] }),
   },
   ApiError: class ApiError extends Error {
     status: number;

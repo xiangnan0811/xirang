@@ -24,6 +24,10 @@ export type AlertListProps = {
   deliveryOpenAlertId: string | null;
   deliveryLoadingAlertId: string | null;
   deliveryMap: Record<string, AlertDeliveryRecord[]>;
+  /** Optional `{id: { count }}` lookup populated lazily when a delivery
+   *  panel opens. count > 1 means this alert is part of an in-memory
+   *  grouping window; the row renders a "+N 条同类" badge. */
+  groupInfoMap?: Record<string, { count: number }>;
   retryingDeliveryKey: string | null;
   retryingAllAlertId: string | null;
   integrationNameMap: Map<string, string>;
@@ -47,6 +51,7 @@ export function AlertList({
   deliveryOpenAlertId,
   deliveryLoadingAlertId,
   deliveryMap,
+  groupInfoMap,
   retryingDeliveryKey,
   retryingAllAlertId,
   integrationNameMap,
@@ -184,6 +189,20 @@ export function AlertList({
                   </span>
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                   <Badge tone={status.variant}>{status.label}</Badge>
+                  {groupInfoMap?.[alert.id]?.count != null && groupInfoMap[alert.id].count > 1 ? (
+                    <Badge
+                      tone="neutral"
+                      title={t("notifications.groupBadgeTooltip", {
+                        defaultValue: "同类告警在当前分组窗口内累计 {{count}} 条",
+                        count: groupInfoMap[alert.id].count,
+                      })}
+                    >
+                      {t("notifications.groupBadge", {
+                        defaultValue: "+{{count}} 条同类",
+                        count: groupInfoMap[alert.id].count - 1,
+                      })}
+                    </Badge>
+                  ) : null}
                 </div>
                 <p className="mt-1.5 text-sm">{alert.message}</p>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -275,7 +294,25 @@ export function AlertList({
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                 </td>
                 <td className="px-3 py-2.5 font-medium">{displayNode}</td>
-                <td className="px-3 py-2.5 max-w-[300px] truncate" title={alert.message}>{alert.message}</td>
+                <td className="px-3 py-2.5 max-w-[300px]" title={alert.message}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="truncate">{alert.message}</span>
+                    {groupInfoMap?.[alert.id]?.count != null && groupInfoMap[alert.id].count > 1 ? (
+                      <Badge
+                        tone="neutral"
+                        title={t("notifications.groupBadgeTooltip", {
+                          defaultValue: "同类告警在当前分组窗口内累计 {{count}} 条",
+                          count: groupInfoMap[alert.id].count,
+                        })}
+                      >
+                        {t("notifications.groupBadge", {
+                          defaultValue: "+{{count}} 条同类",
+                          count: groupInfoMap[alert.id].count - 1,
+                        })}
+                      </Badge>
+                    ) : null}
+                  </div>
+                </td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.policyName}</td>
                 <td className="px-3 py-2.5 text-muted-foreground text-xs">{alert.triggeredAt}</td>
                 <td className="px-3 py-2.5">

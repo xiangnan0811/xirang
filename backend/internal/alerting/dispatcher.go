@@ -326,36 +326,39 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 
 	now := time.Now()
 
-	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
-	silences, _ := ActiveSilences(db, now)
+	// Load node once up-front for both silence matching and grouping. A
+	// zero-value Node silently breaks tag-based silences (matcher sees
+	// empty tags and never fires), so distinguish three cases:
+	//   - platform alert (NodeID=0): skip load, tags are empty by design
+	//   - node deleted (ErrRecordNotFound): proceed with zero Node and log
+	//   - transient DB error: return err so the dispatch is retried
 	var node model.Node
-	nodeLoadAttempted := false
-	if len(silences) > 0 {
-		if res := db.First(&node, alert.NodeID); res.Error != nil {
+	if alert.NodeID != 0 {
+		if err := db.First(&node, alert.NodeID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Module("alerting").Warn().
+					Uint("alert_id", alert.ID).
+					Uint("node_id", alert.NodeID).
+					Err(err).
+					Msg("dispatch: 节点加载失败，跳过本次分发")
+				return err
+			}
 			logger.Module("alerting").Warn().
 				Uint("alert_id", alert.ID).
 				Uint("node_id", alert.NodeID).
-				Err(res.Error).
-				Msg("静默检查：节点加载失败，使用空 tags 计算 group_key")
+				Msg("dispatch: 节点已删除，使用空 tags 继续")
 		}
-		nodeLoadAttempted = true
+	}
+
+	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
+	silences, _ := ActiveSilences(db, now)
+	if len(silences) > 0 {
 		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
 			logger.Module("alerting").Info().
 				Uint("alert_id", alert.ID).
 				Uint("silence_id", matched.ID).
 				Msg("告警已静默，跳过投递")
 			return nil
-		}
-	}
-
-	// 分组检查：同一 (category, nodeID, tags) 组合在窗口内只投递首次告警
-	if !nodeLoadAttempted {
-		if res := db.First(&node, alert.NodeID); res.Error != nil {
-			logger.Module("alerting").Warn().
-				Uint("alert_id", alert.ID).
-				Uint("node_id", alert.NodeID).
-				Err(res.Error).
-				Msg("分组检查：节点加载失败，使用空 tags 计算 group_key")
 		}
 	}
 	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))

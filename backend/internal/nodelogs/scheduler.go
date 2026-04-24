@@ -60,6 +60,10 @@ func (s *Scheduler) enqueue(ctx context.Context) {
 		}
 		select {
 		case s.jobs <- CollectJob{Node: n}:
+			// Update gauge from the scheduler goroutine only — reading
+			// len(channel) from concurrent workers gave a racy snapshot
+			// that made the metric jitter wildly under load.
+			queueDepth.Set(float64(len(s.jobs)))
 		case <-ctx.Done():
 			return
 		default:

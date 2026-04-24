@@ -54,18 +54,45 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// Tick performs one scan+fire pass. Exposed for tests.
+// tickBatchSize caps one Tick's open-alert fetch so a runaway queue can't
+// stall the escalation loop for minutes per pass. At 1000 alerts/30s the
+// engine still drains ~30/s which is far above any realistic fire rate.
+const tickBatchSize = 1000
+
+// Tick performs one scan+fire pass. Exposed for tests. Processes in batches
+// keyed by ascending id to bound memory + per-tick latency at scale.
 func (e *Engine) Tick(ctx context.Context) {
-	var alerts []model.Alert
-	if err := e.db.WithContext(ctx).
-		Where("status = ?", "open").
-		Find(&alerts).Error; err != nil {
-		logger.Module("escalation").Warn().Err(err).Msg("tick: load alerts failed")
-		return
-	}
+	start := time.Now()
+	defer func() { TickDuration.Observe(time.Since(start).Seconds()) }()
 	now := e.nowFn()
-	for i := range alerts {
-		e.evaluate(ctx, &alerts[i], now)
+	var cursor uint
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		var alerts []model.Alert
+		if err := e.db.WithContext(ctx).
+			Where("status = ? AND id > ?", "open", cursor).
+			Order("id ASC").
+			Limit(tickBatchSize).
+			Find(&alerts).Error; err != nil {
+			logger.Module("escalation").Warn().Err(err).Msg("tick: load alerts failed")
+			return
+		}
+		if len(alerts) == 0 {
+			return
+		}
+		for i := range alerts {
+			if ctx.Err() != nil {
+				return
+			}
+			OpenAlertsScanned.Inc()
+			e.evaluate(ctx, &alerts[i], now)
+		}
+		if len(alerts) < tickBatchSize {
+			return
+		}
+		cursor = alerts[len(alerts)-1].ID
 	}
 }
 
@@ -136,9 +163,17 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	pid := policy.ID
 
 	err := e.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// optimistic lock on last_level_fired
+		// Optimistic lock on last_level_fired AND status='open' — covers
+		// two races: concurrent fire (another tick advanced last_level_fired)
+		// and state flip (API acked/resolved the alert between evaluate and
+		// fire). Either outcome triggers a clean idempotent skip.
+		//
+		// NOTE: Updates(map) does NOT skip zero values. If a future caller
+		// adds a field whose legitimate zero value differs from "unchanged"
+		// (e.g. numeric severity scale), switch to a struct + Select().
 		res := tx.Model(&model.Alert{}).
-			Where("id = ? AND last_level_fired = ?", alert.ID, alert.LastLevelFired).
+			Where("id = ? AND last_level_fired = ? AND status = ?",
+				alert.ID, alert.LastLevelFired, "open").
 			Updates(map[string]any{
 				"severity":         severityAfter,
 				"tags":             string(tagsJSON),
@@ -174,6 +209,12 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	alert.Severity = severityAfter
 	alert.Tags = string(tagsJSON)
 	alert.LastLevelFired = idx
+
+	silencedLabel := "false"
+	if silenced {
+		silencedLabel = "true"
+	}
+	FiresTotal.WithLabelValues(severityAfter, silencedLabel).Inc()
 
 	if !silenced && e.sender != nil && len(integrationIDs) > 0 {
 		e.sender(*alert, integrationIDs)

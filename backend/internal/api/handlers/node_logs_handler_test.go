@@ -24,10 +24,19 @@ func openNodeLogsTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeLog{}, &model.Alert{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.NodeLog{}, &model.Alert{}, &model.SystemSetting{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
+}
+
+// seedOperatorOwnership wires user 1 (the test operator) as owner of the
+// given nodes so ownershipNodeFilter returns them and the list query is
+// not 403'd. Called from tests that use role="operator".
+func seedOperatorOwnership(db *gorm.DB, nodeIDs ...uint) {
+	for _, nid := range nodeIDs {
+		db.Create(&model.NodeOwner{NodeID: nid, UserID: 1})
+	}
 }
 
 func newNodeLogsRouter(t *testing.T, db *gorm.DB, role string) *gin.Engine {
@@ -74,6 +83,7 @@ func TestNodeLogs_FiltersNodeAndTime(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
 	db.Create(&model.Node{Name: "n2", Host: "h2", Username: "u", BackupDir: "/b2"})
+	seedOperatorOwnership(db, 1, 2)
 	now := time.Now().UTC()
 	seedLog(db, 1, now.Add(-30*time.Minute), "recent-n1")
 	seedLog(db, 2, now.Add(-30*time.Minute), "recent-n2")
@@ -105,6 +115,7 @@ func TestNodeLogs_FiltersNodeAndTime(t *testing.T) {
 func TestNodeLogs_Pagination(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
 	base := time.Now().UTC()
 	for i := 0; i < 250; i++ {
 		seedLog(db, 1, base.Add(-time.Duration(i)*time.Second), fmt.Sprintf("m%d", i))
@@ -139,6 +150,7 @@ func TestNodeLogs_Pagination(t *testing.T) {
 func TestNodeLogs_KeywordExclusion(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
 	now := time.Now().UTC()
 	seedLog(db, 1, now.Add(-10*time.Minute), "allow traffic")
 	seedLog(db, 1, now.Add(-5*time.Minute), "deny traffic")
@@ -166,6 +178,7 @@ func TestNodeLogs_KeywordExclusion(t *testing.T) {
 func TestAlertLogs_ReturnsWindow(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
 	t0 := time.Now().UTC().Add(-30 * time.Minute)
 	db.Create(&model.Alert{NodeID: 1, NodeName: "n1", Severity: "warning", Status: "open", ErrorCode: "X", Message: "m", TriggeredAt: t0})
 	seedLog(db, 1, t0.Add(-3*time.Minute), "in-window")

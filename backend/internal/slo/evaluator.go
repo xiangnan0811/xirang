@@ -24,9 +24,16 @@ func NewEvaluator(db *gorm.DB) *Evaluator {
 	return &Evaluator{
 		db:   db,
 		tick: time.Minute,
-		raiseFn: func(_ any, _ *model.SLODefinition, _ *Compliance) error {
-			// Real raise wiring injected in main.go (Task 8) to avoid import cycle
-			// between slo and alerting. Default is no-op.
+		raiseFn: func(_ any, def *model.SLODefinition, c *Compliance) error {
+			// Real raise wiring injected in main.go during bootstrap to avoid
+			// an slo → alerting import cycle. The default MUST NOT be a silent
+			// no-op: if we get here, breaches are being computed but dropped,
+			// which is a deployment-level bug. Warn so it surfaces in logs.
+			logger.Module("slo").Warn().
+				Uint("slo_id", def.ID).
+				Str("slo_name", def.Name).
+				Float64("burn_1h", c.BurnRate1h).
+				Msg("raiseFn not wired — breach dropped (bootstrap bug)")
 			return nil
 		},
 	}

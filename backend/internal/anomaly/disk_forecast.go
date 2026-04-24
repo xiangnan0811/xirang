@@ -3,6 +3,7 @@ package anomaly
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -85,8 +86,13 @@ func (d *DiskForecastDetector) evaluateNode(ctx context.Context, node model.Node
 		if r.DiskPctAvg == nil {
 			continue
 		}
+		// Drop NaN/Inf defensively; a polluted value would corrupt the OLS fit.
+		v := *r.DiskPctAvg
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
 		xs = append(xs, float64(r.BucketStart.Unix()))
-		ys = append(ys, *r.DiskPctAvg)
+		ys = append(ys, v)
 	}
 	if len(xs) < minHistoryHours {
 		return nil
@@ -136,7 +142,7 @@ func (d *DiskForecastDetector) evaluateNode(ctx context.Context, node model.Node
 		Message:       msg,
 		Details: map[string]any{
 			"samples_used":   len(xs),
-			"history_span_h": len(xs),
+			"history_span_h": int((xs[len(xs)-1] - xs[0]) / 3600),
 			"slope_per_day":  slope * 86400,
 			"r2":             r2,
 			"threshold_days": thresholdDays,

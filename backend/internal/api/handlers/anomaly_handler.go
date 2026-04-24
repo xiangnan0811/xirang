@@ -22,9 +22,22 @@ type anomalyListResponse struct {
 	HasMore bool                 `json:"has_more"`
 }
 
-// List returns paginated events with optional filters.
+// List returns paginated events with optional filters. For operator role the
+// result is constrained to nodes the user owns (admin/viewer see all).
 func (h *AnomalyHandler) List(c *gin.Context) {
+	ownedIDs, needOwnerFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if needOwnerFilter && len(ownedIDs) == 0 {
+		respondOK(c, anomalyListResponse{Data: []model.AnomalyEvent{}, Total: 0, HasMore: false})
+		return
+	}
 	q := h.db.Model(&model.AnomalyEvent{})
+	if needOwnerFilter {
+		q = q.Where("node_id IN ?", ownedIDs)
+	}
 	if v := c.Query("detector"); v != "" {
 		switch v {
 		case "ewma", "disk_forecast":

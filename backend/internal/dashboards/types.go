@@ -52,10 +52,21 @@ type Filters struct {
 }
 
 // QueryResponse carries series and the step actually used.
+//
+// Truncated=true indicates the underlying row fetch hit MaxRowsPerQuery and
+// the returned series may be incomplete at the tail. Frontends should show
+// a warning and suggest narrowing the time range or filters.
 type QueryResponse struct {
 	Series      []Series `json:"series"`
 	StepSeconds int      `json:"step_seconds"`
+	Truncated   bool     `json:"truncated,omitempty"`
 }
+
+// MaxRowsPerQuery is the per-provider row cap. Hit → Truncated=true. Fixed
+// at 500k to protect the query engine from a pathological wide dashboard +
+// long range combination while staying well above the practical ceiling
+// (a 30-day window * 6 metrics * 60-node fleet at 1-min sampling ≈ 150k).
+const MaxRowsPerQuery = 500000
 
 // Provider queries a specific family of metrics.
 type Provider interface {

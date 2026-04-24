@@ -280,11 +280,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/config/import", middleware.RequireRole("admin"), configHandler.Import)
 
 	silenceHandler := handlers.NewSilenceHandler(dep.DB)
+	// Writes are admin-only per P5b spec — silences are a platform-level ops
+	// tool, not a per-operator self-serve feature.
 	secured.GET("/silences", middleware.RBAC("alerts:read"), silenceHandler.List)
 	secured.GET("/silences/:id", middleware.RBAC("alerts:read"), silenceHandler.Get)
-	secured.POST("/silences", middleware.RBAC("alerts:write"), silenceHandler.Create)
-	secured.PATCH("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Patch)
-	secured.DELETE("/silences/:id", middleware.RBAC("alerts:write"), silenceHandler.Delete)
+	secured.POST("/silences", middleware.RequireRole("admin"), silenceHandler.Create)
+	secured.PATCH("/silences/:id", middleware.RequireRole("admin"), silenceHandler.Patch)
+	secured.DELETE("/silences/:id", middleware.RequireRole("admin"), silenceHandler.Delete)
 
 	sloHandler := handlers.NewSLOHandler(dep.DB)
 	secured.GET("/slos", middleware.RBAC("alerts:read"), sloHandler.List)
@@ -297,7 +299,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	if dep.RetryWorker != nil {
 		alertDeliveryHandler := handlers.NewAlertDeliveryHandler(dep.RetryWorker)
-		secured.POST("/alert-deliveries/:id/retry", middleware.RBAC("alerts:write"), alertDeliveryHandler.Retry)
+		// Manual delivery retry is admin-only per P5b spec.
+		secured.POST("/alert-deliveries/:id/retry", middleware.RequireRole("admin"), alertDeliveryHandler.Retry)
 	}
 
 	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)

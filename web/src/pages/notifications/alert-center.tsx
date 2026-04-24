@@ -72,6 +72,11 @@ export function AlertCenter({
   const [retryingDeliveryKey, setRetryingDeliveryKey] = useState<string | null>(null);
   const [retryingAllAlertId, setRetryingAllAlertId] = useState<string | null>(null);
 
+  // --- 分组计数缓存 ---
+  // Lazy: only fetched when a delivery panel opens (the only context where
+  // "+N 条同类" is useful). Keyed by alertId.
+  const [groupInfoMap, setGroupInfoMap] = useState<Record<string, { count: number }>>({});
+
   // --- 深链接高亮 ---
   const highlightClearTimerRef = useRef<number | null>(null);
   const highlightRef = useCallback((alertId: string, el: HTMLElement | null) => {
@@ -192,6 +197,11 @@ export function AlertCenter({
       .then((rows) => setDeliveryMap((prev) => ({ ...prev, [alertId]: rows })))
       .catch((error) => toast.error(getErrorMessage(error)))
       .finally(() => setDeliveryLoadingAlertId(null));
+    // Fetch group count in parallel. Best-effort: a failure here must not
+    // block delivery rendering, so the error is logged at debug only.
+    void apiClient.getAlertGroupInfo(token, alertId)
+      .then((gi) => setGroupInfoMap((prev) => ({ ...prev, [alertId]: { count: gi.count } })))
+      .catch(() => { /* non-critical; badge simply doesn't render */ });
   };
 
   const toggleDeliveries = (alertId: string) => {
@@ -315,6 +325,7 @@ export function AlertCenter({
             deliveryOpenAlertId={deliveryOpenAlertId}
             deliveryLoadingAlertId={deliveryLoadingAlertId}
             deliveryMap={deliveryMap}
+            groupInfoMap={groupInfoMap}
             retryingDeliveryKey={retryingDeliveryKey}
             retryingAllAlertId={retryingAllAlertId}
             integrationNameMap={integrationNameMap}

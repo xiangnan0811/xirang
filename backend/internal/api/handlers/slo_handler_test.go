@@ -29,7 +29,7 @@ func openSLOHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SLODefinition{}, &model.NodeMetricSampleHourly{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SLODefinition{}, &model.NodeMetricSample{}, &model.NodeMetricSampleHourly{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db

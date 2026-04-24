@@ -17,6 +17,11 @@ func TestEvaluator_RaisesBreachWhenBurnRateOverTwo(t *testing.T) {
 		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
 	}
 	db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-30 * time.Minute), ProbeOK: 0, ProbeFail: 100, SampleCount: 100})
+	// BurnRate1h reads the raw table; seed 1h worth of failing probes so
+	// the 1h burn clears the min-sample threshold and reports breach.
+	for i := 0; i < 20; i++ {
+		db.Create(&model.NodeMetricSample{NodeID: 1, SampledAt: now.Add(-time.Duration(i+1) * 3 * time.Minute), ProbeOK: false})
+	}
 	def := &model.SLODefinition{ID: 1, Name: "prod", MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 

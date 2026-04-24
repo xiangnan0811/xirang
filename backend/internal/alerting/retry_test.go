@@ -1,6 +1,7 @@
 package alerting
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestRetryWorker_MarksFailedAfterMaxAttempts(t *testing.T) {
 
 	w := NewRetryWorker(db)
 	w.sendFn = func(integ model.Integration, alert model.Alert) error { return errors.New("boom") }
-	w.tick(time.Now())
+	w.tick(context.Background(), time.Now())
 
 	var got model.AlertDelivery
 	db.First(&got, d.ID)
@@ -70,7 +71,7 @@ func TestRetryWorker_ReenqueuesOnFailure(t *testing.T) {
 
 	w := NewRetryWorker(db)
 	w.sendFn = func(integ model.Integration, alert model.Alert) error { return errors.New("boom") }
-	w.tick(time.Now())
+	w.tick(context.Background(), time.Now())
 
 	var got model.AlertDelivery
 	db.First(&got, d.ID)
@@ -125,7 +126,7 @@ func TestRetryWorker_MarksFailedWhenIntegrationDeleted(t *testing.T) {
 
 	w := NewRetryWorker(db)
 	w.sendFn = func(integ model.Integration, alert model.Alert) error { return nil }
-	w.tick(time.Now())
+	w.tick(context.Background(), time.Now())
 
 	var got model.AlertDelivery
 	db.First(&got, d.ID)
@@ -153,7 +154,7 @@ func TestRetryWorker_MarksFailedWhenAlertDeleted(t *testing.T) {
 
 	w := NewRetryWorker(db)
 	w.sendFn = func(integ model.Integration, alert model.Alert) error { return nil }
-	w.tick(time.Now())
+	w.tick(context.Background(), time.Now())
 
 	var got model.AlertDelivery
 	db.First(&got, d.ID)
