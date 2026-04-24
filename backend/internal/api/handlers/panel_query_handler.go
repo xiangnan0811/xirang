@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -43,6 +44,13 @@ func (h *PanelQueryHandler) Query(c *gin.Context) {
 			errors.Is(err, dashboards.ErrInvalidFilters),
 			errors.Is(err, dashboards.ErrInvalidTimeRange):
 			respondBadRequest(c, err.Error())
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// Client disconnected (AbortController-driven debounce cancels
+			// on every keystroke in the panel editor). Do not log as an
+			// error and do not write the gin error to the structured log —
+			// just close the response with 499 Client Closed Request so the
+			// HTTP layer records the cause without alarming anyone.
+			c.AbortWithStatus(499)
 		default:
 			respondInternalError(c, err)
 		}

@@ -133,6 +133,30 @@ export function PanelEditorDialog({
   // ── 保存状态 ────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
 
+  // Gate PanelRenderer until the dialog's layout has settled so recharts'
+  // ResponsiveContainer reads real pixel dimensions instead of 0. Without
+  // this the browser console warns
+  //   "The width(-1) and height(-1) of chart should be greater than 0"
+  // because Radix's enter animation transforms the dialog from scale(0.95),
+  // and RC's first measurement catches the pre-transform state. Two RAFs
+  // pushes the mount past the initial paint where the dialog is settled.
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    if (!open) {
+      setChartReady(false);
+      return;
+    }
+    const id1 = requestAnimationFrame(() => {
+      const id2 = requestAnimationFrame(() => setChartReady(true));
+      (setChartReady as unknown as { _raf?: number })._raf = id2;
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      const pending = (setChartReady as unknown as { _raf?: number })._raf;
+      if (pending) cancelAnimationFrame(pending);
+    };
+  }, [open]);
+
   // ── 初始化：打开时加载元数据 + 回填编辑值 ─────────────────────
   // Depend on `panel?.id` too — without it, reopening the dialog for a
   // different panel while it was already open (e.g. quick switch from "new"
@@ -480,7 +504,7 @@ export function PanelEditorDialog({
                   {previewError}
                 </div>
               )}
-              {!previewLoading && !previewError && previewData && (
+              {!previewLoading && !previewError && previewData && chartReady && (
                 <PanelRenderer panel={previewPanel} data={previewData} />
               )}
               {!previewLoading && !previewError && !previewData && (

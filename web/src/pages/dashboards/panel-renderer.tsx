@@ -98,6 +98,16 @@ export function PanelRenderer({ panel, data }: RendererProps) {
     fill: "hsl(var(--muted-foreground))",
   };
 
+  // Recharts passes raw numbers to the tooltip/axis by default, which yields
+  // "1.4083333333333332"-style labels. Round to 2 decimals and strip trailing
+  // zeros so "25.00" stays "25" but "5.508" becomes "5.51".
+  const formatValue = (v: unknown): string => {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    // `Number(v.toFixed(2))` collapses 25.00 → 25 and 5.508333 → 5.51
+    return String(Number(v.toFixed(2)));
+  };
+  const tooltipFormatter = (v: unknown): [string, undefined] => [formatValue(v), undefined];
+
   switch (panel.chart_type) {
     case "line": {
       return (
@@ -105,8 +115,8 @@ export function PanelRenderer({ panel, data }: RendererProps) {
           <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
-            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={tooltipStyle} />
+            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} tickFormatter={formatValue} />
+            <Tooltip contentStyle={tooltipStyle} formatter={tooltipFormatter} />
             {series.length > 1 && <Legend />}
             {series.map((s, i) => (
               <Line
@@ -131,8 +141,8 @@ export function PanelRenderer({ panel, data }: RendererProps) {
           <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
-            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={tooltipStyle} />
+            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} tickFormatter={formatValue} />
+            <Tooltip contentStyle={tooltipStyle} formatter={tooltipFormatter} />
             {series.length > 1 && <Legend />}
             {series.map((s, i) => (
               <Area
@@ -159,8 +169,8 @@ export function PanelRenderer({ panel, data }: RendererProps) {
           <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
-            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={tooltipStyle} />
+            <YAxis tick={axisStyle} stroke="transparent" tickLine={false} axisLine={false} tickFormatter={formatValue} />
+            <Tooltip contentStyle={tooltipStyle} formatter={tooltipFormatter} />
             {series.length > 1 && <Legend />}
             {series.map((s, i) => (
               <Bar
