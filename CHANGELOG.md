@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.5](https://github.com/xiangnan0811/xirang/compare/v0.17.4...v0.17.5) (2026-04-24)
+
+
+### Bug Fixes
+
+* **p5:** Phase 5 hardening — security + correctness + chart UX ([#64](https://github.com/xiangnan0811/xirang/issues/64)) ([e199455](https://github.com/xiangnan0811/xirang/commit/e1994555575aa3cc06f19c36b2acaa1739787770))
+
 ## [0.17.4](https://github.com/xiangnan0811/xirang/compare/v0.17.3...v0.17.4) (2026-04-23)
 
 
