@@ -11,7 +11,11 @@ import (
 	"gorm.io/gorm"
 )
 
-var probeTimeAnchor = time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
+// No probeTimeAnchor here on purpose: isInMaintenanceWindow and
+// cleanupOldMetrics both read time.Now() internally without an injectable
+// clock, so a frozen anchor cannot actually drive the assertions. Tests use
+// relative offsets from time.Now() directly. If the production code grows
+// a clock-injection seam, reintroduce a fixed anchor.
 
 func openProbeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
