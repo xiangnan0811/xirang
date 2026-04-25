@@ -1,5 +1,7 @@
 package metrics
 
+import "xirang/backend/internal/mathx"
+
 // Confidence tiers for the disk-growth forecast.
 type Confidence string
 
@@ -38,37 +40,42 @@ type ForecastResult struct {
 //	≥ 14 points AND r² ≥ 0.3 → medium
 //	≥  7 points            → low
 //	<  7 points            → insufficient
+//
+// The OLS math itself lives in internal/mathx so the same primitive serves
+// both the disk forecaster and the anomaly detector. This file keeps the
+// domain layer (ForecastPoint shape, Confidence tiers, days-to-full
+// projection) — only the inner regression call moved.
 func DiskForecast(points []ForecastPoint, diskGBTotal float64) ForecastResult {
 	n := len(points)
 	if n < 7 {
 		return ForecastResult{Confidence: ConfidenceInsufficient}
 	}
-	var sumX, sumY, sumXY, sumXX float64
-	for _, p := range points {
-		sumX += p.Day
-		sumY += p.DiskGBUsed
-		sumXY += p.Day * p.DiskGBUsed
-		sumXX += p.Day * p.Day
+	xs := make([]float64, n)
+	ys := make([]float64, n)
+	for i, p := range points {
+		xs[i] = p.Day
+		ys[i] = p.DiskGBUsed
 	}
-	fn := float64(n)
-	denom := fn*sumXX - sumX*sumX
-	if denom == 0 {
-		return ForecastResult{Confidence: ConfidenceInsufficient}
-	}
-	slope := (fn*sumXY - sumX*sumY) / denom
-	intercept := (sumY - slope*sumX) / fn
-
-	// r² = 1 - SS_res / SS_tot
-	var ssTot, ssRes float64
-	meanY := sumY / fn
-	for _, p := range points {
-		pred := slope*p.Day + intercept
-		ssRes += (p.DiskGBUsed - pred) * (p.DiskGBUsed - pred)
-		ssTot += (p.DiskGBUsed - meanY) * (p.DiskGBUsed - meanY)
-	}
-	var r2 float64
-	if ssTot > 0 {
-		r2 = 1 - ssRes/ssTot
+	slope, _, r2 := mathx.LinearRegression(xs, ys)
+	// LinearRegression returns (0, mean(ys), 0) for zero variance in xs;
+	// preserve the original "insufficient" semantic by treating that as
+	// a degenerate fit. Any caller passing identical Day values gets the
+	// same result either way.
+	if slope == 0 && r2 == 0 {
+		// Distinguish "all xs equal" (degenerate) from "true zero slope".
+		// If every Day matches the first one, the OLS would have returned
+		// (0, meanY, 0). Otherwise slope==0,r2==0 only when xs are
+		// constant — same conclusion.
+		allEqual := true
+		for i := 1; i < n; i++ {
+			if xs[i] != xs[0] {
+				allEqual = false
+				break
+			}
+		}
+		if allEqual {
+			return ForecastResult{Confidence: ConfidenceInsufficient}
+		}
 	}
 
 	conf := ConfidenceLow
