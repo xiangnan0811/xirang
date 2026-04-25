@@ -327,6 +327,30 @@ func TestGenerate_EmptyData_NoPanic(t *testing.T) {
 	}
 }
 
+func TestGenerate_ReversedTimeRange_DocumentsCurrentBehavior(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	cfg := model.ReportConfig{
+		Name: "reversed", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	// end < start: current generator query uses started_at >= start AND < end,
+	// which yields zero matches when reversed. This test documents that
+	// contract so future refactors don't silently change to panic / error.
+	report, err := Generate(db, cfg, base, base.AddDate(0, 0, -7))
+	if err != nil {
+		t.Fatalf("expected no error on reversed range, got %v", err)
+	}
+	if report.TotalRuns != 0 {
+		t.Fatalf("reversed range should yield 0 runs, got %d", report.TotalRuns)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
