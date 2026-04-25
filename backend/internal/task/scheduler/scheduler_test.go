@@ -62,3 +62,23 @@ func TestRegisterTask_InvalidCronReturnsError(t *testing.T) {
 		t.Fatal("invalid cron should not write entry")
 	}
 }
+
+func TestRemoveTask_RemovesExistingEntry(t *testing.T) {
+	s := NewCronScheduler()
+	if err := s.RegisterTask(3, "@every 1m", func() {}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.RemoveTask(3)
+	s.mu.Lock()
+	_, ok := s.entries[3]
+	s.mu.Unlock()
+	if ok {
+		t.Fatal("entry still present after RemoveTask")
+	}
+}
+
+func TestRemoveTask_UnknownIDIsSilentNoop(t *testing.T) {
+	s := NewCronScheduler()
+	// Must not panic. No assertions beyond reaching this line.
+	s.RemoveTask(9999)
+}
