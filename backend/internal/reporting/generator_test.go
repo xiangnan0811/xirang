@@ -299,6 +299,34 @@ func TestGenerate_DiskTrend_DailyAggregation(t *testing.T) {
 	}
 }
 
+func TestGenerate_EmptyData_NoPanic(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	// One node so scope=all resolves non-empty, but ZERO TaskRuns / samples / alerts.
+	if err := db.Create(&model.Node{ID: 1, Name: "lonely", Host: "h", Username: "u", BackupDir: "/x"}).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	cfg := model.ReportConfig{
+		Name: "empty", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if report.TotalRuns != 0 || report.SuccessRate != 0 || report.AvgDurationMs != 0 {
+		t.Fatalf("empty-data report should be all zeros, got %+v", report)
+	}
+	if report.TopFailures == "" || report.DiskTrend == "" {
+		t.Fatalf("JSON fields must round-trip as 'null' or '[]', got TopFailures=%q DiskTrend=%q",
+			report.TopFailures, report.DiskTrend)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
