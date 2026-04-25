@@ -43,3 +43,109 @@ func openReportingTestDB(t *testing.T) *gorm.DB {
 func approxEqual(got, want float64) bool {
 	return math.Abs(got-want) < 1e-6
 }
+
+// seedReportFixtureBasic writes a stable multi-node, multi-task, mixed-status
+// dataset anchored to base. Used by happy-path / scope / aggregation tests.
+//   - 2 nodes (node "n1" tagged "prod", node "n2" tagged "dev")
+//   - 5 tasks (3 on n1, 2 on n2)
+//   - 30 TaskRuns spanning [base-7d, base-1d): 24 success, 6 failed
+//   - 10 NodeMetricSamples (5 per node) for disk trend
+//   - 3 Alerts (2 critical, 1 warning) for alertCount sanity
+func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
+	t.Helper()
+	if err := db.Create(&model.Node{ID: 1, Name: "n1", Host: "h1", Username: "u", BackupDir: "/b1", Tags: "prod"}).Error; err != nil {
+		t.Fatalf("seed node 1: %v", err)
+	}
+	if err := db.Create(&model.Node{ID: 2, Name: "n2", Host: "h2", Username: "u", BackupDir: "/b2", Tags: "dev"}).Error; err != nil {
+		t.Fatalf("seed node 2: %v", err)
+	}
+	for i := 1; i <= 5; i++ {
+		nodeID := uint(1)
+		if i > 3 {
+			nodeID = 2
+		}
+		if err := db.Create(&model.Task{ID: uint(i), Name: fmt.Sprintf("task-%d", i), NodeID: nodeID, Command: "echo " + fmt.Sprint(i)}).Error; err != nil {
+			t.Fatalf("seed task %d: %v", i, err)
+		}
+	}
+	// 30 TaskRuns: tasks 1-5, 6 runs each. First 24 success, last 6 failed.
+	runIdx := 0
+	for taskID := uint(1); taskID <= 5; taskID++ {
+		for k := 0; k < 6; k++ {
+			runIdx++
+			status := "success"
+			lastErr := ""
+			if runIdx > 24 {
+				status = "failed"
+				lastErr = fmt.Sprintf("err-%d", runIdx)
+			}
+			started := base.AddDate(0, 0, -(runIdx%7 + 1))
+			finished := started.Add(time.Minute)
+			run := &model.TaskRun{
+				TaskID: taskID, Status: status, LastError: lastErr,
+				StartedAt: &started, FinishedAt: &finished, DurationMs: 60000,
+			}
+			if err := db.Create(run).Error; err != nil {
+				t.Fatalf("seed run: %v", err)
+			}
+		}
+	}
+	// 10 disk samples
+	for i := 0; i < 10; i++ {
+		nodeID := uint(1)
+		if i >= 5 {
+			nodeID = 2
+		}
+		ts := base.AddDate(0, 0, -((i % 5) + 1))
+		if err := db.Create(&model.NodeMetricSample{
+			NodeID: nodeID, SampledAt: ts, DiskPct: 40 + float64(i),
+			ProbeOK: true,
+		}).Error; err != nil {
+			t.Fatalf("seed metric: %v", err)
+		}
+	}
+	// 3 alerts
+	for i, sev := range []string{"critical", "critical", "warning"} {
+		ts := base.AddDate(0, 0, -i-1)
+		if err := db.Create(&model.Alert{
+			NodeID: 1, NodeName: "n1", Severity: sev, Status: "open",
+			ErrorCode: fmt.Sprintf("XR-X-%d", i), Message: "test", TriggeredAt: ts,
+		}).Error; err != nil {
+			t.Fatalf("seed alert: %v", err)
+		}
+	}
+}
+
+// seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
+// (n+5) distinct (task,node) groups so the Top N truncation has something to
+// truncate. Other tests do not use this — it is dedicated to test #5.
+func seedReportFixtureFailureTopN(t *testing.T, db *gorm.DB, base time.Time, n int) {
+	t.Helper()
+	for i := 0; i < n+5; i++ {
+		nodeID := uint(i + 100)
+		if err := db.Create(&model.Node{
+			ID: nodeID, Name: fmt.Sprintf("topn-node-%d", i),
+			Host: "h", Username: "u", BackupDir: fmt.Sprintf("/topn-%d", i), Tags: "prod",
+		}).Error; err != nil {
+			t.Fatalf("seed topn node: %v", err)
+		}
+		taskID := uint(i + 100)
+		if err := db.Create(&model.Task{
+			ID: taskID, Name: fmt.Sprintf("topn-task-%d", i), NodeID: nodeID,
+		}).Error; err != nil {
+			t.Fatalf("seed topn task: %v", err)
+		}
+		// failure count = i+1 so node 0 has 1 failure, node n+4 has n+5 failures.
+		// Sorting desc: largest count first; top N keeps highest n indices.
+		for k := 0; k <= i; k++ {
+			started := base.AddDate(0, 0, -1).Add(time.Duration(k) * time.Minute)
+			finished := started.Add(10 * time.Second)
+			if err := db.Create(&model.TaskRun{
+				TaskID: taskID, Status: "failed", LastError: "boom",
+				StartedAt: &started, FinishedAt: &finished, DurationMs: 10000,
+			}).Error; err != nil {
+				t.Fatalf("seed topn run: %v", err)
+			}
+		}
+	}
+}
