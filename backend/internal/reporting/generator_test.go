@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 		if i > 3 {
 			nodeID = 2
 		}
-		if err := db.Create(&model.Task{ID: uint(i), Name: fmt.Sprintf("task-%d", i), NodeID: nodeID, Command: "echo " + fmt.Sprint(i)}).Error; err != nil {
+		if err := db.Create(&model.Task{ID: uint(i), Name: fmt.Sprintf("task-%d", i), NodeID: nodeID, Command: fmt.Sprintf("echo %d", i)}).Error; err != nil {
 			t.Fatalf("seed task %d: %v", i, err)
 		}
 	}
@@ -492,23 +493,10 @@ func TestBuildReportMessage(t *testing.T) {
 	}
 	// Verify key fields appear in the message.
 	for _, want := range []string{"weekly-all", "80.0%", "24/30", "60000ms", "2026-03-25", "2026-04-01"} {
-		if !contains(msg, want) {
+		if !strings.Contains(msg, want) {
 			t.Fatalf("message missing %q:\n%s", want, msg)
 		}
 	}
-}
-
-// contains is a simple substring helper to avoid importing strings in test.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
 }
 
 func TestNewScheduler_CreatesInstance(t *testing.T) {
