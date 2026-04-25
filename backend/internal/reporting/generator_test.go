@@ -262,6 +262,43 @@ func TestGenerate_FailureTopN_TruncatesAndSorts(t *testing.T) {
 	}
 }
 
+func TestGenerate_DiskTrend_DailyAggregation(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	cfg := model.ReportConfig{
+		Name: "trend", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var trend []DiskTrendEntry
+	if err := json.Unmarshal([]byte(report.DiskTrend), &trend); err != nil {
+		t.Fatalf("unmarshal DiskTrend: %v", err)
+	}
+	if len(trend) == 0 {
+		t.Fatal("DiskTrend empty; expected ≥1 daily entry")
+	}
+	// Dates must be strictly ascending (production query uses ORDER BY date_label asc).
+	for i := 1; i < len(trend); i++ {
+		if trend[i].Date <= trend[i-1].Date {
+			t.Fatalf("date order violated: %q <= %q at index %d", trend[i].Date, trend[i-1].Date, i)
+		}
+	}
+	// AvgFree = 100 - disk_pct, so for the seeded values 40..49 expect entries in [51, 60].
+	for _, e := range trend {
+		if e.AvgFree < 50 || e.AvgFree > 61 {
+			t.Fatalf("AvgFree out of expected band [50,61]: got %f for %s", e.AvgFree, e.Date)
+		}
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
