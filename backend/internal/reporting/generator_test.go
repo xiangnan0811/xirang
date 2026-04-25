@@ -152,6 +152,28 @@ func TestGenerate_HappyPath_AllScope(t *testing.T) {
 	}
 }
 
+func TestGenerate_ScopeByTag(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	cfg := model.ReportConfig{
+		Name: "weekly-prod", ScopeType: "tag", ScopeValue: "prod",
+		Period: "weekly", Cron: "0 8 * * 1", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// Only n1 (prod-tagged) tasks 1-3 → 18 runs (3 tasks × 6 runs).
+	if report.TotalRuns != 18 {
+		t.Fatalf("scope=tag should restrict to prod nodes; want 18 runs, got %d", report.TotalRuns)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
