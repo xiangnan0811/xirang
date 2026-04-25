@@ -35,3 +35,30 @@ func TestRegisterTask_ReplacesExisting(t *testing.T) {
 		t.Fatalf("entry id should change after re-register, both = %v", firstID)
 	}
 }
+
+func TestRegisterTask_EmptySpecIsNoop(t *testing.T) {
+	s := NewCronScheduler()
+	if err := s.RegisterTask(99, "", func() {}); err != nil {
+		t.Fatalf("empty spec should not error, got %v", err)
+	}
+	s.mu.Lock()
+	_, ok := s.entries[99]
+	s.mu.Unlock()
+	if ok {
+		t.Fatal("empty spec should not add an entry")
+	}
+}
+
+func TestRegisterTask_InvalidCronReturnsError(t *testing.T) {
+	s := NewCronScheduler()
+	err := s.RegisterTask(42, "this is not a cron expr", func() {})
+	if err == nil {
+		t.Fatal("expected error for invalid cron expression, got nil")
+	}
+	s.mu.Lock()
+	_, ok := s.entries[42]
+	s.mu.Unlock()
+	if ok {
+		t.Fatal("invalid cron should not write entry")
+	}
+}
