@@ -116,6 +116,42 @@ func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 	}
 }
 
+func TestGenerate_HappyPath_AllScope(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	cfg := model.ReportConfig{
+		Name: "weekly-all", ScopeType: "all", Period: "weekly",
+		Cron: "0 8 * * 1", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+
+	start := base.AddDate(0, 0, -7)
+	end := base
+	report, err := Generate(db, cfg, start, end)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if report.TotalRuns != 30 {
+		t.Fatalf("TotalRuns: want 30, got %d", report.TotalRuns)
+	}
+	if report.SuccessRuns != 24 || report.FailedRuns != 6 {
+		t.Fatalf("Success/Failed: want 24/6, got %d/%d", report.SuccessRuns, report.FailedRuns)
+	}
+	if !approxEqual(report.SuccessRate, 80.0) {
+		t.Fatalf("SuccessRate: want 80.0, got %f", report.SuccessRate)
+	}
+	if report.AvgDurationMs != 60000 {
+		t.Fatalf("AvgDurationMs: want 60000, got %d", report.AvgDurationMs)
+	}
+	if report.ConfigID != cfg.ID {
+		t.Fatalf("ConfigID: want %d, got %d", cfg.ID, report.ConfigID)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
