@@ -351,6 +351,37 @@ func TestGenerate_ReversedTimeRange_DocumentsCurrentBehavior(t *testing.T) {
 	}
 }
 
+func TestGenerate_PersistsToReportsTable(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	cfg := model.ReportConfig{
+		Name: "persist", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// Re-read from DB to confirm round-trip — every aggregate field must match.
+	var got model.Report
+	if err := db.First(&got, report.ID).Error; err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.TotalRuns != report.TotalRuns ||
+		got.SuccessRuns != report.SuccessRuns ||
+		got.FailedRuns != report.FailedRuns ||
+		!approxEqual(got.SuccessRate, report.SuccessRate) ||
+		got.TopFailures != report.TopFailures ||
+		got.DiskTrend != report.DiskTrend {
+		t.Fatalf("persisted report differs from returned:\nin-mem  %+v\nfromDB  %+v", report, got)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
