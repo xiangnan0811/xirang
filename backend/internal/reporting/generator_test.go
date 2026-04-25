@@ -196,6 +196,33 @@ func TestGenerate_ScopeByNodeIDs(t *testing.T) {
 	}
 }
 
+func TestGenerate_ScopeUnknown_ReturnsWrappedError(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	cfg := model.ReportConfig{
+		Name: "broken", ScopeType: "garbage", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err == nil {
+		t.Fatal("expected error from unknown scope, got nil")
+	}
+	if report != nil {
+		t.Fatalf("expected nil report on error, got %+v", report)
+	}
+	// Confirm the persisted reports table is empty — production code must
+	// not write a row when scope resolution fails.
+	var count int64
+	db.Model(&model.Report{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("reports table should be empty on scope failure, got %d rows", count)
+	}
+}
+
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
 // (n+5) distinct (task,node) groups so the Top N truncation has something to
 // truncate. Other tests do not use this — it is dedicated to test #5.
