@@ -1,6 +1,7 @@
 package reporting
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -380,6 +381,255 @@ func TestGenerate_PersistsToReportsTable(t *testing.T) {
 		got.DiskTrend != report.DiskTrend {
 		t.Fatalf("persisted report differs from returned:\nin-mem  %+v\nfromDB  %+v", report, got)
 	}
+}
+
+func TestShouldGenerate(t *testing.T) {
+	tests := []struct {
+		name string
+		cron string
+		now  time.Time
+		want bool
+	}{
+		{
+			name: "exact_match_weekly_monday_8am",
+			cron: "0 8 * * 1",
+			now:  time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC), // Monday
+			want: true,
+		},
+		{
+			name: "wrong_minute",
+			cron: "0 8 * * 1",
+			now:  time.Date(2026, 4, 6, 8, 5, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "wrong_hour",
+			cron: "0 8 * * 1",
+			now:  time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "wrong_weekday",
+			cron: "0 8 * * 1",
+			now:  time.Date(2026, 4, 7, 8, 0, 0, 0, time.UTC), // Tuesday
+			want: false,
+		},
+		{
+			name: "wildcard_fires_any_time",
+			cron: "* * * * *",
+			now:  time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "too_few_fields",
+			cron: "0 8 * *",
+			now:  time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "non_wildcard_month_returns_false",
+			cron: "0 8 * 4 1",
+			now:  time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "dom_match",
+			cron: "0 8 6 * *",
+			now:  time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "dom_no_match",
+			cron: "0 8 7 * *",
+			now:  time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := model.ReportConfig{Cron: tt.cron}
+			got := shouldGenerate(cfg, tt.now)
+			if got != tt.want {
+				t.Fatalf("shouldGenerate(%q, %v) = %v, want %v", tt.cron, tt.now, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchField(t *testing.T) {
+	tests := []struct {
+		expr  string
+		value int
+		want  bool
+	}{
+		{"*", 5, true},
+		{"5", 5, true},
+		{"5", 6, false},
+		{"0", 0, true},
+		{"abc", 0, false},
+	}
+	for _, tt := range tests {
+		got := matchField(tt.expr, tt.value)
+		if got != tt.want {
+			t.Fatalf("matchField(%q, %d) = %v, want %v", tt.expr, tt.value, got, tt.want)
+		}
+	}
+}
+
+func TestBuildReportMessage(t *testing.T) {
+	cfg := model.ReportConfig{Name: "weekly-all"}
+	report := &model.Report{
+		PeriodStart:   time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:     time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		SuccessRate:   80.0,
+		SuccessRuns:   24,
+		TotalRuns:     30,
+		AvgDurationMs: 60000,
+	}
+	msg := buildReportMessage(cfg, report)
+	if msg == "" {
+		t.Fatal("buildReportMessage returned empty string")
+	}
+	// Verify key fields appear in the message.
+	for _, want := range []string{"weekly-all", "80.0%", "24/30", "60000ms", "2026-03-25", "2026-04-01"} {
+		if !contains(msg, want) {
+			t.Fatalf("message missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// contains is a simple substring helper to avoid importing strings in test.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
+func TestNewScheduler_CreatesInstance(t *testing.T) {
+	db := openReportingTestDB(t)
+	ctx := t.Context()
+	s := NewScheduler(ctx, db)
+	if s == nil {
+		t.Fatal("NewScheduler returned nil")
+	}
+	if s.db != db {
+		t.Fatal("Scheduler.db not set")
+	}
+}
+
+func TestCheckAndGenerate_FiresMatchingConfig(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	seedReportFixtureBasic(t, db, base)
+
+	// Seed a config whose cron exactly matches base (Wednesday 12:30 → "30 12 * * 3").
+	// base = 2026-04-01 12:30 UTC, which is a Wednesday (weekday=3).
+	cfg := model.ReportConfig{
+		Name: "sched-test", ScopeType: "all", Period: "weekly",
+		Cron: "30 12 * * 3", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+
+	ctx := t.Context()
+	s := NewScheduler(ctx, db)
+	s.checkAndGenerate(base)
+
+	var count int64
+	db.Model(&model.Report{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 report generated, got %d", count)
+	}
+}
+
+func TestCheckAndGenerate_SkipsNonMatchingCron(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor // Wednesday 12:30 UTC
+
+	// Cron fires Monday at 08:00 — does not match base (Wednesday 12:30).
+	cfg := model.ReportConfig{
+		Name: "non-matching", ScopeType: "all", Period: "weekly",
+		Cron: "0 8 * * 1", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+
+	ctx := t.Context()
+	s := NewScheduler(ctx, db)
+	s.checkAndGenerate(base)
+
+	var count int64
+	db.Model(&model.Report{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("non-matching cron should not generate report, got %d", count)
+	}
+}
+
+func TestCheckAndGenerate_MonthlyPeriodUsesOneMonthRange(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	if err := db.Create(&model.Node{ID: 1, Name: "m1", Host: "h", Username: "u", BackupDir: "/m"}).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	cfg := model.ReportConfig{
+		Name: "monthly", ScopeType: "all", Period: "monthly",
+		Cron: "30 12 * * 3", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+
+	ctx := t.Context()
+	s := NewScheduler(ctx, db)
+	s.checkAndGenerate(base)
+
+	var report model.Report
+	if err := db.First(&report).Error; err != nil {
+		t.Fatalf("re-read report: %v", err)
+	}
+	// Period start should be ~1 month before base.
+	expectedStart := base.AddDate(0, -1, 0)
+	diff := report.PeriodStart.Sub(expectedStart)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > time.Second {
+		t.Fatalf("monthly report PeriodStart: want ~%v, got %v", expectedStart, report.PeriodStart)
+	}
+}
+
+func TestScheduler_Start_ExitsOnContextCancel(t *testing.T) {
+	db := openReportingTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so loop() exits on the first ctx.Done() select.
+	cancel()
+	s := NewScheduler(ctx, db)
+	s.Start()
+	// Give the goroutine a moment to observe the cancellation.
+	time.Sleep(20 * time.Millisecond)
+	// If we reach here without hanging, Start() and loop() work correctly.
+}
+
+func TestSendReport_MissingIntegration_DoesNotPanic(t *testing.T) {
+	db := openReportingTestDB(t)
+	// IntegrationIDs references a non-existent integration — sendReport must
+	// log and continue, not panic. Run synchronously via direct call.
+	cfg := model.ReportConfig{
+		Name: "send-test", IntegrationIDs: "[9999]",
+	}
+	report := &model.Report{ID: 1}
+	// sendReport is fire-and-forget with panic recovery — call it directly.
+	sendReport(db, cfg, report)
 }
 
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across
