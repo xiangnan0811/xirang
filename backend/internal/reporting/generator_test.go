@@ -1,6 +1,7 @@
 package reporting
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"testing"
@@ -220,6 +221,44 @@ func TestGenerate_ScopeUnknown_ReturnsWrappedError(t *testing.T) {
 	db.Model(&model.Report{}).Count(&count)
 	if count != 0 {
 		t.Fatalf("reports table should be empty on scope failure, got %d rows", count)
+	}
+}
+
+func TestGenerate_FailureTopN_TruncatesAndSorts(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+	// buildTopFailures hardcodes LIMIT 5 — seed 8 distinct failure groups so
+	// truncation is exercised, with descending counts 1..8.
+	seedReportFixtureFailureTopN(t, db, base, 5)
+
+	cfg := model.ReportConfig{
+		Name: "topn", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -2), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var failures []FailureEntry
+	if err := json.Unmarshal([]byte(report.TopFailures), &failures); err != nil {
+		t.Fatalf("unmarshal TopFailures: %v", err)
+	}
+	if len(failures) != 5 {
+		t.Fatalf("Top N should truncate to 5, got %d entries", len(failures))
+	}
+	// Descending order: first entry has the highest Count.
+	for i := 1; i < len(failures); i++ {
+		if failures[i].Count > failures[i-1].Count {
+			t.Fatalf("entry %d (count=%d) > entry %d (count=%d) — not sorted desc",
+				i, failures[i].Count, i-1, failures[i-1].Count)
+		}
+	}
+	// Highest two counts among 1..10 are 10 and 9 (10 nodes seeded: i+1 fails).
+	if failures[0].Count != 10 {
+		t.Fatalf("top entry Count: want 10, got %d", failures[0].Count)
 	}
 }
 
