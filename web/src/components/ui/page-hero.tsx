@@ -12,7 +12,7 @@ export function PageHero({ title, subtitle, actions, className }: PageHeroProps)
   return (
     <header className={cn("flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4", className)}>
       <div className="min-w-0">
-        <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.025em] text-foreground">
+        <h1 className="text-stat font-semibold leading-tight tracking-[-0.025em] text-foreground">
           {title}
         </h1>
         {subtitle ? (

@@ -67,7 +67,7 @@ export const TasksTable = React.memo(function TasksTable({
     <div className="rounded-lg border border-border bg-card overflow-x-auto">
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
-          <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="w-10 px-3 py-2.5">
               <input
                 type="checkbox"
@@ -161,7 +161,7 @@ export const TasksTable = React.memo(function TasksTable({
                       {task.verifyStatus && task.verifyStatus !== "none" && (
                         <Badge
                           tone={task.verifyStatus === "passed" ? "success" : "warning"}
-                          className="text-[10px]"
+                          className="text-micro"
                         >
                           {task.verifyStatus === "passed"
                             ? t("tasks.verifyPassed")
@@ -171,19 +171,19 @@ export const TasksTable = React.memo(function TasksTable({
                         </Badge>
                       )}
                       {task.enabled === false && (
-                        <Badge tone="neutral" className="text-[10px]">
+                        <Badge tone="neutral" className="text-micro">
                           {t("tasks.paused")}
                         </Badge>
                       )}
                       {task.skipNext && (
-                        <Badge tone="neutral" className="text-[10px]">
+                        <Badge tone="neutral" className="text-micro">
                           {t("tasks.skipNextBadge")}
                         </Badge>
                       )}
                     </div>
                   </td>
                   <td className="px-3 py-2.5">
-                    <Badge tone="neutral" className="text-[10px]">
+                    <Badge tone="neutral" className="text-micro">
                       {task.cronSpec ? t("tasks.typeCron") : t("tasks.typeManual")}
                     </Badge>
                   </td>

@@ -102,7 +102,7 @@ export function LogsFilterBar({
               className="flex items-center gap-2"
               title={t("logs.taskProgress")}
             >
-              <span className="text-[11px] font-medium text-foreground/80">
+              <span className="text-mini font-medium text-foreground/80">
                 {t("logs.progress", {
                   value: Number.isFinite(progressValue) ? progressValue : 0,
                 })}

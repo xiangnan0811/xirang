@@ -36,7 +36,24 @@ export default {
         sans: ['"Inter Variable"', '"Inter"', '"PingFang SC"', '"Microsoft YaHei"', "system-ui", "sans-serif"],
         mono: ['"JetBrains Mono"', "monospace"]
       },
+      // Project-specific size tokens. These names sit alongside Tailwind's
+      // built-in xs/sm/base/... scale rather than overriding it. Each was
+      // promoted from a recurring `text-[Npx]` arbitrary value (audit ran
+      // 2026-04-25). If you need a one-off size that doesn't fit, prefer
+      // `text-[Npx]` over forcing it into a token name that doesn't match.
+      fontSize: {
+        // 10px — micro labels: badges, source tags, tiny chips (~22 sites)
+        micro: ["10px", { lineHeight: "14px" }],
+        // 11px — small meta text: stat captions, table headers, footnotes (~17 sites)
+        mini: ["11px", { lineHeight: "16px" }],
+        // 13px — sidebar nav items (3 sites)
+        nav: ["13px", { lineHeight: "18px" }],
+        // 28px — hero stat numbers on overview cards (2 sites)
+        stat: ["28px", { lineHeight: "32px" }],
+      },
       borderRadius: {
+        // 4px — small status dots, micro icon containers
+        xs: "0.25rem",
         sm: "var(--radius-sm)",
         DEFAULT: "var(--radius)",
         md: "var(--radius)",

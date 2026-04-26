@@ -274,7 +274,7 @@ export function PoliciesPage() {
           <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
             <table className="min-w-[980px] text-left text-sm">
               <thead>
-                <tr className="border-b border-border bg-secondary text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
                   <th scope="col" className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"

@@ -76,7 +76,7 @@ function CompactTooltip({ active, payload, label }: TooltipProps) {
       style={{ pointerEvents: "none" }}
     >
       {label !== undefined && (
-        <div className="text-[10px] font-medium text-muted-foreground">
+        <div className="text-micro font-medium text-muted-foreground">
           {new Date(String(label)).toLocaleString()}
         </div>
       )}

@@ -7,7 +7,7 @@ export function MonoChip({ className, ...props }: MonoChipProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-sm bg-secondary px-2 py-[2px] font-mono text-[10px] font-medium tracking-[0.02em] text-muted-foreground",
+        "inline-flex items-center rounded-sm bg-secondary px-2 py-[2px] font-mono text-micro font-medium tracking-[0.02em] text-muted-foreground",
         className,
       )}
       {...props}

@@ -375,7 +375,7 @@ function NodeLogsTable({
     <div className="rounded-lg border border-border bg-card overflow-x-auto">
       <table className="min-w-[900px] w-full text-left text-xs">
         <thead>
-          <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="px-3 py-2.5 w-[160px]">{t("nodeLogs.columns.time")}</th>
             <th scope="col" className="px-3 py-2.5 w-[110px]">{t("nodeLogs.columns.node")}</th>
             <th scope="col" className="px-3 py-2.5 w-[160px]">{t("nodeLogs.columns.path")}</th>
@@ -406,12 +406,12 @@ function NodeLogsTable({
                 </td>
                 <td className="px-3 py-2">
                   {entry.priority ? (
-                    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${priorityClass}`}>
+                    <span className={`inline-block rounded px-1.5 py-0.5 text-micro font-medium ${priorityClass}`}>
                       {entry.priority}
                     </span>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 font-mono text-[11px] break-all">{entry.message}</td>
+                <td className="px-3 py-2 font-mono text-mini break-all">{entry.message}</td>
               </tr>
             );
           })}

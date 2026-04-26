@@ -235,7 +235,7 @@ export function OverviewPage() {
                           key={node.id}
                           type="button"
                           data-testid={`overview-node-link-${node.id}`}
-                          className={`relative size-[18px] rounded-[4px] ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                          className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                           onClick={() => navigate(`/app/nodes/${node.id}`)}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
@@ -250,13 +250,13 @@ export function OverviewPage() {
                   </div>
 
                   {hiddenNodeCount > 0 ? (
-                    <p className="pb-3 text-[11px] text-muted-foreground">
+                    <p className="pb-3 text-mini text-muted-foreground">
                       {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
                     </p>
                   ) : null}
 
                   {nodes.length > 0 && (
-                    <div className="mt-auto shrink-0 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border">
+                    <div className="mt-auto shrink-0 flex items-center gap-4 text-mini text-muted-foreground pt-3 border-t border-border">
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
@@ -318,7 +318,7 @@ export function OverviewPage() {
                     key={node.id}
                     type="button"
                     data-testid={`overview-node-link-full-${node.id}`}
-                    className={`relative size-[18px] rounded-[4px] ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                    className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                     onClick={() => {
                       setMatrixFullscreen(false);
                       navigate(`/app/nodes/${node.id}`);
@@ -334,7 +334,7 @@ export function OverviewPage() {
                 );
               })}
             </div>
-            <div className="mt-4 flex items-center gap-4 text-[11px] text-muted-foreground pt-3 border-t border-border">
+            <div className="mt-4 flex items-center gap-4 text-mini text-muted-foreground pt-3 border-t border-border">
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />{t("overview.legendOnline")}</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning" />{t("overview.legendWarning")}</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />{t("overview.legendOffline")}</span>

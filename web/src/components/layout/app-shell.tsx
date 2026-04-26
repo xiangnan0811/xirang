@@ -134,7 +134,7 @@ function AppShellInner() {
               >
                 <Search className="size-3.5 shrink-0" aria-hidden />
                 <span className="flex-1 text-left">{t('search.placeholder')}</span>
-                <kbd className="rounded border border-border bg-background px-1.5 py-[2px] font-mono text-[10px]">
+                <kbd className="rounded border border-border bg-background px-1.5 py-[2px] font-mono text-micro">
                   {t('search.kbd')}
                 </kbd>
               </button>
@@ -183,7 +183,7 @@ function AppShellInner() {
           <div
             role="status"
             aria-live="polite"
-            className="border-t border-warning/30 bg-warning/10 px-4 py-1.5 text-[11px] text-warning md:px-6"
+            className="border-t border-warning/30 bg-warning/10 px-4 py-1.5 text-mini text-warning md:px-6"
           >
             {consoleData.warning}
           </div>

@@ -259,7 +259,7 @@ export function AlertList({
     <div className="rounded-lg border border-border bg-card overflow-x-auto">
       <table className="min-w-[960px] text-left text-sm w-full">
         <thead>
-          <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
             <th scope="col" {...sortableThProps("severity")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
               {t("notifications.colSeverity")} {sortIndicator("severity")}
             </th>

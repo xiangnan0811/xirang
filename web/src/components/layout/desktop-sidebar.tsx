@@ -61,7 +61,7 @@ export function DesktopSidebar({
             <div key={group.key} className={cn(groupIndex > 0 && "mt-4")}>
               {/* Group label — hidden in collapsed mode */}
               {!isCollapsed && (
-                <span className="px-3 mb-1.5 block text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                <span className="px-3 mb-1.5 block text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
                   {t(group.labelKey)}
                 </span>
               )}
@@ -90,7 +90,7 @@ export function DesktopSidebar({
                             aria-hidden
                           />
                           {!isCollapsed && (
-                            <span className="truncate text-[13px]">
+                            <span className="truncate text-nav">
                               {t(item.titleKey)}
                             </span>
                           )}
@@ -138,7 +138,7 @@ export function DesktopSidebar({
                       aria-hidden
                     />
                     {!isCollapsed && (
-                      <span className="truncate text-[13px]">
+                      <span className="truncate text-nav">
                         {t(item.titleKey)}
                       </span>
                     )}
@@ -181,7 +181,7 @@ export function DesktopSidebar({
           ) : (
             <>
               <PanelLeftClose className="mr-3 size-[18px]" />
-              <span className="text-[13px] font-medium">
+              <span className="text-nav font-medium">
                 {t("appShell.collapsePanel")}
               </span>
             </>

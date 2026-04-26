@@ -145,7 +145,7 @@ export function LoginPage() {
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
         <section className="hidden rounded-lg border border-border bg-card shadow-md p-8 md:flex md:flex-col md:justify-center lg:p-12">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-sm animate-slide-up [animation-delay:100ms]">
-            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-[4px] border border-border bg-background" />
+            <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-xs border border-border bg-background" />
             <span>XiRang / X-Soil</span>
           </div>
           <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">

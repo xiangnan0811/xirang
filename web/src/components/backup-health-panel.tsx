@@ -264,7 +264,7 @@ function MiniStat({ label, value, tone, icon }: { label: string; value: string |
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-xl font-bold font-mono tracking-tight text-foreground/90">{value}</div>
-          <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider truncate" title={label}>{label}</div>
+          <div className="text-mini font-medium text-muted-foreground uppercase tracking-wider truncate" title={label}>{label}</div>
         </div>
       </CardContent>
     </Card>
