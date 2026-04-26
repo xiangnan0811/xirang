@@ -8,20 +8,39 @@ import (
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/retention"
 	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
 
+// Compile-time assertion: *RetentionWorker satisfies retention.Worker.
+var _ retention.Worker = (*RetentionWorker)(nil)
+
+// RetentionWorker prunes node_logs older than each node's configured
+// retention. Embeds retention.Loop for the standard ticker + Shutdown
+// scaffold. Reads the global default via the module-level settings service
+// (injected by InitSettings; not constructor-injected).
 type RetentionWorker struct {
-	db   *gorm.DB
-	tick time.Duration
-	done chan struct{}
+	*retention.Loop
+	db *gorm.DB
 }
 
+// NewRetentionWorker constructs the worker with a 1-hour default tick.
+// Test code can override the tick by reassigning w.Loop.Tick before Run.
 func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
-	return &RetentionWorker{db: db, tick: time.Hour, done: make(chan struct{})}
+	w := &RetentionWorker{db: db}
+	w.Loop = &retention.Loop{
+		Tick:   time.Hour,
+		Pruner: w.prune,
+	}
+	return w
 }
+
+// SetTickInterval overrides the tick for tests. Must be called before Run;
+// Loop reads Tick once at startup and a later mutation has no effect on the
+// live ticker.
+func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.Loop.Tick = d }
 
 // settingsSvc 模块级设置服务引用，由 InitSettings 注入
 var (
@@ -61,52 +80,40 @@ var defaultDaysFromSettings = func(_ *gorm.DB) int {
 	return n
 }
 
-func (r *RetentionWorker) Run(ctx context.Context) {
-	t := time.NewTicker(r.tick)
-	defer close(r.done) // fires last - terminal signal after all other cleanup
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			r.pruneAll()
-		}
-	}
+// Prune runs one retention pass synchronously across all nodes.
+// Implements retention.Worker.
+func (w *RetentionWorker) Prune(ctx context.Context) (int64, error) {
+	return w.prune(ctx)
 }
 
-// Shutdown blocks until Run has returned or ctx expires.
-// Run MUST be called before Shutdown; safe to call after Run has already returned.
-func (r *RetentionWorker) Shutdown(ctx context.Context) error {
-	select {
-	case <-r.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (r *RetentionWorker) pruneAll() {
-	defaultDays := defaultDaysFromSettings(r.db)
+// prune is the Pruner closure for retention.Loop. Iterates all nodes,
+// applies per-node retention, returns the total rows deleted across nodes.
+func (w *RetentionWorker) prune(ctx context.Context) (int64, error) {
+	defaultDays := defaultDaysFromSettings(w.db)
 	var nodes []model.Node
-	if err := r.db.Find(&nodes).Error; err != nil {
+	if err := w.db.WithContext(ctx).Find(&nodes).Error; err != nil {
 		logger.Module("nodelogs").Warn().Err(err).Msg("retention: load nodes failed")
-		return
+		return 0, err
 	}
+	var total int64
 	for _, n := range nodes {
-		r.pruneNode(n, defaultDays)
+		total += w.pruneNode(n, defaultDays)
 	}
 	// Orphan cleanup not needed: ON DELETE CASCADE on node_logs (migration 000039) handles it.
+	return total, nil
 }
 
-func (r *RetentionWorker) pruneNode(node model.Node, defaultDays int) {
+// pruneNode deletes rows older than node-specific or default days.
+// Returns rows affected (so prune can sum across nodes).
+func (w *RetentionWorker) pruneNode(node model.Node, defaultDays int) int64 {
 	days := node.LogRetentionDays
 	if days <= 0 {
 		days = defaultDays
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
-	res := r.db.Where("node_id = ? AND created_at < ?", node.ID, cutoff).Delete(&model.NodeLog{})
+	res := w.db.Where("node_id = ? AND created_at < ?", node.ID, cutoff).Delete(&model.NodeLog{})
 	if res.RowsAffected > 0 {
 		retentionDeleted.WithLabelValues(nodeIDLabel(node.ID)).Add(float64(res.RowsAffected))
 	}
+	return res.RowsAffected
 }
