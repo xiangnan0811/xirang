@@ -41,7 +41,9 @@ func TestRetention_DeletesOld_KeepsRecent(t *testing.T) {
 		FiredAt: now.AddDate(0, 0, -2),
 	})
 	w := NewRetentionWorker(db, settings.NewService(db))
-	w.Prune(context.Background())
+	if _, err := w.Prune(context.Background()); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
 	var count int64
 	db.Model(&model.AnomalyEvent{}).Count(&count)
 	if count != 1 {
@@ -69,7 +71,9 @@ func TestRetention_HonorsCustomDays(t *testing.T) {
 		FiredAt: now.AddDate(0, 0, -3), // newer than 7d
 	})
 	w := NewRetentionWorker(db, settings.NewService(db))
-	w.Prune(context.Background())
+	if _, err := w.Prune(context.Background()); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
 	var count int64
 	db.Model(&model.AnomalyEvent{}).Count(&count)
 	if count != 1 {
