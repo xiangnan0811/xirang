@@ -29,6 +29,7 @@ type SilenceRetentionWorker struct {
 	db       *gorm.DB
 	settings *settings.Service
 	tick     time.Duration
+	done     chan struct{}
 }
 
 // DefaultSilenceRetentionGraceDays is the fallback when settings lookup fails
@@ -40,7 +41,7 @@ const silenceRetentionKey = "alerts.silence_retention_days"
 // NewSilenceRetentionWorker creates a worker running every 6 hours by default.
 // settings may be nil (e.g. in tests) — grace_days falls back to the default.
 func NewSilenceRetentionWorker(db *gorm.DB, s *settings.Service) *SilenceRetentionWorker {
-	return &SilenceRetentionWorker{db: db, settings: s, tick: 6 * time.Hour}
+	return &SilenceRetentionWorker{db: db, settings: s, tick: 6 * time.Hour, done: make(chan struct{})}
 }
 
 // SetTickInterval overrides for tests.
@@ -49,6 +50,7 @@ func (w *SilenceRetentionWorker) SetTickInterval(d time.Duration) { w.tick = d }
 // Run drives the worker until ctx cancels.
 func (w *SilenceRetentionWorker) Run(ctx context.Context) {
 	t := time.NewTicker(w.tick)
+	defer close(w.done) // fires last - terminal signal after all other cleanup
 	defer t.Stop()
 	// Initial pass on startup so stale data from a long-stopped deployment
 	// is cleaned immediately rather than after the first tick.
@@ -60,6 +62,17 @@ func (w *SilenceRetentionWorker) Run(ctx context.Context) {
 		case <-t.C:
 			w.Prune(ctx)
 		}
+	}
+}
+
+// Shutdown blocks until Run has returned or ctx expires.
+// Run MUST be called before Shutdown; safe to call after Run has already returned.
+func (w *SilenceRetentionWorker) Shutdown(ctx context.Context) error {
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

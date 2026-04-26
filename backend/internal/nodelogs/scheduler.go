@@ -17,6 +17,7 @@ type Scheduler struct {
 	tick    time.Duration
 	fetcher *Fetcher
 	curRepo *CursorRepo
+	done    chan struct{}
 }
 
 func NewScheduler(db *gorm.DB, runner Runner) *Scheduler {
@@ -27,10 +28,12 @@ func NewScheduler(db *gorm.DB, runner Runner) *Scheduler {
 		tick:    DefaultTickInterval,
 		fetcher: NewFetcher(runner),
 		curRepo: NewCursorRepo(db),
+		done:    make(chan struct{}),
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
+	defer close(s.done)
 	for i := 0; i < s.workers; i++ {
 		w := &Worker{db: s.db, jobs: s.jobs, fetcher: s.fetcher, curRepo: s.curRepo}
 		go w.Run(ctx)
@@ -45,6 +48,17 @@ func (s *Scheduler) Run(ctx context.Context) {
 		case <-t.C:
 			s.enqueue(ctx)
 		}
+	}
+}
+
+// Shutdown blocks until Run has returned or ctx expires.
+// Run MUST be called before Shutdown; safe to call after Run has already returned.
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
