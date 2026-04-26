@@ -400,8 +400,8 @@ func (a *Aggregator) measureRollup(ctx context.Context, tier string, fn func(con
 	rollupDurationSeconds.WithLabelValues(tier).Observe(time.Since(start).Seconds())
 }
 
-// Stop signals the background loop to exit and waits for completion or ctx timeout.
-func (a *Aggregator) Stop(ctx context.Context) error {
+// Shutdown signals the background loop to exit and waits for completion or ctx timeout.
+func (a *Aggregator) Shutdown(ctx context.Context) error {
 	if a.cancel != nil {
 		a.cancel()
 	}

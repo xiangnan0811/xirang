@@ -50,8 +50,8 @@ func (p *Prober) Start(ctx context.Context) {
 	go p.run(probeCtx)
 }
 
-// Stop signals the prober to stop and waits for completion.
-func (p *Prober) Stop(ctx context.Context) error {
+// Shutdown signals the prober to stop and waits for completion.
+func (p *Prober) Shutdown(ctx context.Context) error {
 	if p.cancel != nil {
 		p.cancel()
 	}

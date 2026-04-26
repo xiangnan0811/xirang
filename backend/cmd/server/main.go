@@ -239,10 +239,10 @@ func main() {
 	if err := taskManager.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("任务管理器关闭失败")
 	}
-	if err := prober.Stop(shutdownCtx); err != nil {
+	if err := prober.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("节点探测停止失败")
 	}
-	if err := aggregator.Stop(shutdownCtx); err != nil {
+	if err := aggregator.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("指标聚合器停止失败")
 	}
 	hubCancel()
