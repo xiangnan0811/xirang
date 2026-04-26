@@ -8,59 +8,45 @@ import (
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/retention"
 	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
 
 // RetentionWorker prunes anomaly_events older than the configured threshold.
+// Embeds retention.Loop for the standard ticker + Shutdown scaffold.
 type RetentionWorker struct {
+	*retention.Loop
 	db       *gorm.DB
 	settings *settings.Service
-	tick     time.Duration
-	done     chan struct{}
 }
 
+// NewRetentionWorker constructs the worker with a 6-hour default tick.
+// Test code can override the tick by reassigning w.Loop.Tick before Run.
 func NewRetentionWorker(db *gorm.DB, s *settings.Service) *RetentionWorker {
-	return &RetentionWorker{db: db, settings: s, tick: 6 * time.Hour, done: make(chan struct{})}
-}
-
-// SetTickInterval overrides for tests.
-func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.tick = d }
-
-// Run blocks until ctx is cancelled, pruning on each tick.
-// Implements lifecycle.Worker.
-func (w *RetentionWorker) Run(ctx context.Context) {
-	defer close(w.done)
-	t := time.NewTicker(w.tick)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			w.prune(ctx)
-		}
+	w := &RetentionWorker{db: db, settings: s}
+	w.Loop = &retention.Loop{
+		Tick:   6 * time.Hour,
+		Pruner: w.prune,
 	}
+	return w
 }
 
-// Shutdown blocks until Run returns or ctx expires. Implements lifecycle.Worker.
-func (w *RetentionWorker) Shutdown(ctx context.Context) error {
-	select {
-	case <-w.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+// SetTickInterval overrides the tick for tests. Must be called before Run;
+// Loop reads Tick once at startup and a later mutation has no effect on the
+// live ticker.
+func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.Tick = d }
+
+// Prune runs one retention pass synchronously. Implements retention.Worker.
+func (w *RetentionWorker) Prune(ctx context.Context) (int64, error) {
+	return w.prune(ctx)
 }
 
-// Prune runs one retention pass (exposed for tests).
-func (w *RetentionWorker) Prune(ctx context.Context) { w.prune(ctx) }
-
-func (w *RetentionWorker) prune(ctx context.Context) {
+func (w *RetentionWorker) prune(ctx context.Context) (int64, error) {
 	days := w.retentionDays()
 	if days <= 0 {
-		return
+		return 0, nil
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	res := w.db.WithContext(ctx).
@@ -68,7 +54,7 @@ func (w *RetentionWorker) prune(ctx context.Context) {
 		Delete(&model.AnomalyEvent{})
 	if res.Error != nil {
 		logger.Module("anomaly").Warn().Err(res.Error).Msg("retention prune failed")
-		return
+		return 0, res.Error
 	}
 	if res.RowsAffected > 0 {
 		logger.Module("anomaly").Info().
@@ -76,6 +62,7 @@ func (w *RetentionWorker) prune(ctx context.Context) {
 			Int("days", days).
 			Msg("retention pruned anomaly_events")
 	}
+	return res.RowsAffected, nil
 }
 
 func (w *RetentionWorker) retentionDays() int {

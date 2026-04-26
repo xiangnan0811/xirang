@@ -114,9 +114,6 @@ type Manager struct {
 	lastTaskRunCleanupAt    time.Time
 	taskRunCleanupMu        sync.Mutex
 
-	retentionCancel  context.CancelFunc
-	retentionDone    chan struct{}
-
 	settingsSvc *settings.Service
 
 	shuttingDown atomic.Bool
@@ -141,13 +138,11 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		sampleWorkerDone:     make(chan struct{}),
 		sampleRetentionDays:  sampleRetentionDays,
 		taskRunRetentionDays: taskRunRetentionDays,
-		retentionDone:       make(chan struct{}),
 		settingsSvc:          settingsSvc,
 	}
 	m.hookRunFunc = m.runSSHHook
 	m.startLogWorker()
 	m.startSampleWorker()
-	m.startRetentionWorker()
 	return m
 }
 
@@ -510,16 +505,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.sampleWorkerDone != nil {
 		select {
 		case <-m.sampleWorkerDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	if m.retentionCancel != nil {
-		m.retentionCancel()
-	}
-	if m.retentionDone != nil {
-		select {
-		case <-m.retentionDone:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
