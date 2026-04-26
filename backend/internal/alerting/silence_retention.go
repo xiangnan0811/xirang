@@ -55,7 +55,7 @@ func NewSilenceRetentionWorker(db *gorm.DB, s *settings.Service) *SilenceRetenti
 // SetTickInterval overrides the tick for tests. Must be called before Run;
 // Loop reads Tick once at startup and a later mutation has no effect on the
 // live ticker.
-func (w *SilenceRetentionWorker) SetTickInterval(d time.Duration) { w.Loop.Tick = d }
+func (w *SilenceRetentionWorker) SetTickInterval(d time.Duration) { w.Tick = d }
 
 // Prune runs one retention pass synchronously. Implements retention.Worker.
 func (w *SilenceRetentionWorker) Prune(ctx context.Context) (int64, error) {

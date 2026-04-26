@@ -40,7 +40,7 @@ func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
 // SetTickInterval overrides the tick for tests. Must be called before Run;
 // Loop reads Tick once at startup and a later mutation has no effect on the
 // live ticker.
-func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.Loop.Tick = d }
+func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.Tick = d }
 
 // settingsSvc 模块级设置服务引用，由 InitSettings 注入
 var (
