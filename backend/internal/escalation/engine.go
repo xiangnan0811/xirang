@@ -15,23 +15,48 @@ import (
 // DefaultTickInterval is the engine's poll cadence.
 const DefaultTickInterval = 30 * time.Second
 
-// Engine polls open alerts and fires the next escalation level when due.
-type Engine struct {
-	db      *gorm.DB
-	svc     *Service
-	silence SilenceCheckerFn
-	sender  SenderFn
-	tick    time.Duration
-	nowFn   func() time.Time // for tests
+// Dispatcher is escalation's inbound interface for dispatching the
+// fired-level integration list. Defined here so the engine does not import
+// alerting; alerting.DefaultRaiser satisfies this interface because it
+// implements DispatchToIntegrations with the same signature.
+type Dispatcher interface {
+	DispatchToIntegrations(alert model.Alert, integrationIDs []uint)
 }
 
-// NewEngine constructs an Engine. silence and sender are injected dependencies.
-func NewEngine(db *gorm.DB, svc *Service, silence SilenceCheckerFn, sender SenderFn) *Engine {
+// Engine polls open alerts and fires the next escalation level when due.
+type Engine struct {
+	db         *gorm.DB
+	svc        *Service
+	silence    SilenceCheckerFn
+	dispatcher Dispatcher
+	tick       time.Duration
+	nowFn      func() time.Time // for tests
+}
+
+// NewEngine constructs an Engine. silence may be nil (no-op silence check);
+// dispatcher MUST be wired but, to mirror the slo/anomaly nil-safety pattern,
+// passing nil installs a stub that logs dropped fires loudly so a
+// misconfiguration is visible in production logs rather than panicking the
+// engine goroutine.
+func NewEngine(db *gorm.DB, svc *Service, silence SilenceCheckerFn, dispatcher Dispatcher) *Engine {
+	if dispatcher == nil {
+		logger.Module("escalation").Warn().Msg("NewEngine called with nil dispatcher - fires will be logged only")
+		dispatcher = stubDispatcher{}
+	}
 	return &Engine{
-		db: db, svc: svc, silence: silence, sender: sender,
+		db: db, svc: svc, silence: silence, dispatcher: dispatcher,
 		tick:  DefaultTickInterval,
 		nowFn: time.Now,
 	}
+}
+
+type stubDispatcher struct{}
+
+func (stubDispatcher) DispatchToIntegrations(alert model.Alert, integrationIDs []uint) {
+	logger.Module("escalation").Warn().
+		Uint("alert_id", alert.ID).
+		Int("integration_count", len(integrationIDs)).
+		Msg("stub dispatcher active - fire dropped; wire a real Dispatcher via NewEngine")
 }
 
 // SetTickInterval overrides the default tick for tests/smoke.
@@ -132,7 +157,7 @@ func (e *Engine) evaluate(ctx context.Context, alert *model.Alert, now time.Time
 //  2. check silence against the projected alert state
 //  3. UPDATE alerts with optimistic lock on last_level_fired
 //  4. INSERT event row (UNIQUE protects against double fire)
-//  5. after tx commit, call sender (unless silenced-skip)
+//  5. after tx commit, dispatch to integrations (unless silenced-skip)
 func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.EscalationPolicy,
 	idx int, level model.EscalationLevel, now time.Time) {
 
@@ -221,8 +246,8 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	}
 	FiresTotal.WithLabelValues(severityAfter, silencedLabel).Inc()
 
-	if !silenced && e.sender != nil && len(integrationIDs) > 0 {
-		e.sender(*alert, integrationIDs)
+	if !silenced && len(integrationIDs) > 0 {
+		e.dispatcher.DispatchToIntegrations(*alert, integrationIDs)
 	}
 }
 

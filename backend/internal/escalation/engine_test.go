@@ -32,6 +32,16 @@ type senderRecord struct {
 	ids     []uint
 }
 
+// recordingDispatcher captures every DispatchToIntegrations call so tests
+// can assert post-fire dispatch behaviour without touching engine internals.
+type recordingDispatcher struct {
+	calls []senderRecord
+}
+
+func (r *recordingDispatcher) DispatchToIntegrations(alert model.Alert, ids []uint) {
+	r.calls = append(r.calls, senderRecord{alertID: alert.ID, ids: ids})
+}
+
 func seedPolicy(t *testing.T, s *Service, name string, levels []model.EscalationLevel, minSev string) *model.EscalationPolicy {
 	t.Helper()
 	in := PolicyInput{Name: name, MinSeverity: minSev, Enabled: true, Levels: levels}
@@ -64,18 +74,16 @@ func TestEngine_Level0_FiresImmediately(t *testing.T) {
 	triggered := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	if len(rec) != 1 || len(rec[0].ids) != 1 || rec[0].ids[0] != 1 {
-		t.Fatalf("expected 1 send to [1], got %+v", rec)
+	if len(disp.calls) != 1 || len(disp.calls[0].ids) != 1 || disp.calls[0].ids[0] != 1 {
+		t.Fatalf("expected 1 send to [1], got %+v", disp.calls)
 	}
 	var got model.Alert
-	db.First(&got, rec[0].alertID)
+	db.First(&got, disp.calls[0].alertID)
 	if got.LastLevelFired != 0 {
 		t.Fatalf("last_level_fired=%d want 0", got.LastLevelFired)
 	}
@@ -96,10 +104,8 @@ func TestEngine_Level1_WaitsForDelay(t *testing.T) {
 	triggered := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	a := seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 
 	// tick at T+0 → level 0 fires
 	e.SetNowFn(func() time.Time { return triggered })
@@ -108,15 +114,15 @@ func TestEngine_Level1_WaitsForDelay(t *testing.T) {
 	// tick at T+4min → still level 0, no level 1 yet
 	e.SetNowFn(func() time.Time { return triggered.Add(4 * time.Minute) })
 	e.Tick(context.Background())
-	if len(rec) != 1 {
-		t.Fatalf("early: expected 1, got %d", len(rec))
+	if len(disp.calls) != 1 {
+		t.Fatalf("early: expected 1, got %d", len(disp.calls))
 	}
 
 	// tick at T+6min → level 1 fires
 	e.SetNowFn(func() time.Time { return triggered.Add(6 * time.Minute) })
 	e.Tick(context.Background())
-	if len(rec) != 2 || rec[1].ids[0] != 2 {
-		t.Fatalf("late: expected 2 sends with ids[0]=2, got %+v", rec)
+	if len(disp.calls) != 2 || disp.calls[1].ids[0] != 2 {
+		t.Fatalf("late: expected 2 sends with ids[0]=2, got %+v", disp.calls)
 	}
 
 	var got model.Alert
@@ -137,20 +143,18 @@ func TestEngine_AckedAlert_NotEvaluated(t *testing.T) {
 	a := seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
 	// fire level 0, then ack
-	e := NewEngine(db, svc, nil, func(_ model.Alert, _ []uint) {})
+	e := NewEngine(db, svc, nil, &recordingDispatcher{})
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 	db.Model(&model.Alert{}).Where("id = ?", a.ID).Update("status", "acked")
 
-	var rec []senderRecord
-	e = NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e = NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered.Add(10 * time.Minute) })
 	e.Tick(context.Background())
 
-	if len(rec) != 0 {
-		t.Fatalf("acked alert should not re-fire, got %+v", rec)
+	if len(disp.calls) != 0 {
+		t.Fatalf("acked alert should not re-fire, got %+v", disp.calls)
 	}
 }
 
@@ -163,15 +167,13 @@ func TestEngine_BelowMinSeverity_Skipped(t *testing.T) {
 	triggered := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	if len(rec) != 0 {
-		t.Fatalf("expected skip, got %+v", rec)
+	if len(disp.calls) != 0 {
+		t.Fatalf("expected skip, got %+v", disp.calls)
 	}
 }
 
@@ -185,7 +187,7 @@ func TestEngine_SeverityOverride_Applied(t *testing.T) {
 	triggered := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	a := seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	e := NewEngine(db, svc, nil, func(_ model.Alert, _ []uint) {})
+	e := NewEngine(db, svc, nil, &recordingDispatcher{})
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 	e.SetNowFn(func() time.Time { return triggered.Add(2 * time.Minute) })
@@ -222,15 +224,13 @@ func TestEngine_PolicyDisabled_Skipped(t *testing.T) {
 	triggered := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	if len(rec) != 0 {
-		t.Fatalf("disabled policy should not fire, got %+v", rec)
+	if len(disp.calls) != 0 {
+		t.Fatalf("disabled policy should not fire, got %+v", disp.calls)
 	}
 }
 
@@ -243,14 +243,12 @@ func TestEngine_NoPolicyLinked_Skipped(t *testing.T) {
 		TriggeredAt: time.Now(), Tags: "[]", LastLevelFired: -1,
 	})
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.Tick(context.Background())
 
-	if len(rec) != 0 {
-		t.Fatalf("expected no fire, got %+v", rec)
+	if len(disp.calls) != 0 {
+		t.Fatalf("expected no fire, got %+v", disp.calls)
 	}
 }
 
@@ -271,16 +269,14 @@ func TestEngine_Idempotency_UniqueConstraint(t *testing.T) {
 	})
 	// But leave alert.last_level_fired = -1 (simulating mid-race)
 	// Engine tick should fail UNIQUE on insert and roll back without advancing alert
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	// sender must NOT have been called since tx rolled back before calling sender
-	if len(rec) != 0 {
-		t.Fatalf("unique-conflict tick must not call sender, got %+v", rec)
+	// dispatcher must NOT have been called since tx rolled back before dispatch
+	if len(disp.calls) != 0 {
+		t.Fatalf("unique-conflict tick must not call dispatcher, got %+v", disp.calls)
 	}
 	var got model.Alert
 	db.First(&got, a.ID)

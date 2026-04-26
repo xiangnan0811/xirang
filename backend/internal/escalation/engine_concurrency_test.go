@@ -3,7 +3,6 @@ package escalation
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,11 +18,11 @@ func TestEngine_ConcurrentTicks_OnlyOneFires(t *testing.T) {
 	triggered := time.Now()
 	a := seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var sendCount int64
-	sendFn := func(_ model.Alert, _ []uint) { atomic.AddInt64(&sendCount, 1) }
+	rd1 := &recordingDispatcher{}
+	rd2 := &recordingDispatcher{}
 
-	e1 := NewEngine(db, svc, nil, sendFn)
-	e2 := NewEngine(db, svc, nil, sendFn)
+	e1 := NewEngine(db, svc, nil, rd1)
+	e2 := NewEngine(db, svc, nil, rd2)
 	e1.SetNowFn(func() time.Time { return triggered })
 	e2.SetNowFn(func() time.Time { return triggered })
 
@@ -33,8 +32,9 @@ func TestEngine_ConcurrentTicks_OnlyOneFires(t *testing.T) {
 	go func() { defer wg.Done(); e2.Tick(context.Background()) }()
 	wg.Wait()
 
-	if got := atomic.LoadInt64(&sendCount); got != 1 {
-		t.Fatalf("sendCount=%d want 1 (optimistic lock + UNIQUE should serialize)", got)
+	totalFires := len(rd1.calls) + len(rd2.calls)
+	if totalFires != 1 {
+		t.Fatalf("totalFires=%d want 1 (optimistic lock + UNIQUE should serialize)", totalFires)
 	}
 	// Exactly one event row
 	var n int64
@@ -59,14 +59,12 @@ func TestEngine_MultipleOpenAlerts_Independent(t *testing.T) {
 		ErrorCode: "XR-NODE-2", Message: "m", TriggeredAt: triggered, Tags: "[]", LastLevelFired: -1,
 	})
 
-	var rec []senderRecord
-	e := NewEngine(db, svc, nil, func(a model.Alert, ids []uint) {
-		rec = append(rec, senderRecord{a.ID, ids})
-	})
+	disp := &recordingDispatcher{}
+	e := NewEngine(db, svc, nil, disp)
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	if len(rec) != 2 {
-		t.Fatalf("expected 2 independent fires, got %d", len(rec))
+	if len(disp.calls) != 2 {
+		t.Fatalf("expected 2 independent fires, got %d", len(disp.calls))
 	}
 }

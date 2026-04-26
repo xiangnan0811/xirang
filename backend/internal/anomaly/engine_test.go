@@ -35,36 +35,48 @@ func (f *fakeDetector) Calls() int {
 	return f.calls
 }
 
-func TestEngine_DispatchesFindingsToRaise(t *testing.T) {
+// recordingSink captures every Raise call so tests can assert dispatch
+// behavior without touching the engine internals.
+type recordingSink struct {
+	count int64
+}
+
+func (r *recordingSink) Raise(_ context.Context, _ Finding) error {
+	atomic.AddInt64(&r.count, 1)
+	return nil
+}
+
+func (r *recordingSink) Count() int64 { return atomic.LoadInt64(&r.count) }
+
+func TestEngine_DispatchesFindingsToSink(t *testing.T) {
 	det := &fakeDetector{
 		name:     "fake",
 		interval: 10 * time.Millisecond,
 		returns:  []Finding{{NodeID: 1, Metric: "cpu_pct"}, {NodeID: 2, Metric: "cpu_pct"}},
 	}
-	var raised int64
-	e := NewEngine(nil, nil, det)
-	e.SetRaiseFn(func(_ context.Context, _ Finding) error {
-		atomic.AddInt64(&raised, 1)
-		return nil
-	})
+	sink := &recordingSink{}
+	e := NewEngine(nil, nil, sink, det)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
 	e.Run(ctx)
-	if atomic.LoadInt64(&raised) < 2 {
-		t.Fatalf("expected ≥2 raises, got %d", atomic.LoadInt64(&raised))
+	if sink.Count() < 2 {
+		t.Fatalf("expected ≥2 raises, got %d", sink.Count())
 	}
 }
 
-func TestEngine_NilRaiseFn_NoPanic(t *testing.T) {
+// TestEngine_NilSink_StubAbsorbs replaces the prior NilRaiseFn_NoPanic test.
+// Constructor now installs a stub when sink is nil; Run must not panic and
+// findings must be silently absorbed by the stub.
+func TestEngine_NilSink_StubAbsorbs(t *testing.T) {
 	det := &fakeDetector{
 		name: "fake", interval: 10 * time.Millisecond,
 		returns: []Finding{{NodeID: 1}},
 	}
-	e := NewEngine(nil, nil, det) // no raiseFn set
+	e := NewEngine(nil, nil, nil, det) // nil sink → stubSink installed
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
 	defer cancel()
 	e.Run(ctx)
-	// Not panicking is the assertion
+	// Not panicking is the assertion. The stub logs but never panics.
 }
 
 func TestEngine_TickPanic_Recovered_TickerContinues(t *testing.T) {
@@ -72,12 +84,12 @@ func TestEngine_TickPanic_Recovered_TickerContinues(t *testing.T) {
 		name: "fake", interval: 10 * time.Millisecond,
 		panicMsg: "boom",
 	}
-	e := NewEngine(nil, nil, det)
-	e.SetRaiseFn(func(_ context.Context, _ Finding) error { return nil })
+	sink := &recordingSink{}
+	e := NewEngine(nil, nil, sink, det)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	e.Run(ctx)
-	// If panic wasn't recovered, the goroutine would die and calls would stop
+	// If panic wasn't recovered, the goroutine would die and calls would stop.
 	if det.Calls() < 2 {
 		t.Fatalf("ticker should continue after panic; calls=%d", det.Calls())
 	}
@@ -88,16 +100,12 @@ func TestEngine_EvaluateError_LoggedNotFatal(t *testing.T) {
 		name: "fake", interval: 10 * time.Millisecond,
 		err: ErrInvalidInput,
 	}
-	var raised int64
-	e := NewEngine(nil, nil, det)
-	e.SetRaiseFn(func(_ context.Context, _ Finding) error {
-		atomic.AddInt64(&raised, 1)
-		return nil
-	})
+	sink := &recordingSink{}
+	e := NewEngine(nil, nil, sink, det)
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
 	defer cancel()
 	e.Run(ctx)
-	if atomic.LoadInt64(&raised) != 0 {
-		t.Fatalf("evaluate error should short-circuit raise, got %d", atomic.LoadInt64(&raised))
+	if sink.Count() != 0 {
+		t.Fatalf("evaluate error should short-circuit raise, got %d", sink.Count())
 	}
 }

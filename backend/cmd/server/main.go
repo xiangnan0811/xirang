@@ -89,6 +89,7 @@ func main() {
 
 	settingsSvc := settings.NewService(db)
 	alerting.InitSettings(settingsSvc)
+	raiser := alerting.DefaultRaiser{DB: db}
 
 	escSvc := escalation.NewService(db)
 
@@ -121,24 +122,23 @@ func main() {
 			}
 			return alerting.MatchSilence(alert, node, sils, time.Now())
 		},
-		// sender — dispatch to the level's integrations
-		func(alert model.Alert, ids []uint) {
-			alerting.DispatchToIntegrations(db, alert, ids)
-		},
+		// dispatcher - fires the level's integration list via DefaultRaiser
+		raiser,
 	)
 	go escEngine.Run(hubCtx)
 
 	// Anomaly detection engine + retention
+	anomalySink := anomaly.NewSink(db, func(_ *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
+		return raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
+			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
+		})
+	})
 	anomalyEngine := anomaly.NewEngine(
 		db, settingsSvc,
+		anomalySink,
 		anomaly.NewEWMADetector(db, settingsSvc),
 		anomaly.NewDiskForecastDetector(db, settingsSvc),
 	)
-	anomalyEngine.SetRaiseFn(anomaly.NewRaiseFn(db, func(rdb *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
-		return alerting.RaiseAnomalyAlert(rdb, alerting.AnomalyAlertInput{
-			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
-		})
-	}))
 	go anomalyEngine.Run(hubCtx)
 
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
@@ -170,10 +170,7 @@ func main() {
 	silenceRetention := alerting.NewSilenceRetentionWorker(db, settingsSvc)
 	go silenceRetention.Run(hubCtx)
 
-	sloEvaluator := slo.NewEvaluator(db)
-	sloEvaluator.SetRaiseFn(func(_ any, def *model.SLODefinition, c *slo.Compliance) error {
-		return alerting.RaiseSLOBreach(db, def, c)
-	})
+	sloEvaluator := slo.NewEvaluator(db, raiser)
 	go sloEvaluator.Run(hubCtx)
 
 	nodelogs.InitSettings(settingsSvc)

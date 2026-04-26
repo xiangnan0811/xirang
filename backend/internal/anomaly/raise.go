@@ -52,3 +52,18 @@ func NewRaiseFn(db *gorm.DB, raiser AlertRaiser) RaiseFn {
 		return alertErr
 	}
 }
+
+// alertSinkFunc adapts a RaiseFn to the AlertSink interface so the existing
+// NewRaiseFn output (which is a closure, not a method receiver) can be used
+// as an AlertSink without rewriting raise.go's persistence semantics.
+type alertSinkFunc func(ctx context.Context, f Finding) error
+
+func (a alertSinkFunc) Raise(ctx context.Context, f Finding) error { return a(ctx, f) }
+
+// NewSink builds an AlertSink that persists every finding as an
+// AnomalyEvent row (via NewRaiseFn) and forwards severity/error_code/message
+// to the supplied AlertRaiser. main.go constructs the AlertRaiser as a thin
+// wrapper around alerting.DefaultRaiser.RaiseAnomalyAlert.
+func NewSink(db *gorm.DB, raiser AlertRaiser) AlertSink {
+	return alertSinkFunc(NewRaiseFn(db, raiser))
+}
