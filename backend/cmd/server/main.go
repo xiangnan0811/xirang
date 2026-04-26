@@ -149,6 +149,8 @@ func main() {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
 
+	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
+
 	metricSink := metrics.NewFanSink(metrics.NewDBSink(db))
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
 
@@ -173,6 +175,7 @@ func main() {
 		prober,
 		aggregator,
 		taskManager,
+		taskRetention,
 		reportScheduler,
 		retryWorker,
 		silenceRetention,
