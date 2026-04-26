@@ -26,6 +26,7 @@ type Evaluator struct {
 	db   *gorm.DB
 	tick time.Duration
 	sink AlertSink
+	done chan struct{}
 }
 
 // NewEvaluator constructs the evaluator. sink MUST be non-nil; passing nil
@@ -36,7 +37,7 @@ func NewEvaluator(db *gorm.DB, sink AlertSink) *Evaluator {
 		logger.Module("slo").Warn().Msg("NewEvaluator called with nil sink — breaches will be logged only")
 		sink = stubSink{}
 	}
-	return &Evaluator{db: db, tick: time.Minute, sink: sink}
+	return &Evaluator{db: db, tick: time.Minute, sink: sink, done: make(chan struct{})}
 }
 
 type stubSink struct{}
@@ -51,7 +52,9 @@ func (stubSink) RaiseSLOBreach(def *model.SLODefinition, c *Compliance) error {
 }
 
 // Run blocks until ctx is cancelled, evaluating every `tick`.
+// Implements lifecycle.Worker.
 func (e *Evaluator) Run(ctx context.Context) {
+	defer close(e.done)
 	t := time.NewTicker(e.tick)
 	defer t.Stop()
 	for {
@@ -61,6 +64,16 @@ func (e *Evaluator) Run(ctx context.Context) {
 		case now := <-t.C:
 			e.evaluateAll(now)
 		}
+	}
+}
+
+// Shutdown blocks until Run returns or ctx expires. Implements lifecycle.Worker.
+func (e *Evaluator) Shutdown(ctx context.Context) error {
+	select {
+	case <-e.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

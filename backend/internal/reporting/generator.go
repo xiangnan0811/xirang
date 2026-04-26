@@ -256,29 +256,45 @@ func buildReportMessage(cfg model.ReportConfig, report *model.Report) string {
 
 // Scheduler 定时报告调度器，在应用启动时启动。
 type Scheduler struct {
-	db  *gorm.DB
-	ctx context.Context
+	db   *gorm.DB
+	ctx  context.Context
+	done chan struct{}
 }
 
 func NewScheduler(ctx context.Context, db *gorm.DB) *Scheduler {
-	return &Scheduler{db: db, ctx: ctx}
+	return &Scheduler{db: db, ctx: ctx, done: make(chan struct{})}
 }
 
-// Start 启动报告调度器（每分钟轮询 cron 配置）。
+// Start launches the scheduler using the ctx supplied at construction.
+// Deprecated: prefer go s.Run(ctx) directly for the lifecycle.Worker pattern.
+// TODO(task-12): remove once main.go is migrated to lifecycle.Worker slice.
 func (s *Scheduler) Start() {
-	go s.loop()
+	go s.Run(s.ctx)
 }
 
-func (s *Scheduler) loop() {
+// Run drives the scheduler until ctx is done. Implements lifecycle.Worker.
+func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
+	defer close(s.done) // fires last
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
 			s.checkAndGenerate(t)
 		}
+	}
+}
+
+// Shutdown blocks until Run returns or stopCtx expires. Implements
+// lifecycle.Worker.
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
