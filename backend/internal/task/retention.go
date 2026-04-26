@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,49 +15,6 @@ import (
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/util"
 )
-
-func (m *Manager) startRetentionWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.retentionCancel = cancel
-	go m.runRetentionWorker(ctx)
-}
-
-func (m *Manager) runRetentionWorker(ctx context.Context) {
-	defer close(m.retentionDone)
-
-	integrityMultiplier := 4
-	if raw := util.GetEnvOrDefault("INTEGRITY_CHECK_MULTIPLIER", ""); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			integrityMultiplier = v
-		}
-	}
-
-	var tickCount int
-	for {
-		// 每次循环动态读取间隔配置
-		interval := 6 * time.Hour
-		if m.settingsSvc != nil {
-			raw := m.settingsSvc.GetEffective("retention.check_interval")
-			if parsed, err := time.ParseDuration(raw); err == nil && parsed >= 1*time.Minute {
-				interval = parsed
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
-			tickCount++
-			m.enforceRetention()
-			m.checkLocalStorageSpace()
-			m.checkNodeExpiry()
-			// 完整性检查频率低于保留清理（默认每 4 个周期运行一次，即默认间隔 6h 时每 24h 一次）
-			if tickCount%integrityMultiplier == 0 {
-				m.checkIntegrity()
-			}
-		}
-	}
-}
 
 func (m *Manager) enforceRetention() {
 	log := logger.Module("task")
