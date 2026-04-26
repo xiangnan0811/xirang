@@ -7,6 +7,17 @@ import (
 	"xirang/backend/internal/model"
 )
 
+// recordingSink captures SLO IDs whose RaiseSLOBreach was invoked, mirroring
+// the prior raiseFn lambda so test assertions stay comparable.
+type recordingSink struct {
+	raised []uint
+}
+
+func (r *recordingSink) RaiseSLOBreach(def *model.SLODefinition, _ *Compliance) error {
+	r.raised = append(r.raised, def.ID)
+	return nil
+}
+
 func TestEvaluator_RaisesBreachWhenBurnRateOverTwo(t *testing.T) {
 	db := openSLOTestDB(t)
 	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
@@ -25,15 +36,11 @@ func TestEvaluator_RaisesBreachWhenBurnRateOverTwo(t *testing.T) {
 	def := &model.SLODefinition{ID: 1, Name: "prod", MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
-	var raised []uint
-	w := NewEvaluator(db)
-	w.raiseFn = func(_ any, slo *model.SLODefinition, c *Compliance) error {
-		raised = append(raised, slo.ID)
-		return nil
-	}
+	sink := &recordingSink{}
+	w := NewEvaluator(db, sink)
 	w.evaluateAll(now)
-	if len(raised) != 1 || raised[0] != 1 {
-		t.Fatalf("expected breach raised for SLO 1, got %v", raised)
+	if len(sink.raised) != 1 || sink.raised[0] != 1 {
+		t.Fatalf("expected breach raised for SLO 1, got %v", sink.raised)
 	}
 }
 
@@ -47,15 +54,11 @@ func TestEvaluator_SkipsHealthySLO(t *testing.T) {
 	def := &model.SLODefinition{ID: 1, MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
-	var raised []uint
-	w := NewEvaluator(db)
-	w.raiseFn = func(_ any, slo *model.SLODefinition, c *Compliance) error {
-		raised = append(raised, slo.ID)
-		return nil
-	}
+	sink := &recordingSink{}
+	w := NewEvaluator(db, sink)
 	w.evaluateAll(now)
-	if len(raised) != 0 {
-		t.Fatalf("healthy SLO must not raise breach, got %v", raised)
+	if len(sink.raised) != 0 {
+		t.Fatalf("healthy SLO must not raise breach, got %v", sink.raised)
 	}
 }
 
@@ -69,12 +72,11 @@ func TestEvaluator_SkipsDisabled(t *testing.T) {
 	// Use raw SQL to bypass GORM's zero-value skip + SQLite column default:true.
 	db.Exec("INSERT INTO slo_definitions (id,name,metric_type,threshold,window_days,enabled,created_by,created_at,updated_at) VALUES (1,'disabled-slo','availability',0.99,28,0,1,datetime('now'),datetime('now'))")
 
-	var raised []uint
-	w := NewEvaluator(db)
-	w.raiseFn = func(_ any, slo *model.SLODefinition, c *Compliance) error { raised = append(raised, slo.ID); return nil }
+	sink := &recordingSink{}
+	w := NewEvaluator(db, sink)
 	w.evaluateAll(now)
-	if len(raised) != 0 {
-		t.Fatalf("disabled SLO must not raise breach, got %v", raised)
+	if len(sink.raised) != 0 {
+		t.Fatalf("disabled SLO must not raise breach, got %v", sink.raised)
 	}
 }
 
@@ -87,11 +89,10 @@ func TestEvaluator_SkipsInsufficient(t *testing.T) {
 	def := &model.SLODefinition{ID: 1, MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
-	var raised []uint
-	w := NewEvaluator(db)
-	w.raiseFn = func(_ any, slo *model.SLODefinition, c *Compliance) error { raised = append(raised, slo.ID); return nil }
+	sink := &recordingSink{}
+	w := NewEvaluator(db, sink)
 	w.evaluateAll(now)
-	if len(raised) != 0 {
-		t.Fatalf("insufficient_data must not raise, got %v", raised)
+	if len(sink.raised) != 0 {
+		t.Fatalf("insufficient_data must not raise, got %v", sink.raised)
 	}
 }
