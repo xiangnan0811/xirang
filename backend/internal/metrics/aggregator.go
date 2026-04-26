@@ -400,6 +400,21 @@ func (a *Aggregator) measureRollup(ctx context.Context, tier string, fn func(con
 	rollupDurationSeconds.WithLabelValues(tier).Observe(time.Since(start).Seconds())
 }
 
+// Run drives the aggregator: runs Start (which performs initial backfill +
+// retention pass + arms tickers) and blocks until ctx is done. If Start
+// fails, the error is logged and Run continues to block -- the rest of the
+// app should not abort because aggregation can't initialise. Implements
+// lifecycle.Worker.
+func (a *Aggregator) Run(ctx context.Context) {
+	if err := a.Start(ctx); err != nil {
+		logger.Module("metrics").Error().Err(err).Msg("启动指标聚合器失败")
+		close(a.done) // unblock Shutdown - loop goroutine never started
+		<-ctx.Done()
+		return
+	}
+	<-ctx.Done()
+}
+
 // Shutdown signals the background loop to exit and waits for completion or ctx timeout.
 func (a *Aggregator) Shutdown(ctx context.Context) error {
 	if a.cancel != nil {

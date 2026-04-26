@@ -501,8 +501,7 @@ func TestBuildReportMessage(t *testing.T) {
 
 func TestNewScheduler_CreatesInstance(t *testing.T) {
 	db := openReportingTestDB(t)
-	ctx := t.Context()
-	s := NewScheduler(ctx, db)
+	s := NewScheduler(db)
 	if s == nil {
 		t.Fatal("NewScheduler returned nil")
 	}
@@ -526,8 +525,7 @@ func TestCheckAndGenerate_FiresMatchingConfig(t *testing.T) {
 		t.Fatalf("seed cfg: %v", err)
 	}
 
-	ctx := t.Context()
-	s := NewScheduler(ctx, db)
+	s := NewScheduler(db)
 	s.checkAndGenerate(base)
 
 	var count int64
@@ -550,8 +548,7 @@ func TestCheckAndGenerate_SkipsNonMatchingCron(t *testing.T) {
 		t.Fatalf("seed cfg: %v", err)
 	}
 
-	ctx := t.Context()
-	s := NewScheduler(ctx, db)
+	s := NewScheduler(db)
 	s.checkAndGenerate(base)
 
 	var count int64
@@ -577,8 +574,7 @@ func TestCheckAndGenerate_MonthlyPeriodUsesOneMonthRange(t *testing.T) {
 		t.Fatalf("seed cfg: %v", err)
 	}
 
-	ctx := t.Context()
-	s := NewScheduler(ctx, db)
+	s := NewScheduler(db)
 	s.checkAndGenerate(base)
 
 	var report model.Report
@@ -596,16 +592,16 @@ func TestCheckAndGenerate_MonthlyPeriodUsesOneMonthRange(t *testing.T) {
 	}
 }
 
-func TestScheduler_Start_ExitsOnContextCancel(t *testing.T) {
+func TestScheduler_Run_ExitsOnContextCancel(t *testing.T) {
 	db := openReportingTestDB(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel immediately so loop() exits on the first ctx.Done() select.
+	// Cancel immediately so Run() exits on the first ctx.Done() select.
 	cancel()
-	s := NewScheduler(ctx, db)
-	s.Start()
+	s := NewScheduler(db)
+	go s.Run(ctx)
 	// Give the goroutine a moment to observe the cancellation.
 	time.Sleep(20 * time.Millisecond)
-	// If we reach here without hanging, Start() and loop() work correctly.
+	// If we reach here without hanging, Run() works correctly.
 }
 
 func TestSendReport_MissingIntegration_DoesNotPanic(t *testing.T) {

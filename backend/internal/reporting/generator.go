@@ -257,19 +257,11 @@ func buildReportMessage(cfg model.ReportConfig, report *model.Report) string {
 // Scheduler 定时报告调度器，在应用启动时启动。
 type Scheduler struct {
 	db   *gorm.DB
-	ctx  context.Context
 	done chan struct{}
 }
 
-func NewScheduler(ctx context.Context, db *gorm.DB) *Scheduler {
-	return &Scheduler{db: db, ctx: ctx, done: make(chan struct{})}
-}
-
-// Start launches the scheduler using the ctx supplied at construction.
-// Deprecated: prefer go s.Run(ctx) directly for the lifecycle.Worker pattern.
-// TODO(task-12): remove once main.go is migrated to lifecycle.Worker slice.
-func (s *Scheduler) Start() {
-	go s.Run(s.ctx)
+func NewScheduler(db *gorm.DB) *Scheduler {
+	return &Scheduler{db: db, done: make(chan struct{})}
 }
 
 // Run drives the scheduler until ctx is done. Implements lifecycle.Worker.

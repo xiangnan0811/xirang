@@ -50,6 +50,13 @@ func (p *Prober) Start(ctx context.Context) {
 	go p.run(probeCtx)
 }
 
+// Run starts the periodic probe loop and blocks until ctx is done.
+// Implements lifecycle.Worker.
+func (p *Prober) Run(ctx context.Context) {
+	p.Start(ctx)
+	<-ctx.Done()
+}
+
 // Shutdown signals the prober to stop and waits for completion.
 func (p *Prober) Shutdown(ctx context.Context) error {
 	if p.cancel != nil {
