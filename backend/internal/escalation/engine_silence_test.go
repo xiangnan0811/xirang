@@ -19,18 +19,17 @@ func TestEngine_SilencedLevel_SkipsSenderButAdvancesLevel(t *testing.T) {
 	triggered := time.Now().Add(-2 * time.Minute)
 	a := seedAlertOnNodeWithPolicy(t, db, 10, policy.ID, triggered, "warning")
 
-	var rec []senderRecord
+	disp := &recordingDispatcher{}
 	silenceFn := func(alert model.Alert) *model.Silence {
 		return &model.Silence{ID: 1, Note: "maint"} // always silenced
 	}
-	sendFn := func(a model.Alert, ids []uint) { rec = append(rec, senderRecord{a.ID, ids}) }
-	e := NewEngine(db, svc, silenceFn, sendFn)
+	e := NewEngine(db, svc, silenceFn, disp)
 
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
-	if len(rec) != 0 {
-		t.Fatalf("silenced should skip sender, got %+v", rec)
+	if len(disp.calls) != 0 {
+		t.Fatalf("silenced should skip sender, got %+v", disp.calls)
 	}
 	// But the level must advance
 	var got model.Alert
@@ -62,7 +61,7 @@ func TestEngine_SilenceMatchesProjectedState(t *testing.T) {
 		projectedSeen = alert
 		return nil
 	}
-	e := NewEngine(db, svc, silenceFn, func(_ model.Alert, _ []uint) {})
+	e := NewEngine(db, svc, silenceFn, &recordingDispatcher{})
 	e.SetNowFn(func() time.Time { return triggered })
 	e.Tick(context.Background())
 
