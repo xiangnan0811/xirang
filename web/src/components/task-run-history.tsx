@@ -130,13 +130,13 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
                     {getTriggerIcon(run.triggerType)}
                     {t(getTriggerLabelKey(run.triggerType))}
                   </span>
-                  <Badge tone={statusMeta.variant} className="text-[10px] px-1.5 py-0">
+                  <Badge tone={statusMeta.variant} className="text-micro px-1.5 py-0">
                     {statusMeta.label}
                   </Badge>
                   {run.verifyStatus !== "none" && (
                     <Badge
                       tone={run.verifyStatus === "passed" ? "success" : "warning"}
-                      className="text-[10px] px-1.5 py-0"
+                      className="text-micro px-1.5 py-0"
                     >
                       {run.verifyStatus === "passed" ? t('taskRunHistory.verifyPassed') : run.verifyStatus === "warning" ? t('taskRunHistory.verifyWarning') : t('taskRunHistory.verifyFailed')}
                     </Badge>

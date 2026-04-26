@@ -35,7 +35,7 @@ export function LogsViewer({
     <div
       ref={terminalRef}
       className={cn(
-        "terminal-surface thin-scrollbar overflow-auto rounded-xl p-3 font-mono text-[12px] md:text-[13px]",
+        "terminal-surface thin-scrollbar overflow-auto rounded-xl p-3 font-mono text-[12px] md:text-nav",
         "h-[62vh]",
       )}
       role="log"

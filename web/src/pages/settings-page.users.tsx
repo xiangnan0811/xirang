@@ -216,7 +216,7 @@ export function UsersTab() {
                     <p className="text-xs text-muted-foreground">
                       ID: {item.id} · {roleLabel(item.role)}
                       {item.totpEnabled ? (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-success/15 px-1.5 py-0.5 text-micro font-medium text-success">
                           <Shield className="size-2.5" />
                           2FA
                         </span>

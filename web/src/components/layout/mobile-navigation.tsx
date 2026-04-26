@@ -116,7 +116,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
               aria-label={t("appShell.switchTo", { name: t(item.titleKey) })}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors",
+                "flex flex-col items-center justify-center gap-1 px-1 text-micro transition-colors",
                 active
                   ? "text-[hsl(var(--nav-active-foreground))] font-semibold"
                   : "text-muted-foreground"
@@ -144,7 +144,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
           aria-controls={drawerId}
           aria-expanded={drawerOpen}
           className={cn(
-            "flex flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors",
+            "flex flex-col items-center justify-center gap-1 px-1 text-micro transition-colors",
             drawerOpen
               ? "text-[hsl(var(--nav-active-foreground))] font-semibold"
               : "text-muted-foreground"

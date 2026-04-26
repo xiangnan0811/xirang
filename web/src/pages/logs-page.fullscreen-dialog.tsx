@@ -37,7 +37,7 @@ export function LogsFullscreenDialog({
         </DialogHeader>
         <div className="flex-1 overflow-y-auto px-6 pb-6">
           <div
-            className="terminal-surface thin-scrollbar h-[calc(90vh-140px)] overflow-auto rounded-xl p-3 font-mono text-[12px] md:text-[13px]"
+            className="terminal-surface thin-scrollbar h-[calc(90vh-140px)] overflow-auto rounded-xl p-3 font-mono text-[12px] md:text-nav"
             role="log"
             aria-live="polite"
             aria-relevant="additions text"

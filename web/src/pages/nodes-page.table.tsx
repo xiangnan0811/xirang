@@ -38,7 +38,7 @@ export const NodesTable = React.memo(function NodesTable({
     <div className="hidden rounded-lg border border-border bg-card overflow-x-auto md:block">
       <table className="min-w-[1280px] text-left text-sm">
         <thead>
-          <tr className="border-b border-border bg-secondary text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="px-3 py-2.5">
               <input
                 type="checkbox"
@@ -150,7 +150,7 @@ export const NodesTable = React.memo(function NodesTable({
                           }}
                         />
                       </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-mini text-muted-foreground">
                         {t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}
                       </p>
                     </div>

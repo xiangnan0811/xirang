@@ -75,7 +75,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
     <div className="hidden rounded-lg border border-border bg-card overflow-x-auto md:block">
       <table className="min-w-[960px] text-left text-sm">
         <thead>
-          <tr className="border-b border-border bg-secondary text-[11px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
             <th scope="col" className="px-3 py-2.5">
               <input
                 type="checkbox"

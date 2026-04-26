@@ -123,7 +123,7 @@ export function SystemTab() {
       default: "bg-muted text-muted-foreground",
     };
     return (
-      <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase", colors[source] || colors.default)}>
+      <span className={cn("rounded px-1.5 py-0.5 text-micro font-medium uppercase", colors[source] || colors.default)}>
         {source}
       </span>
     );
@@ -145,14 +145,14 @@ export function SystemTab() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium truncate">{def.description}</p>
                     {def.requires_restart && (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-warning-foreground dark:text-warning" title={t("settings.system.requiresRestart")}>
+                      <span className="inline-flex items-center gap-0.5 text-micro text-warning-foreground dark:text-warning" title={t("settings.system.requiresRestart")}>
                         <AlertTriangle className="size-3" />
                         {t("settings.system.restart")}
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <code className="text-[11px] text-muted-foreground">{def.key}</code>
+                    <code className="text-mini text-muted-foreground">{def.key}</code>
                     {resolved && sourceBadge(resolved.source)}
                   </div>
                 </div>

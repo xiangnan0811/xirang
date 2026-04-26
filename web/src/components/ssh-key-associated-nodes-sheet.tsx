@@ -84,7 +84,7 @@ export function SSHKeyAssociatedNodesSheet({
 
           {/* 提示文字 */}
           {associatedNodes.length > 0 && (
-            <p className="px-5 pt-3 text-[11px] text-muted-foreground/70">
+            <p className="px-5 pt-3 text-mini text-muted-foreground/70">
               {t("sshKeys.clickToNavigate")}
             </p>
           )}

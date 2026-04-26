@@ -13,7 +13,7 @@ export function Stepper({ steps, current, className, ...props }: StepperProps) {
         <div key={i} className="flex flex-1 items-center gap-2">
           <div
             className={cn(
-              "flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
+              "flex size-5 shrink-0 items-center justify-center rounded-full text-micro font-semibold",
               i < current && "bg-primary text-primary-foreground",
               i === current && "bg-[hsl(var(--accent-brand))] text-[hsl(var(--background))]",
               i > current && "bg-muted text-muted-foreground",

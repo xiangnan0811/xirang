@@ -45,7 +45,7 @@ export function UserDropdown() {
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuLabel>
           {username ?? t("common.unknown")}
-          <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+          <span className="ml-1.5 text-micro font-normal text-muted-foreground">
             {role}
           </span>
         </DropdownMenuLabel>

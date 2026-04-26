@@ -102,7 +102,7 @@ export function IntegrationManager({
                       </span>
                       <div>
                         <p className="font-medium text-foreground/90">{integration.name}</p>
-                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mt-0.5">{integration.type}</p>
+                        <p className="text-mini font-medium text-muted-foreground uppercase tracking-wider mt-0.5">{integration.type}</p>
                       </div>
                     </div>
 

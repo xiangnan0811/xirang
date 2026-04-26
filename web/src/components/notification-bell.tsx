@@ -52,7 +52,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
         >
           <Bell className="size-4" />
           {unreadCount.total > 0 ? (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-micro font-semibold leading-none text-destructive-foreground">
               {countLabel}
             </span>
           ) : null}
@@ -63,12 +63,12 @@ export function NotificationBell({ token }: NotificationBellProps) {
           <DropdownMenuLabel className="p-0 text-sm font-semibold">{t('notificationBell.label')}</DropdownMenuLabel>
           <div className="flex items-center gap-1.5">
             {unreadCount.critical > 0 ? (
-              <Badge tone="destructive" className="h-5 px-1.5 text-[10px]">
+              <Badge tone="destructive" className="h-5 px-1.5 text-micro">
                 {t('notificationBell.critical')} {unreadCount.critical}
               </Badge>
             ) : null}
             {unreadCount.warning > 0 ? (
-              <Badge tone="warning" className="h-5 px-1.5 text-[10px]">
+              <Badge tone="warning" className="h-5 px-1.5 text-micro">
                 {t('notificationBell.warning')} {unreadCount.warning}
               </Badge>
             ) : null}
@@ -97,14 +97,14 @@ export function NotificationBell({ token }: NotificationBellProps) {
                   <div className="flex w-full items-center gap-2">
                     <Badge
                       tone={severityMeta.variant}
-                      className="h-5 shrink-0 px-1.5 text-[10px]"
+                      className="h-5 shrink-0 px-1.5 text-micro"
                     >
                       {severityMeta.label}
                     </Badge>
                     <span className="truncate text-xs font-medium">
                       {alert.nodeName}
                     </span>
-                    <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                    <span className="ml-auto shrink-0 text-micro text-muted-foreground">
                       {alert.triggeredAt && alert.triggeredAt !== "-"
                         ? formatRelativeTime(alert.triggeredAt, locale)
                         : ""}

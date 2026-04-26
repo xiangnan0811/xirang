@@ -18,7 +18,7 @@ export function TableHeaderRow({ className, ...p }: React.HTMLAttributes<HTMLDiv
   return (
     <div
       className={cn(
-        "grid border-b border-border px-4 py-2.5 text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground",
+        "grid border-b border-border px-4 py-2.5 text-micro font-medium uppercase tracking-[0.06em] text-muted-foreground",
         className,
       )}
       {...p}

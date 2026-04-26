@@ -51,7 +51,7 @@ export function CommandPalette() {
       <DialogContent size="md" className="p-0 overflow-hidden">
         <Command
           label={t("search.placeholder")}
-          className="[&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.06em] [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-item]]:flex [&_[cmdk-item]]:items-center [&_[cmdk-item]]:gap-2 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-3 [&_[cmdk-item]]:py-2 [&_[cmdk-item]]:text-sm [&_[cmdk-item]]:cursor-pointer [&_[cmdk-item]:hover]:bg-accent [&_[cmdk-item][data-selected=true]]:bg-accent [&_[cmdk-empty]]:py-6 [&_[cmdk-empty]]:text-center [&_[cmdk-empty]]:text-sm [&_[cmdk-empty]]:text-muted-foreground"
+          className="[&_[cmdk-group-heading]]:text-micro [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.06em] [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-item]]:flex [&_[cmdk-item]]:items-center [&_[cmdk-item]]:gap-2 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-3 [&_[cmdk-item]]:py-2 [&_[cmdk-item]]:text-sm [&_[cmdk-item]]:cursor-pointer [&_[cmdk-item]:hover]:bg-accent [&_[cmdk-item][data-selected=true]]:bg-accent [&_[cmdk-empty]]:py-6 [&_[cmdk-empty]]:text-center [&_[cmdk-empty]]:text-sm [&_[cmdk-empty]]:text-muted-foreground"
         >
           <div className="flex items-center gap-3 border-b border-border px-4 py-3">
             <Command.Input
@@ -61,7 +61,7 @@ export function CommandPalette() {
               placeholder={t("search.placeholder")}
               className="flex-1 h-8 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground focus:ring-0"
             />
-            <kbd className="rounded border border-border bg-background px-1.5 py-[2px] font-mono text-[10px] text-muted-foreground">
+            <kbd className="rounded border border-border bg-background px-1.5 py-[2px] font-mono text-micro text-muted-foreground">
               {t("search.kbd")}
             </kbd>
           </div>

@@ -193,11 +193,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               {/* 指纹 + 最后使用 */}
               <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
+                  <p className="text-micro uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
                   <code className="mt-0.5 block truncate font-mono">{key.fingerprint}</code>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>
+                  <p className="text-micro uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>
                   <p className="mt-0.5">
                     {key.lastUsedAt ? formatTime(key.lastUsedAt) : (
                       <span className="italic">{t("sshKeys.neverUsed")}</span>
@@ -294,11 +294,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               {/* 中部：指纹 + 最后使用 */}
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
+                  <p className="text-micro uppercase tracking-wide">{t("sshKeys.colFingerprint")}</p>
                   <code className="mt-0.5 block truncate font-mono">{key.fingerprint}</code>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>
+                  <p className="text-micro uppercase tracking-wide">{t("sshKeys.colLastUsed")}</p>
                   <p className="mt-0.5">
                     {key.lastUsedAt ? formatTime(key.lastUsedAt) : (
                       <span className="italic">{t("sshKeys.neverUsed")}</span>

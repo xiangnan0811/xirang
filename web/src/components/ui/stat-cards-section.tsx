@@ -61,7 +61,7 @@ export function StatCardsSection({
           )}
         >
           <div className="flex items-center justify-between">
-            <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            <div className="text-micro font-medium uppercase tracking-[0.06em] text-muted-foreground">
               {item.title}
             </div>
             {item.icon ? (
@@ -70,7 +70,7 @@ export function StatCardsSection({
           </div>
           <div
             className={cn(
-              "mt-3 text-[28px] font-semibold tabular-nums leading-none tracking-[-0.025em] text-foreground",
+              "mt-3 text-stat font-semibold tabular-nums leading-none tracking-[-0.025em] text-foreground",
               item.valueClassName
             )}
           >

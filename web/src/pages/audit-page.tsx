@@ -307,7 +307,7 @@ export function AuditPage() {
           <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
             <table className="min-w-[1080px] text-left text-sm">
               <thead>
-                <tr className="border-b border-border bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
                   <th scope="col" className="px-3 py-2.5">{t("audit.colTime")}</th>
                   <th scope="col" className="px-3 py-2.5">{t("audit.colUser")}</th>
                   <th scope="col" className="px-3 py-2.5">{t("audit.colRole")}</th>
