@@ -256,29 +256,37 @@ func buildReportMessage(cfg model.ReportConfig, report *model.Report) string {
 
 // Scheduler 定时报告调度器，在应用启动时启动。
 type Scheduler struct {
-	db  *gorm.DB
-	ctx context.Context
+	db   *gorm.DB
+	done chan struct{}
 }
 
-func NewScheduler(ctx context.Context, db *gorm.DB) *Scheduler {
-	return &Scheduler{db: db, ctx: ctx}
+func NewScheduler(db *gorm.DB) *Scheduler {
+	return &Scheduler{db: db, done: make(chan struct{})}
 }
 
-// Start 启动报告调度器（每分钟轮询 cron 配置）。
-func (s *Scheduler) Start() {
-	go s.loop()
-}
-
-func (s *Scheduler) loop() {
+// Run drives the scheduler until ctx is done. Implements lifecycle.Worker.
+func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
+	defer close(s.done) // fires last
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
 			s.checkAndGenerate(t)
 		}
+	}
+}
+
+// Shutdown blocks until Run returns or stopCtx expires. Implements
+// lifecycle.Worker.
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

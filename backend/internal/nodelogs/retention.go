@@ -16,10 +16,11 @@ import (
 type RetentionWorker struct {
 	db   *gorm.DB
 	tick time.Duration
+	done chan struct{}
 }
 
 func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
-	return &RetentionWorker{db: db, tick: time.Hour}
+	return &RetentionWorker{db: db, tick: time.Hour, done: make(chan struct{})}
 }
 
 // settingsSvc 模块级设置服务引用，由 InitSettings 注入
@@ -62,6 +63,7 @@ var defaultDaysFromSettings = func(_ *gorm.DB) int {
 
 func (r *RetentionWorker) Run(ctx context.Context) {
 	t := time.NewTicker(r.tick)
+	defer close(r.done) // fires last - terminal signal after all other cleanup
 	defer t.Stop()
 	for {
 		select {
@@ -70,6 +72,17 @@ func (r *RetentionWorker) Run(ctx context.Context) {
 		case <-t.C:
 			r.pruneAll()
 		}
+	}
+}
+
+// Shutdown blocks until Run has returned or ctx expires.
+// Run MUST be called before Shutdown; safe to call after Run has already returned.
+func (r *RetentionWorker) Shutdown(ctx context.Context) error {
+	select {
+	case <-r.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

@@ -49,15 +49,17 @@ type RetryWorker struct {
 	mu     sync.Mutex
 	db     *gorm.DB
 	sendFn func(integration model.Integration, alert model.Alert) error
+	done   chan struct{}
 }
 
 // NewRetryWorker 创建 RetryWorker，默认使用生产发送函数。
 func NewRetryWorker(db *gorm.DB) *RetryWorker {
-	return &RetryWorker{db: db, sendFn: dispatchSingle}
+	return &RetryWorker{db: db, sendFn: dispatchSingle, done: make(chan struct{})}
 }
 
 // Run 启动后台重试循环，每 10 秒扫描一次，直到 ctx 取消。
 func (w *RetryWorker) Run(ctx context.Context) {
+	defer close(w.done)
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 	for {
@@ -67,6 +69,17 @@ func (w *RetryWorker) Run(ctx context.Context) {
 		case now := <-t.C:
 			w.tick(ctx, now)
 		}
+	}
+}
+
+// Shutdown blocks until Run has returned or ctx expires.
+// Run MUST be called before Shutdown; safe to call after Run has already returned.
+func (w *RetryWorker) Shutdown(ctx context.Context) error {
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

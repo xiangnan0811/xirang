@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"xirang/backend/internal/dashboards/providers"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/escalation"
+	"xirang/backend/internal/lifecycle"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
@@ -125,7 +127,6 @@ func main() {
 		// dispatcher - fires the level's integration list via DefaultRaiser
 		raiser,
 	)
-	go escEngine.Run(hubCtx)
 
 	// Anomaly detection engine + retention
 	anomalySink := anomaly.NewSink(db, func(_ *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
@@ -139,10 +140,8 @@ func main() {
 		anomaly.NewEWMADetector(db, settingsSvc),
 		anomaly.NewDiskForecastDetector(db, settingsSvc),
 	)
-	go anomalyEngine.Run(hubCtx)
 
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
-	go anomalyRetention.Run(hubCtx)
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
@@ -152,34 +151,41 @@ func main() {
 
 	metricSink := metrics.NewFanSink(metrics.NewDBSink(db))
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
-	prober.Start(hubCtx)
 
 	aggregator := metrics.NewAggregator(db, cfg.DBType)
-	if err := aggregator.Start(hubCtx); err != nil {
-		log.Error().Err(err).Msg("启动指标聚合器失败")
-		// Non-fatal: continue without aggregator. Raw samples still accumulate;
-		// the hourly/daily tiers just fall behind until the next restart.
-	}
 
-	reportScheduler := reporting.NewScheduler(hubCtx, db)
-	reportScheduler.Start()
+	reportScheduler := reporting.NewScheduler(db)
 
 	retryWorker := alerting.NewRetryWorker(db)
-	go retryWorker.Run(hubCtx)
 
 	silenceRetention := alerting.NewSilenceRetentionWorker(db, settingsSvc)
-	go silenceRetention.Run(hubCtx)
 
 	sloEvaluator := slo.NewEvaluator(db, raiser)
-	go sloEvaluator.Run(hubCtx)
 
 	nodelogs.InitSettings(settingsSvc)
 	nodeLogRunner := nodelogs.NewSSHRunner(db)
 	nodeLogScheduler := nodelogs.NewScheduler(db, nodeLogRunner)
-	go nodeLogScheduler.Run(hubCtx)
 
 	nodeLogRetention := nodelogs.NewRetentionWorker(db)
-	go nodeLogRetention.Run(hubCtx)
+
+	// LIFECYCLE PHASE: assemble workers in startup order, then start all.
+	workers := []lifecycle.Worker{
+		prober,
+		aggregator,
+		taskManager,
+		reportScheduler,
+		retryWorker,
+		silenceRetention,
+		sloEvaluator,
+		nodeLogScheduler,
+		nodeLogRetention,
+		anomalyEngine,
+		anomalyRetention,
+		escEngine,
+	}
+	for _, w := range workers {
+		go w.Run(hubCtx)
+	}
 
 	dashboards.Register(providers.NewNodeProvider(db))
 	dashboards.Register(providers.NewTaskProvider(db))
@@ -230,20 +236,19 @@ func main() {
 
 	taskManager.StopAccepting()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
 	}
 
-	if err := taskManager.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("任务管理器关闭失败")
-	}
-	if err := prober.Stop(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("节点探测停止失败")
-	}
-	if err := aggregator.Stop(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("指标聚合器停止失败")
+	// LIFO drain: workers started last finish first to invert the dependency
+	// stack. Errors are logged but never abort -- we want every worker to
+	// receive a shutdown signal even if one fails.
+	for i := len(workers) - 1; i >= 0; i-- {
+		if err := workers[i].Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Int("index", i).Str("worker", fmt.Sprintf("%T", workers[i])).Msg("shutdown worker failed")
+		}
 	}
 	hubCancel()
 }

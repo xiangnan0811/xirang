@@ -3,6 +3,7 @@ package anomaly
 import (
 	"context"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
@@ -26,6 +27,7 @@ type Engine struct {
 	settings  *settings.Service
 	detectors []Detector
 	sink      AlertSink
+	done      chan struct{}
 }
 
 // NewEngine constructs an Engine. Passing nil for sink installs a stub that
@@ -36,7 +38,7 @@ func NewEngine(db *gorm.DB, s *settings.Service, sink AlertSink, detectors ...De
 		logger.Module("anomaly").Warn().Msg("NewEngine called with nil sink — findings will be logged only")
 		sink = stubSink{}
 	}
-	return &Engine{db: db, settings: s, detectors: detectors, sink: sink}
+	return &Engine{db: db, settings: s, detectors: detectors, sink: sink, done: make(chan struct{})}
 }
 
 type stubSink struct{}
@@ -52,12 +54,32 @@ func (stubSink) Raise(_ context.Context, f Finding) error {
 }
 
 // Run spawns one goroutine per detector and blocks until ctx is done.
+// Implements lifecycle.Worker. close(e.done) only fires after every detector
+// goroutine has returned, so Shutdown's nil return guarantees full quiescence
+// (no detector still touching e.db, e.sink, or e.settings).
 func (e *Engine) Run(ctx context.Context) {
+	defer close(e.done)
+	var wg sync.WaitGroup
 	for _, det := range e.detectors {
 		det := det
-		go e.runDetector(ctx, det)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.runDetector(ctx, det)
+		}()
 	}
 	<-ctx.Done()
+	wg.Wait() // drain detectors before closing done
+}
+
+// Shutdown blocks until Run returns or ctx expires. Implements lifecycle.Worker.
+func (e *Engine) Shutdown(ctx context.Context) error {
+	select {
+	case <-e.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (e *Engine) runDetector(ctx context.Context, det Detector) {

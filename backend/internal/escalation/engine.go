@@ -31,6 +31,7 @@ type Engine struct {
 	dispatcher Dispatcher
 	tick       time.Duration
 	nowFn      func() time.Time // for tests
+	done       chan struct{}
 }
 
 // NewEngine constructs an Engine. silence may be nil (no-op silence check);
@@ -47,6 +48,7 @@ func NewEngine(db *gorm.DB, svc *Service, silence SilenceCheckerFn, dispatcher D
 		db: db, svc: svc, silence: silence, dispatcher: dispatcher,
 		tick:  DefaultTickInterval,
 		nowFn: time.Now,
+		done:  make(chan struct{}),
 	}
 }
 
@@ -65,8 +67,9 @@ func (e *Engine) SetTickInterval(d time.Duration) { e.tick = d }
 // SetNowFn overrides time.Now for deterministic tests.
 func (e *Engine) SetNowFn(fn func() time.Time) { e.nowFn = fn }
 
-// Run drives the engine until ctx is done.
+// Run drives the engine until ctx is done. Implements lifecycle.Worker.
 func (e *Engine) Run(ctx context.Context) {
+	defer close(e.done)
 	t := time.NewTicker(e.tick)
 	defer t.Stop()
 	for {
@@ -76,6 +79,16 @@ func (e *Engine) Run(ctx context.Context) {
 		case <-t.C:
 			e.Tick(ctx)
 		}
+	}
+}
+
+// Shutdown blocks until Run returns or ctx expires. Implements lifecycle.Worker.
+func (e *Engine) Shutdown(ctx context.Context) error {
+	select {
+	case <-e.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

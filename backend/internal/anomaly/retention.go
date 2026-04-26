@@ -18,16 +18,20 @@ type RetentionWorker struct {
 	db       *gorm.DB
 	settings *settings.Service
 	tick     time.Duration
+	done     chan struct{}
 }
 
 func NewRetentionWorker(db *gorm.DB, s *settings.Service) *RetentionWorker {
-	return &RetentionWorker{db: db, settings: s, tick: 6 * time.Hour}
+	return &RetentionWorker{db: db, settings: s, tick: 6 * time.Hour, done: make(chan struct{})}
 }
 
 // SetTickInterval overrides for tests.
 func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.tick = d }
 
+// Run blocks until ctx is cancelled, pruning on each tick.
+// Implements lifecycle.Worker.
 func (w *RetentionWorker) Run(ctx context.Context) {
+	defer close(w.done)
 	t := time.NewTicker(w.tick)
 	defer t.Stop()
 	for {
@@ -37,6 +41,16 @@ func (w *RetentionWorker) Run(ctx context.Context) {
 		case <-t.C:
 			w.prune(ctx)
 		}
+	}
+}
+
+// Shutdown blocks until Run returns or ctx expires. Implements lifecycle.Worker.
+func (w *RetentionWorker) Shutdown(ctx context.Context) error {
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

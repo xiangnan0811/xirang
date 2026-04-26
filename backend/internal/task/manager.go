@@ -463,6 +463,14 @@ func (m *Manager) StopAccepting() {
 	m.shuttingDown.Store(true)
 }
 
+// Run blocks until ctx is done. Implements lifecycle.Worker. The Manager
+// owns no goroutine of its own -- task execution is driven by the cron
+// scheduler injected at construction. Run exists so main.go can drive the
+// Manager through the same lifecycle.Worker slice as every other worker.
+func (m *Manager) Run(ctx context.Context) {
+	<-ctx.Done()
+}
+
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.shuttingDown.Store(true)
 	m.stopAllRetryTimers()
