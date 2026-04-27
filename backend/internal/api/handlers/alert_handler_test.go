@@ -49,7 +49,7 @@ func TestAlertDeliveries(t *testing.T) {
 	}
 
 	delivery1 := model.AlertDelivery{AlertID: alert1.ID, IntegrationID: 11, Status: "sent"}
-	delivery2 := model.AlertDelivery{AlertID: alert1.ID, IntegrationID: 12, Status: "failed", Error: "http 500"}
+	delivery2 := model.AlertDelivery{AlertID: alert1.ID, IntegrationID: 12, Status: "failed", LastError: "http 500"}
 	delivery3 := model.AlertDelivery{AlertID: alert2.ID, IntegrationID: 13, Status: "sent"}
 	if err := db.Create(&delivery1).Error; err != nil {
 		t.Fatalf("创建投递1失败: %v", err)
@@ -260,7 +260,7 @@ func TestAlertRetryDeliveryFailed(t *testing.T) {
 	if result.Data.Delivery.Status != "failed" {
 		t.Fatalf("期望 delivery 状态 failed，实际: %s", result.Data.Delivery.Status)
 	}
-	if result.Data.Delivery.Error == "" {
+	if result.Data.Delivery.LastError == "" {
 		t.Fatalf("期望记录错误信息")
 	}
 }
@@ -320,9 +320,9 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 	}
 
 	seedRecords := []model.AlertDelivery{
-		{AlertID: alert.ID, IntegrationID: integrationA.ID, Status: "failed", Error: "http 500"},
-		{AlertID: alert.ID, IntegrationID: integrationB.ID, Status: "failed", Error: "timeout"},
-		{AlertID: alert.ID, IntegrationID: integrationA.ID, Status: "failed", Error: "duplicate"},
+		{AlertID: alert.ID, IntegrationID: integrationA.ID, Status: "failed", LastError: "http 500"},
+		{AlertID: alert.ID, IntegrationID: integrationB.ID, Status: "failed", LastError: "timeout"},
+		{AlertID: alert.ID, IntegrationID: integrationA.ID, Status: "failed", LastError: "duplicate"},
 	}
 	for _, record := range seedRecords {
 		if err := db.Create(&record).Error; err != nil {

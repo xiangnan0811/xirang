@@ -188,7 +188,7 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
       onOpenChange(false);
     } catch (err) {
       const msg = getErrorMessage(err);
-      if (msg.includes("409") || msg.toLowerCase().includes("conflict") || msg.includes("名称已存在")) {
+      if (msg.includes("409") || msg.toLowerCase().includes("conflict")) {
         setNameConflict(true);
       } else {
         toast.error(msg);
@@ -203,7 +203,7 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
       <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {isEdit ? `编辑策略：${policy?.name}` : t("escalation.newButton")}
+            {isEdit ? t("escalation.editTitle", { name: policy?.name ?? "" }) : t("escalation.newButton")}
           </DialogTitle>
           <DialogCloseButton />
         </DialogHeader>
@@ -221,7 +221,7 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
                 setName(e.target.value);
                 setNameConflict(false);
               }}
-              placeholder="我的升级策略"
+              placeholder={t("escalation.placeholders.name")}
             />
             {errors.name && (
               <p className="text-xs text-destructive">{errors.name}</p>
@@ -241,7 +241,7 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
-              placeholder="可选描述"
+              placeholder={t("escalation.placeholders.description")}
             />
           </div>
 

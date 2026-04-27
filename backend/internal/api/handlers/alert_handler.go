@@ -395,14 +395,14 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	}
 	if err := alerting.SendAlert(integration, alert); err != nil {
 		delivery.Status = "failed"
-		delivery.Error = util.SanitizeDeliveryError(integration.Type, err)
+		delivery.LastError = util.SanitizeDeliveryError(integration.Type, err)
 		if saveErr := h.db.Create(&delivery).Error; saveErr != nil {
 			respondInternalError(c, saveErr)
 			return
 		}
 		respondOK(c, retryDeliveryResponse{
 			OK:       false,
-			Message:  "重发失败: " + delivery.Error,
+			Message:  "重发失败: " + delivery.LastError,
 			Delivery: delivery,
 		})
 		return
@@ -493,11 +493,11 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 		var integration model.Integration
 		if err := h.db.First(&integration, integrationID).Error; err != nil {
 			newRecord.Status = "failed"
-			newRecord.Error = fmt.Sprintf("通知通道不存在: %d", integrationID)
+			newRecord.LastError = fmt.Sprintf("通知通道不存在: %d", integrationID)
 			failedCount += 1
 		} else if err := alerting.SendAlert(integration, alert); err != nil {
 			newRecord.Status = "failed"
-			newRecord.Error = util.SanitizeDeliveryError(integration.Type, err)
+			newRecord.LastError = util.SanitizeDeliveryError(integration.Type, err)
 			failedCount += 1
 		} else {
 			newRecord.Status = "sent"

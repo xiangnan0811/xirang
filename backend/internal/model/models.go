@@ -210,9 +210,6 @@ type AlertDelivery struct {
 	AlertID       uint       `gorm:"index;not null" json:"alert_id"`
 	IntegrationID uint       `gorm:"index;not null" json:"integration_id"`
 	Status        string     `gorm:"size:16;not null" json:"status"` // pending|sent|retrying|failed
-	// Error is a legacy field preserved for backward compatibility with existing admin UIs.
-	// TODO(post-0.12): remove after one release cycle; replaced by LastError.
-	Error         string     `gorm:"type:text" json:"error"`
 	AttemptCount  int        `gorm:"not null;default:0" json:"attempt_count"`
 	NextRetryAt   *time.Time `json:"next_retry_at"`
 	LastError     string     `gorm:"type:text" json:"last_error"`

@@ -399,7 +399,6 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 				d.Status = "retrying"
 				d.NextRetryAt = &next
 				d.LastError = util.SanitizeDeliveryError(ch.Type, err)
-				d.Error = d.LastError // legacy compat
 			}
 			if saveErr := db.Create(&d).Error; saveErr != nil {
 				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")

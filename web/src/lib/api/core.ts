@@ -209,14 +209,6 @@ export function unwrapPaginated<T>(payload: PaginatedEnvelope<T[]>): {
   };
 }
 
-/** @deprecated request() now auto-unwraps the envelope. This is kept for backward compat during migration. */
-export function unwrapData<T>(payload: Envelope<T> | T): T {
-  if (payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)) {
-    return ((payload as Envelope<T>).data ?? null) as T;
-  }
-  return payload as T;
-}
-
 export function parseNumericId(rawId: string, prefix: string): number {
   const value = rawId.trim();
   if (!value) {
