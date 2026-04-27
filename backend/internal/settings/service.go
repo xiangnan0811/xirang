@@ -94,6 +94,8 @@ var registry = []SettingDef{
 	{Key: "anomaly.disk_forecast_min_history_hours", EnvVar: "ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS", CodeDefault: "72", Type: TypeInt, Category: "anomaly", Description: "磁盘预测所需最少历史小时", Min: "24", Max: "720"},
 	{Key: "anomaly.events_retention_days", EnvVar: "ANOMALY_EVENTS_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "anomaly", Description: "异常事件保留天数", Min: "7", Max: "365"},
 	{Key: "alerts.silence_retention_days", EnvVar: "SILENCE_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "retention", Description: "已过期静默规则的审计保留天数（超出后删除）", Min: "1", Max: "365"},
+	{Key: "metrics.remote_url", EnvVar: "METRICS_REMOTE_URL", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 端点 URL（如 https://mimir.example.com/api/v1/push）；留空禁用远程推送", RequiresRestart: true},
+	{Key: "metrics.remote_bearer_token", EnvVar: "METRICS_REMOTE_BEARER_TOKEN", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 鉴权 Bearer token；生产环境建议使用环境变量配置以避免明文存库", RequiresRestart: true},
 }
 
 // registryMap O(1) key 查找（init 时构建）

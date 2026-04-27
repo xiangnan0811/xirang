@@ -165,3 +165,17 @@
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 数据库备份文件存放目录 |
 
 **读取位置**：`VERSION_CHECK_URL` → `api/handlers/version_handler.go:37`，`DB_BACKUP_DIR` → `api/handlers/system_handler.go:39`
+
+## 14. 指标远程推送（Prometheus remote-write）
+
+可选功能。设置 `METRICS_REMOTE_URL` 后，每次节点探测样本同时通过 Prometheus remote-write 协议（snappy + protobuf）推送到外部 TSDB（Mimir、Cortex、VictoriaMetrics、Grafana Cloud 等）。`FanSink` 自动吞掉远程错误，DBSink 不受影响。
+
+| 变量 | 类型 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `METRICS_REMOTE_URL` | string | 空 | 否 | Prometheus remote-write 端点 URL（如 `https://mimir.example.com/api/v1/push`）。留空禁用远程推送。 |
+| `METRICS_REMOTE_BEARER_TOKEN` | string | 空 | 否 | 可选 Bearer Token，作为 `Authorization: Bearer <token>` 请求头。生产环境建议使用此环境变量而非设置 UI，避免明文存库。 |
+| `METRICS_REMOTE_TIMEOUT` | duration | `5s` | 否 | 单次 HTTP 请求超时（Go duration 格式）。解析失败时回退到 5 秒。 |
+
+可观测性：失败时通过 `xirang_metrics_remote_write_total{status="failure"}` 计数，建议在 Grafana 上配置 `rate(...)` 持续大于 0 的告警面板。
+
+**读取位置**：`cmd/server/main.go:buildRemoteWriteSinkFromConfig`

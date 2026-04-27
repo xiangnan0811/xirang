@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -151,7 +152,11 @@ func main() {
 
 	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
 
-	metricSink := metrics.NewFanSink(metrics.NewDBSink(db))
+	sinks := []metrics.Sink{metrics.NewDBSink(db)}
+	if rs := buildRemoteWriteSinkFromConfig(settingsSvc); rs != nil {
+		sinks = append(sinks, rs)
+	}
+	metricSink := metrics.NewFanSink(sinks...)
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
 
 	aggregator := metrics.NewAggregator(db, cfg.DBType)
@@ -254,4 +259,29 @@ func main() {
 		}
 	}
 	hubCancel()
+}
+
+// buildRemoteWriteSinkFromConfig reads METRICS_REMOTE_URL / _BEARER_TOKEN /
+// _TIMEOUT env vars first, falling back to settings.GetEffective. Returns
+// nil when no URL is configured (sink disabled). Read once at boot;
+// changes require restart.
+func buildRemoteWriteSinkFromConfig(svc *settings.Service) *metrics.RemoteWriteSink {
+	url := strings.TrimSpace(os.Getenv("METRICS_REMOTE_URL"))
+	if url == "" && svc != nil {
+		url = strings.TrimSpace(svc.GetEffective("metrics.remote_url"))
+	}
+	if url == "" {
+		return nil
+	}
+	token := strings.TrimSpace(os.Getenv("METRICS_REMOTE_BEARER_TOKEN"))
+	if token == "" && svc != nil {
+		token = strings.TrimSpace(svc.GetEffective("metrics.remote_bearer_token"))
+	}
+	timeout := 5 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("METRICS_REMOTE_TIMEOUT")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			timeout = parsed
+		}
+	}
+	return metrics.NewRemoteWriteSink(url, token, timeout)
 }
