@@ -26,3 +26,12 @@ var SinkDropped = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "xirang_metric_sink_dropped_total",
 	Help: "Samples dropped by a metric sink due to overflow or fatal failure.",
 }, []string{"sink"})
+
+// remoteWriteTotal counts Prometheus remote-write attempts by terminal
+// status. Incremented from RemoteWriteSink.Write. Use rate of
+// xirang_metrics_remote_write_total{status="failure"} to detect chronic
+// remote-endpoint failure without burning the operator's attention.
+var remoteWriteTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "xirang_metrics_remote_write_total",
+	Help: "Total Prometheus remote-write attempts by status",
+}, []string{"status"})
