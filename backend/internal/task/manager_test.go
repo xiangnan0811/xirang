@@ -85,11 +85,23 @@ func (e *blockingExecutor) Calls() int {
 
 func openManagerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	// 关键：不用 cache=shared + 命名 file，原实现导致两个 flake：
+	//   1) Manager 的后台 goroutine 与测试主线程并发写同一内存库 →
+	//      SQLite 单写者锁默认立即返回 "database table is locked"，
+	//      CI 上观察到 TestPreHookTimeout 偶发断言失败。
+	//   2) 同一进程内 go test -count=N 重复跑同名测试时，命名 file 复用
+	//      同一份内存库，残留数据触发 UNIQUE constraint。
+	// 改用纯 ":memory:" + SetMaxOpenConns(1)：每次调用得到全新的私有库，
+	// 单连接彻底串行化所有写入；_busy_timeout 作为兜底应对偶发竞争。
+	db, err := gorm.Open(sqlite.Open("file::memory:?_busy_timeout=5000"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取底层连接失败: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
