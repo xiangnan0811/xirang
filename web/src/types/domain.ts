@@ -219,6 +219,7 @@ export interface AlertRecord {
   nodeId: number;
   taskId?: number | null;
   taskRunId?: number | null;
+  sloId?: number | null;
   policyName: string;
   severity: AlertSeverity;
   status: AlertStatus;

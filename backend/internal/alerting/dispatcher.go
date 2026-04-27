@@ -856,9 +856,11 @@ func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) er
 	if c.ErrorBudgetRemainingPct <= 0 {
 		severity = "critical"
 	}
+	id := def.ID
 	alert := &model.Alert{
 		NodeID:    0,
 		NodeName:  "platform",
+		SLOID:     &id,
 		ErrorCode: fmt.Sprintf("XR-SLO-%d", def.ID),
 		Severity:  severity,
 		Status:    "open",
