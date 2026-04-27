@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/xiangnan0811/xirang/compare/v0.17.7...v0.18.0) (2026-04-27)
+
+
+### Features
+
+* **metrics:** add Prometheus remote-write sink ([#80](https://github.com/xiangnan0811/xirang/issues/80)) ([1911502](https://github.com/xiangnan0811/xirang/commit/1911502bc3653844cdd9d8e92fefa1b345ac010c))
+
 ## [0.17.7](https://github.com/xiangnan0811/xirang/compare/v0.17.6...v0.17.7) (2026-04-27)
 
 
