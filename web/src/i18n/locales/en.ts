@@ -1839,6 +1839,10 @@ const en = {
     endTime: "End time",
     limitMbps: "Limit (Mbps)",
     deleteRule: "Delete rule",
+    deleteConfirmTitle: "Delete bandwidth rule?",
+    deleteConfirmDesc: "Removes the limit between {{start}} and {{end}}. Effective only after saving the policy.",
+    deleteConfirmAction: "Delete",
+    deleteConfirmCancel: "Cancel",
   },
 
   // ── display preferences ──

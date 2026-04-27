@@ -63,8 +63,7 @@
 
     --touch-target-size: 44px;
 
-    /* --- Legacy aliases still in use (nav-active*, shadow-panel*, shadow-mobile-sheet) --- */
-    /* Keep these pointing at new Sage equivalents until Wave 1 Task 1.25 (mobile-navigation rewrite) */
+    /* Navigation & panel-shadow tokens (alias --accent / --foreground; consumed by mobile-navigation, ssh-key sheet) */
     --nav-active: 40 25% 92%;              /* same as new --accent */
     --nav-active-foreground: 38 14% 15%;   /* same as --foreground */
     --shadow-panel: 0 1px 2px rgba(90, 80, 60, 0.06), 0 1px 2px rgba(139, 120, 90, 0.06);
@@ -126,7 +125,7 @@
     --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
     --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.6);
 
-    /* --- Legacy aliases still in use (dark mode mapping) --- */
+    /* Navigation & panel-shadow tokens (dark mode mapping) */
     --nav-active: 36 8% 18%;                 /* same as new --accent */
     --nav-active-foreground: 42 40% 95%;     /* same as --foreground */
     --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -207,6 +206,13 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
+    }
+
+    /* Loading spinners are an essential affordance (signal that work is in flight), */
+    /* not decorative motion. Keep them spinning under reduced-motion. */
+    .animate-spin {
+      animation-duration: 1s !important;
+      animation-iteration-count: infinite !important;
     }
   }
 }

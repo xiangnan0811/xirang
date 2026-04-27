@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Plus } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
-import { toast } from "@/components/ui/toast";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import type {
   NewTaskInput,
@@ -129,16 +128,18 @@ export function TaskEditorDialog({
     taskRecordToDraft,
   );
   const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<{ name?: string | null; nodeId?: string | null }>({});
 
   const handleSave = async () => {
+    setErrors({});
     const nodeId = toNumberOrNull(draft.nodeId);
     if (!nodeId) {
-      toast.error(t("taskCreate.errorNodeRequired"), { id: "task-editor-node-required" });
+      setErrors({ nodeId: t("taskCreate.errorNodeRequired") });
       return;
     }
 
     if (!draft.name.trim()) {
-      toast.error(t("taskCreate.errorNameRequired"), { id: "task-editor-name-required" });
+      setErrors({ name: t("taskCreate.errorNameRequired") });
       return;
     }
 
@@ -210,6 +211,7 @@ export function TaskEditorDialog({
         tasks={tasks}
         editingTask={editingTask}
         saving={saving}
+        errors={errors}
       />
 
       <TaskSchedule draft={draft} setDraft={setDraft} saving={saving} />
