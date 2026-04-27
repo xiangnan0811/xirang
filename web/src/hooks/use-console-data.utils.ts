@@ -24,7 +24,12 @@ export function deriveOverview(
   };
 }
 
-export function describeCron(cron: string) {
+export function describeCron(cron: string | null | undefined) {
+  // 防御：API 偶发返回非标准信封时 mapPolicy 可能将 cron 设为 undefined，
+  // 这里返回安全占位避免顶级渲染崩溃（详见 policy_handler Update 警告分支修复）。
+  if (typeof cron !== "string" || cron.trim() === "") {
+    return i18n.t("cron.byCronExpression", { cron: cron ?? "" });
+  }
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) {
     return i18n.t("cron.byCronExpression", { cron });
