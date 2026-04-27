@@ -452,6 +452,12 @@ func TestDispatch_SLOBreachUsesXRSLOPrefix(t *testing.T) {
 	if a.Severity == "" {
 		t.Fatalf("expected severity set, got empty")
 	}
+	if a.SLOID == nil {
+		t.Fatalf("expected Alert.SLOID populated, got nil")
+	}
+	if *a.SLOID != sloDef.ID {
+		t.Fatalf("expected Alert.SLOID == %d, got %d", sloDef.ID, *a.SLOID)
+	}
 }
 
 // openDispatcherDBForEscalation opens an in-memory SQLite DB with tables needed for
