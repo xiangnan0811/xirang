@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.3](https://github.com/xiangnan0811/xirang/compare/v0.18.2...v0.18.3) (2026-04-27)
+
+
+### Bug Fixes
+
+* **backend:** 策略 target_path 警告分支返回标准信封，修复策略开关白屏 ([#87](https://github.com/xiangnan0811/xirang/issues/87)) ([2bfa457](https://github.com/xiangnan0811/xirang/commit/2bfa4575d699d6f15c67b9fab49af12b5714bb78))
+
 ## [0.18.2](https://github.com/xiangnan0811/xirang/compare/v0.18.1...v0.18.2) (2026-04-27)
 
 

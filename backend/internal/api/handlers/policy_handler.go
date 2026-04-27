@@ -443,9 +443,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 
 	h.db.Preload("Nodes").First(&p, p.ID)
 	if oldTargetPath != "" && oldTargetPath != config.BackupRoot {
-		c.JSON(http.StatusOK, gin.H{
-			"data":    buildPolicyResponse(p),
-			"warning": fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
+		// 警告信息走标准信封的 message 字段，避免破坏前端 request() 的自动解包；
+		// 旧的 {data, warning} 顶层结构会让 mapPolicy 收到嵌套对象、字段全部 undefined，
+		// 进而触发 describeCron(undefined) 崩溃。
+		c.JSON(http.StatusOK, Response{
+			Code:    0,
+			Message: fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
+			Data:    buildPolicyResponse(p),
 		})
 		return
 	}
