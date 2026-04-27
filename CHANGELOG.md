@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.4](https://github.com/xiangnan0811/xirang/compare/v0.18.3...v0.18.4) (2026-04-27)
+
+
+### Bug Fixes
+
+* **task-test:** 修复 openManagerTestDB 的 SQLite 共享内存库 flake ([#88](https://github.com/xiangnan0811/xirang/issues/88)) ([050e4a0](https://github.com/xiangnan0811/xirang/commit/050e4a0c4e85de40830a53f84a82392d727c68b6))
+
 ## [0.18.3](https://github.com/xiangnan0811/xirang/compare/v0.18.2...v0.18.3) (2026-04-27)
 
 
