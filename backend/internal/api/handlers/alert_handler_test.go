@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -438,5 +439,120 @@ func TestAlertDeliveryStats(t *testing.T) {
 	}
 	if len(result.Data.ByIntegration) != 2 {
 		t.Fatalf("按通道统计数量错误，实际: %d", len(result.Data.ByIntegration))
+	}
+}
+
+func TestAlertGet_ReturnsPlainAlert_NoGroupInfo(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.Node{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	a := model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   "XR-001",
+		Message:     "boom",
+		TriggeredAt: time.Now(),
+		Tags:        "[]",
+	}
+	if err := db.Create(&a).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.GET("/alerts/:id", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/alerts/%d", a.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if _, has := result.Data["group_info"]; has {
+		t.Fatalf("Get 响应不应再包含 group_info 字段，实际: %s", resp.Body.String())
+	}
+	if _, has := result.Data["error_code"]; !has {
+		t.Fatalf("Get 响应应包含 Alert 字段，实际: %s", resp.Body.String())
+	}
+}
+
+func TestAlertGroupInfo_HappyPath(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.Node{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	a := model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		Severity:    "warning",
+		Status:      "open",
+		ErrorCode:   "XR-GRP-1",
+		Message:     "grp",
+		TriggeredAt: time.Now(),
+		Tags:        "[]",
+	}
+	if err := db.Create(&a).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	// Bump the in-memory grouping counter so we get a non-zero count.
+	key := alerting.GroupKey(a.ErrorCode, a.NodeID, []string{})
+	for i := 0; i < 3; i++ {
+		alerting.GetSharedGrouping().ShouldSend(key)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.GET("/alerts/:id/group-info", handler.GroupInfo)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/alerts/%d/group-info", a.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data AlertGroupInfo `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.Count < 1 {
+		t.Fatalf("期望 count >=1，实际: %d", result.Data.Count)
+	}
+}
+
+func TestAlertGroupInfo_NotFound(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.Node{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.GET("/alerts/:id/group-info", handler.GroupInfo)
+
+	req := httptest.NewRequest(http.MethodGet, "/alerts/9999/group-info", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("期望状态码 404，实际: %d", resp.Code)
 	}
 }
