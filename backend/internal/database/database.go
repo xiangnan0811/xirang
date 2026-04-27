@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"xirang/backend/internal/config"
@@ -23,20 +24,19 @@ func configurePool(db *gorm.DB) error {
 	return nil
 }
 
-func applySQLitePragmas(db *gorm.DB) error {
-	if err := db.Exec("PRAGMA foreign_keys=ON;").Error; err != nil {
-		return fmt.Errorf("设置 SQLite foreign_keys 失败: %w", err)
+// sqlitePragmas are appended to the SQLite DSN so each pooled connection
+// gets them at open time (they are per-connection in mattn/go-sqlite3).
+// _journal_mode=WAL enables reader/writer concurrency; _txlock=immediate
+// makes BEGIN take a write lock up front so concurrent writers serialize
+// via _busy_timeout (5s) instead of failing at COMMIT with SQLITE_BUSY.
+const sqlitePragmas = "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_synchronous=NORMAL&_txlock=immediate"
+
+func buildSQLiteDSN(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
 	}
-	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
-		return fmt.Errorf("设置 SQLite WAL 模式失败: %w", err)
-	}
-	if err := db.Exec("PRAGMA busy_timeout=5000;").Error; err != nil {
-		return fmt.Errorf("设置 SQLite busy_timeout 失败: %w", err)
-	}
-	if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
-		return fmt.Errorf("设置 SQLite synchronous 失败: %w", err)
-	}
-	return nil
+	return path + sep + sqlitePragmas
 }
 
 func configureSQLitePool(db *gorm.DB) error {
@@ -44,10 +44,14 @@ func configureSQLitePool(db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	// SQLite 同一时刻只允许一个写入者，多连接会导致 "database is locked"。
-	// 单连接保证所有 PRAGMA 生效且写入串行化。
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
+	// PRAGMAs are now embedded in the DSN, so each new connection in the
+	// pool auto-applies WAL/busy_timeout/foreign_keys/synchronous on open.
+	// WAL allows multiple concurrent readers + one writer; the pool size
+	// reflects that. Writes serialize at the SQLite level via
+	// _txlock=immediate + _busy_timeout, so multiple Go connections don't
+	// race for the write lock.
+	sqlDB.SetMaxOpenConns(10)
+	sqlDB.SetMaxIdleConns(5)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 	return nil
 }
@@ -60,12 +64,9 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 	gormCfg := &gorm.Config{Logger: newCtxAwareLogger(logger.Default)}
 	switch cfg.DBType {
 	case "sqlite":
-		db, err := gorm.Open(sqlite.Open(cfg.SQLitePath), gormCfg)
+		db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(cfg.SQLitePath)), gormCfg)
 		if err != nil {
 			return nil, fmt.Errorf("连接 sqlite 失败: %w", err)
-		}
-		if err := applySQLitePragmas(db); err != nil {
-			return nil, err
 		}
 		if err := configureSQLitePool(db); err != nil {
 			return nil, fmt.Errorf("配置连接池失败: %w", err)
