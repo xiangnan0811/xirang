@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/xiangnan0811/xirang/compare/v0.18.0...v0.18.1) (2026-04-27)
+
+
+### Bug Fixes
+
+* **backend:** rename legacy policies.bw_limit column on startup ([#83](https://github.com/xiangnan0811/xirang/issues/83)) ([1d05d6e](https://github.com/xiangnan0811/xirang/commit/1d05d6eeeb8076b9b2164b04f97d76d9f7e1256e))
+
 ## [0.18.0](https://github.com/xiangnan0811/xirang/compare/v0.17.7...v0.18.0) (2026-04-27)
 
 
