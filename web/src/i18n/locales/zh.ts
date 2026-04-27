@@ -1012,7 +1012,6 @@ const zh = {
     deliveryPanelAriaLabel: "告警 {{code}} 的投递记录",
     deliveryLoading: "加载投递记录中...",
     deliveryTime: "{{time}}",
-    deliveryError: "错误：{{error}}",
     noDeliveryRecords: "暂无投递记录",
     integrationSaved: "通知方式 {{name}} 已保存",
     integrationCreated: "通知方式已创建",
@@ -1839,6 +1838,10 @@ const zh = {
     endTime: "结束时间",
     limitMbps: "限速 (Mbps)",
     deleteRule: "删除规则",
+    deleteConfirmTitle: "删除带宽规则？",
+    deleteConfirmDesc: "将移除时段 {{start}} – {{end}} 的限速规则，此操作仅在保存策略后生效。",
+    deleteConfirmAction: "删除",
+    deleteConfirmCancel: "取消",
   },
 
   // ── display preferences ──
@@ -2239,6 +2242,7 @@ const zh = {
   escalation: {
     tabTitle: "升级策略",
     newButton: "新建策略",
+    editTitle: "编辑策略：{{name}}",
     empty: { title: "还没有升级策略", hint: "创建策略以启用告警多级升级" },
     deleteConfirm: "确定要删除策略「{{name}}」吗？关联的 task/policy/slo/node 的链接会被清空。",
     fields: {
@@ -2247,6 +2251,10 @@ const zh = {
       minSeverity: "最低生效严重度",
       enabled: "启用",
       levels: "升级级别",
+    },
+    placeholders: {
+      name: "我的升级策略",
+      description: "可选描述",
     },
     severity: { info: "info", warning: "warning", critical: "critical" },
     severityOverride: { empty: "保持原严重度" },

@@ -359,7 +359,7 @@ export function IntegrationEditorDialog({
       {SECRET_TYPES.has(draft.type) && (
         <div>
           <label htmlFor="int-edit-secret" className="mb-1 block text-sm font-medium">{t('integration.signingSecret')}</label>
-          <Input id="int-edit-secret" type="password" autoComplete="off"
+          <Input id="int-edit-secret" name="integration-secret" type="password" autoComplete="off"
             placeholder={draft.id ? t('integration.secretPlaceholderEdit') : t('integration.secretPlaceholder')}
             value={draft.secret}
             onChange={(event) =>

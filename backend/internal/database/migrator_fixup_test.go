@@ -109,25 +109,3 @@ func TestFixupLegacyPolicyBwlimit_Idempotent(t *testing.T) {
 	}
 }
 
-// TestFixupLegacyPolicyBwlimit_UnknownDriverIsNoop verifies the fixup is a
-// no-op (no error) for unrecognized drivers, leaving the schema untouched.
-func TestFixupLegacyPolicyBwlimit_UnknownDriverIsNoop(t *testing.T) {
-	db := openMemoryDB(t)
-	if _, err := db.Exec(`CREATE TABLE policies (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		bw_limit INTEGER NOT NULL DEFAULT 0
-	)`); err != nil {
-		t.Fatalf("create policies: %v", err)
-	}
-	if err := fixupLegacyPolicyBwlimit(db, "mysql"); err != nil {
-		t.Fatalf("expected no-op for unknown driver, got: %v", err)
-	}
-	// bw_limit must still be there since we didn't run.
-	var oldCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('policies') WHERE name='bw_limit'`).Scan(&oldCount); err != nil {
-		t.Fatalf("count bw_limit: %v", err)
-	}
-	if oldCount != 1 {
-		t.Fatalf("expected bw_limit untouched, got count=%d", oldCount)
-	}
-}

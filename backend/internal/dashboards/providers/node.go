@@ -59,7 +59,6 @@ func (p *NodeMetricsProvider) Query(ctx context.Context, req dashboards.QueryReq
 	}
 
 	nodeIDs := req.Filters.NodeIDs
-	aggSQL, needInMemoryPercentile := aggregationSQL(req.Aggregation, col)
 
 	// We bucket by dividing unix seconds by stepSeconds. SQLite has strftime('%s'),
 	// Postgres has EXTRACT(EPOCH FROM ...). Use a Go computation via CASE, which is
@@ -129,28 +128,15 @@ func (p *NodeMetricsProvider) Query(ctx context.Context, req dashboards.QueryReq
 		if name == "" {
 			name = fmt.Sprintf("node-%d", id)
 		}
-		pts := aggregateBuckets(buckets[id], aggSQL, req.Aggregation, needInMemoryPercentile)
+		pts := aggregateBuckets(buckets[id], req.Aggregation)
 		series = append(series, dashboards.Series{Name: name, Points: pts})
 	}
 
 	return &dashboards.QueryResponse{Series: series, StepSeconds: stepSeconds, Truncated: truncated}, nil
 }
 
-// aggregationSQL returns (SQL fragment, needInMemoryPercentile).
-// We apply aggregations in Go (see aggregateBuckets). SQL fragment is unused
-// except for documentation / future optimization.
-func aggregationSQL(agg, col string) (string, bool) {
-	switch agg {
-	case "avg", "max", "min", "sum":
-		return agg + "(" + col + ")", false
-	case "p50", "p95", "p99":
-		return "", true
-	}
-	return "", false
-}
-
 // aggregateBuckets reduces each bucket's slice of floats to a single Point.
-func aggregateBuckets(m map[int64][]float64, _ string, agg string, _ bool) []dashboards.Point {
+func aggregateBuckets(m map[int64][]float64, agg string) []dashboards.Point {
 	keys := make([]int64, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

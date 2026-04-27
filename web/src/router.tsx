@@ -126,20 +126,12 @@ export const AppRouter = createBrowserRouter([
         element: <LazyPage><NotificationsPage /></LazyPage>
       },
       {
-        path: "alert-center",
-        element: <Navigate to="../notifications" replace />
-      },
-      {
         path: "tasks",
         element: <LazyPage><TasksPage /></LazyPage>
       },
       {
         path: "audit",
         element: <LazyPage><AuditPage /></LazyPage>
-      },
-      {
-        path: "users",
-        element: <Navigate to="../settings?tab=users" replace />
       },
       {
         path: "reports",
