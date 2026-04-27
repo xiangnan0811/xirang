@@ -1012,7 +1012,6 @@ const en = {
     deliveryPanelAriaLabel: "Delivery records for alert {{code}}",
     deliveryLoading: "Loading delivery records...",
     deliveryTime: "{{time}}",
-    deliveryError: "Error: {{error}}",
     noDeliveryRecords: "No delivery records",
     integrationSaved: "Channel {{name}} saved",
     integrationCreated: "Notification channel created",
@@ -2234,6 +2233,7 @@ const en = {
   escalation: {
     tabTitle: "Escalation",
     newButton: "New Policy",
+    editTitle: "Edit policy: {{name}}",
     empty: { title: "No escalation policies", hint: "Create a policy to enable multi-level escalation" },
     deleteConfirm: "Delete policy \"{{name}}\"? Links on task/policy/slo/node will be cleared.",
     fields: {
@@ -2242,6 +2242,10 @@ const en = {
       minSeverity: "Min severity",
       enabled: "Enabled",
       levels: "Levels",
+    },
+    placeholders: {
+      name: "My escalation policy",
+      description: "Optional description",
     },
     severity: { info: "info", warning: "warning", critical: "critical" },
     severityOverride: { empty: "Keep original" },

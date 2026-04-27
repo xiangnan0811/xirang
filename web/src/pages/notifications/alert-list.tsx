@@ -141,7 +141,7 @@ export function AlertList({
                   <p className="mt-0.5 text-destructive truncate max-w-xs" title={delivery.lastError}>
                     {delivery.lastError.length > 120 ? delivery.lastError.slice(0, 120) + "…" : delivery.lastError}
                   </p>
-                ) : delivery.error ? <p className="mt-1 text-destructive">{t("notifications.deliveryError", { error: delivery.error })}</p> : null}
+                ) : null}
                 {delivery.status === "failed" ? (
                   <Button
                     className="mt-2"
