@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.7](https://github.com/xiangnan0811/xirang/compare/v0.17.6...v0.17.7) (2026-04-27)
+
+
+### Bug Fixes
+
+* **alerts:** add slo_id column with backfill ([#77](https://github.com/xiangnan0811/xirang/issues/77)) ([03b9e3d](https://github.com/xiangnan0811/xirang/commit/03b9e3ddbb663457ac7cbaf4877cea15c926b46a))
+* **alerts:** split group_info into dedicated endpoint ([#79](https://github.com/xiangnan0811/xirang/issues/79)) ([eb1978e](https://github.com/xiangnan0811/xirang/commit/eb1978e70697fe013bb69cdc97edfd652f0a72a4))
+
 ## [0.17.6](https://github.com/xiangnan0811/xirang/compare/v0.17.5...v0.17.6) (2026-04-24)
 
 
