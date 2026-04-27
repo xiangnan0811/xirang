@@ -1012,7 +1012,6 @@ const zh = {
     deliveryPanelAriaLabel: "告警 {{code}} 的投递记录",
     deliveryLoading: "加载投递记录中...",
     deliveryTime: "{{time}}",
-    deliveryError: "错误：{{error}}",
     noDeliveryRecords: "暂无投递记录",
     integrationSaved: "通知方式 {{name}} 已保存",
     integrationCreated: "通知方式已创建",
@@ -2239,6 +2238,7 @@ const zh = {
   escalation: {
     tabTitle: "升级策略",
     newButton: "新建策略",
+    editTitle: "编辑策略：{{name}}",
     empty: { title: "还没有升级策略", hint: "创建策略以启用告警多级升级" },
     deleteConfirm: "确定要删除策略「{{name}}」吗？关联的 task/policy/slo/node 的链接会被清空。",
     fields: {
@@ -2247,6 +2247,10 @@ const zh = {
       minSeverity: "最低生效严重度",
       enabled: "启用",
       levels: "升级级别",
+    },
+    placeholders: {
+      name: "我的升级策略",
+      description: "可选描述",
     },
     severity: { info: "info", warning: "warning", critical: "critical" },
     severityOverride: { empty: "保持原严重度" },

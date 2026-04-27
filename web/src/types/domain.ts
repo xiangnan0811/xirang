@@ -234,9 +234,7 @@ export interface AlertDeliveryRecord {
   alertId: string;
   integrationId: string;
   status: "sent" | "failed";
-  error?: string;
   createdAt: string;
-  // retry-related fields (added in P5b Task 4)
   attemptCount?: number;
   nextRetryAt?: string | null;
   lastError?: string | null;
