@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.2](https://github.com/xiangnan0811/xirang/compare/v0.18.1...v0.18.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* **backend:** 消除启动期 6 条 SLOW SQL（DSN PRAGMAs + node_logs 复合索引） ([#85](https://github.com/xiangnan0811/xirang/issues/85)) ([95fd6e0](https://github.com/xiangnan0811/xirang/commit/95fd6e08102eea90124ab3c921a5ab95adb662cd))
+
 ## [0.18.1](https://github.com/xiangnan0811/xirang/compare/v0.18.0...v0.18.1) (2026-04-27)
 
 
