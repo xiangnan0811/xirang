@@ -64,19 +64,21 @@ func TestEngine_DispatchesFindingsToSink(t *testing.T) {
 	}
 }
 
-// TestEngine_NilSink_StubAbsorbs replaces the prior NilRaiseFn_NoPanic test.
-// Constructor now installs a stub when sink is nil; Run must not panic and
-// findings must be silently absorbed by the stub.
-func TestEngine_NilSink_StubAbsorbs(t *testing.T) {
+// TestEngine_NilSink_PanicsAtConstruction asserts the bootstrap contract:
+// a nil sink is a wiring bug and must crash loudly at NewEngine, not be
+// silently swallowed by a stub. Findings have no other dispatch path.
+func TestEngine_NilSink_PanicsAtConstruction(t *testing.T) {
 	det := &fakeDetector{
 		name: "fake", interval: 10 * time.Millisecond,
 		returns: []Finding{{NodeID: 1}},
 	}
-	e := NewEngine(nil, nil, nil, det) // nil sink → stubSink installed
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
-	defer cancel()
-	e.Run(ctx)
-	// Not panicking is the assertion. The stub logs but never panics.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected NewEngine to panic on nil sink, got no panic")
+		}
+	}()
+	_ = NewEngine(nil, nil, nil, det)
+	t.Fatalf("unreachable: NewEngine should have panicked")
 }
 
 func TestEngine_TickPanic_Recovered_TickerContinues(t *testing.T) {
