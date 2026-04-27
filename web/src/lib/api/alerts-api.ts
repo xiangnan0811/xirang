@@ -14,6 +14,7 @@ type AlertResponse = {
   node_name: string;
   task_id?: number | null;
   task_run_id?: number | null;
+  slo_id?: number | null;
   policy_name?: string;
   severity: AlertRecord["severity"];
   status: AlertRecord["status"];
@@ -74,6 +75,7 @@ function mapAlert(row: AlertResponse): AlertRecord {
     nodeId: row.node_id,
     taskId: row.task_id ?? null,
     taskRunId: row.task_run_id ?? null,
+    sloId: row.slo_id ?? null,
     policyName: row.policy_name ?? i18n.t("notifications.nodeProbe"),
     severity: row.severity,
     status: row.status,
