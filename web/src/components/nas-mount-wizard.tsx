@@ -225,19 +225,19 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
             <div className="space-y-3">
               <div>
                 <label htmlFor="nas-nfs-server" className={labelClass}>{t("nasMountWizard.nfs.serverAddress")}</label>
-                <input id="nas-nfs-server" className={inputClass} placeholder="192.168.1.100" value={nfs.server} onChange={(e) => setNfs({ ...nfs, server: e.target.value })} />
+                <input id="nas-nfs-server" name="nfs-server" className={inputClass} placeholder="192.168.1.100" value={nfs.server} onChange={(e) => setNfs({ ...nfs, server: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-nfs-export" className={labelClass}>{t("nasMountWizard.nfs.exportPath")}</label>
-                <input id="nas-nfs-export" className={inputClass} placeholder="/export/backup" value={nfs.exportPath} onChange={(e) => setNfs({ ...nfs, exportPath: e.target.value })} />
+                <input id="nas-nfs-export" name="nfs-export" className={inputClass} placeholder="/export/backup" value={nfs.exportPath} onChange={(e) => setNfs({ ...nfs, exportPath: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-nfs-mount" className={labelClass}>{t("nasMountWizard.localMountPoint")}</label>
-                <input id="nas-nfs-mount" className={inputClass} placeholder="/mnt/nas-backup" value={nfs.mountPoint} onChange={(e) => setNfs({ ...nfs, mountPoint: e.target.value })} />
+                <input id="nas-nfs-mount" name="nfs-mount" className={inputClass} placeholder="/mnt/nas-backup" value={nfs.mountPoint} onChange={(e) => setNfs({ ...nfs, mountPoint: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-nfs-options" className={labelClass}>{t("nasMountWizard.mountOptions")}</label>
-                <input id="nas-nfs-options" className={inputClass} value={nfs.options} onChange={(e) => setNfs({ ...nfs, options: e.target.value })} />
+                <input id="nas-nfs-options" name="nfs-options" className={inputClass} value={nfs.options} onChange={(e) => setNfs({ ...nfs, options: e.target.value })} />
               </div>
             </div>
           )}
@@ -246,29 +246,29 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
             <div className="space-y-3">
               <div>
                 <label htmlFor="nas-smb-server" className={labelClass}>{t("nasMountWizard.smb.serverAddress")}</label>
-                <input id="nas-smb-server" className={inputClass} placeholder="192.168.1.100" value={smb.server} onChange={(e) => setSmb({ ...smb, server: e.target.value })} />
+                <input id="nas-smb-server" name="smb-server" className={inputClass} placeholder="192.168.1.100" value={smb.server} onChange={(e) => setSmb({ ...smb, server: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-smb-share" className={labelClass}>{t("nasMountWizard.smb.shareName")}</label>
-                <input id="nas-smb-share" className={inputClass} placeholder="backup" value={smb.shareName} onChange={(e) => setSmb({ ...smb, shareName: e.target.value })} />
+                <input id="nas-smb-share" name="smb-share" className={inputClass} placeholder="backup" value={smb.shareName} onChange={(e) => setSmb({ ...smb, shareName: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-smb-mount" className={labelClass}>{t("nasMountWizard.localMountPoint")}</label>
-                <input id="nas-smb-mount" className={inputClass} placeholder="/mnt/nas-backup" value={smb.mountPoint} onChange={(e) => setSmb({ ...smb, mountPoint: e.target.value })} />
+                <input id="nas-smb-mount" name="smb-mount" className={inputClass} placeholder="/mnt/nas-backup" value={smb.mountPoint} onChange={(e) => setSmb({ ...smb, mountPoint: e.target.value })} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="nas-smb-user" className={labelClass}>{t("nasMountWizard.smb.username")}</label>
-                  <input id="nas-smb-user" className={inputClass} placeholder="admin" value={smb.username} onChange={(e) => setSmb({ ...smb, username: e.target.value })} />
+                  <input id="nas-smb-user" name="smb-username" className={inputClass} placeholder="admin" value={smb.username} onChange={(e) => setSmb({ ...smb, username: e.target.value })} />
                 </div>
                 <div>
                   <label htmlFor="nas-smb-pass" className={labelClass}>{t("nasMountWizard.smb.password")}</label>
-                  <input id="nas-smb-pass" className={inputClass} type="password" placeholder="********" value={smb.password} onChange={(e) => setSmb({ ...smb, password: e.target.value })} />
+                  <input id="nas-smb-pass" name="smb-password" autoComplete="off" className={inputClass} type="password" placeholder="********" value={smb.password} onChange={(e) => setSmb({ ...smb, password: e.target.value })} />
                 </div>
               </div>
               <div>
                 <label htmlFor="nas-smb-options" className={labelClass}>{t("nasMountWizard.mountOptions")}</label>
-                <input id="nas-smb-options" className={inputClass} value={smb.options} onChange={(e) => setSmb({ ...smb, options: e.target.value })} />
+                <input id="nas-smb-options" name="smb-options" className={inputClass} value={smb.options} onChange={(e) => setSmb({ ...smb, options: e.target.value })} />
               </div>
             </div>
           )}
@@ -277,15 +277,15 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
             <div className="space-y-3">
               <div>
                 <label htmlFor="nas-usb-device" className={labelClass}>{t("nasMountWizard.usb.devicePath")}</label>
-                <input id="nas-usb-device" className={inputClass} placeholder="/dev/sdb1" value={usb.devicePath} onChange={(e) => setUsb({ ...usb, devicePath: e.target.value })} />
+                <input id="nas-usb-device" name="usb-device" className={inputClass} placeholder="/dev/sdb1" value={usb.devicePath} onChange={(e) => setUsb({ ...usb, devicePath: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-usb-mount" className={labelClass}>{t("nasMountWizard.localMountPoint")}</label>
-                <input id="nas-usb-mount" className={inputClass} placeholder="/mnt/usb-backup" value={usb.mountPoint} onChange={(e) => setUsb({ ...usb, mountPoint: e.target.value })} />
+                <input id="nas-usb-mount" name="usb-mount" className={inputClass} placeholder="/mnt/usb-backup" value={usb.mountPoint} onChange={(e) => setUsb({ ...usb, mountPoint: e.target.value })} />
               </div>
               <div>
                 <label htmlFor="nas-usb-fstype" className={labelClass}>{t("nasMountWizard.usb.fsType")}</label>
-                <input id="nas-usb-fstype" className={inputClass} placeholder="ext4" value={usb.fsType} onChange={(e) => setUsb({ ...usb, fsType: e.target.value })} />
+                <input id="nas-usb-fstype" name="usb-fstype" className={inputClass} placeholder="ext4" value={usb.fsType} onChange={(e) => setUsb({ ...usb, fsType: e.target.value })} />
               </div>
             </div>
           )}

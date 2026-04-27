@@ -312,7 +312,7 @@ export function NodeEditorDialog({
       ) : (
         <div>
           <label htmlFor="node-edit-password" className="mb-1 block text-sm font-medium">{t('nodeEditor.sshPassword')}</label>
-          <Input id="node-edit-password" type="password"
+          <Input id="node-edit-password" name="ssh-password" type="password" autoComplete="off"
             placeholder={isEditing ? t('nodeEditor.passwordPlaceholderEdit') : t('nodeEditor.passwordPlaceholder')}
             value={draft.password}
             onChange={(event) =>

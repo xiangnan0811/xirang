@@ -67,16 +67,16 @@ describe("LogConfigTab", () => {
 
   test("invalid relative path shows validation error without calling updateNodeLogConfig", async () => {
     render(<LogConfigTab nodeId={1} />);
-    await screen.findByDisplayValue("/var/log/nginx/access.log");
-
-    const textarea = screen.getByRole("textbox", { name: "" }) ?? screen.getByDisplayValue("/var/log/nginx/access.log");
+    const textarea = await screen.findByDisplayValue("/var/log/nginx/access.log");
     fireEvent.change(textarea, { target: { value: "relative/path/here" } });
 
     fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalled();
-    });
+    // Validation error renders inline (role="alert"), not via toast.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toBeInTheDocument();
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+    expect(mockToastError).not.toHaveBeenCalled();
     expect(mockUpdateNodeLogConfig).not.toHaveBeenCalled();
   });
 

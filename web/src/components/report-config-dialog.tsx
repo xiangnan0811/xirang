@@ -75,14 +75,21 @@ function toDraft(cfg: ReportConfig): Draft {
 function LabelRow({
   label,
   children,
+  error,
+  htmlFor,
 }: {
   label: string;
   children: React.ReactNode;
+  error?: string | null;
+  htmlFor?: string;
 }) {
   return (
     <div className="space-y-1">
-      <label className="text-sm font-medium text-foreground">{label}</label>
+      <label className="text-sm font-medium text-foreground" htmlFor={htmlFor}>{label}</label>
       {children}
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">{error}</p>
+      ) : null}
     </div>
   );
 }
@@ -102,6 +109,8 @@ export function ReportConfigDialog({
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft(open, DEFAULT_DRAFT, editingConfig, toDraft);
   const [saving, setSaving] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [cronError, setCronError] = useState<string | null>(null);
   const isEditing = Boolean(editingConfig);
 
   // Integration channels state
@@ -137,12 +146,14 @@ export function ReportConfigDialog({
   };
 
   const handleSubmit = async () => {
+    setNameError(null);
+    setCronError(null);
     if (!draft.name.trim()) {
-      toast.error(t("reportConfig.errorNameRequired"));
+      setNameError(t("reportConfig.errorNameRequired"));
       return;
     }
     if (!draft.cron.trim()) {
-      toast.error(t("reportConfig.errorCronRequired"));
+      setCronError(t("reportConfig.errorCronRequired"));
       return;
     }
 
@@ -187,11 +198,17 @@ export function ReportConfigDialog({
       submitLabel={t(isEditing ? "reportConfig.submitEdit" : "reportConfig.submitLabel")}
     >
       <div className="space-y-4">
-        <LabelRow label={t("reportConfig.configName")}>
+        <LabelRow label={t("reportConfig.configName")} error={nameError} htmlFor="report-config-name">
           <Input
+            id="report-config-name"
+            name="report-config-name"
             value={draft.name}
-            onChange={(e) => set({ name: e.target.value })}
+            onChange={(e) => {
+              set({ name: e.target.value });
+              if (nameError) setNameError(null);
+            }}
             placeholder={t("reportConfig.configNamePlaceholder")}
+            aria-invalid={nameError ? true : undefined}
           />
         </LabelRow>
 
@@ -246,10 +263,13 @@ export function ReportConfigDialog({
           </LabelRow>
         )}
 
-        <LabelRow label={t("reportConfig.cronLabel")}>
+        <LabelRow label={t("reportConfig.cronLabel")} error={cronError}>
           <CronGenerator
             value={draft.cron}
-            onChange={(val) => set({ cron: val })}
+            onChange={(val) => {
+              set({ cron: val });
+              if (cronError) setCronError(null);
+            }}
             disabled={saving}
           />
         </LabelRow>
