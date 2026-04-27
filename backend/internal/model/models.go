@@ -190,6 +190,7 @@ type Alert struct {
 	NodeName       string     `gorm:"size:128;not null" json:"node_name"`
 	TaskID         *uint      `gorm:"index" json:"task_id"`
 	TaskRunID      *uint      `gorm:"index" json:"task_run_id,omitempty"`
+	SLOID          *uint      `gorm:"index" json:"slo_id,omitempty"`
 	PolicyName     string     `gorm:"size:128" json:"policy_name"`
 	Severity       string     `gorm:"size:16;not null;index" json:"severity"`
 	Status         string     `gorm:"size:16;not null;index" json:"status"`
