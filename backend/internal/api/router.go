@@ -217,6 +217,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/alerts", middleware.RBAC("alerts:read"), alertHandler.List)
 	secured.GET("/alerts/unread-count", middleware.RBAC("alerts:read"), alertHandler.UnreadCount)
 	secured.GET("/alerts/:id", middleware.RBAC("alerts:read"), alertHandler.Get)
+	secured.GET("/alerts/:id/group-info", middleware.RBAC("alerts:read"), alertHandler.GroupInfo)
 	secured.GET("/alerts/delivery-stats", middleware.RBAC("alerts:deliveries"), alertHandler.DeliveryStats)
 	secured.GET("/alerts/:id/deliveries", middleware.RBAC("alerts:deliveries"), alertHandler.Deliveries)
 	secured.POST("/alerts/:id/ack", middleware.RBAC("alerts:write"), alertHandler.Ack)

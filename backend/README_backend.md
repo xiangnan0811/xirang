@@ -156,6 +156,7 @@ go run ./cmd/server
 | GET | /alerts | 🔒 告警列表 |
 | GET | /alerts/unread-count | 🔒 未读数量 |
 | GET | /alerts/:id | 🔒 告警详情 |
+| GET | /alerts/:id/group-info | 🔒 内存分组计数（alerts:read） |
 | GET | /alerts/delivery-stats | 🔒 投递统计 |
 | GET | /alerts/:id/deliveries | 🔒 投递记录 |
 | POST | /alerts/:id/ack | 🔒 确认告警 |
