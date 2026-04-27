@@ -131,35 +131,59 @@ func (h *AlertHandler) List(c *gin.Context) {
 	respondPaginated(c, alerts, total, pg.Page, pg.PageSize)
 }
 
-// alertGroupInfo 表示告警在内存分组窗口内的计数信息。
-type alertGroupInfo struct {
-	// Count 是当前分组窗口内（含本次）累计出现的同类告警次数。
-	Count int `json:"count"`
-	// SiblingNodeIDs 刻意留空：渐进式内存分组只追踪计数，不保留单条告警标识。
-	// SiblingNodeIDs is intentionally empty: progressive in-memory grouping
-	// only tracks counts by key, not individual alert identity.
+// AlertGroupInfo is the response shape for GET /alerts/:id/group-info.
+// SiblingNodeIDs is intentionally empty for now: progressive in-memory
+// grouping only tracks counts by key, not individual alert identity.
+type AlertGroupInfo struct {
+	Count          int    `json:"count"`
 	SiblingNodeIDs []uint `json:"sibling_node_ids,omitempty"`
-}
-
-// alertWithGroupInfo 在 Alert 模型基础上附加分组信息。
-type alertWithGroupInfo struct {
-	model.Alert
-	GroupInfo alertGroupInfo `json:"group_info"`
 }
 
 // Get godoc
 // @Summary      获取告警详情
-// @Description  返回单个告警的详细信息（含内存分组计数）
+// @Description  返回单个告警的详细信息
 // @Tags         alerts
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "告警 ID"
-// @Success      200  {object}  handlers.Response{data=alertWithGroupInfo}
+// @Success      200  {object}  handlers.Response{data=model.Alert}
 // @Failure      401  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /alerts/{id} [get]
 func (h *AlertHandler) Get(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var a model.Alert
+	if err := h.db.First(&a, id).Error; err != nil {
+		respondNotFound(c, "告警不存在")
+		return
+	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, a.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
+		respondForbidden(c, "无权访问该告警")
+		return
+	}
+	respondOK(c, a)
+}
+
+// GroupInfo godoc
+// @Summary      获取告警分组计数
+// @Description  返回告警在内存分组窗口内的累计计数
+// @Tags         alerts
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "告警 ID"
+// @Success      200  {object}  handlers.Response{data=AlertGroupInfo}
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /alerts/{id}/group-info [get]
+func (h *AlertHandler) GroupInfo(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
@@ -183,7 +207,7 @@ func (h *AlertHandler) Get(c *gin.Context) {
 			Uint("alert_id", a.ID).
 			Uint("node_id", a.NodeID).
 			Err(res.Error).
-			Msg("alert detail: 节点加载失败，group_count 将为 0")
+			Msg("group-info: 节点加载失败，count 将为 0")
 	}
 	tags := strings.Split(node.Tags, ",")
 	cleanTags := make([]string, 0, len(tags))
@@ -194,12 +218,9 @@ func (h *AlertHandler) Get(c *gin.Context) {
 	}
 	key := alerting.GroupKey(a.ErrorCode, a.NodeID, cleanTags)
 
-	respondOK(c, alertWithGroupInfo{
-		Alert: a,
-		GroupInfo: alertGroupInfo{
-			Count:          alerting.GetSharedGrouping().Count(key),
-			SiblingNodeIDs: nil,
-		},
+	respondOK(c, AlertGroupInfo{
+		Count:          alerting.GetSharedGrouping().Count(key),
+		SiblingNodeIDs: nil,
 	})
 }
 
