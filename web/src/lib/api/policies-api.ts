@@ -22,13 +22,15 @@ type PolicyResponse = {
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
+  // 防御：后端任意返回路径若漏掉 cron_spec，避免污染下游 describeCron。
+  const cron = typeof row.cron_spec === "string" ? row.cron_spec : "";
   return {
     id: row.id,
     name: row.name,
     sourcePath: row.source_path,
     targetPath: row.target_path,
-    cron: row.cron_spec,
-    naturalLanguage: i18n.t("policies.scheduledByCron", { cron: row.cron_spec }),
+    cron,
+    naturalLanguage: i18n.t("policies.scheduledByCron", { cron }),
     enabled: row.enabled,
     criticalThreshold: 2,
     nodeIds: row.node_ids ?? [],
