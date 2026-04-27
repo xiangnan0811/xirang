@@ -1,7 +1,18 @@
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/confirm-dialog";
 
 export interface BandwidthRule {
   start: string;
@@ -27,6 +38,7 @@ function parseRules(json: string): BandwidthRule[] {
 export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEditorProps) {
   const { t } = useTranslation();
   const rules = parseRules(value);
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   const emit = (next: BandwidthRule[]) => {
     onChange(next.length > 0 ? JSON.stringify(next) : "");
@@ -36,9 +48,13 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
     emit([...rules, { start: "22:00", end: "06:00", limit_mbps: 100 }]);
   };
 
-  const removeRule = (index: number) => {
-    emit(rules.filter((_, i) => i !== index));
+  const confirmRemoveRule = () => {
+    if (pendingDelete === null) return;
+    emit(rules.filter((_, i) => i !== pendingDelete));
+    setPendingDelete(null);
   };
+
+  const pendingRule = pendingDelete !== null ? rules[pendingDelete] : null;
 
   const updateRule = (index: number, field: keyof BandwidthRule, val: string) => {
     const next = rules.map((r, i) => {
@@ -92,7 +108,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
             aria-label={t('bandwidthEditor.limitMbps')}
           />
           <span className="text-xs text-muted-foreground shrink-0">Mbps</span>
-          <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => removeRule(i)} aria-label={t('bandwidthEditor.deleteRule')}>
+          <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => setPendingDelete(i)} aria-label={t('bandwidthEditor.deleteRule')}>
             <Trash2 className="size-3.5 text-destructive" />
           </Button>
         </div>
@@ -103,6 +119,23 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
           {t('bandwidth.rulesHint')}
         </p>
       )}
+
+      <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('bandwidthEditor.deleteConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingRule
+                ? t('bandwidthEditor.deleteConfirmDesc', { start: pendingRule.start, end: pendingRule.end })
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('bandwidthEditor.deleteConfirmCancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmRemoveRule}>{t('bandwidthEditor.deleteConfirmAction')}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1838,6 +1838,10 @@ const zh = {
     endTime: "结束时间",
     limitMbps: "限速 (Mbps)",
     deleteRule: "删除规则",
+    deleteConfirmTitle: "删除带宽规则？",
+    deleteConfirmDesc: "将移除时段 {{start}} – {{end}} 的限速规则，此操作仅在保存策略后生效。",
+    deleteConfirmAction: "删除",
+    deleteConfirmCancel: "取消",
   },
 
   // ── display preferences ──

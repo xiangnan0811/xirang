@@ -31,6 +31,8 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
   const [retentionDays, setRetentionDays] = useState(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [pathsError, setPathsError] = useState<string | null>(null);
 
   const fetchConfig = useCallback(async (signal: AbortSignal) => {
     const token = sessionStorage.getItem("xirang-auth-token");
@@ -60,8 +62,11 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
     const token = sessionStorage.getItem("xirang-auth-token");
     if (!token) return;
 
+    setRetentionError(null);
+    setPathsError(null);
+
     if (retentionDays < 0 || retentionDays > 365) {
-      toast.error(t("nodeLogs.nodeConfig.validation.retentionOutOfRange"));
+      setRetentionError(t("nodeLogs.nodeConfig.validation.retentionOutOfRange"));
       return;
     }
 
@@ -72,7 +77,7 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
 
     const validationError = validatePaths(paths, t);
     if (validationError) {
-      toast.error(validationError);
+      setPathsError(validationError);
       return;
     }
 
@@ -110,16 +115,26 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-sm font-medium">
+        <label htmlFor="log-paths" className="text-sm font-medium">
           {t("nodeLogs.nodeConfig.logPaths")}
         </label>
         <Textarea
+          id="log-paths"
           value={logPaths}
-          onChange={(e) => setLogPaths(e.target.value)}
+          onChange={(e) => {
+            setLogPaths(e.target.value);
+            if (pathsError) setPathsError(null);
+          }}
           rows={6}
           placeholder="/var/log/nginx/access.log"
+          aria-invalid={pathsError ? true : undefined}
+          aria-describedby={pathsError ? "log-paths-error" : "log-paths-hint"}
         />
-        <p className="text-xs text-muted-foreground">{t("nodeLogs.nodeConfig.logPathsHint")}</p>
+        {pathsError ? (
+          <p id="log-paths-error" role="alert" className="text-xs text-destructive">{pathsError}</p>
+        ) : (
+          <p id="log-paths-hint" className="text-xs text-muted-foreground">{t("nodeLogs.nodeConfig.logPathsHint")}</p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -132,10 +147,19 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
           min={0}
           max={365}
           value={retentionDays}
-          onChange={(e) => setRetentionDays(Number(e.target.value))}
+          onChange={(e) => {
+            setRetentionDays(Number(e.target.value));
+            if (retentionError) setRetentionError(null);
+          }}
           className="w-32"
+          aria-invalid={retentionError ? true : undefined}
+          aria-describedby={retentionError ? "retention-days-error" : "retention-days-hint"}
         />
-        <p className="text-xs text-muted-foreground">{t("nodeLogs.nodeConfig.retentionDaysHint")}</p>
+        {retentionError ? (
+          <p id="retention-days-error" role="alert" className="text-xs text-destructive">{retentionError}</p>
+        ) : (
+          <p id="retention-days-hint" className="text-xs text-muted-foreground">{t("nodeLogs.nodeConfig.retentionDaysHint")}</p>
+        )}
       </div>
 
       <Button size="sm" onClick={handleSave} disabled={saving}>

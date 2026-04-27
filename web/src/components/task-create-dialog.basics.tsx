@@ -17,6 +17,7 @@ type TaskBasicsProps = {
   tasks?: TaskRecord[];
   editingTask?: TaskRecord | null;
   saving: boolean;
+  errors?: { name?: string | null; nodeId?: string | null };
 };
 
 export function TaskBasics({
@@ -26,6 +27,7 @@ export function TaskBasics({
   policies,
   tasks,
   editingTask,
+  errors,
 }: TaskBasicsProps) {
   const { t } = useTranslation();
 
@@ -37,12 +39,18 @@ export function TaskBasics({
         </label>
         <Input
           id="task-editor-name"
+          name="task-name"
           placeholder={t("taskCreate.taskNamePlaceholder")}
           value={draft.name}
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, name: event.target.value }))
           }
+          aria-invalid={errors?.name ? true : undefined}
+          aria-describedby={errors?.name ? "task-editor-name-error" : undefined}
         />
+        {errors?.name ? (
+          <p id="task-editor-name-error" role="alert" className="mt-1 text-xs text-destructive">{errors.name}</p>
+        ) : null}
       </div>
 
       <div>
@@ -56,6 +64,8 @@ export function TaskBasics({
           onChange={(event) =>
             setDraft((prev) => ({ ...prev, nodeId: event.target.value }))
           }
+          aria-invalid={errors?.nodeId ? true : undefined}
+          aria-describedby={errors?.nodeId ? "task-editor-node-error" : undefined}
         >
           <option value="">{t("taskCreate.selectNode")}</option>
           {nodes.map((node) => (
@@ -64,6 +74,9 @@ export function TaskBasics({
             </option>
           ))}
         </Select>
+        {errors?.nodeId ? (
+          <p id="task-editor-node-error" role="alert" className="mt-1 text-xs text-destructive">{errors.nodeId}</p>
+        ) : null}
       </div>
 
       <div>
