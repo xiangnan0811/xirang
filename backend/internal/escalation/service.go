@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"xirang/backend/internal/model"
@@ -178,19 +177,14 @@ func (s *Service) ResolvePolicyForAlert(ctx context.Context, alert model.Alert) 
 		}
 	}
 
-	// SLO (RaiseSLOBreach): resolve the policy by parsing the SLO id out of
-	// the ErrorCode. This couples ErrorCode format ("XR-SLO-<id>") to the
-	// resolver — a follow-up should add a dedicated alert.SLOID column and
-	// rely on that instead; once wired, drop this heuristic. Schema change
-	// deferred out of P5 hardening scope to avoid a migration.
-	if pid == nil && strings.HasPrefix(alert.ErrorCode, "XR-SLO-") {
-		rest := strings.TrimPrefix(alert.ErrorCode, "XR-SLO-")
-		if sloIDU, err := strconv.ParseUint(rest, 10, 64); err == nil && sloIDU > 0 {
-			sloID := uint(sloIDU)
-			var sloDef model.SLODefinition
-			if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&sloDef, sloID).Error; err == nil {
-				pid = sloDef.EscalationPolicyID
-			}
+	// SLO (RaiseSLOBreach): resolve the policy via alert.SLOID, populated
+	// directly by RaiseSLOBreach. Migration 000045 added the column and
+	// backfilled historical XR-SLO-<id> rows, so this single read replaces
+	// the previous ErrorCode string-parse heuristic.
+	if pid == nil && alert.SLOID != nil && *alert.SLOID > 0 {
+		var sloDef model.SLODefinition
+		if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&sloDef, *alert.SLOID).Error; err == nil {
+			pid = sloDef.EscalationPolicyID
 		}
 	}
 
