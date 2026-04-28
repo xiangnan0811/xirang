@@ -30,27 +30,16 @@ type Engine struct {
 	done      chan struct{}
 }
 
-// NewEngine constructs an Engine. Passing nil for sink installs a stub that
-// logs dropped findings loudly so misconfigurations surface in production
-// logs instead of panicking the detector goroutines.
+// NewEngine constructs an Engine. sink MUST be non-nil — anomaly findings have
+// no meaningful path other than the configured AlertSink, and silently dropping
+// them would mask real production incidents. The previous fallback (a logging
+// stub) only delayed the bug surface to runtime; failing fast at construction
+// makes the wiring contract explicit.
 func NewEngine(db *gorm.DB, s *settings.Service, sink AlertSink, detectors ...Detector) *Engine {
 	if sink == nil {
-		logger.Module("anomaly").Warn().Msg("NewEngine called with nil sink — findings will be logged only")
-		sink = stubSink{}
+		panic("anomaly: NewEngine requires a non-nil AlertSink")
 	}
 	return &Engine{db: db, settings: s, detectors: detectors, sink: sink, done: make(chan struct{})}
-}
-
-type stubSink struct{}
-
-func (stubSink) Raise(_ context.Context, f Finding) error {
-	logger.Module("anomaly").Warn().
-		Uint("node_id", f.NodeID).
-		Str("detector", f.Detector).
-		Str("metric", f.Metric).
-		Str("severity", f.Severity).
-		Msg("stub sink active — finding dropped; wire a real AlertSink via NewEngine")
-	return nil
 }
 
 // Run spawns one goroutine per detector and blocks until ctx is done.

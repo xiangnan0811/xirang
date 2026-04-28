@@ -29,26 +29,15 @@ type Evaluator struct {
 	done chan struct{}
 }
 
-// NewEvaluator constructs the evaluator. sink MUST be non-nil; passing nil
-// installs a stub that logs dropped breaches loudly so the deployment bug
-// surfaces in logs rather than silently dropping alerts.
+// NewEvaluator constructs the evaluator. sink MUST be non-nil — SLO breaches
+// have no other dispatch path, and silently dropping them would mask the very
+// reliability incidents this evaluator exists to detect. We fail fast at
+// construction so wiring bugs surface during boot, not on the first breach.
 func NewEvaluator(db *gorm.DB, sink AlertSink) *Evaluator {
 	if sink == nil {
-		logger.Module("slo").Warn().Msg("NewEvaluator called with nil sink — breaches will be logged only")
-		sink = stubSink{}
+		panic("slo: NewEvaluator requires a non-nil AlertSink")
 	}
 	return &Evaluator{db: db, tick: time.Minute, sink: sink, done: make(chan struct{})}
-}
-
-type stubSink struct{}
-
-func (stubSink) RaiseSLOBreach(def *model.SLODefinition, c *Compliance) error {
-	logger.Module("slo").Warn().
-		Uint("slo_id", def.ID).
-		Str("slo_name", def.Name).
-		Float64("burn_1h", c.BurnRate1h).
-		Msg("stub sink installed — breach not dispatched (bootstrap bug)")
-	return nil
 }
 
 // Run blocks until ctx is cancelled, evaluating every `tick`.
