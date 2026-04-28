@@ -112,7 +112,9 @@
 | `SMTP_FROM` | string | 回退到 `SMTP_USER` | 否 | 发件人地址 |
 | `SMTP_REQUIRE_TLS` | bool | `true` | 否 | 强制 TLS 连接（465 隐式/587 STARTTLS），设为 `false` 回退到明文 |
 
-**读取位置**：`alerting/dispatcher.go:394-407`
+> 上述 `SMTP_*` 变量从 v0.18+ 起已纳入系统设置注册表（key 前缀 `smtp.`），可通过 `/settings` API 实时调整；环境变量仅作为首次启动时的回退默认值。生产环境建议把 `SMTP_PASS` 仍以环境变量注入而非入库。
+
+**读取位置**：settings 服务键 `smtp.host` / `smtp.port` / `smtp.user` / `smtp.password` / `smtp.from` / `smtp.require_tls`（`alerting/dispatcher.go:sendEmail`）
 
 ## 10. 告警
 
