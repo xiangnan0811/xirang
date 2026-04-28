@@ -261,6 +261,7 @@ go run ./cmd/server
 | GET | /version/check | 🔒 检查更新 |
 | POST | /system/backup-db | 🔒 备份数据库 |
 | GET | /system/backups | 🔒 备份列表 |
+| GET | /system/encryption-status | 🔒 加密 V1 残留计数（admin；运维确认 V1 数据已全部迁移到 V2 后可退役 V1 解密支持） |
 | POST | /system/verify-mount | 🔒 验证挂载点 |
 
 ### WebSocket
