@@ -34,8 +34,6 @@ type Dependencies struct {
 	AllowedOrigins            []string
 	LoginRateLimit            int
 	LoginRateWindow           time.Duration
-	LoginCaptchaEnabled       bool
-	LoginSecondCaptchaEnabled bool
 	SettingsService           *settings.Service
 	RetryWorker               *alerting.RetryWorker
 }
@@ -83,7 +81,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	captchaStore := handlers.NewCaptchaStore()
 	captchaHandler := handlers.NewCaptchaHandler(captchaStore)
-	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.SettingsService, dep.LoginCaptchaEnabled, dep.LoginSecondCaptchaEnabled).WithDB(dep.DB).WithCaptchaStore(captchaStore)
+	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.SettingsService).WithDB(dep.DB).WithCaptchaStore(captchaStore)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)

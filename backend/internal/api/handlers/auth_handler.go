@@ -18,23 +18,39 @@ import (
 )
 
 type AuthHandler struct {
-	authService          *auth.Service
-	jwtManager           *auth.JWTManager
-	settingsSvc          *settings.Service
-	db                   *gorm.DB
-	captchaEnabled       bool
-	secondCaptchaEnabled bool
-	captchaStore         *CaptchaStore
+	authService  *auth.Service
+	jwtManager   *auth.JWTManager
+	settingsSvc  *settings.Service
+	db           *gorm.DB
+	captchaStore *CaptchaStore
 }
 
-func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, settingsSvc *settings.Service, captchaEnabled bool, secondCaptchaEnabled bool) *AuthHandler {
+// NewAuthHandler 构造登录 handler。验证码开关从 settings 服务按需读取（key:
+// login.captcha_enabled / login.second_captcha_enabled），不在构造期捕获，
+// 这样 settings API 的修改可以即时生效，无需重启进程。settingsSvc 为 nil
+// 时（仅测试场景）等价于两项验证码均关闭。
+func NewAuthHandler(authService *auth.Service, jwtManager *auth.JWTManager, settingsSvc *settings.Service) *AuthHandler {
 	return &AuthHandler{
-		authService:          authService,
-		jwtManager:           jwtManager,
-		settingsSvc:          settingsSvc,
-		captchaEnabled:       captchaEnabled,
-		secondCaptchaEnabled: secondCaptchaEnabled,
+		authService: authService,
+		jwtManager:  jwtManager,
+		settingsSvc: settingsSvc,
 	}
+}
+
+// captchaEnabled 动态读取 login.captcha_enabled 设置；nil settings 视为关闭。
+func (h *AuthHandler) captchaEnabled() bool {
+	if h.settingsSvc == nil {
+		return false
+	}
+	return strings.ToLower(h.settingsSvc.GetEffective("login.captcha_enabled")) == "true"
+}
+
+// secondCaptchaEnabled 动态读取 login.second_captcha_enabled 设置；nil settings 视为关闭。
+func (h *AuthHandler) secondCaptchaEnabled() bool {
+	if h.settingsSvc == nil {
+		return false
+	}
+	return strings.ToLower(h.settingsSvc.GetEffective("login.second_captcha_enabled")) == "true"
 }
 
 // WithDB 注入数据库，用于 2FA 相关操作。
@@ -81,17 +97,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 动态读取验证码启用状态
-	captchaEnabled := h.captchaEnabled
-	if h.settingsSvc != nil {
-		captchaEnabled = strings.ToLower(h.settingsSvc.GetEffective("login.captcha_enabled")) == "true"
-	}
+	captchaEnabled := h.captchaEnabled()
 
 	if captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
 		respondBadRequest(c, "验证码不能为空")
 		return
 	}
-	if h.secondCaptchaEnabled && strings.TrimSpace(req.SecondCaptcha) == "" {
+	if h.secondCaptchaEnabled() && strings.TrimSpace(req.SecondCaptcha) == "" {
 		respondBadRequest(c, "二次验证码不能为空")
 		return
 	}

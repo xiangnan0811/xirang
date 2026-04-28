@@ -73,7 +73,7 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 		FailLockDuration:  time.Minute,
 	})
 
-	authHandler := NewAuthHandler(service, jwtManager, nil, false, false)
+	authHandler := NewAuthHandler(service, jwtManager, nil)
 	userHandler := NewUserHandler(service)
 
 	router := gin.New()

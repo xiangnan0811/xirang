@@ -45,6 +45,8 @@ go run ./cmd/server
 | PUT | /users/:id | 🔒 更新用户 |
 | DELETE | /users/:id | 🔒 删除用户 |
 
+> 登录验证码（`/auth/captcha`）启停由系统设置 `login.captcha_enabled` / `login.second_captcha_enabled` 控制，可通过 `/settings` 接口实时调整，无需重启进程。环境变量 `LOGIN_CAPTCHA_ENABLED` / `LOGIN_SECOND_CAPTCHA_ENABLED` 仅作为首次启动时的回退默认值。
+
 ### 概览与监控
 
 | 方法 | 路径 | 说明 |
