@@ -13,8 +13,6 @@ func TestLoadParsesOriginsAndRateLimit(t *testing.T) {
 	t.Setenv("LOGIN_RATE_WINDOW", "90s")
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "6")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "20m")
-	t.Setenv("LOGIN_CAPTCHA_ENABLED", "true")
-	t.Setenv("LOGIN_SECOND_CAPTCHA_ENABLED", "false")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
@@ -35,12 +33,6 @@ func TestLoadParsesOriginsAndRateLimit(t *testing.T) {
 	}
 	if cfg.LoginFailLockDuration.String() != "20m0s" {
 		t.Fatalf("期望登录失败锁定时长为 20m0s，实际: %s", cfg.LoginFailLockDuration)
-	}
-	if !cfg.LoginCaptchaEnabled {
-		t.Fatalf("期望开启登录验证码开关")
-	}
-	if cfg.LoginSecondCaptchaEnabled {
-		t.Fatalf("期望登录二次验证码开关为关闭")
 	}
 	if len(cfg.AllowedOrigins) != 2 {
 		t.Fatalf("期望解析 2 个域名，实际: %d", len(cfg.AllowedOrigins))
@@ -112,23 +104,6 @@ func TestLoadAcceptsStrongSecretsInProduction(t *testing.T) {
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("期望生产环境强密钥配置可通过，实际错误: %v", err)
-	}
-}
-
-func TestLoadRejectsInvalidCaptchaSwitch(t *testing.T) {
-	t.Setenv("DB_TYPE", "sqlite")
-	t.Setenv("JWT_TTL", "2h")
-	t.Setenv("LOGIN_RATE_LIMIT", "10")
-	t.Setenv("LOGIN_RATE_WINDOW", "1m")
-	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
-	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
-	t.Setenv("LOGIN_CAPTCHA_ENABLED", "abc")
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("ENVIRONMENT", "")
-	t.Setenv("GIN_MODE", "")
-
-	if _, err := Load(); err == nil {
-		t.Fatalf("期望验证码开关非法时返回错误")
 	}
 }
 

@@ -75,6 +75,7 @@ var registry = []SettingDef{
 	{Key: "login.fail_lock_threshold", EnvVar: "LOGIN_FAIL_LOCK_THRESHOLD", CodeDefault: "5", Type: TypeInt, Category: "security", Description: "连续登录失败锁定阈值", Min: "3", Max: "100"},
 	{Key: "login.fail_lock_duration", EnvVar: "LOGIN_FAIL_LOCK_DURATION", CodeDefault: "15m", Type: TypeDuration, Category: "security", Description: "登录锁定持续时间", MinDuration: "1m"},
 	{Key: "login.captcha_enabled", EnvVar: "LOGIN_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录验证码"},
+	{Key: "login.second_captcha_enabled", EnvVar: "LOGIN_SECOND_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录二次验证码"},
 	{Key: "node.probe_interval", EnvVar: "NODE_PROBE_INTERVAL", CodeDefault: "5m", Type: TypeDuration, Category: "node_monitor", Description: "节点探测间隔", RequiresRestart: true},
 	{Key: "node.probe_fail_threshold", EnvVar: "NODE_PROBE_FAIL_THRESHOLD", CodeDefault: "3", Type: TypeInt, Category: "node_monitor", Description: "节点探测失败阈值", Min: "1", Max: "100", RequiresRestart: true},
 	{Key: "node.probe_concurrency", EnvVar: "NODE_PROBE_CONCURRENCY", CodeDefault: "10", Type: TypeInt, Category: "node_monitor", Description: "节点探测并发数", Min: "1", Max: "100", RequiresRestart: true},

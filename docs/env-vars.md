@@ -36,12 +36,12 @@
 | `LOGIN_RATE_WINDOW` | duration | `1m` | 否 | 速率限制时间窗口 |
 | `LOGIN_FAIL_LOCK_THRESHOLD` | int | `5` | 否 | 连续登录失败多少次后锁定账号 |
 | `LOGIN_FAIL_LOCK_DURATION` | duration | `15m` | 否 | 账号锁定持续时间 |
-| `LOGIN_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用登录验证码 |
-| `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码 |
+| `LOGIN_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用登录验证码（settings 键 `login.captcha_enabled`，可通过设置 API 实时调整） |
+| `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
 | `ADMIN_INITIAL_PASSWORD` | string | — | 首次启动 | 初始 admin 账号密码，仅 bootstrap 阶段使用 |
 | `DATA_ENCRYPTION_KEY` | string | 内置开发密钥 | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 SHA-256 派生） |
 
-**读取位置**：`JWT_SECRET` → `config/config.go:43`，`LOGIN_*` → `config/config.go:85-123`，`ADMIN_INITIAL_PASSWORD` → `bootstrap/bootstrap.go:30`，`DATA_ENCRYPTION_KEY` → `secure/crypto.go:44` + `config/config.go:170`
+**读取位置**：`JWT_SECRET` → `config/config.go:43`，登录限流/锁定 → `config/config.go:80-120` + settings 服务（`login.rate_limit`、`login.rate_window`、`login.fail_lock_threshold`、`login.fail_lock_duration`），登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`（auth_handler 按需读取，env 仅作首次启动的回退默认值），`ADMIN_INITIAL_PASSWORD` → `bootstrap/bootstrap.go:30`，`DATA_ENCRYPTION_KEY` → `secure/crypto.go` + `config/config.go`
 
 ## 4. 跨域与 WebSocket
 

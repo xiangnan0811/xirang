@@ -27,8 +27,6 @@ type Config struct {
 	LoginRateWindow           time.Duration
 	LoginFailLockThreshold    int
 	LoginFailLockDuration     time.Duration
-	LoginCaptchaEnabled       bool
-	LoginSecondCaptchaEnabled bool
 	NodeProbeInterval         time.Duration
 	NodeProbeFailThreshold    int
 	NodeProbeConcurrency      int
@@ -112,18 +110,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("解析 LOGIN_FAIL_LOCK_DURATION 失败: %w", err)
 	}
 	cfg.LoginFailLockDuration = failLockDuration
-
-	loginCaptchaEnabled, err := util.ReadBoolEnv("LOGIN_CAPTCHA_ENABLED", false)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.LoginCaptchaEnabled = loginCaptchaEnabled
-
-	loginSecondCaptchaEnabled, err := util.ReadBoolEnv("LOGIN_SECOND_CAPTCHA_ENABLED", false)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.LoginSecondCaptchaEnabled = loginSecondCaptchaEnabled
 
 	probeIntervalRaw := util.GetEnvOrDefault("NODE_PROBE_INTERVAL", "5m")
 	probeInterval, err := time.ParseDuration(probeIntervalRaw)

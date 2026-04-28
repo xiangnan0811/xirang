@@ -216,8 +216,6 @@ func main() {
 		AllowedOrigins:            cfg.AllowedOrigins,
 		LoginRateLimit:            cfg.LoginRateLimit,
 		LoginRateWindow:           cfg.LoginRateWindow,
-		LoginCaptchaEnabled:       cfg.LoginCaptchaEnabled,
-		LoginSecondCaptchaEnabled: cfg.LoginSecondCaptchaEnabled,
 		RetryWorker:               retryWorker,
 	})
 
