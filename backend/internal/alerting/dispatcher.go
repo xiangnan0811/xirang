@@ -687,21 +687,30 @@ func extractNotificationErrorDescription(raw []byte) string {
 	return text
 }
 
+// smtpConfig 从 settings 服务读取 SMTP 配置；service 为 nil（仅测试场景）时
+// 回退到 env vars，与 settings 注册表的 EnvVar 一致。
+func smtpConfig(key, envVar string) string {
+	if svc := getSettingsSvc(); svc != nil {
+		return strings.TrimSpace(svc.GetEffective(key))
+	}
+	return strings.TrimSpace(os.Getenv(envVar))
+}
+
 func sendEmail(toRaw, subject, content string) error {
-	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	host := smtpConfig("smtp.host", "SMTP_HOST")
 	if host == "" {
 		return fmt.Errorf("SMTP_HOST 未配置")
 	}
-	port := strings.TrimSpace(os.Getenv("SMTP_PORT"))
+	port := smtpConfig("smtp.port", "SMTP_PORT")
 	if port == "" {
 		port = "587"
 	}
 	if _, err := strconv.Atoi(port); err != nil {
 		return fmt.Errorf("SMTP_PORT 配置错误")
 	}
-	user := strings.TrimSpace(os.Getenv("SMTP_USER"))
-	password := strings.TrimSpace(os.Getenv("SMTP_PASS"))
-	from := strings.TrimSpace(os.Getenv("SMTP_FROM"))
+	user := smtpConfig("smtp.user", "SMTP_USER")
+	password := smtpConfig("smtp.password", "SMTP_PASS")
+	from := smtpConfig("smtp.from", "SMTP_FROM")
 	if from == "" {
 		from = user
 	}
@@ -737,8 +746,8 @@ func sendEmail(toRaw, subject, content string) error {
 		auth = smtp.PlainAuth("", user, password, host)
 	}
 
-	// SMTP_REQUIRE_TLS=true（默认）强制使用 TLS 连接
-	requireTLS := strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_REQUIRE_TLS"))) != "false"
+	// smtp.require_tls=true（默认）强制使用 TLS 连接
+	requireTLS := strings.ToLower(smtpConfig("smtp.require_tls", "SMTP_REQUIRE_TLS")) != "false"
 	if requireTLS {
 		return sendEmailWithTLS(addr, host, port, auth, from, to, message)
 	}
