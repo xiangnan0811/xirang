@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -189,6 +190,26 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 	})
 
 	respondOK(c, backups)
+}
+
+// EncryptionStatus godoc
+// @Summary      查询加密 V1 残留状态
+// @Description  返回当前数据库中仍以 enc:v1: 前缀加密的字段总数。运维侧用于
+// @Description  判断是否所有敏感字段都已迁移到 V2 (argon2id)，是后续退役 V1
+// @Description  解密支持的前置条件。返回 0 表示可以安全裁掉 V1 兼容代码。
+// @Tags         system
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /system/encryption-status [get]
+func (h *SystemHandler) EncryptionStatus(c *gin.Context) {
+	count := bootstrap.CountV1EncryptedData(h.db)
+	respondOK(c, gin.H{
+		"v1_remaining_count": count,
+		"healthy":            count == 0,
+	})
 }
 
 func createSQLiteBackup(db *gorm.DB, backupPath string) (checksum string, size int64, err error) {

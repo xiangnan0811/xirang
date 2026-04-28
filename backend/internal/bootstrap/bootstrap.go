@@ -169,6 +169,14 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 
 // HasV1EncryptedData 快速检查是否存在 v1 加密数据。
 func HasV1EncryptedData(db *gorm.DB) bool {
+	return CountV1EncryptedData(db) > 0
+}
+
+// CountV1EncryptedData 返回所有受加密保护字段中仍以 enc:v1: 开头的记录总数。
+// 与 HasV1EncryptedData 不同，此函数遍历所有列、不在第一条命中即返回，方便
+// 运维通过监控接口（GET /system/encryption-status）观察 V1 残留消减进度，
+// 作为后续退役 V1 解密支持的判定依据。
+func CountV1EncryptedData(db *gorm.DB) int64 {
 	tables := []struct {
 		table   string
 		columns []string
@@ -180,15 +188,15 @@ func HasV1EncryptedData(db *gorm.DB) bool {
 		{"users", []string{"totp_secret", "recovery_codes"}},
 	}
 
+	var total int64
 	for _, t := range tables {
 		for _, col := range t.columns {
 			var count int64
-			db.Table(t.table).Where(col+" LIKE ?", "enc:v1:%").Count(&count)
-			if count > 0 {
-				return true
+			if err := db.Table(t.table).Where(col+" LIKE ?", "enc:v1:%").Count(&count).Error; err == nil {
+				total += count
 			}
 		}
 	}
-	return false
+	return total
 }
 
