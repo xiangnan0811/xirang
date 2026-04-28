@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/xiangnan0811/xirang/compare/v0.18.4...v0.19.0) (2026-04-28)
+
+
+### Features
+
+* **backend:** Wave 2 prep - 暴露 V1 加密残留监控接口 ([#97](https://github.com/xiangnan0811/xirang/issues/97)) ([d3908cc](https://github.com/xiangnan0811/xirang/commit/d3908cce49f90ff362f757f93701201cac454bb2))
+
 ## [0.18.4](https://github.com/xiangnan0811/xirang/compare/v0.18.3...v0.18.4) (2026-04-27)
 
 
