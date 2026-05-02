@@ -125,6 +125,24 @@
 
 **读取位置**：`ALERT_DEDUP_WINDOW` → `alerting/dispatcher.go:237`，`INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` → `api/handlers/integration_handler.go:101`
 
+### 10.1 异常检测
+
+异常检测默认保留事件记录，但不会升级为告警中心告警或外部通知。需要恢复异常通知时，将 `ANOMALY_ALERTS_ENABLED` 设为 `true`，或在系统设置中打开 `anomaly.alerts_enabled`。
+
+| 变量 | 类型 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `ANOMALY_ENABLED` | bool | `true` | 否 | 启用异常检测总开关；关闭后 EWMA 与磁盘预测检测器都停止 |
+| `ANOMALY_ALERTS_ENABLED` | bool | `false` | 否 | 是否将异常事件升级为告警/通知；默认仅写入 `anomaly_events` 供诊断 |
+| `ANOMALY_EWMA_ALPHA` | string | `0.3` | 否 | EWMA 平滑因子 α |
+| `ANOMALY_EWMA_SIGMA` | string | `5.0` | 否 | EWMA 异常判定标准差倍数，默认更保守以降低低负载误报 |
+| `ANOMALY_EWMA_WINDOW_HOURS` | int | `6` | 否 | EWMA 回看样本窗口（小时） |
+| `ANOMALY_EWMA_MIN_SAMPLES` | int | `24` | 否 | EWMA 最少样本数 |
+| `ANOMALY_DISK_FORECAST_DAYS` | int | `7` | 否 | 磁盘预测阈值，预计小于等于该天数爆满时记录事件 |
+| `ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS` | int | `72` | 否 | 磁盘预测所需最少历史小时数 |
+| `ANOMALY_EVENTS_RETENTION_DAYS` | int | `30` | 否 | 异常事件保留天数 |
+
+**读取位置**：settings 服务键 `anomaly.enabled` / `anomaly.alerts_enabled` / `anomaly.ewma_*` / `anomaly.disk_forecast_*` / `anomaly.events_retention_days`（`anomaly/ewma.go`、`anomaly/disk_forecast.go`、`anomaly/raise.go`、`anomaly/retention.go`）
+
 ## 11. 前端
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |

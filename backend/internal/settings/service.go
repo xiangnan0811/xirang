@@ -29,16 +29,16 @@ const (
 
 // SettingDef 设置项定义
 type SettingDef struct {
-	Key             string     `json:"key"`
-	EnvVar          string     `json:"env_var"`
-	CodeDefault     string     `json:"code_default"`
+	Key             string      `json:"key"`
+	EnvVar          string      `json:"env_var"`
+	CodeDefault     string      `json:"code_default"`
 	Type            SettingType `json:"type"`
-	Category        string     `json:"category"`
-	Description     string     `json:"description"`
-	Min             string     `json:"min,omitempty"`
-	Max             string     `json:"max,omitempty"`
-	MinDuration     string     `json:"min_duration,omitempty"` // 安全下限（duration 类型）
-	RequiresRestart bool       `json:"requires_restart"`
+	Category        string      `json:"category"`
+	Description     string      `json:"description"`
+	Min             string      `json:"min,omitempty"`
+	Max             string      `json:"max,omitempty"`
+	MinDuration     string      `json:"min_duration,omitempty"` // 安全下限（duration 类型）
+	RequiresRestart bool        `json:"requires_restart"`
 }
 
 // ResolvedSetting 已解析的设置值（含来源信息）
@@ -68,7 +68,7 @@ func NewService(db *gorm.DB) *Service {
 	}
 }
 
-// registry 23 项设置定义（安全相关项设有最小安全下限）
+// registry lists all dynamic settings definitions.
 var registry = []SettingDef{
 	{Key: "login.rate_limit", EnvVar: "LOGIN_RATE_LIMIT", CodeDefault: "10", Type: TypeInt, Category: "security", Description: "登录接口每窗口最大请求数", Min: "5", Max: "1000"},
 	{Key: "login.rate_window", EnvVar: "LOGIN_RATE_WINDOW", CodeDefault: "1m", Type: TypeDuration, Category: "security", Description: "登录限流时间窗口", MinDuration: "10s"},
@@ -87,11 +87,12 @@ var registry = []SettingDef{
 	{Key: "alert.dedup_window", EnvVar: "ALERT_DEDUP_WINDOW", CodeDefault: "10m", Type: TypeDuration, Category: "alert", Description: "告警去重时间窗口"},
 	{Key: "logs.retention_days_default", EnvVar: "LOG_RETENTION_DAYS_DEFAULT", CodeDefault: "30", Type: TypeInt, Category: "logs", Description: "节点日志默认保留天数（节点未单独配置时生效）", Min: "1", Max: "365"},
 	{Key: "anomaly.enabled", EnvVar: "ANOMALY_ENABLED", CodeDefault: "true", Type: TypeBool, Category: "anomaly", Description: "启用基线异常检测总开关"},
+	{Key: "anomaly.alerts_enabled", EnvVar: "ANOMALY_ALERTS_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "anomaly", Description: "将异常事件升级为告警通知；默认仅记录事件"},
 	{Key: "anomaly.ewma_alpha", EnvVar: "ANOMALY_EWMA_ALPHA", CodeDefault: "0.3", Type: TypeString, Category: "anomaly", Description: "EWMA 平滑因子 α (0.1-0.9)"},
-	{Key: "anomaly.ewma_sigma", EnvVar: "ANOMALY_EWMA_SIGMA", CodeDefault: "3.0", Type: TypeString, Category: "anomaly", Description: "EWMA 异常判定 k 倍标准差 (1.5-5.0)"},
-	{Key: "anomaly.ewma_window_hours", EnvVar: "ANOMALY_EWMA_WINDOW_HOURS", CodeDefault: "1", Type: TypeInt, Category: "anomaly", Description: "EWMA 回看样本窗口 (小时)", Min: "1", Max: "6"},
-	{Key: "anomaly.ewma_min_samples", EnvVar: "ANOMALY_EWMA_MIN_SAMPLES", CodeDefault: "8", Type: TypeInt, Category: "anomaly", Description: "EWMA 最少样本数", Min: "5", Max: "50"},
-	{Key: "anomaly.disk_forecast_days", EnvVar: "ANOMALY_DISK_FORECAST_DAYS", CodeDefault: "7", Type: TypeInt, Category: "anomaly", Description: "磁盘预测告警天数阈值", Min: "1", Max: "30"},
+	{Key: "anomaly.ewma_sigma", EnvVar: "ANOMALY_EWMA_SIGMA", CodeDefault: "5.0", Type: TypeString, Category: "anomaly", Description: "EWMA 异常判定 k 倍标准差 (默认 5.0)"},
+	{Key: "anomaly.ewma_window_hours", EnvVar: "ANOMALY_EWMA_WINDOW_HOURS", CodeDefault: "6", Type: TypeInt, Category: "anomaly", Description: "EWMA 回看样本窗口 (小时)", Min: "1", Max: "6"},
+	{Key: "anomaly.ewma_min_samples", EnvVar: "ANOMALY_EWMA_MIN_SAMPLES", CodeDefault: "24", Type: TypeInt, Category: "anomaly", Description: "EWMA 最少样本数", Min: "5", Max: "50"},
+	{Key: "anomaly.disk_forecast_days", EnvVar: "ANOMALY_DISK_FORECAST_DAYS", CodeDefault: "7", Type: TypeInt, Category: "anomaly", Description: "磁盘预测事件天数阈值", Min: "1", Max: "30"},
 	{Key: "anomaly.disk_forecast_min_history_hours", EnvVar: "ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS", CodeDefault: "72", Type: TypeInt, Category: "anomaly", Description: "磁盘预测所需最少历史小时", Min: "24", Max: "720"},
 	{Key: "anomaly.events_retention_days", EnvVar: "ANOMALY_EVENTS_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "anomaly", Description: "异常事件保留天数", Min: "7", Max: "365"},
 	{Key: "alerts.silence_retention_days", EnvVar: "SILENCE_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "retention", Description: "已过期静默规则的审计保留天数（超出后删除）", Min: "1", Max: "365"},

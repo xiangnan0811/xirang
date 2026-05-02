@@ -61,9 +61,9 @@ func (d *EWMADetector) Evaluate(ctx context.Context) ([]Finding, error) {
 	}
 
 	alpha := d.settingsFloat("anomaly.ewma_alpha", 0.3)
-	sigmaK := d.settingsFloat("anomaly.ewma_sigma", 3.0)
-	windowHours := d.settingsInt("anomaly.ewma_window_hours", 1)
-	minSamples := d.settingsInt("anomaly.ewma_min_samples", 8)
+	sigmaK := d.settingsFloat("anomaly.ewma_sigma", 5.0)
+	windowHours := d.settingsInt("anomaly.ewma_window_hours", 6)
+	minSamples := d.settingsInt("anomaly.ewma_min_samples", 24)
 
 	if alpha <= 0 || alpha >= 1 || sigmaK <= 0 || windowHours <= 0 || minSamples <= 1 {
 		return nil, fmt.Errorf("%w: invalid anomaly settings", ErrInvalidInput)

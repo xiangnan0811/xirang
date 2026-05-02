@@ -24,13 +24,29 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func TestRegistry(t *testing.T) {
 	svc := NewService(setupTestDB(t))
 	defs := svc.Registry()
-	if len(defs) != 33 {
-		t.Errorf("expected 33 definitions, got %d", len(defs))
+	if len(defs) != 34 {
+		t.Errorf("expected 34 definitions, got %d", len(defs))
 	}
 	// 确认返回副本，不影响全局 registry
 	defs[0].Key = "mutated"
 	if registry[0].Key == "mutated" {
 		t.Error("Registry() should return a copy, not a reference")
+	}
+}
+
+func TestAnomalyDefaults_AreConservativeAndAlertsOff(t *testing.T) {
+	svc := NewService(setupTestDB(t))
+	cases := map[string]string{
+		"anomaly.enabled":           "true",
+		"anomaly.alerts_enabled":    "false",
+		"anomaly.ewma_sigma":        "5.0",
+		"anomaly.ewma_window_hours": "6",
+		"anomaly.ewma_min_samples":  "24",
+	}
+	for key, want := range cases {
+		if got := svc.GetEffective(key); got != want {
+			t.Errorf("%s default = %q, want %q", key, got, want)
+		}
 	}
 }
 
@@ -162,8 +178,8 @@ func TestGetAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 33 {
-		t.Errorf("expected 33 settings, got %d", len(all))
+	if len(all) != 34 {
+		t.Errorf("expected 34 settings, got %d", len(all))
 	}
 	if all["login.rate_limit"].Source != "db" {
 		t.Errorf("expected source 'db', got '%s'", all["login.rate_limit"].Source)

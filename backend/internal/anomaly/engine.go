@@ -12,8 +12,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// AlertSink is anomaly's inbound interface for raising detection events as
-// alerts. Defined here so the engine does not import alerting.
+// AlertSink is anomaly's inbound interface for persisting detection events and
+// optionally promoting them as alerts. Defined here so the engine does not
+// import alerting.
 // alerting.DefaultRaiser does NOT directly satisfy this interface — see
 // NewSink in raise.go for the adapter that bridges alerting's
 // (db, AnomalyAlertInput)→(uint, bool, error) shape onto Sink.Raise.
@@ -31,10 +32,10 @@ type Engine struct {
 }
 
 // NewEngine constructs an Engine. sink MUST be non-nil — anomaly findings have
-// no meaningful path other than the configured AlertSink, and silently dropping
-// them would mask real production incidents. The previous fallback (a logging
-// stub) only delayed the bug surface to runtime; failing fast at construction
-// makes the wiring contract explicit.
+// no meaningful persistence path other than the configured AlertSink, and
+// silently dropping them would mask real production incidents. The previous
+// fallback (a logging stub) only delayed the bug surface to runtime; failing
+// fast at construction makes the wiring contract explicit.
 func NewEngine(db *gorm.DB, s *settings.Service, sink AlertSink, detectors ...Detector) *Engine {
 	if sink == nil {
 		panic("anomaly: NewEngine requires a non-nil AlertSink")
