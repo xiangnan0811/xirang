@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check that the rule is specific enough to prevent direct main-branch commits."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Check that future Trellis tasks can discover the branch workflow guide."}
