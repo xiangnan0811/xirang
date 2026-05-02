@@ -1,6 +1,6 @@
 # P3: Frontend Architecture — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve frontend performance and maintainability by lazy-loading 11 dialogs, splitting 6 large pages into focused sub-components, and replacing the 59-property ConsoleOutletContext with 7 domain-specific contexts.
 

@@ -22,8 +22,6 @@ web/.env
 .vscode/
 
 # ai
-.omc/
-.omx/
 .claude/
 .codex/
 .gemini/
@@ -31,7 +29,6 @@ web/.env
 AGENTS.md
 CLAUDE.md
 GEMINI.md
-.superpowers/
 
 # git worktrees
 .worktrees/
@@ -41,7 +38,6 @@ tmp/
 
 # temp docs
 docs/plans/
-docs/superpowers/
 
 # deploy
 deploy/certs/
@@ -50,7 +46,6 @@ deploy-kit/
 # local build artifacts
 backend/.env.production
 web/*.tsbuildinfo
-docs/superpowers/
 
 # swaggo generated files (docs.go is committed; json/yaml are regenerated)
 backend/internal/api/docs/swagger.json

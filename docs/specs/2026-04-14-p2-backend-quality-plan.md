@@ -1,6 +1,6 @@
 # P2: Backend Quality — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Standardize all API responses to a `{code, message, data}` envelope format, consolidate response helpers, fix silent errors, deduplicate sanitizeNode, and update the frontend API client.
 

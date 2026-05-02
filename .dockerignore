@@ -5,6 +5,5 @@ web/.vite
 web/dist
 .env
 .env.*
-.omc
 .claude
 backend/tmp
