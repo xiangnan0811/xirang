@@ -21,12 +21,21 @@ These guides help you **ask the right questions before coding**.
 
 | Guide | Purpose | When to Use |
 |-------|---------|-------------|
+| [Branch Workflow Guidelines](./branch-workflow-guidelines.md) | Keep work off `main` and route changes through PRs | Before any file-changing task |
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
 
 ---
 
 ## Quick Reference: Thinking Triggers
+
+### Before Any File-Changing Work
+
+- [ ] You are on a dedicated branch, not `main`
+- [ ] The branch was created from an up-to-date `main`
+- [ ] The work will be merged through a PR after checks pass
+
+→ Read [Branch Workflow Guidelines](./branch-workflow-guidelines.md)
 
 ### When to Think About Cross-Layer Issues
 

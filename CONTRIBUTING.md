@@ -17,7 +17,10 @@
 ### 提交代码
 
 1. Fork 本仓库并 clone 到本地
-2. 基于 `main` 创建功能分支：`git checkout -b feat/your-feature`
+2. 先同步 `main`，再基于 `main` 创建工作分支：`git checkout -b feat/your-feature`
+
+> 不要直接在 `main` 分支提交。任何功能开发、问题修复、文档、配置、CI、Trellis 任务或流程规范变更，都应在独立工作分支完成，并通过 Pull Request 合入。
+
 3. 完成开发后运行校验：
 
 ```bash
@@ -42,6 +45,7 @@ git push origin feat/your-feature
 
 - Pull Request 标题必须遵循 Conventional Commits；CI 会校验标题格式。
 - Maintainer 合并到 `main` 时应优先使用 `Squash and merge`，并保留符合规范的 PR 标题，让最终进入发布分支的提交语义稳定可预测。
+- Maintainer 也不要绕过 PR 直接在 `main` 提交功能或修复；如需维护仓库流程规范，也应走独立分支和 PR。
 - 不要直接向 `main` 推送发布相关改动；正式版本通过 Release Please 生成的 Release PR 落地。
 
 ### Commit 规范
