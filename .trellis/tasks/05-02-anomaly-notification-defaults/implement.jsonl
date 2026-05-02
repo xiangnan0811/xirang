@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend anomaly, settings, and alerting implementation conventions"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "GORM persistence patterns for SystemSetting, Alert, and AnomalyEvent behavior"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error handling patterns for settings and alerting code paths"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend test and quality gates for changed packages"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured logging conventions around anomaly/alerting changes"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend settings copy/i18n conventions if UI text is adjusted"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality checks if locale or settings UI text changes"}
