@@ -70,3 +70,37 @@ Added repository workflow rules requiring all file-changing work to happen on de
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Anomaly notification defaults
+
+**Date**: 2026-05-02
+**Task**: Anomaly notification defaults
+**Branch**: `fix/anomaly-notification-defaults`
+
+### Summary
+
+Made anomaly alert notifications opt-in by default, preserved anomaly event recording, raised EWMA defaults, updated tests/docs/smoke coverage, and recorded the Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7aee27a` | (see git log) |
+| `64ac4e5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
