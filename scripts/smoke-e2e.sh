@@ -431,7 +431,7 @@ log "PASS: P5e escalation policy smoke"
 log "=== P5f: anomaly detection ==="
 
 # Toggle via settings
-api_call PATCH "/settings" '{"anomaly.enabled":"true"}'
+api_call PUT "/settings" '{"anomaly.enabled":"true"}'
 assert_status 200
 
 # Per-node events (should respond 200 even if empty)

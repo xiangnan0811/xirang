@@ -130,7 +130,7 @@ func main() {
 	)
 
 	// Anomaly detection engine + retention
-	anomalySink := anomaly.NewSink(db, func(_ *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
+	anomalySink := anomaly.NewSink(db, settingsSvc, func(_ *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
 		return raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
 			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
 		})
@@ -206,17 +206,17 @@ func main() {
 	})
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:                hubCtx,
-		DB:                        db,
-		AuthService:               authService,
-		JWTManager:                jwtManager,
-		TaskManager:               taskManager,
-		Hub:                       hub,
-		SettingsService:           settingsSvc,
-		AllowedOrigins:            cfg.AllowedOrigins,
-		LoginRateLimit:            cfg.LoginRateLimit,
-		LoginRateWindow:           cfg.LoginRateWindow,
-		RetryWorker:               retryWorker,
+		AppContext:      hubCtx,
+		DB:              db,
+		AuthService:     authService,
+		JWTManager:      jwtManager,
+		TaskManager:     taskManager,
+		Hub:             hub,
+		SettingsService: settingsSvc,
+		AllowedOrigins:  cfg.AllowedOrigins,
+		LoginRateLimit:  cfg.LoginRateLimit,
+		LoginRateWindow: cfg.LoginRateWindow,
+		RetryWorker:     retryWorker,
 	})
 
 	server := &http.Server{

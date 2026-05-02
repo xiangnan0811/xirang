@@ -59,7 +59,7 @@ func TestEWMA_InsufficientSamples_NoFindings(t *testing.T) {
 	db := openEWMADB(t)
 	seedNode(t, db, 1, "n1", "/b1")
 	now := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
-	// Only 3 samples — below default min=8
+	// Only 3 samples — below default min=24.
 	for i := 0; i < 3; i++ {
 		seedSample(t, db, 1, now.Add(time.Duration(-i)*time.Minute), 20, 20, 0.5, true)
 	}
@@ -77,7 +77,7 @@ func TestEWMA_ConstantSeries_NoFindings(t *testing.T) {
 	db := openEWMADB(t)
 	seedNode(t, db, 1, "n1", "/b1")
 	now := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 25; i++ {
 		seedSample(t, db, 1, now.Add(time.Duration(-i)*time.Minute), 20, 20, 0.5, true)
 	}
 	d := newEWMADetector(t, db, now)
@@ -91,8 +91,12 @@ func TestEWMA_CpuSpike_Warning(t *testing.T) {
 	db := openEWMADB(t)
 	seedNode(t, db, 1, "n1", "/b1")
 	now := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
-	// 9 baseline samples around 20 with small noise, last sample spikes
-	values := []float64{18, 22, 20, 21, 19, 20, 22, 21, 20, 80} // last=80
+	// 24 baseline samples around 20 with small noise, last sample spikes.
+	values := []float64{
+		18, 22, 20, 21, 19, 20, 22, 21, 20, 19, 21, 20,
+		18, 22, 20, 21, 19, 20, 22, 21, 20, 19, 21, 20,
+		80,
+	}
 	for i, v := range values {
 		ts := now.Add(-time.Duration(len(values)-1-i) * time.Minute)
 		seedSample(t, db, 1, ts, v, 20, 0.5, true)
@@ -141,12 +145,17 @@ func TestEWMA_MultipleNodesIndependent(t *testing.T) {
 	seedNode(t, db, 1, "n1", "/b1")
 	seedNode(t, db, 2, "n2", "/b2")
 	now := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
-	// n1 has a noisy baseline then a spike (all-flat baseline → stddev=0 → no finding)
-	for i, v := range []float64{18, 22, 20, 21, 19, 20, 22, 21, 19, 90} {
-		seedSample(t, db, 1, now.Add(-time.Duration(9-i)*time.Minute), v, 20, 0.5, true)
+	// n1 has a noisy baseline then a spike.
+	node1Values := []float64{
+		18, 22, 20, 21, 19, 20, 22, 21, 19, 20, 18, 22,
+		20, 21, 19, 20, 22, 21, 19, 20, 18, 22, 20, 21,
+		90,
+	}
+	for i, v := range node1Values {
+		seedSample(t, db, 1, now.Add(-time.Duration(len(node1Values)-1-i)*time.Minute), v, 20, 0.5, true)
 	}
 	// n2 is calm
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 25; i++ {
 		seedSample(t, db, 2, now.Add(-time.Duration(i)*time.Minute), 20, 20, 0.5, true)
 	}
 	d := newEWMADetector(t, db, now)

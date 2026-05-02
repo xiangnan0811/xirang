@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Review changed backend anomaly/settings/alerting behavior against project conventions"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check persistence and GORM behavior for alerts and anomaly events"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check error handling remains consistent"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run and assess backend quality gates for changed code"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Review any frontend settings copy/i18n changes for consistency"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Run and assess frontend checks if frontend files are touched"}
