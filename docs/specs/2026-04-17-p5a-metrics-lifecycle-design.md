@@ -1,5 +1,7 @@
 # P5a: Metrics Lifecycle & Node Detail Page
 
+> Historical note: This dated design snapshot documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 First sub-project of the P5 Observability Evolution series. Adds retention/downsampling for node metrics, a pluggable metric sink with optional Prometheus remote_write, and the previously-missing `/nodes/:id` detail page.
 
 Depends on P4 (Prometheus /metrics endpoint, performance indexes). Blocks P5b (alerting baselines need historical aggregates), P5d (custom dashboards query the rollup tables).
@@ -415,7 +417,7 @@ web/src/features/nodes-detail/
 ```
 
 ### Modified existing files (frontend)
-- Router config (current project convention: routes registered in `web/src/app/` — exact file confirmed during Commit 6) — add `/nodes/:id` route pointing at `nodes-detail-page.tsx`.
+- Router config (historical design correction: implementation confirmed routes live in `web/src/router.tsx`, not `web/src/app/`) — add `/nodes/:id` route pointing at `nodes-detail-page.tsx`.
 - Overview page node matrix — make dots link to `/nodes/:id`.
 - Node list page — make rows link to `/nodes/:id`.
 - Alerts page row — add "查看节点" action building `/nodes/:id?tab=metrics&from=<alert_ts - 15min>&to=<alert_ts + 15min>`.

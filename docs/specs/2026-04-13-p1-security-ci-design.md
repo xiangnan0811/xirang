@@ -1,5 +1,7 @@
 # P1: Security Hardening & CI Quality Gates
 
+> Historical note: This dated design snapshot documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 Phase 1 of the Xirang improvement plan. Focuses on executor security and establishing CI quality gates.
 
 ## Scope

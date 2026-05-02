@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check that documentation/process edits comply with the repository branch workflow."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for reviewing backend-related documentation truth claims."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify docs describe the current backend structure accurately."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify appropriate backend checks are run or justified."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec index for reviewing frontend-related documentation truth claims."}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Verify docs describe the current web/ frontend structure accurately."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify appropriate frontend checks are run or justified."}

@@ -21,7 +21,7 @@
 
 ### 节点管理
 
-SSH 接入多台服务器，实时采集 CPU、内存、磁盘、负载等指标并自动告警。
+SSH 接入多台服务器，按探测间隔采集 CPU、内存、磁盘、负载等指标并生成状态与告警。
 支持维护窗口设置、节点到期提醒、紧急备份触发，以及按分组批量管理。
 
 ### 备份策略
@@ -31,7 +31,7 @@ SSH 接入多台服务器，实时采集 CPU、内存、磁盘、负载等指标
 
 ### 任务编排
 
-远程命令执行与批量操作，支持任务依赖链（DAG 编排）、失败自动重试与智能退避。
+远程命令执行与批量操作，支持任务依赖链、失败自动重试与指数退避。
 任务可随时暂停、跳过下次执行，运行历史与日志独立追溯。
 
 ### 文件浏览
@@ -89,22 +89,25 @@ cp .env.deploy .env
 # 生产环境建议固定稳定版标签
 echo 'IMAGE_TAG=vX.Y.Z' >> .env
 
-# 可选：启用版本检查（替换成正式 GitHub 仓库地址）
+# 可选：启用版本检查
 echo 'VERSION_CHECK_URL=https://api.github.com/repos/xiangnan0811/xirang/releases/latest' >> .env
 
-# 3. 放入 HTTPS 证书
-mkdir -p deploy/certs
-cp /path/to/fullchain.pem deploy/certs/
-cp /path/to/privkey.pem deploy/certs/
+# 3. 可选：启用 HTTPS
+mkdir -p certs
+cp /path/to/fullchain.pem certs/
+cp /path/to/privkey.pem certs/
+# 然后在 docker-compose.prod.yml 中取消注释 ./certs:/etc/nginx/certs:ro
 
 # 4. 拉取并启动官方镜像
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-访问 `https://your-domain`，使用 `admin` 和设置的初始密码登录。
+启用证书挂载后访问 `https://your-domain`，使用 `admin` 和设置的初始密码登录。未挂载证书时容器会自动使用 HTTP 模式，可先通过 `http://your-domain` 试用。
 
 > `docker-compose.prod.yml` 默认读取仓库根目录 `.env`。默认使用 SQLite，无需额外配置数据库。如需 PostgreSQL，在 `.env` 中修改 `DB_TYPE=postgres` 并设置 `DB_DSN`。完整配置项见 [`.env.deploy`](.env.deploy)、[docs/env-vars.md](docs/env-vars.md) 和 [docs/deployment.md](docs/deployment.md)。
+>
+> `VERSION_CHECK_URL` 会让后台将当前构建版本与 GitHub latest release 比较；如果二进制或镜像构建时没有注入版本信息，当前版本会显示为 `dev`，检查结果只能作为开发提示。
 
 ### Docker Run
 
@@ -117,24 +120,26 @@ docker run -d \
   -p 80:8080 -p 443:8443 \
   -v xirang-data:/data \
   -v xirang-backup:/backup \
-  -v ./deploy/certs:/etc/nginx/certs:ro \
+  -v "$(pwd)/certs:/etc/nginx/certs:ro" \
   --env-file .env \
   docker.io/xirang/xirang:vX.Y.Z
 ```
 
 ### 从源码运行
 
-需要 Go 1.24+ 和 Node.js 20+：
+需要 Go 1.26.2 或更新的兼容版本，以及 Node.js 20+：
 
 ```bash
 # 终端 1 — 后端（:8080）
-cd backend && cp .env.example .env
-export ADMIN_INITIAL_PASSWORD='your-strong-password'
+cd backend
+ADMIN_INITIAL_PASSWORD='your-strong-password' APP_ENV=development \
 go run ./cmd/server
 
 # 终端 2 — 前端（:5173）
 cd web && npm install && npm run dev
 ```
+
+后端不会自动读取 `.env` 文件；如果你希望使用 `backend/.env.example`，请复制后在 shell 中显式加载，例如 `set -a; . ./.env; set +a`。
 
 ---
 
@@ -143,13 +148,13 @@ cd web && npm install && npm run dev
 ```bash
 # 升级到指定稳定版
 # 编辑 .env，将 IMAGE_TAG 设置为目标稳定版，例如：
-# IMAGE_TAG=v1.0.0
+# IMAGE_TAG=vX.Y.Z
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
 # 或者临时指定版本回滚
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml pull
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ```
 
 快速试用可以继续使用 `latest`，但生产环境建议固定到显式稳定版 tag。
@@ -163,11 +168,13 @@ IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
 内置定时任务每日 02:00 自动备份数据库，保留最近 30 天。也可手动操作：
 
 ```bash
-# 备份
-bash scripts/backup-db.sh ./backups
+# 备份（Docker Compose 默认 bind mount: ./data -> /data）
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
+  bash scripts/backup-db.sh ./backups
 
 # 恢复（自动生成回滚文件）
-bash scripts/restore-db.sh ./backups/xirang-sqlite-20250301-020000.db
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
+  bash scripts/restore-db.sh ./backups/xirang-sqlite-20250301-020000.db
 ```
 
 ---

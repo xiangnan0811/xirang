@@ -1,5 +1,7 @@
 # P4: Observability & Infrastructure — Implementation Plan
 
+> Historical note: This dated implementation plan documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 > **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Prometheus full-stack metrics, missing DB performance indexes, Makefile DX targets, and OpenAPI/Swagger documentation to complete the Xirang improvement plan.
