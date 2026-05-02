@@ -1,5 +1,7 @@
 # P3: Frontend Architecture — Lazy Loading, Component Splitting, Context Splitting
 
+> Historical note: This dated design snapshot documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 Phase 3 of the Xirang improvement plan. Restructures the frontend for better performance, maintainability, and developer experience.
 
 ## Scope

@@ -1,5 +1,7 @@
 # P2: Backend Quality — API Response Standardization & Code Cleanup
 
+> Historical note: This dated design snapshot documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 Phase 2 of the Xirang improvement plan. Focuses on unified API response format, error handling standardization, and code deduplication.
 
 ## Scope

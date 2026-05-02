@@ -1,5 +1,7 @@
 # P2: Backend Quality — Implementation Plan
 
+> Historical note: This dated implementation plan documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 > **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Standardize all API responses to a `{code, message, data}` envelope format, consolidate response helpers, fix silent errors, deduplicate sanitizeNode, and update the frontend API client.

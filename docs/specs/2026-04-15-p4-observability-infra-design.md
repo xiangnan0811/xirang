@@ -1,5 +1,7 @@
 # P4: Observability & Infrastructure
 
+> Historical note: This dated design snapshot documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 Final phase of the Xirang improvement plan. Adds Prometheus metrics, performance indexes, Makefile DX, and OpenAPI documentation.
 
 ## Scope

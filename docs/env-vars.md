@@ -2,6 +2,8 @@
 
 完整的 Xirang 环境变量列表，按功能分组。示例文件：`backend/.env.example`（开发）、`backend/.env.production.example`（生产）、`web/.env.example`（前端）。
 
+后端进程不会自动读取 `.env` 文件；源码运行时需要由 shell、systemd、Docker Compose 或 `docker run --env-file` 注入环境变量。Docker Compose 生产模板会读取仓库根目录 `.env`。
+
 ---
 
 ## 1. 服务器与环境
@@ -14,7 +16,7 @@
 | `GIN_MODE` | string | — | 否 | `APP_ENV` 的回退变量（`debug` = development，`release` = production） |
 | `LOG_LEVEL` | string | 空（info） | 否 | 日志级别：`debug` / `info` / `warn` / `error` |
 
-**读取位置**：`SERVER_ADDR` → `config/config.go:54`，`APP_ENV` / `ENVIRONMENT` / `GIN_MODE` → `util/env.go:54-63`，`LOG_LEVEL` → `cmd/server/main.go:26`
+**读取位置**：`SERVER_ADDR` → `backend/internal/config/config.go` 的 `Load`；`APP_ENV` / `ENVIRONMENT` / `GIN_MODE` → `backend/internal/util/env.go`；`LOG_LEVEL` → `backend/cmd/server/main.go`。
 
 ## 2. 数据库
 
@@ -24,7 +26,7 @@
 | `SQLITE_PATH` | string | `./xirang.db` | 否 | SQLite 文件路径 |
 | `DB_DSN` | string | — | PG 时必填 | PostgreSQL 连接串，生产建议 `sslmode=require` |
 
-**读取位置**：`config/config.go:55-57`
+**读取位置**：`backend/internal/config/config.go` 的 `Load`；系统自助备份接口也会读取 `DB_TYPE` / `SQLITE_PATH`。
 
 ## 3. 认证与安全
 
@@ -41,7 +43,7 @@
 | `ADMIN_INITIAL_PASSWORD` | string | — | 首次启动 | 初始 admin 账号密码，仅 bootstrap 阶段使用 |
 | `DATA_ENCRYPTION_KEY` | string | 内置开发密钥 | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 SHA-256 派生） |
 
-**读取位置**：`JWT_SECRET` → `config/config.go:43`，登录限流/锁定 → `config/config.go:80-120` + settings 服务（`login.rate_limit`、`login.rate_window`、`login.fail_lock_threshold`、`login.fail_lock_duration`），登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`（auth_handler 按需读取，env 仅作首次启动的回退默认值），`ADMIN_INITIAL_PASSWORD` → `bootstrap/bootstrap.go:30`，`DATA_ENCRYPTION_KEY` → `secure/crypto.go` + `config/config.go`
+**读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go` 和 `backend/internal/config/config.go`。
 
 ## 4. 跨域与 WebSocket
 
@@ -51,7 +53,7 @@
 | `WS_ALLOW_EMPTY_ORIGIN` | bool | `false` | 否 | WebSocket 是否允许空 Origin |
 | `WS_MAX_CONNECTIONS` | int | `100` | 否 | WebSocket 最大连接数 |
 
-**读取位置**：`CORS_ALLOWED_ORIGINS` → `config/config.go:38`，`WS_ALLOW_EMPTY_ORIGIN` → `config/config.go:146`，`WS_MAX_CONNECTIONS` → `ws/hub.go:54`
+**读取位置**：`CORS_ALLOWED_ORIGINS` / `WS_ALLOW_EMPTY_ORIGIN` → `backend/internal/config/config.go`；`WS_MAX_CONNECTIONS` → `backend/internal/ws/hub.go`。
 
 ## 5. SSH
 
@@ -61,7 +63,7 @@
 | `SSH_KNOWN_HOSTS_PATH` | string | `~/.ssh/known_hosts` | 否 | known_hosts 文件路径 |
 | `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `true` | 否 | 严格校验开启时，是否自动接受首次出现的主机指纹（设为 `false` 可禁用） |
 
-**读取位置**：`SSH_STRICT_HOST_KEY_CHECKING` → `sshutil/ssh_auth.go:126` + `task/executor/executor.go:147`，`SSH_KNOWN_HOSTS_PATH` → `sshutil/ssh_auth.go:135` + `task/executor/executor.go:152`，`SSH_AUTO_ACCEPT_NEW_HOSTS` → `sshutil/ssh_auth.go:155` + `task/executor/executor.go:158`
+**读取位置**：`backend/internal/sshutil/ssh_auth.go` 和 `backend/internal/task/executor/executor.go`。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使自动接受的新主机指纹随数据卷持久化。
 
 ## 6. 备份与执行
 
@@ -76,7 +78,7 @@
 | `BATCH_COMMAND_BLACKLIST` | string | 空（使用内置规则） | 否 | 批量命令黑名单（逗号分隔正则） |
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 
-**读取位置**：`RSYNC_BINARY` → `config/config.go:59`，`RSYNC_ALLOWED_*` → `api/handlers/task_handler.go:593-594`，`RSYNC_MIN_FREE_GB` → `task/executor/executor.go:491,628`，`RCLONE_BINARY` → `task/executor/rclone_executor.go:43`，`RESTIC_BINARY` → `task/executor/restic_executor.go:38`，`BATCH_COMMAND_BLACKLIST` → `api/handlers/batch_handler.go:229`，`FILE_BROWSER_ALLOW_ALL` → `api/handlers/file_handler.go:261`
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）。
 
 ## 7. 节点探测
 
@@ -86,7 +88,7 @@
 | `NODE_PROBE_FAIL_THRESHOLD` | int | `3` | 否 | 连续失败多少次标记节点离线 |
 | `NODE_PROBE_CONCURRENCY` | int | `10` | 否 | 并发探测数（生产建议 `20`） |
 
-**读取位置**：`config/config.go:125-143`
+**读取位置**：`backend/internal/config/config.go`；这些键也注册到 settings 服务，当前探测 worker 启动时读取配置，变更需重启生效。
 
 ## 8. 数据保留
 
@@ -98,8 +100,10 @@
 | `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警 |
 | `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警 |
 | `INTEGRITY_CHECK_MULTIPLIER` | int | `4` | 否 | 完整性检查频率倍数——每隔多少个保留清理周期运行一次 `restic check` / `rclone check`（默认 4，即 `RETENTION_CHECK_INTERVAL=6h` 时每 24h 一次） |
+| `LOG_RETENTION_DAYS_DEFAULT` | int | `30` | 否 | 节点日志默认保留天数，节点未单独配置时生效 |
+| `SILENCE_RETENTION_DAYS` | int | `30` | 否 | 已过期静默规则的审计保留天数，超出后删除 |
 
-**读取位置**：`config/config.go:64-76`，`RETENTION_CHECK_INTERVAL` → `config/config.go:146`，`BACKUP_STORAGE_*` → `config/config.go:152-164`，`INTEGRITY_CHECK_MULTIPLIER` → `task/retention.go`
+**读取位置**：基础任务保留与存储阈值 → `backend/internal/config/config.go` 和 settings 服务；`INTEGRITY_CHECK_MULTIPLIER` → `backend/internal/task/retention_worker.go`；节点日志保留 → `backend/internal/nodelogs/retention.go`；静默规则保留 → `backend/internal/alerting/silence_retention.go`。
 
 ## 9. 邮件通知
 
@@ -114,7 +118,7 @@
 
 > 上述 `SMTP_*` 变量从 v0.18+ 起已纳入系统设置注册表（key 前缀 `smtp.`），可通过 `/settings` API 实时调整；环境变量仅作为首次启动时的回退默认值。生产环境建议把 `SMTP_PASS` 仍以环境变量注入而非入库。
 
-**读取位置**：settings 服务键 `smtp.host` / `smtp.port` / `smtp.user` / `smtp.password` / `smtp.from` / `smtp.require_tls`（`alerting/dispatcher.go:sendEmail`）
+**读取位置**：settings 服务键 `smtp.host` / `smtp.port` / `smtp.user` / `smtp.password` / `smtp.from` / `smtp.require_tls`，邮件发送路径位于 `backend/internal/alerting/dispatcher.go`。
 
 ## 10. 告警
 
@@ -122,8 +126,9 @@
 |------|------|--------|------|------|
 | `ALERT_DEDUP_WINDOW` | duration | `10m` | 否 | 告警去重窗口（同节点+同任务+同错误码），`0` 关闭去重 |
 | `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | bool | `true` | 否 | 阻断 webhook/slack/telegram 指向私网地址（`.env.example` 开发值 `false`，生产建议 `true`） |
+| `BACKUP_STALE_THRESHOLD_HOURS` | int | `48` | 否 | 备份健康面板判定节点备份过期的小时阈值 |
 
-**读取位置**：`ALERT_DEDUP_WINDOW` → `alerting/dispatcher.go:237`，`INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` → `api/handlers/integration_handler.go:101`
+**读取位置**：`ALERT_DEDUP_WINDOW` → settings 服务 / `backend/internal/alerting/dispatcher.go`；`INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` → `backend/internal/api/handlers/integration_handler.go`；`BACKUP_STALE_THRESHOLD_HOURS` → `backend/internal/api/handlers/overview_backup_health_handler.go`。
 
 ### 10.1 异常检测
 
@@ -141,7 +146,7 @@
 | `ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS` | int | `72` | 否 | 磁盘预测所需最少历史小时数 |
 | `ANOMALY_EVENTS_RETENTION_DAYS` | int | `30` | 否 | 异常事件保留天数 |
 
-**读取位置**：settings 服务键 `anomaly.enabled` / `anomaly.alerts_enabled` / `anomaly.ewma_*` / `anomaly.disk_forecast_*` / `anomaly.events_retention_days`（`anomaly/ewma.go`、`anomaly/disk_forecast.go`、`anomaly/raise.go`、`anomaly/retention.go`）
+**读取位置**：settings 服务键 `anomaly.enabled` / `anomaly.alerts_enabled` / `anomaly.ewma_*` / `anomaly.disk_forecast_*` / `anomaly.events_retention_days`，消费端位于 `backend/internal/anomaly/`。
 
 ## 11. 前端
 
@@ -153,18 +158,20 @@
 | `VITE_WS_URL` | string | 自动推导 | 否 | 自定义 WebSocket 地址 |
 | `VITE_ENABLE_DEMO_MODE` | string | — | 否 | 设为 `true` 启用 mock 数据（仅演示/测试用） |
 
-**读取位置**：`VITE_ENABLE_DEMO_MODE` → `hooks/use-console-data.ts:108`
+**读取位置**：`VITE_API_BASE_URL` / `VITE_DEV_API_DIRECT_URL` → `web/src/lib/api/core.ts` 和 WebSocket URL 推导；`VITE_PROXY_TARGET` → `web/vite.config.ts`；`VITE_WS_URL` → `web/src/lib/ws/logs-socket.ts`；`VITE_ENABLE_DEMO_MODE` → `web/src/hooks/use-console-data.ts`。
 
-## 12. 部署变量（Docker Compose 模板）
+## 12. 部署变量（Docker Compose / All-in-One 模板）
 
-以下变量用于 `docker-compose.prod.yml`，非应用运行时变量：
+以下变量用于 `docker-compose.prod.yml` 或 All-in-One 镜像的 Nginx 模板，部分不是后端应用运行时变量：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `IMAGE_REGISTRY` | `docker.io` | 镜像仓库地址 |
 | `IMAGE_NAMESPACE` | `xirang` | 镜像命名空间；官方公开镜像默认使用 `docker.io/xirang/xirang` |
 | `IMAGE_TAG` | `latest` | 镜像标签；`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
-| `BACKEND_UPSTREAM` | `127.0.0.1:8080` | Nginx 反代后端地址 |
+| `HTTP_PORT` | `80` | 宿主机 HTTP 端口映射到容器 `8080` |
+| `HTTPS_PORT` | `443` | 宿主机 HTTPS 端口映射到容器 `8443` |
+| `BACKEND_UPSTREAM` | `http://127.0.0.1:3000` | All-in-One 镜像内 Nginx 反代后端地址，需包含协议 |
 
 ---
 
@@ -183,8 +190,11 @@
 |------|------|--------|------|------|
 | `VERSION_CHECK_URL` | string | — | 否 | 版本检查地址，推荐使用 `https://api.github.com/repos/xiangnan0811/xirang/releases/latest`；当前仅支持稳定版 semver 响应，未设置时版本检查接口返回"未配置" |
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 数据库备份文件存放目录 |
+| `DB_BACKUP_MAX_COUNT` | int | `20` | 否 | 系统自助 SQLite 备份接口保留的最大备份数量 |
 
-**读取位置**：`VERSION_CHECK_URL` → `api/handlers/version_handler.go:37`，`DB_BACKUP_DIR` → `api/handlers/system_handler.go:39`
+**读取位置**：`VERSION_CHECK_URL` → `backend/internal/api/handlers/version_handler.go`；`DB_BACKUP_DIR` / `DB_BACKUP_MAX_COUNT` → `backend/internal/api/handlers/system_handler.go`。容器内 cron 备份使用 `scripts/backup-db.sh` 与 `/etc/supercronic/xirang-backup`，按文件 mtime 清理 30 天前的备份，不读取 `DB_BACKUP_MAX_COUNT`。
+
+版本检查会把 GitHub latest release 的 `tag_name` 与服务端当前构建版本比较；当前构建版本来自编译时注入。未注入版本信息的本地二进制或镜像会显示 `dev`，检查结果只适合作为开发提示。
 
 ## 14. 指标远程推送（Prometheus remote-write）
 
@@ -198,4 +208,4 @@
 
 可观测性：失败时通过 `xirang_metrics_remote_write_total{status="failure"}` 计数，建议在 Grafana 上配置 `rate(...)` 持续大于 0 的告警面板。
 
-**读取位置**：`cmd/server/main.go:buildRemoteWriteSinkFromConfig`
+**读取位置**：`backend/cmd/server/main.go` 的 `buildRemoteWriteSinkFromConfig`，并回退读取 settings 服务键 `metrics.remote_url` / `metrics.remote_bearer_token`。

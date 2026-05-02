@@ -10,18 +10,18 @@
 - `latest` 仅表示最新稳定版；手动重发和恢复构建不得移动 `latest`。
 - 私有部署不绑定公开 release 事件；部署仅通过手动 workflow 触发。
 
-## 首次公开发布 bootstrap
+## Release Please 状态与基线
 
-当前仓库已启用 Release Please，manifest 基线见 `.release-please-manifest.json`。
+当前仓库已启用 Release Please，manifest 基线见 `.release-please-manifest.json`；当前仓库内基线为 `0.19.0`，`CHANGELOG.md` 已由 Release Please 维护。
 
-首次公开发布前请完成以下检查：
+仅在重建发布链路、迁移仓库或重置首发版本时，才需要重新执行 bootstrap 检查：
 
 1. 确认 `.release-please-manifest.json` 中的起始版本号就是你希望公开的首个稳定版。
 2. 确认 `CHANGELOG.md` 已纳入仓库，并由 Release Please 接管。
 3. 确认 `README.md`、`docs/deployment.md`、`docs/env-vars.md` 中的默认安装路径是 Docker Hub 预构建镜像，而不是本地 `docker build`。
 4. 确认 Docker Hub 命名空间和 GitHub 仓库名已经最终确定，再向外公开 `VERSION_CHECK_URL` 示例。
 
-若需要调整首版号，不要手动打 tag；先修改 `.release-please-manifest.json`，再等待/触发新的 Release PR。
+若需要调整下一版号，不要手动打正式 tag；优先使用 Release Please 支持的 `Release-As:` 机制，或在明确重置基线时修改 `.release-please-manifest.json` 后等待/触发新的 Release PR。
 
 ## GitHub 仓库设置
 
@@ -140,3 +140,4 @@
 - 检查 `VERSION_CHECK_URL` 是否仍指向 GitHub latest release API。
 - 检查返回 JSON 是否包含 `tag_name` 和 `html_url`。
 - 检查 Release tag 是否保持稳定版 `vX.Y.Z` 格式。
+- 检查构建产物是否注入了 `backend/internal/version` 中的当前版本；未注入时 `/api/v1/version` 会返回 `dev`，版本检查只能作为开发提示。
