@@ -104,3 +104,37 @@ Made anomaly alert notifications opt-in by default, preserved anomaly event reco
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Documentation current-state audit
+
+**Date**: 2026-05-03
+**Task**: Documentation current-state audit
+**Branch**: `docs/current-state-audit`
+
+### Summary
+
+Audited and refreshed README/docs against current repo state, marked dated specs as historical snapshots, added a documentation truth guide, and verified doc freshness plus local links.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fc8a7b1` | (see git log) |
+| `e1f6304` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
