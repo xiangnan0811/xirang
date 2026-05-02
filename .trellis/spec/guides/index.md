@@ -24,6 +24,7 @@ These guides help you **ask the right questions before coding**.
 | [Branch Workflow Guidelines](./branch-workflow-guidelines.md) | Keep work off `main` and route changes through PRs | Before any file-changing task |
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Documentation Truth Guide](./documentation-truth-guide.md) | Keep docs accurate without rewriting historical snapshots | Before broad documentation audits |
 
 ---
 
@@ -55,6 +56,15 @@ These guides help you **ask the right questions before coding**.
 - [ ] **You're creating a new utility/helper function** ← Search first!
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
+
+### When to Audit Documentation Truth
+
+- [ ] Updating `README.md` or public operating docs
+- [ ] Editing `docs/deployment.md`, `docs/env-vars.md`, or release docs
+- [ ] Touching dated `docs/specs/*` design or implementation plan files
+- [ ] Changing version, Docker image, release, workflow, or environment-variable claims
+
+→ Read [Documentation Truth Guide](./documentation-truth-guide.md)
 
 ---
 
