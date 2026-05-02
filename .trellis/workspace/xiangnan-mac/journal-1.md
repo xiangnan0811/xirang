@@ -37,3 +37,36 @@ Initialized Trellis project support files, filled backend and frontend engineeri
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Document branch-required workflow
+
+**Date**: 2026-05-02
+**Task**: Document branch-required workflow
+**Branch**: `chore/require-work-branches`
+
+### Summary
+
+Added repository workflow rules requiring all file-changing work to happen on dedicated branches, documented the rule for agents and contributors, and added Trellis branch workflow guidance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0859f8f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
