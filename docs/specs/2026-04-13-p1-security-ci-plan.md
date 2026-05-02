@@ -1,6 +1,6 @@
 # P1: Security & CI Quality Gates — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Harden SSH executor defaults, deduplicate SSH auth code, and establish CI quality gates (lint, vulnerability scanning, coverage, container scanning).
 

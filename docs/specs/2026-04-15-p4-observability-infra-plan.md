@@ -1,6 +1,6 @@
 # P4: Observability & Infrastructure — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Prometheus full-stack metrics, missing DB performance indexes, Makefile DX targets, and OpenAPI/Swagger documentation to complete the Xirang improvement plan.
 

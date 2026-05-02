@@ -1,6 +1,6 @@
 # P5a: Metrics Lifecycle & Node Detail Page — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add 3-tier metric storage (raw 7d / hourly 90d / daily 2y), a pluggable metric sink with optional Prometheus remote_write, and the missing `/nodes/:id` detail page.
 
