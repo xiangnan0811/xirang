@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Documentation updates must stay on a dedicated branch and follow PR-oriented workflow."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for locating current Go backend conventions while auditing backend-related documentation."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Current backend layout and package boundaries are needed to verify README and docs claims."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend verification commands and quality gates inform doc audit and final checks."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec index for locating current React console conventions while auditing frontend-related documentation."}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Current web/ frontend layout is needed to correct stale path and source-run documentation."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend verification commands and quality gates inform doc audit and final checks."}

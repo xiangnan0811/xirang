@@ -12,13 +12,13 @@
 
 ## 架构概览
 
-生产环境使用 All-in-One 单容器架构：
+生产环境使用 All-in-One 单容器架构。容器启动时会检测 `/etc/nginx/certs/fullchain.pem` 和 `/etc/nginx/certs/privkey.pem`：存在证书时启用 HTTPS 并将 HTTP 重定向到 HTTPS；未挂载证书时自动使用 HTTP 模式。
 
 ```text
                     ┌────────────────────────────────┐
                     │        Docker Container        │
-   :80 (HTTP)  ───> │  Nginx ── 301 ──> HTTPS        │
-   :443 (HTTPS) ──> │  Nginx                         │
+   :80 (HTTP)  ───> │  Nginx                         │
+   :443 (HTTPS) ──> │  Nginx（证书存在时启用）          │
                     │    ├── /api/v1/*  ──> Backend  │
                     │    ├── /healthz   ──> Backend  │
                     │    └── /*         ──> 静态文件  │
@@ -55,13 +55,14 @@ cp .env.deploy .env
 # 生产环境建议固定稳定版镜像
 echo 'IMAGE_TAG=vX.Y.Z' >> .env
 
-# 可选：开启版本检查（替换成正式 GitHub 仓库地址）
+# 可选：开启版本检查
 echo 'VERSION_CHECK_URL=https://api.github.com/repos/xiangnan0811/xirang/releases/latest' >> .env
 
-# 3. 放入证书
-mkdir -p deploy/certs
-cp /path/to/fullchain.pem deploy/certs/
-cp /path/to/privkey.pem deploy/certs/
+# 3. 可选：启用 HTTPS
+mkdir -p certs
+cp /path/to/fullchain.pem certs/
+cp /path/to/privkey.pem certs/
+# 然后在 docker-compose.prod.yml 中取消注释 ./certs:/etc/nginx/certs:ro
 
 # 4. 拉取并启动
 docker compose -f docker-compose.prod.yml pull
@@ -75,6 +76,7 @@ docker compose -f docker-compose.prod.yml up -d
 - 备份目录：`./backups`
 - HTTP 端口：`80 -> 8080`
 - HTTPS 端口：`443 -> 8443`
+- HTTPS 证书目录：`./certs`（需要取消注释 Compose 里的证书挂载；如未挂载证书，容器使用 HTTP 模式）
 
 如需 PostgreSQL，在 `.env` 中改为：
 
@@ -94,7 +96,7 @@ docker run -d \
   -p 80:8080 -p 443:8443 \
   -v xirang-data:/data \
   -v xirang-backup:/backup \
-  -v ./deploy/certs:/etc/nginx/certs:ro \
+  -v "$(pwd)/certs:/etc/nginx/certs:ro" \
   --env-file .env \
   docker.io/xirang/xirang:vX.Y.Z
 ```
@@ -126,7 +128,7 @@ docker run -d \
 推荐方式是修改 `.env` 中的 `IMAGE_TAG`：
 
 ```env
-IMAGE_TAG=v1.0.0
+IMAGE_TAG=vX.Y.Z
 ```
 
 然后执行：
@@ -139,8 +141,8 @@ docker compose -f docker-compose.prod.yml up -d
 ### 临时指定版本
 
 ```bash
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml pull
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### 关于 `latest`
@@ -148,6 +150,10 @@ IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
 - `latest` 仅表示当前最新稳定版
 - 适合快速试用
 - 不建议作为生产环境长期固定标签
+
+### 版本检查说明
+
+`VERSION_CHECK_URL` 会让 `/api/v1/version/check` 请求 GitHub latest release API，并将返回的 `tag_name` 与服务端当前构建版本比较。当前构建版本来自编译时注入；如果二进制或镜像构建时没有注入版本信息，`/api/v1/version` 会返回 `dev`，版本检查结果只能作为开发提示。
 
 ## 镜像构建（仅维护者或高级用户）
 
@@ -200,12 +206,12 @@ docker buildx build \
 ### 手动备份与恢复
 
 ```bash
-# SQLite 备份
-DB_TYPE=sqlite SQLITE_PATH=/data/xirang.db \
+# SQLite 备份（Docker Compose 默认 bind mount: ./data -> /data）
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
   bash scripts/backup-db.sh ./backups
 
 # SQLite 恢复
-DB_TYPE=sqlite SQLITE_PATH=/data/xirang.db \
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
   bash scripts/restore-db.sh ./backups/xirang-sqlite-20260301-020000.db
 
 # PostgreSQL 备份
@@ -225,7 +231,10 @@ DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
 # 容器内部
 curl -fsS http://127.0.0.1:8080/healthz
 
-# 通过 HTTPS（外部）
+# 通过 HTTP（外部，无证书模式）
+curl -fsS http://127.0.0.1/healthz
+
+# 通过 HTTPS（外部，证书模式）
 curl -kfsS https://127.0.0.1/healthz
 ```
 
@@ -257,8 +266,8 @@ docker exec -it xirang sh -lc \
 - 触发：`push` / `pull_request`
 - 检查项：
   - PR 标题 Conventional Commits 校验
-  - 后端 `go test ./...` + `go build ./...`
-  - 前端 `npm run check`
+  - 后端 `golangci-lint`、`go test -coverprofile=coverage.out ./...`、`go build ./...`、`govulncheck ./...`
+  - 前端 `npm audit --audit-level=moderate`、`npm run check`
   - bundle budget
   - 文档新鲜度提醒
 
@@ -289,7 +298,7 @@ docker exec -it xirang sh -lc \
 
 维护者需要额外关注：
 
-- 首个公开版本 bootstrap
+- Release Please manifest 与 `CHANGELOG.md`
 - GitHub branch protection / squash merge 设置
 - Docker Hub secrets / variables
 - 镜像重发与私有部署
@@ -304,12 +313,13 @@ docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
 # 健康检查
+curl -fsS http://127.0.0.1/healthz
 curl -kfsS https://127.0.0.1/healthz
 
 # 查看日志
 docker compose -f docker-compose.prod.yml logs -f xirang
 
 # 版本回滚
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml pull
-IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ```

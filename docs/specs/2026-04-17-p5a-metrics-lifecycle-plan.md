@@ -1,5 +1,7 @@
 # P5a: Metrics Lifecycle & Node Detail Page — Implementation Plan
 
+> Historical note: This dated implementation plan documents the plan at the time it was written. Treat it as implementation history, not current operating documentation; verify commands, paths, and workflow behavior against the current repo before acting.
+
 > **For agentic workers:** Use the current repo-approved task execution workflow to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add 3-tier metric storage (raw 7d / hourly 90d / daily 2y), a pluggable metric sink with optional Prometheus remote_write, and the missing `/nodes/:id` detail page.
