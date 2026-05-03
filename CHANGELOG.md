@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/xiangnan0811/xirang/compare/v0.19.0...v0.19.1) (2026-05-02)
+
+
+### Bug Fixes
+
+* **backend:** make anomaly alerts opt-in by default ([be0d249](https://github.com/xiangnan0811/xirang/commit/be0d2491963434d348364d7c888c73b56bc1ee5a))
+
 ## [0.19.0](https://github.com/xiangnan0811/xirang/compare/v0.18.4...v0.19.0) (2026-04-28)
 
 
