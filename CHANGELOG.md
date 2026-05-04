@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.2](https://github.com/xiangnan0811/xirang/compare/v0.19.1...v0.19.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* Wave 0 安全/稳定性/文档整改（基于全方位审查后实读复核清单） ([#105](https://github.com/xiangnan0811/xirang/issues/105)) ([6556214](https://github.com/xiangnan0811/xirang/commit/6556214f644f572bdfc916c734ab7fc886e7fbbf))
+* Wave 1 清理 Wave 0 Out-of-Scope 三项 (B-2 SFTP RealPath / B-8 UTC 迁移 / F-3 logs 虚拟化) ([#108](https://github.com/xiangnan0811/xirang/issues/108)) ([b59f7d8](https://github.com/xiangnan0811/xirang/commit/b59f7d8eda193b90bed47fc5a408661d32ab8778))
+
 ## [0.19.1](https://github.com/xiangnan0811/xirang/compare/v0.19.0...v0.19.1) (2026-05-02)
 
 
