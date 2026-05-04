@@ -325,8 +325,8 @@ func TestSFTPClient_SatisfiesRealPathResolver(t *testing.T) {
 	}
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer c1.Close() //nolint:errcheck // test cleanup, error not actionable
+	defer c2.Close() //nolint:errcheck // test cleanup, error not actionable
 
 	server, err := sftp.NewServer(serverPipe{ReadCloser: c1, WriteCloser: c1})
 	if err != nil {
@@ -339,7 +339,7 @@ func TestSFTPClient_SatisfiesRealPathResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sftp client: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test cleanup, error not actionable
 
 	// 直接断言 *sftp.Client 实现了我们定义的接口
 	var _ realPathResolver = client
