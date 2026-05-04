@@ -93,7 +93,7 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	//      同一份内存库，残留数据触发 UNIQUE constraint。
 	// 改用纯 ":memory:" + SetMaxOpenConns(1)：每次调用得到全新的私有库，
 	// 单连接彻底串行化所有写入；_busy_timeout 作为兜底应对偶发竞争。
-	db, err := gorm.Open(sqlite.Open("file::memory:?_busy_timeout=5000"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file::memory:?_busy_timeout=5000&_loc=UTC"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}

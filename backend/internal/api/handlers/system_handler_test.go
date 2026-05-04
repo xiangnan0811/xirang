@@ -14,7 +14,7 @@ import (
 
 func openSystemHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared&_loc=UTC"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
@@ -23,7 +23,7 @@ func openSystemHandlerTestDB(t *testing.T) *gorm.DB {
 
 func openSystemHandlerSQLiteFileDB(t *testing.T, dbPath string) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_loc=UTC"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开 SQLite 文件数据库失败: %v", err)
 	}

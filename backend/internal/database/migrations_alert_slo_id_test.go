@@ -20,7 +20,7 @@ import (
 //   - leaves slo_id NULL for malformed XR-SLO-<garbage> rows
 //   - leaves slo_id NULL for non-SLO error_codes
 func TestMigration045_BackfillSLOID(t *testing.T) {
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared",
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC",
 		strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
