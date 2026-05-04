@@ -1,9 +1,52 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LogsPage } from "./logs-page";
 import type { LogEvent } from "@/types/domain";
+
+// LogsViewer 使用 @tanstack/react-virtual；jsdom 下元素默认 0×0，
+// virtualizer 会判定容器无高度而拒绝渲染任何 item。这里给 HTMLElement 打补丁，
+// 使包含日志区域的 ancestors 都报告 600 高度，让虚拟化能正常出 row。
+beforeAll(() => {
+  const proto = HTMLElement.prototype as unknown as {
+    __logsPageJsdomPatched?: boolean;
+  };
+  if (proto.__logsPageJsdomPatched) return;
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: function () {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 800,
+        bottom: 600,
+        width: 800,
+        height: 600,
+        toJSON: () => ({}),
+      } as DOMRect;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get: () => 600,
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get: () => 800,
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get: () => 600,
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => 800,
+  });
+  proto.__logsPageJsdomPatched = true;
+});
 
 const setSearchParamsMock = vi.fn();
 const searchParamsRef = { current: new URLSearchParams() };

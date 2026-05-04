@@ -89,14 +89,6 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		return
 	}
 
-	// 路径安全校验
-	cleanPath, err := validateNodePath(rawPath, node, h.db)
-	if err != nil {
-		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
-		respondForbidden(c, "路径不在允许的访问范围内")
-		return
-	}
-
 	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
@@ -105,6 +97,14 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	}
 	defer sftpClient.Close() //nolint:errcheck
 	defer client.Close()    //nolint:errcheck
+
+	// 路径安全校验：通过 SFTP RealPath 解析后再做白名单比对，防御远程符号链接逃逸。
+	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
+	if err != nil {
+		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		respondForbidden(c, err.Error())
+		return
+	}
 
 	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
 	if err != nil {
@@ -153,13 +153,6 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		return
 	}
 
-	cleanPath, err := validateNodePath(rawPath, node, h.db)
-	if err != nil {
-		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
-		respondForbidden(c, "路径不在允许的访问范围内")
-		return
-	}
-
 	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
@@ -168,6 +161,13 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	}
 	defer sftpClient.Close() //nolint:errcheck
 	defer client.Close()    //nolint:errcheck
+
+	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
+	if err != nil {
+		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		respondForbidden(c, err.Error())
+		return
+	}
 
 	stat, err := sftpClient.Stat(cleanPath)
 	if err != nil {
@@ -302,8 +302,23 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Clo
 	return sshClient, sftpClient, nil
 }
 
-// validateNodePath 对选项 A 的路径做安全校验，允许 Node.BasePath 及该节点任务的 RsyncSource 作为白名单根。
-func validateNodePath(rawPath string, node model.Node, db *gorm.DB) (string, error) {
+// realPathResolver 抽象出"把任意路径解析为节点端真实绝对路径"的能力。
+// *sftp.Client 直接满足；测试时可注入伪实现以模拟符号链接解析。
+type realPathResolver interface {
+	RealPath(p string) (string, error)
+}
+
+// validateNodePath 校验请求路径是否落在节点的允许根目录（Node.BasePath 及该节点任务的 RsyncSource）内。
+//
+// 实现要点（B-2 加固）：
+//  1. 通过 sftp.RealPath 让节点端解析输入路径与每个白名单根，获得解析符号链接后的绝对路径；
+//  2. 在解析后的字符串上做严格前缀比对，封堵 "ln -s /etc /backup/sneaky" 类逃逸；
+//  3. 返回值为节点端真实路径，可直接用于后续 SFTP 调用，避免再次解析。
+//
+// 性能影响：每次请求新增 (1 + len(roots)) 次 SFTP RTT；典型 LAN 节点 ~10ms 量级，可接受。
+// 开发旁路：FILE_BROWSER_ALLOW_ALL=true 且处于开发环境时跳过解析，仅做语法 Clean。
+func validateNodePath(ctx context.Context, resolver realPathResolver, rawPath string, node model.Node, db *gorm.DB) (string, error) {
+	_ = ctx // 预留：未来若需要带 ctx 的 RealPath，签名已保留 ctx
 	if util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true" {
 		if !util.IsDevelopmentEnv() {
 			return "", fmt.Errorf("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
@@ -311,30 +326,53 @@ func validateNodePath(rawPath string, node model.Node, db *gorm.DB) (string, err
 		return filepath.Clean(rawPath), nil
 	}
 
-	clean := filepath.Clean(rawPath)
-
-	// 收集白名单根路径
-	roots := []string{}
-	if base := strings.TrimSpace(node.BasePath); base != "" {
-		roots = append(roots, filepath.Clean(base))
+	if resolver == nil {
+		return "", fmt.Errorf("路径解析失败：缺少 SFTP 会话")
 	}
 
-	// 该节点所有任务的 RsyncSource
+	clean := filepath.Clean(rawPath)
+
+	// 1) 解析用户输入路径
+	resolved, err := resolver.RealPath(clean)
+	if err != nil {
+		// 区分"路径不存在/不可访问" vs "白名单越界"，避免把权限/不存在错误误报为越界
+		return "", fmt.Errorf("路径不存在或不可访问")
+	}
+	resolved = filepath.Clean(resolved)
+
+	// 2) 收集并解析白名单根（roots 自身可能是符号链接，例如 /data → /mnt/data）
+	rawRoots := []string{}
+	if base := strings.TrimSpace(node.BasePath); base != "" {
+		rawRoots = append(rawRoots, filepath.Clean(base))
+	}
 	var tasks []model.Task
 	if err := db.Select("rsync_source").Where("node_id = ?", node.ID).Find(&tasks).Error; err == nil {
 		for _, t := range tasks {
 			if s := strings.TrimSpace(t.RsyncSource); s != "" {
-				roots = append(roots, filepath.Clean(s))
+				rawRoots = append(rawRoots, filepath.Clean(s))
 			}
 		}
 	}
 
-	for _, root := range roots {
-		if root == "/" || strings.HasPrefix(clean, root+"/") || clean == root {
-			return clean, nil
+	// 3) 对每个 root 也做 RealPath；root 不存在则跳过（保持原 silent skip 行为）。
+	for _, root := range rawRoots {
+		var resolvedRoot string
+		if root == "/" {
+			resolvedRoot = "/"
+		} else {
+			rr, err := resolver.RealPath(root)
+			if err != nil {
+				// root 自身不存在或权限不足：跳过（与原始实现保持等价：缺失的 root 不应阻塞其他 roots）
+				continue
+			}
+			resolvedRoot = filepath.Clean(rr)
+		}
+		if resolvedRoot == "/" || resolved == resolvedRoot || strings.HasPrefix(resolved, resolvedRoot+"/") {
+			return resolved, nil
 		}
 	}
 
+	// 不在错误信息中泄露 resolved 真实路径，避免提供额外侦测信息
 	return "", fmt.Errorf("路径超出允许范围，请在节点 BasePath 或任务源路径下浏览")
 }
 

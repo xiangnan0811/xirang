@@ -62,6 +62,21 @@ if (typeof window !== "undefined") {
   window.localStorage.setItem("xirang.language", "zh");
 }
 
+// jsdom 缺少 ResizeObserver；recharts、@tanstack/react-virtual 等库会用到，
+// 这里提供一个 no-op stub 避免每个测试文件重复定义。
+if (typeof globalThis !== "undefined" && !("ResizeObserver" in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ResizeObserverStub,
+  });
+}
+
 if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
