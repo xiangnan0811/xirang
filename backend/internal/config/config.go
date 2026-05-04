@@ -33,6 +33,9 @@ type Config struct {
 	RetentionCheckInterval    time.Duration
 	BackupStorageMinFreeGB    int
 	BackupStorageMaxUsagePct  int
+	MetricsToken              string
+	MetricsRateLimit          int
+	MetricsRateWindow         time.Duration
 }
 
 func Load() (Config, error) {
@@ -158,6 +161,22 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.WSAllowEmptyOrigin = wsAllowEmptyOrigin
+
+	cfg.MetricsToken = strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
+
+	metricsRateLimitRaw := util.GetEnvOrDefault("METRICS_RATE_LIMIT", "5")
+	metricsRateLimit, err := strconv.Atoi(metricsRateLimitRaw)
+	if err != nil || metricsRateLimit <= 0 {
+		return Config{}, fmt.Errorf("解析 METRICS_RATE_LIMIT 失败")
+	}
+	cfg.MetricsRateLimit = metricsRateLimit
+
+	metricsRateWindowRaw := util.GetEnvOrDefault("METRICS_RATE_WINDOW", "1s")
+	metricsRateWindow, err := time.ParseDuration(metricsRateWindowRaw)
+	if err != nil || metricsRateWindow <= 0 {
+		return Config{}, fmt.Errorf("解析 METRICS_RATE_WINDOW 失败: %w", err)
+	}
+	cfg.MetricsRateWindow = metricsRateWindow
 
 	if len(cfg.AllowedOrigins) == 0 {
 		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，仅同主机（忽略端口）Origin 会被放行")

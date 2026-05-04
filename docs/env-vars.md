@@ -210,6 +210,30 @@
 
 **读取位置**：`backend/cmd/server/main.go` 的 `buildRemoteWriteSinkFromConfig`，并回退读取 settings 服务键 `metrics.remote_url` / `metrics.remote_bearer_token`。
 
+### 14.1 /metrics 端点鉴权与限流
+
+`/metrics` 端点暴露 Prometheus 标准指标（含 `http_requests_total{path=...}` 标签集），未鉴权时会泄露所有 secured 路由清单和流量画像，且无限流可被 DoS 放大。Wave 2 PR-B 引入下列变量来加固：
+
+| 变量 | 类型 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `METRICS_TOKEN` | string | 空 | 否 | Bearer token，留空时 `/metrics` 仍可公开访问（兼容旧行为）但会在日志中提示一次（每 10 分钟最多再提示一次）；设置后请求必须携带 `Authorization: Bearer <token>`，否则返回 401 |
+| `METRICS_RATE_LIMIT` | int | `5` | 否 | `/metrics` 独立限流桶（per IP）允许的请求次数，与 `/api` 限流分离 |
+| `METRICS_RATE_WINDOW` | duration | `1s` | 否 | 限流时间窗口（Go duration 格式）。默认 `5 req/s` 对应 Prometheus 通常 15-30s 一次抓取，留有充足余量；超过返回 429 |
+
+Prometheus scrape config 示例：
+
+```yaml
+scrape_configs:
+  - job_name: xirang
+    metrics_path: /metrics
+    scheme: http
+    bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
+    static_configs:
+      - targets: ['xirang-backend:8080']
+```
+
+**读取位置**：`backend/internal/config/config.go`（`MetricsToken` / `MetricsRateLimit` / `MetricsRateWindow`） → `backend/internal/api/router.go` 通过 `middleware.MetricsAuth` + `middleware.MetricsRateLimit` 注册到 `/metrics`。
+
 ---
 
 ## 15. 容器与运行时

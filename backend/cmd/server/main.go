@@ -206,17 +206,20 @@ func main() {
 	})
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:      hubCtx,
-		DB:              db,
-		AuthService:     authService,
-		JWTManager:      jwtManager,
-		TaskManager:     taskManager,
-		Hub:             hub,
-		SettingsService: settingsSvc,
-		AllowedOrigins:  cfg.AllowedOrigins,
-		LoginRateLimit:  cfg.LoginRateLimit,
-		LoginRateWindow: cfg.LoginRateWindow,
-		RetryWorker:     retryWorker,
+		AppContext:        hubCtx,
+		DB:                db,
+		AuthService:       authService,
+		JWTManager:        jwtManager,
+		TaskManager:       taskManager,
+		Hub:               hub,
+		SettingsService:   settingsSvc,
+		AllowedOrigins:    cfg.AllowedOrigins,
+		LoginRateLimit:    cfg.LoginRateLimit,
+		LoginRateWindow:   cfg.LoginRateWindow,
+		RetryWorker:       retryWorker,
+		MetricsToken:      cfg.MetricsToken,
+		MetricsRateLimit:  cfg.MetricsRateLimit,
+		MetricsRateWindow: cfg.MetricsRateWindow,
 	})
 
 	server := &http.Server{
