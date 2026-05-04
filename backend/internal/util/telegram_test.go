@@ -112,10 +112,13 @@ func TestSanitizeDeliveryErrorNonTelegram(t *testing.T) {
 		t.Fatalf("期望纯文本原样返回，实际: %s", result)
 	}
 
+	// 以下三个 fixture 字符串均为单元测试占位，不是真凭据；命名 FAKE_* 与
+	// TEST_ONLY_* 让 secret scanner（GitGuardian、gitleaks 等）容易识别为非真实。
 	// 含 webhook URL 应被屏蔽 path/query
-	urlErr := fmt.Errorf(`Post "https://oapi.dingtalk.com/robot/send?access_token=SECRETXYZ": http 500`)
+	const fakeAccessToken = "FAKE_ACCESS_TOKEN_FOR_TEST_ONLY"
+	urlErr := fmt.Errorf(`Post "https://oapi.dingtalk.com/robot/send?access_token=%s": http 500`, fakeAccessToken)
 	urlResult := SanitizeDeliveryError("dingtalk", urlErr)
-	if strings.Contains(urlResult, "SECRETXYZ") {
+	if strings.Contains(urlResult, fakeAccessToken) {
 		t.Fatalf("期望 URL access_token 被屏蔽，实际: %s", urlResult)
 	}
 	// 应保留 host
@@ -124,16 +127,18 @@ func TestSanitizeDeliveryErrorNonTelegram(t *testing.T) {
 	}
 
 	// 含 token=secret 形式应被屏蔽
-	tokenErr := fmt.Errorf("dingtalk failed: token=ABCD-1234-EFGH timeout")
+	const fakeToken = "FAKE_TOKEN_FOR_TEST_ONLY"
+	tokenErr := fmt.Errorf("dingtalk failed: token=%s timeout", fakeToken)
 	tokenResult := SanitizeDeliveryError("dingtalk", tokenErr)
-	if strings.Contains(tokenResult, "ABCD-1234-EFGH") {
+	if strings.Contains(tokenResult, fakeToken) {
 		t.Fatalf("期望 token=value 被屏蔽，实际: %s", tokenResult)
 	}
 
 	// 含 password=xxx 形式应被屏蔽
-	pwErr := fmt.Errorf("auth failed: password=hunter2 invalid")
+	const fakePassword = "FAKE_PASSWORD_FOR_TEST_ONLY"
+	pwErr := fmt.Errorf("auth failed: password=%s invalid", fakePassword)
 	pwResult := SanitizeDeliveryError("webhook", pwErr)
-	if strings.Contains(pwResult, "hunter2") {
+	if strings.Contains(pwResult, fakePassword) {
 		t.Fatalf("期望 password=value 被屏蔽，实际: %s", pwResult)
 	}
 }
