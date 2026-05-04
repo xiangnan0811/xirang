@@ -124,7 +124,7 @@ type Integration struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	Type            string    `gorm:"size:32;not null" json:"type"`
 	Name            string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Endpoint        string    `gorm:"size:1024;not null" json:"endpoint"`
+	Endpoint        string    `gorm:"type:text;not null" json:"endpoint"`
 	Secret          string    `gorm:"size:512" json:"-"`
 	HasSecret       bool      `gorm:"-" json:"has_secret"`
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
