@@ -25,11 +25,13 @@ type User struct {
 }
 
 type SSHKey struct {
-	ID          uint       `gorm:"primaryKey" json:"id"`
-	Name        string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	Name string `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	// PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem
+	// + toSSHKeyResponse() 脱敏，此处 json:"-" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})
 	Username    string     `gorm:"size:128;not null" json:"username"`
 	KeyType     string     `gorm:"size:32;not null;default:auto" json:"key_type"`
-	PrivateKey  string     `gorm:"type:text;not null" json:"private_key"`
+	PrivateKey  string     `gorm:"type:text;not null" json:"-"`
 	Fingerprint string     `gorm:"size:255;not null" json:"fingerprint"`
 	LastUsedAt  *time.Time `json:"last_used_at"`
 	CreatedAt   time.Time  `json:"created_at"`

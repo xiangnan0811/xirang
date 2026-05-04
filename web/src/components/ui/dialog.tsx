@@ -40,13 +40,14 @@ const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2 rounded-xl bg-card shadow-xl",
+        "max-h-[calc(100dvh-4rem)] overflow-y-auto",
         "dark:border dark:border-border",
         "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.96] data-[state=open]:[animation-duration:220ms]",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.98] data-[state=closed]:duration-150",
         {
-          "max-w-[480px]": size === "sm",
-          "max-w-[560px]": size === "md",
-          "max-w-[640px]": size === "lg",
+          "max-w-[calc(100%-2rem)] sm:max-w-[480px]": size === "sm",
+          "max-w-[calc(100%-2rem)] sm:max-w-[560px]": size === "md",
+          "max-w-[calc(100%-2rem)] sm:max-w-[640px]": size === "lg",
         },
         className,
       )}
