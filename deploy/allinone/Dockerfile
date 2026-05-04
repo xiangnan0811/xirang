@@ -40,9 +40,9 @@ RUN set -eux; \
 FROM nginx:1.27-alpine
 
 # 升级基础镜像已安装包到最新补丁版本（解 libxml2 / musl / zlib 等 HIGH CVE）
-# 再安装运行期依赖：rsync/openssh-client（任务执行）、sqlite（备份 WAL 一致性）、bash（脚本）、curl（健康检查）
+# 再安装运行期依赖：rsync/openssh-client（任务执行）、sqlite（备份 WAL 一致性）、bash（脚本）、curl（健康检查）、tzdata（时区数据）
 RUN apk upgrade --no-cache && \
-    apk add --no-cache curl rsync openssh-client sqlite bash
+    apk add --no-cache curl rsync openssh-client sqlite bash tzdata
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic
@@ -75,9 +75,15 @@ ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
 # known_hosts 默认存放在持久化卷，容器重启不丢失
 ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
+# 默认时区：避免容器落入 UTC 导致备份/日志时间戳与运维偏差；运行时可通过 -e TZ= 覆盖
+ENV TZ=Asia/Shanghai
 
 VOLUME ["/data", "/backup"]
 EXPOSE 8080 8443
+
+# 镜像层健康检查兜底（compose 已配 healthcheck，此处保证裸 docker run 也能监控）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
 # 不设置 USER，由 entrypoint 在修复 bind mount 权限后切换用户
 ENTRYPOINT ["/entrypoint.sh"]
