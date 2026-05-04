@@ -40,7 +40,7 @@ func TestMetricsAuthOpenWhenTokenUnset(t *testing.T) {
 }
 
 func TestMetricsAuthRejectsMissingHeader(t *testing.T) {
-	router := newMetricsRouter(t, "secret-metrics-token", 100, time.Second)
+	router := newMetricsRouter(t, "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", 100, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestMetricsAuthRejectsMissingHeader(t *testing.T) {
 }
 
 func TestMetricsAuthRejectsBadToken(t *testing.T) {
-	router := newMetricsRouter(t, "secret-metrics-token", 100, time.Second)
+	router := newMetricsRouter(t, "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", 100, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token-value")
@@ -65,10 +65,10 @@ func TestMetricsAuthRejectsBadToken(t *testing.T) {
 }
 
 func TestMetricsAuthRejectsNonBearerScheme(t *testing.T) {
-	router := newMetricsRouter(t, "secret-metrics-token", 100, time.Second)
+	router := newMetricsRouter(t, "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", 100, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("Authorization", "Basic c2VjcmV0LW1ldHJpY3MtdG9rZW4=")
+	req.Header.Set("Authorization", "Basic RkFLRV9NRVRSSUNTX1RPS0VOX0ZPUl9URVNUX09OTFk=")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -78,10 +78,10 @@ func TestMetricsAuthRejectsNonBearerScheme(t *testing.T) {
 }
 
 func TestMetricsAuthAcceptsValidBearer(t *testing.T) {
-	router := newMetricsRouter(t, "secret-metrics-token", 100, time.Second)
+	router := newMetricsRouter(t, "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", 100, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("Authorization", "Bearer secret-metrics-token")
+	req.Header.Set("Authorization", "Bearer FAKE_METRICS_TOKEN_FOR_TEST_ONLY")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -91,10 +91,10 @@ func TestMetricsAuthAcceptsValidBearer(t *testing.T) {
 }
 
 func TestMetricsAuthAcceptsLowercaseBearerScheme(t *testing.T) {
-	router := newMetricsRouter(t, "secret-metrics-token", 100, time.Second)
+	router := newMetricsRouter(t, "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", 100, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("Authorization", "bearer secret-metrics-token")
+	req.Header.Set("Authorization", "bearer FAKE_METRICS_TOKEN_FOR_TEST_ONLY")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
