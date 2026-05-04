@@ -96,13 +96,43 @@ UPDATE task_runs SET status='failed', last_error='killed by utc-cutover maintena
 > 迁移由后端启动时自动执行（`bootstrap` 调用 `database.RunMigrations`）。**不需要手动
 > 运行 SQL**——只要新镜像启动就会触发 `migrate.Up()` 把 49 → 50。
 
-```bash
-# 1. 升级到含本 commit 的镜像 / 二进制
-# 假设镜像是 linnea7171/xirang，本 commit 已 tag 为 vX.Y.Z
-docker compose pull
-# 或 sudo systemctl daemon-reload 后准备好新二进制
+`docker compose up -d` 一启动就会被反向代理 / 健康检查接流量，**做不到「只观察日志
+不接流量」**。推荐用下列两种方式之一确保 cutover 期间没有用户请求与迁移并发：
 
-# 2. 启动后端，**只观察日志，不让它服务流量**（如果可能）
+### 推荐方式 A — 用 `docker compose run` 单跑迁移容器（最干净）
+
+`docker compose run` 不会启动 `depends_on` 的服务，也不映射 compose 文件里的端口；
+适合用一次性容器只执行 `migrate.Up()` 然后退出，再正常启动整套服务。
+
+```bash
+# 1. 升级镜像。假设镜像 tag 已切到含本 commit 的版本。
+docker compose pull
+
+# 2. 单跑后端容器执行迁移，前台直接看日志；进程在等迁移完成 → 启动 HTTP 服务。
+#    我们用 ALLOW_DIRTY_STARTUP=false（默认）让 dirty=1 立即拒绝启动。
+#    确认看到 "数据库迁移完成，当前版本: 50, dirty: false" 后用 Ctrl-C 退出。
+docker compose run --rm \
+  --service-ports="" \
+  -e ALLOW_DIRTY_STARTUP=false \
+  xirang-backend 2>&1 | tee /tmp/utc-cutover-migrate.log
+
+# 3. Verify（见下一节）通过后再正常启动整套服务：
+make prod-up
+```
+
+> Compose 版本若不支持 `--service-ports=""`，可用 `docker compose run --rm
+> --no-deps -p '' xirang-backend ...` 替代；目标是让该容器**不映射任何宿主端口**。
+
+### 推荐方式 B — 临时阻断流量后启动整套服务
+
+如果反向代理在 compose 文件里且不能拆分启动顺序，可在 nginx/HAProxy 层暂时
+`return 503` 或在主机 firewall 阻断对外端口，让 backend 正常启动跑完迁移：
+
+```bash
+# 1. 升级镜像
+docker compose pull
+
+# 2. 在反向代理层加 return 503（或 firewall block 80/443），然后启动
 make prod-up
 docker compose logs -f xirang-backend | grep -E "(数据库迁移完成|migrat|ERROR|FATAL)"
 ```
@@ -113,13 +143,50 @@ docker compose logs -f xirang-backend | grep -E "(数据库迁移完成|migrat|E
 数据库迁移完成，当前版本: 50, dirty: false
 ```
 
-观察 1-2 分钟无 ERROR / FATAL 日志后，**立即停服**进入 Verify 阶段：
+观察 1-2 分钟无 ERROR / FATAL 日志后停服进入 Verify：
 
 ```bash
 make prod-down
 ```
 
+### 失败处理
+
 如果日志出现 `dirty: true` 或迁移报错，**不要重启**——直接进入 Rollback。
+后续启动时本服务的 dirty 守卫（`migrator.go:checkMigrationDirty`）会拒绝启动并
+提示设置 `ALLOW_DIRTY_STARTUP=true` 才能跳过；切勿在没有完整恢复备份前直接
+设置该 env，否则可能导致永久双时区污染。
+
+---
+
+## 3.5. Dirty 状态恢复
+
+启动日志显示 `FATAL: schema_migrations.dirty=1, version=50` 时表示前次迁移在
+执行过程中失败但 schema_migrations 没有被驱动自动标记 clean。**继续启动会基于
+半完成的 schema 写入数据**，最坏情况是双时区污染。
+
+修复决策树：
+
+1. **首选：恢复备份**（参考第 5 节 Path A）——切回上个版本镜像 + 还原 backup +
+   重启。这是数据最安全的回滚方式。
+2. **次选：跑 down.sql 回滚**（参考第 5 节 Path B）——仅当确认 up.sql 完整跑完
+   再失败（例如发生在 COMMIT 之后），用 down.sql 把所有时间戳加回 +8h。
+3. **特殊情况：手工 clean 标记**——如果你已经确认数据完全没受到中间态影响
+   （例如失败发生在 ALTER 之类 DDL 上而不是 UPDATE 中段），可以：
+   ```bash
+   # 用 golang-migrate CLI 强制标记 clean
+   migrate -path backend/internal/database/migrations/sqlite \
+           -database "sqlite3:///data/xirang.db" force 50
+   # 然后正常启动；服务会通过 dirty 检查
+   make prod-up
+   ```
+4. **紧急绕过（仅 rescue）**：环境变量 `ALLOW_DIRTY_STARTUP=true` 让服务跳过
+   dirty 检查直接启动，用于短暂上线运行手工修复 SQL。**修复完后必须 unset 重启**。
+   ```bash
+   ALLOW_DIRTY_STARTUP=true make prod-up
+   # ...修复...
+   unset ALLOW_DIRTY_STARTUP
+   make prod-down && make prod-up
+   ```
 
 ---
 
@@ -133,21 +200,39 @@ make prod-down
 -- 验证迁移已应用且 clean
 SELECT version, dirty FROM schema_migrations;
 -- 期望: 50 | 0
+```
 
--- 验证最近一条 user 的 created_at 比备份里的少 8h
--- 与 backup（恢复到 /tmp/old.db）对比：
-ATTACH DATABASE '/backup/xirang-pre-utc-cutover-XXXX.db.bak' AS old;
-SELECT
-  (SELECT created_at FROM old.users ORDER BY id DESC LIMIT 1) AS old_local,
-  (SELECT created_at FROM main.users ORDER BY id DESC LIMIT 1) AS new_utc;
--- 期望: old - new = 8 hours
+跨库对比验证（用第 1 节中记录的 $TS 值替换占位符 `<your-TS>`）。把 ATTACH
+路径整体替换成第 1 节命名的真实备份文件，例如：
+`/backup/xirang-pre-utc-cutover-20260504-123045.db.bak`。
 
--- 全表抽样：所有时间字段都应少 8h
+```sql
+ATTACH DATABASE '/backup/xirang-pre-utc-cutover-<your-TS>.db.bak' AS old;
+
+-- 抽样断言：应当返回 0.333..."天"（即 8 小时），用 julianday() 直接算 diff
 SELECT
-  MIN(created_at) AS min_ca,
-  MAX(created_at) AS max_ca
-FROM tasks;
--- 与 backup 同表对比，差应为 8h
+  julianday(
+    (SELECT created_at FROM old.users ORDER BY id DESC LIMIT 1)
+  ) -
+  julianday(
+    (SELECT created_at FROM main.users ORDER BY id DESC LIMIT 1)
+  ) AS diff_days;
+-- 期望: 0.3333... (即 8 小时；任何其他值意味着 cutover 不正确)
+
+-- 多表抽样：tasks / alerts / audit_logs 都应当返回相同的 ~0.333
+SELECT 'tasks' AS tbl,
+       julianday((SELECT MAX(created_at) FROM old.tasks)) -
+       julianday((SELECT MAX(created_at) FROM main.tasks)) AS diff_days
+UNION ALL
+SELECT 'alerts',
+       julianday((SELECT MAX(created_at) FROM old.alerts)) -
+       julianday((SELECT MAX(created_at) FROM main.alerts))
+UNION ALL
+SELECT 'audit_logs',
+       julianday((SELECT MAX(created_at) FROM old.audit_logs)) -
+       julianday((SELECT MAX(created_at) FROM main.audit_logs));
+
+DETACH DATABASE old;
 ```
 
 ### PostgreSQL
@@ -155,11 +240,50 @@ FROM tasks;
 ```sql
 SELECT version, dirty FROM schema_migrations;
 -- 期望: 50 | f
-
--- 查看一条样本
-SELECT id, created_at FROM users ORDER BY id DESC LIMIT 1;
--- 与 backup 还原到临时库后的同行对比，差应为 8 小时
 ```
+
+PostgreSQL 跨库对比需要先把 backup 还原到一个临时库，再用 `dblink` 或两次
+连接对比：
+
+```bash
+# 1. 创建临时库（专用于 verify，不影响生产）
+psql -h <host> -U <admin-user> -c "CREATE DATABASE xirang_verify_<your-TS>;"
+
+# 2. 还原 backup 到临时库
+pg_restore -h <host> -U <admin-user> -d xirang_verify_<your-TS> \
+           -O -x /backup/xirang-pre-utc-cutover-<your-TS>.pgdump
+
+# 3. 在生产库执行跨库对比（需要安装 dblink 扩展）
+psql -h <host> -U <user> -d <prod-dbname> <<'SQL'
+CREATE EXTENSION IF NOT EXISTS dblink;
+SELECT
+  EXTRACT(EPOCH FROM (old_ts - new_ts)) / 3600.0 AS diff_hours
+FROM (
+  SELECT
+    (SELECT created_at FROM users ORDER BY id DESC LIMIT 1) AS new_ts,
+    (SELECT created_at FROM dblink('dbname=xirang_verify_<your-TS>',
+                                   'SELECT created_at FROM users ORDER BY id DESC LIMIT 1')
+                       AS t(created_at TIMESTAMP) LIMIT 1) AS old_ts
+) q;
+-- 期望: 8.0
+SQL
+
+# 4. 验证完毕，销毁临时库
+psql -h <host> -U <admin-user> -c "DROP DATABASE xirang_verify_<your-TS>;"
+```
+
+如果环境没有 dblink 权限，最简退路：分别 `psql` 进 prod 与临时库，
+`SELECT created_at FROM users ORDER BY id DESC LIMIT 1`，肉眼对比两个值差
+应是 8 小时。
+
+### Verify 失败决策树
+
+| 现象 | 处置 |
+|---|---|
+| `version != 50` 或 `dirty=true` | 直接 Rollback Path A（恢复备份） |
+| 时间差 ≠ 8 小时（例如 16 小时） | 平移已重复执行（双倍偏移），Rollback Path A 立即恢复 |
+| 时间差 = 0 | 平移未生效（可能数据已被新写入覆盖），Rollback Path A |
+| 时间差 = 8 小时 + 启动后第一次写入是 UTC | Verify 通过，正常启动服务 |
 
 ### 启动后第一次写入验证
 
@@ -183,17 +307,19 @@ SELECT id, created_at, started_at FROM task_runs ORDER BY id DESC LIMIT 1;
 
 ### Path A: 恢复备份（首选）
 
+替换 `<your-TS>` 为第 1 节命名备份时记录的时间戳。
+
 ```bash
 # SQLite
 make prod-down
-sudo cp /backup/xirang-pre-utc-cutover-XXXX.db.bak /data/xirang.db
+sudo cp /backup/xirang-pre-utc-cutover-<your-TS>.db.bak /data/xirang.db
 # 切回上一个不含 NowFunc=UTC / DSN _loc=UTC 的镜像 tag
 docker compose pull <old-tag>
 make prod-up
 
 # PostgreSQL
 make prod-down
-pg_restore -c -d <dbname> /backup/xirang-pre-utc-cutover-XXXX.pgdump
+pg_restore -c -d <dbname> /backup/xirang-pre-utc-cutover-<your-TS>.pgdump
 docker compose pull <old-tag>
 make prod-up
 ```

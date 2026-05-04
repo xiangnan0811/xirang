@@ -2,6 +2,10 @@
 --
 -- 回滚 UTC 平移：把所有 timestamp 列加回 +8h，恢复到本地时区 (Asia/Shanghai) 写入的状态。
 -- 同样**不可幂等执行**；只在 up 紧接失败时立即调用，配合还原 GORM NowFunc/DSN 修改。
+--
+-- 事务保护：本迁移由 golang-migrate sqlite3 驱动在 driver 层使用 tx.Begin/Commit
+-- 包裹整个 .sql 内容，所以以下 UPDATE 已被原子化执行。不要在本文件中再写显式
+-- BEGIN/COMMIT —— sqlite3 不支持嵌套事务。详见 up.sql 顶部说明。
 
 UPDATE users SET created_at = datetime(created_at, '+8 hours') WHERE created_at IS NOT NULL;
 UPDATE users SET updated_at = datetime(updated_at, '+8 hours') WHERE updated_at IS NOT NULL;

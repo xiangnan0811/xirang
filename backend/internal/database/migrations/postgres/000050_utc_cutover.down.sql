@@ -1,6 +1,11 @@
 -- 000050_utc_cutover.down.sql
 --
 -- 回滚 UTC 平移：把所有 timestamp 列加回 +8h，恢复到本地时区 (Asia/Shanghai) 写入的状态。
+--
+-- 事务保护：与 up.sql 对称使用显式 BEGIN/COMMIT。pgx v5 driver 不在 driver 层 wrap tx，
+-- 所以 PostgreSQL 端必须由 SQL 自己加事务保护。详见 up.sql 顶部注释。
+
+BEGIN;
 
 UPDATE users SET created_at = created_at + INTERVAL '8 hours' WHERE created_at IS NOT NULL;
 UPDATE users SET updated_at = updated_at + INTERVAL '8 hours' WHERE updated_at IS NOT NULL;
@@ -107,3 +112,5 @@ UPDATE escalation_policies SET updated_at = updated_at + INTERVAL '8 hours' WHER
 UPDATE alert_escalation_events SET fired_at = fired_at + INTERVAL '8 hours' WHERE fired_at IS NOT NULL;
 
 UPDATE anomaly_events SET fired_at = fired_at + INTERVAL '8 hours' WHERE fired_at IS NOT NULL;
+
+COMMIT;

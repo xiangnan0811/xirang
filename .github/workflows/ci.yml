@@ -122,3 +122,16 @@ jobs:
 
       - name: Check doc freshness
         run: bash scripts/check-doc-freshness.sh
+
+  migration-utc-safety:
+    name: Migration UTC Safety
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Lint migrations for UTC regression patterns
+        run: bash scripts/check-migration-utc-safety.sh
+
+      - name: Self-test the lint script
+        run: bash scripts/check-migration-utc-safety.test.sh
