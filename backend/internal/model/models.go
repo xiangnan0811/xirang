@@ -25,11 +25,13 @@ type User struct {
 }
 
 type SSHKey struct {
-	ID          uint       `gorm:"primaryKey" json:"id"`
-	Name        string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	Name string `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	// PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem
+	// + toSSHKeyResponse() 脱敏，此处 json:"-" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})
 	Username    string     `gorm:"size:128;not null" json:"username"`
 	KeyType     string     `gorm:"size:32;not null;default:auto" json:"key_type"`
-	PrivateKey  string     `gorm:"type:text;not null" json:"private_key"`
+	PrivateKey  string     `gorm:"type:text;not null" json:"-"`
 	Fingerprint string     `gorm:"size:255;not null" json:"fingerprint"`
 	LastUsedAt  *time.Time `json:"last_used_at"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -102,7 +104,10 @@ type Policy struct {
 	PreHook            string    `gorm:"type:text;not null;default:''" json:"pre_hook"`
 	PostHook           string    `gorm:"type:text;not null;default:''" json:"post_hook"`
 	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
-	MaxRetries         int       `gorm:"not null;default:2" json:"max_retries"`
+	// MaxExecutionSeconds 0 = 使用环境变量 TASK_MAX_EXECUTION_SECONDS（默认 86400=24h）。
+	// >0 = 该策略的任务最长执行秒数；超时后 ctx 被 cancel，executor 收到 SIGTERM 退出。
+	MaxExecutionSeconds int       `gorm:"not null;default:0" json:"max_execution_seconds"`
+	MaxRetries          int       `gorm:"not null;default:2" json:"max_retries"`
 	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
 	BandwidthSchedule  string    `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
 	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`
@@ -122,7 +127,7 @@ type Integration struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	Type            string    `gorm:"size:32;not null" json:"type"`
 	Name            string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Endpoint        string    `gorm:"size:1024;not null" json:"endpoint"`
+	Endpoint        string    `gorm:"type:text;not null" json:"endpoint"`
 	Secret          string    `gorm:"size:512" json:"-"`
 	HasSecret       bool      `gorm:"-" json:"has_secret"`
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`

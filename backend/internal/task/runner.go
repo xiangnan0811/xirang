@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +20,34 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// defaultGlobalTaskTimeout 是任务执行超时的兜底值（24h），仅在 Policy.MaxExecutionSeconds=0
+// 且环境变量 TASK_MAX_EXECUTION_SECONDS 未设置时生效。可通过 globalTaskTimeoutOverride
+// 在测试中覆盖。
+const defaultGlobalTaskTimeout = 24 * time.Hour
+
+var globalTaskTimeoutOverride time.Duration // 仅供测试，0 = 不覆盖
+
+// computeExecTimeout 计算单次任务执行的最大允许时长：
+//   - 优先使用 Policy.MaxExecutionSeconds（>0 时）
+//   - 否则读环境变量 TASK_MAX_EXECUTION_SECONDS（秒）
+//   - 否则使用全局兜底 defaultGlobalTaskTimeout (24h)
+//
+// 返回值至少为 1 秒，避免 0 触发立即超时。
+func computeExecTimeout(taskEntity model.Task) time.Duration {
+	if taskEntity.Policy != nil && taskEntity.Policy.MaxExecutionSeconds > 0 {
+		return time.Duration(taskEntity.Policy.MaxExecutionSeconds) * time.Second
+	}
+	if globalTaskTimeoutOverride > 0 {
+		return globalTaskTimeoutOverride
+	}
+	if env := strings.TrimSpace(os.Getenv("TASK_MAX_EXECUTION_SECONDS")); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	}
+	return defaultGlobalTaskTimeout
+}
 
 var (
 	tasksActive = promauto.NewGauge(prometheus.GaugeOpts{
@@ -267,7 +298,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
 
-	execCtx, cancel := context.WithCancel(context.Background())
+	execTimeout := computeExecTimeout(taskEntity)
+	execCtx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	m.runningCancels.Store(taskID, cancel)
 	defer m.runningCancels.Delete(taskID)
 	defer cancel()
@@ -311,6 +343,24 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			m.emitProgress(taskID, runID, sample.Percent)
 		}
 	})
+
+	wasTimeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded)
+	if wasTimeout {
+		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
+		m.emitLog(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
+		failedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &failedAt,
+			"last_error":  errorMsg,
+		})
+		runCompleted = true
+		m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{ //nolint:errcheck // best-effort status update during timeout handling
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
+			"last_error":  errorMsg,
+		})
+		return
+	}
 
 	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID)
 	if wasCanceled {
@@ -526,8 +576,9 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	defer m.pendingRuns.Delete(taskID)
 	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
 
-	// 尽早注册取消句柄，使排队等锁期间也能被 Cancel() 中断
-	execCtx, cancel := context.WithCancel(context.Background())
+	// 尽早注册取消句柄，使排队等锁期间也能被 Cancel() 中断；
+	// 同时受 Policy.MaxExecutionSeconds / TASK_MAX_EXECUTION_SECONDS 全局兜底。
+	execCtx, cancel := context.WithTimeout(context.Background(), computeExecTimeout(restoreTask))
 	m.runningCancels.Store(taskID, cancel)
 	defer m.runningCancels.Delete(taskID)
 	defer cancel()

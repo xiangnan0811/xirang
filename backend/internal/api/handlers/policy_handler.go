@@ -38,8 +38,9 @@ type policyRequest struct {
 	IsTemplate         *bool  `json:"is_template"`
 	PreHook            string `json:"pre_hook"`
 	PostHook           string `json:"post_hook"`
-	HookTimeoutSeconds *int   `json:"hook_timeout_seconds"`
-	MaxRetries         *int   `json:"max_retries"`
+	HookTimeoutSeconds  *int   `json:"hook_timeout_seconds"`
+	MaxExecutionSeconds *int   `json:"max_execution_seconds"`
+	MaxRetries          *int   `json:"max_retries"`
 	RetryBaseSeconds   *int   `json:"retry_base_seconds"`
 	BandwidthSchedule  string `json:"bandwidth_schedule"`
 	NodeIDs            []uint `json:"node_ids"`
@@ -143,6 +144,10 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if err := validatePathChars(req.SourcePath, "source_path"); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
 	// 非 admin 不允许设置 hook 命令
 	if req.PreHook != "" || req.PostHook != "" {
@@ -213,6 +218,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 			return
 		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
+	}
+	if req.MaxExecutionSeconds != nil {
+		if *req.MaxExecutionSeconds < 0 || *req.MaxExecutionSeconds > 7*86400 {
+			respondBadRequest(c, "任务最大执行秒数必须在 0-604800 (7 天) 之间，0=使用全局兜底")
+			return
+		}
+		p.MaxExecutionSeconds = *req.MaxExecutionSeconds
 	}
 	if req.MaxRetries != nil {
 		p.MaxRetries = *req.MaxRetries
@@ -315,6 +327,10 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if err := validatePathChars(req.SourcePath, "source_path"); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
 	// 非 admin 不允许设置 hook 命令
 	if req.PreHook != "" || req.PostHook != "" {
@@ -382,6 +398,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 			return
 		}
 		p.HookTimeoutSeconds = *req.HookTimeoutSeconds
+	}
+	if req.MaxExecutionSeconds != nil {
+		if *req.MaxExecutionSeconds < 0 || *req.MaxExecutionSeconds > 7*86400 {
+			respondBadRequest(c, "任务最大执行秒数必须在 0-604800 (7 天) 之间，0=使用全局兜底")
+			return
+		}
+		p.MaxExecutionSeconds = *req.MaxExecutionSeconds
 	}
 	if req.MaxRetries != nil {
 		p.MaxRetries = *req.MaxRetries
@@ -556,8 +579,9 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"is_template":          p.IsTemplate,
 		"pre_hook":             p.PreHook,
 		"post_hook":            p.PostHook,
-		"hook_timeout_seconds": p.HookTimeoutSeconds,
-		"max_retries":          p.MaxRetries,
+		"hook_timeout_seconds":  p.HookTimeoutSeconds,
+		"max_execution_seconds": p.MaxExecutionSeconds,
+		"max_retries":           p.MaxRetries,
 		"retry_base_seconds":   p.RetryBaseSeconds,
 		"bandwidth_schedule":   p.BandwidthSchedule,
 		"node_ids":             nodeIDs,

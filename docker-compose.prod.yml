@@ -4,6 +4,9 @@ services:
     container_name: xirang
     env_file:
       - .env
+    environment:
+      # 时区由 .env 注入；此处给出兜底，避免容器落入 UTC 导致备份/日志时间戳偏差
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./data:/data           # SQLite 数据库及应用数据，务必备份此目录
       - ./backups:/backup      # 自动备份目录（每日 02:00 备份，保留 30 天）
@@ -18,4 +21,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        # 单文件 ≤10MB、保留 5 个轮转文件，避免 docker logs 无限增长占满宿主机磁盘
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped

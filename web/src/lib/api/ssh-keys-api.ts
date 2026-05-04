@@ -6,7 +6,6 @@ type SSHKeyResponse = {
   name: string;
   username: string;
   key_type?: "auto" | "rsa" | "ed25519" | "ecdsa";
-  private_key?: string;
   public_key?: string;
   fingerprint: string;
   created_at: string;

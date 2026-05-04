@@ -235,3 +235,38 @@ func validatePathByPrefix(path string, prefixes []string, label string) error {
 	}
 	return fmt.Errorf("%s 不在允许路径范围内", label)
 }
+
+// validatePathChars 是 defense-in-depth：拒绝路径中的控制字符 (\x00 \r \n)
+// 与已知 shell 注入序列。executor 全部使用 ShellEscape 单引号包裹，理论上对
+// 恶意输入已经免疫；本函数提供额外一层校验，并把异常输入拦在 API 层而不是
+// 留到执行时才报错。
+//
+// 历史数据兼容：如果用户既有合法路径碰巧含特殊字符，可设置
+// BACKUP_PATH_ALLOW_SHELL_META=true 绕过此校验。
+//
+// label 用于错误信息（如 "rsync_source" / "source_path"）。
+func validatePathChars(path, label string) error {
+	if strings.TrimSpace(os.Getenv("BACKUP_PATH_ALLOW_SHELL_META")) == "true" {
+		return nil
+	}
+
+	// 控制字符：NUL 截断 C 字符串、\r\n 触发多行注入或日志污染
+	for _, r := range path {
+		if r == '\x00' {
+			return fmt.Errorf("%s 不能包含 NUL 字符", label)
+		}
+		if r == '\r' || r == '\n' {
+			return fmt.Errorf("%s 不能包含换行符", label)
+		}
+	}
+
+	// 已知 shell 注入序列：反引号命令替换、$(...) 命令替换
+	if strings.ContainsRune(path, '`') {
+		return fmt.Errorf("%s 不能包含反引号 `", label)
+	}
+	if strings.Contains(path, "$(") {
+		return fmt.Errorf("%s 不能包含 $( 序列", label)
+	}
+
+	return nil
+}

@@ -883,6 +883,20 @@ func validateTaskRequest(req taskRequest) error {
 		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
 			return fmt.Errorf("同步任务必须填写源路径和目标路径")
 		}
+		// 拒绝路径中已知的 shell 注入字符（NUL/CR/LF/反引号/$(…)），
+		// defense-in-depth：executor 已对所有用户输入做 ShellEscape，但额外
+		// 在 API 层拦住明显恶意的输入并给出友好错误。
+		// 远程路径形如 user@host:/path 由 IsRemotePathSpec 识别后跳过本地校验。
+		if !util.IsRemotePathSpec(req.RsyncSource) {
+			if err := validatePathChars(req.RsyncSource, "rsync_source"); err != nil {
+				return err
+			}
+		}
+		if !util.IsRemotePathSpec(req.RsyncTarget) {
+			if err := validatePathChars(req.RsyncTarget, "rsync_target"); err != nil {
+				return err
+			}
+		}
 	}
 
 	if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
