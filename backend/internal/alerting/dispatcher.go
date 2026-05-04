@@ -374,7 +374,25 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		return nil
 	}
 
+	// Wave 2 (PR-C C5) 慢通道隔离：
+	//
+	// 旧行为：每个 enabled integration 起 goroutine + wg.Wait()，整段
+	// raiseAndDispatch 等所有 send() 完成才返回。一个 30s timeout 的代理慢
+	// 通道会把整条 RaiseTaskFailure → task runner 都阻塞 30s。
+	//
+	// 新行为：依然每通道 goroutine（继承之前的并发隔离），但调度路径用
+	// 限时 wg.Wait —— 默认 fastWaitTimeout（500ms），用于"快通道一般 50-200ms
+	// 即返"的常见路径，便于立刻更新 last_notified_at；超时后剩下的 goroutine
+	// 继续在后台跑（每个 goroutine 自带 HTTP client.Timeout=15s 上限），失败
+	// 进 retrying 状态由 RetryWorker 后续扫描兜底，不影响主调度路径。
+	//
+	// 这样：
+	//   - 快通道（< 500ms）：行为同旧版 (wg.Wait 完成 → 更新 last_notified_at)
+	//   - 慢通道（>= 500ms）：raiseAndDispatch 在 ~500ms 内返回；后台 goroutine
+	//     完成后单独 UPDATE last_notified_at，不阻塞 task runner
 	var wg sync.WaitGroup
+	deliveryDone := make(chan struct{})
+
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {
 			continue
@@ -398,27 +416,71 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 				next := time.Now().Add(backoffDuration(1))
 				d.Status = "retrying"
 				d.NextRetryAt = &next
-				d.LastError = util.SanitizeDeliveryError(ch.Type, err)
+				// Wave 2 (PR-C C6): 统一走 util.SanitizeError，与重试路径
+				// (retry.go) 共享同一过滤规则（URL/path/query/bot-token/
+				// token-secret-password 模式）。原来 util.SanitizeDeliveryError
+				// 仅 telegram 类型脱敏，导致 webhook/feishu/dingtalk 失败时
+				// LastError 直接含 bearer token / access_token。
+				d.LastError = util.SanitizeError(err)
 			}
 			if saveErr := db.Create(&d).Error; saveErr != nil {
 				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")
 			}
 		}(channel)
 	}
-	wg.Wait()
 
-	// 更新 last_notified_at（在所有发送完成后）
-	var sentCount int64
-	db.Model(&model.AlertDelivery{}).Where("alert_id = ? AND status = ?", alert.ID, "sent").Count(&sentCount)
-	if sentCount > 0 {
-		notifiedAt := time.Now()
-		alert.LastNotifiedAt = &notifiedAt
-		if err := db.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
-			logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Err(err).Msg("更新告警最后通知时间失败")
-		}
+	// 后台等待所有发送完成，最后更新 last_notified_at（不阻塞调用方）
+	go func() {
+		wg.Wait()
+		close(deliveryDone)
+		updateLastNotifiedAt(db, alert)
+	}()
+
+	// 限时等待快路径完成；慢通道继续在后台跑，由 RetryWorker 兜底
+	select {
+	case <-deliveryDone:
+	case <-time.After(fastWaitTimeout):
+		logger.Module("alerting").Info().
+			Uint("alert_id", alert.ID).
+			Dur("fast_wait_timeout", fastWaitTimeout).
+			Msg("dispatch: 快路径超时，转后台投递")
 	}
 
 	return nil
+}
+
+// fastWaitTimeout 是 raiseAndDispatch 同步等待 send() 完成的上限。超过即返回，
+// 慢通道继续在后台 goroutine 完成（每个有 HTTP client.Timeout 兜底），
+// 失败由 RetryWorker 持久化重试。值故意短，让 task runner 主路径不被慢通道拖死。
+//
+// 暴露为 var 而非 const 是为了让测试可以临时调短/调长，验证慢通道隔离行为。
+var fastWaitTimeout = 500 * time.Millisecond
+
+// updateLastNotifiedAt 在所有 dispatch goroutine 完成后异步更新 alert 行的
+// last_notified_at。只要有 ≥ 1 条 sent 即更新；从 dispatcher 主路径剥离出来
+// 避免阻塞 task runner。
+func updateLastNotifiedAt(db *gorm.DB, alert *model.Alert) {
+	var sentCount int64
+	if err := db.Model(&model.AlertDelivery{}).
+		Where("alert_id = ? AND status = ?", alert.ID, "sent").
+		Count(&sentCount).Error; err != nil {
+		logger.Module("alerting").Warn().
+			Uint("alert_id", alert.ID).
+			Err(err).
+			Msg("dispatch: 统计已发送投递数失败")
+		return
+	}
+	if sentCount == 0 {
+		return
+	}
+	notifiedAt := time.Now()
+	alert.LastNotifiedAt = &notifiedAt
+	if err := db.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
+		logger.Module("alerting").Warn().
+			Uint("alert_id", alert.ID).
+			Err(err).
+			Msg("更新告警最后通知时间失败")
+	}
 }
 
 func inDedupWindow(db *gorm.DB, alert model.Alert, now time.Time) (bool, error) {

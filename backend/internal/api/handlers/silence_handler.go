@@ -50,15 +50,23 @@ type silenceRequest struct {
 }
 
 // silencePatchRequest is the dedicated request type for PATCH /silences/:id.
+//
 // Match fields (match_node_id, match_category, match_tags) are intentionally
 // absent: clients sending them will have them silently ignored by Go's JSON
 // unmarshaller (unknown fields are discarded), keeping match criteria immutable
 // after creation.
+//
+// Wave 2 (PR-C C7) 起，starts_at 也被设计为不可在 Patch 中修改：
+//   - 之前实现：客户端必须传 starts_at 走 ends_at>starts_at 校验，但该值不写库
+//     → 客户端可绕过校验把 ends_at 设到旧 starts_at 之前，导致 silence 被错误
+//     "复活"或延长（finding F-5）。
+//   - 现在：拒绝请求体中的 starts_at（语义上 "开始时间在创建后冻结"），
+//     校验改为用数据库里的 stored starts_at 与新 ends_at 比较。如确需调整起始
+//     时间，应删除并重建 silence。
 type silencePatchRequest struct {
-	Name     string    `json:"name" binding:"required"`
-	EndsAt   time.Time `json:"ends_at" binding:"required"`
-	StartsAt time.Time `json:"starts_at" binding:"required"` // required for end>start validation
-	Note     string    `json:"note"`
+	Name   string    `json:"name" binding:"required"`
+	EndsAt time.Time `json:"ends_at" binding:"required"`
+	Note   string    `json:"note"`
 }
 
 // List 列出静默规则。?active=true 仅返回当前生效的规则。
@@ -142,8 +150,11 @@ func (h *SilenceHandler) Patch(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	if !req.EndsAt.After(req.StartsAt) {
-		respondBadRequest(c, "ends_at 必须晚于 starts_at")
+	// Wave 2 (PR-C C7) 之前用客户端 starts_at 做"end > start"校验，但 starts_at
+	// 不写库——可被绕过把 ends_at 设到 stored starts_at 之前。现在用 stored
+	// starts_at 校验，starts_at 不可改。
+	if !req.EndsAt.After(s.StartsAt) {
+		respondBadRequest(c, "ends_at 必须晚于已创建的 starts_at；如需调整起始时间请删除后重建")
 		return
 	}
 	updates := map[string]any{

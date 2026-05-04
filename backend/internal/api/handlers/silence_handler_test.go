@@ -376,3 +376,93 @@ func TestPatchSilence_DoesNotChangeMatchFields(t *testing.T) {
 		t.Fatalf("match_category 不应被 PATCH 修改，期望 XR-NODE-5，实际: %s", out.MatchCategory)
 	}
 }
+
+// TestPatchSilence_StartsAtIsImmutable 验证 Wave 2 (PR-C C7) 修复：
+// 客户端在 PATCH body 中携带 starts_at 也不会修改库里的值（只读不写）。
+// 旧实现：starts_at 必填用于校验"end > start"，但不写库 → 客户端可绕过校验
+// 把 ends_at 设到 stored starts_at 之前。
+// 新实现：starts_at 字段已从请求结构体移除，校验直接用 stored starts_at。
+func TestPatchSilence_StartsAtIsImmutable(t *testing.T) {
+	db := openSilenceTestDB(t)
+
+	now := time.Now()
+	originalStartsAt := now.Add(-1 * time.Hour)
+	s := model.Silence{
+		Name:      "starts-immutable",
+		StartsAt:  originalStartsAt,
+		EndsAt:    now.Add(1 * time.Hour),
+		CreatedBy: 1,
+		MatchTags: "[]",
+	}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("创建静默规则失败: %v", err)
+	}
+
+	// 客户端故意传一个不同的 starts_at（"未来"），并请求 ends_at 介于
+	// 旧 starts_at 与新 starts_at 之间（如旧版仅用客户端 starts_at 校验，
+	// ends_at < stored starts_at 这种语义错误反而会通过）。
+	clientFakeStarts := now.Add(2 * time.Hour)
+	newEndsAt := now.Add(3 * time.Hour) // > stored starts_at（合法）
+	patchBody := map[string]any{
+		"name":      "starts-immutable",
+		"starts_at": clientFakeStarts.Format(time.RFC3339),
+		"ends_at":   newEndsAt.Format(time.RFC3339),
+	}
+	bodyBytes, _ := json.Marshal(patchBody)
+
+	r := newSilenceRouter(db, "admin", 1)
+	w := doSilenceJSON(r, "PATCH", fmt.Sprintf("/api/v1/silences/%d", s.ID), string(bodyBytes))
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d — %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data model.Silence `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	// starts_at 必须保持原值不变（5 秒误差容忍 RFC3339 截断）
+	diff := resp.Data.StartsAt.Sub(originalStartsAt)
+	if diff < -5*time.Second || diff > 5*time.Second {
+		t.Fatalf("starts_at 不应被 PATCH 修改，期望 %v，实际: %v",
+			originalStartsAt, resp.Data.StartsAt)
+	}
+	// ends_at 应已更新
+	endsDiff := resp.Data.EndsAt.Sub(newEndsAt)
+	if endsDiff < -5*time.Second || endsDiff > 5*time.Second {
+		t.Fatalf("ends_at 期望 %v，实际: %v", newEndsAt, resp.Data.EndsAt)
+	}
+}
+
+// TestPatchSilence_RejectsEndsAtBeforeStoredStartsAt 验证用 stored starts_at
+// 做校验：客户端不能把 ends_at 设到 stored starts_at 之前。
+func TestPatchSilence_RejectsEndsAtBeforeStoredStartsAt(t *testing.T) {
+	db := openSilenceTestDB(t)
+
+	now := time.Now()
+	s := model.Silence{
+		Name:      "validate-against-stored",
+		StartsAt:  now,                     // stored 基准
+		EndsAt:    now.Add(2 * time.Hour),
+		CreatedBy: 1,
+		MatchTags: "[]",
+	}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+
+	// 客户端尝试把 ends_at 调到 stored starts_at 之前
+	patchBody := map[string]any{
+		"name":    "validate-against-stored",
+		"ends_at": now.Add(-1 * time.Hour).Format(time.RFC3339), // < stored starts_at
+	}
+	bodyBytes, _ := json.Marshal(patchBody)
+
+	r := newSilenceRouter(db, "admin", 1)
+	w := doSilenceJSON(r, "PATCH", fmt.Sprintf("/api/v1/silences/%d", s.ID), string(bodyBytes))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望 400 BadRequest，实际: %d — %s", w.Code, w.Body.String())
+	}
+}

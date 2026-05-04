@@ -732,3 +732,65 @@ func TestDispatch_NonMatchingSilenceDoesNotBlock(t *testing.T) {
 		t.Fatal("期望至少 1 条投递记录（静默未命中，不应拦截）")
 	}
 }
+
+// TestDispatch_SlowChannelDoesNotBlockMainPath 验证 Wave 2 (PR-C C5) 修复：
+// 慢通道（模拟 30s 延迟）不应阻塞 raiseAndDispatch 主路径，task runner 等
+// 调用方应在 fastWaitTimeout 内拿到返回，慢通道在后台跑。
+//
+// 旧行为：raiseAndDispatch 末尾 wg.Wait() 同步等所有通道完成 → 一个慢通道
+// 把 RaiseTaskFailure 的整条链路阻塞 30s。
+// 新行为：fastWaitTimeout 内未完成的慢通道转后台投递；调用方立即返回。
+func TestDispatch_SlowChannelDoesNotBlockMainPath(t *testing.T) {
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	db := setupTestDB(t)
+
+	// 临时缩短 fastWaitTimeout 让测试稳定（默认 500ms 太接近测试节奏）
+	prevTimeout := fastWaitTimeout
+	fastWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { fastWaitTimeout = prevTimeout })
+
+	// 慢通道：response 阻塞 1s（远大于 fastWaitTimeout），模拟代理超时场景
+	slowSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slowSrv.Close()
+
+	db.Create(&model.Node{ID: 1, Name: "node-a"})
+	db.Create(&model.Integration{
+		Name: "slow", Type: "webhook", Enabled: true,
+		Endpoint: slowSrv.URL, FailThreshold: 1,
+	})
+
+	SetSharedGroupingForTest(NewGrouping(5 * time.Minute))
+	t.Cleanup(func() { SetSharedGroupingForTest(NewGrouping(5 * time.Minute)) })
+
+	alert := &model.Alert{
+		NodeID: 1, NodeName: "node-a",
+		ErrorCode: "XR-SLOW-1", Severity: "warn", Status: "open",
+		Message: "slow channel test", TriggeredAt: time.Now(),
+	}
+
+	start := time.Now()
+	if err := raiseAndDispatch(db, alert); err != nil {
+		t.Fatalf("raiseAndDispatch error: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// 主路径不应等满慢通道的 1s；上限 = fastWaitTimeout + 调度开销
+	if elapsed > 600*time.Millisecond {
+		t.Fatalf("raiseAndDispatch 被慢通道阻塞，耗时 %v（应 < 600ms）", elapsed)
+	}
+	if elapsed < 50*time.Millisecond {
+		// 太快说明 fastWaitTimeout 不生效（或者通道 send 立即完成—但 1s sleep 不可能）
+		t.Logf("warn: 调度耗时 %v 异常快，请检查测试 fixture", elapsed)
+	}
+
+	// 给后台 goroutine 1.5s 跑完慢通道 send → 应有 1 条 sent 投递记录
+	time.Sleep(1500 * time.Millisecond)
+	var count int64
+	db.Model(&model.AlertDelivery{}).Where("alert_id = ?", alert.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("后台投递应有 1 条 delivery 记录，实际 %d", count)
+	}
+}
