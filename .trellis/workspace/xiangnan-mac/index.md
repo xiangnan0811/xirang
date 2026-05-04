@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-05-03
+- **Total Sessions**: 5
+- **Last Active**: 2026-05-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~140 | Active |
+| `journal-1.md` | ~173 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-05-04 | Wave 0 全方位审查整改：14 项真问题落地（剔除 9 项子代理误报） | `6556214` | `main` |
 | 4 | 2026-05-03 | Documentation current-state audit | `fc8a7b1`, `e1f6304` | `docs/current-state-audit` |
 | 3 | 2026-05-02 | Anomaly notification defaults | `7aee27a`, `64ac4e5` | `fix/anomaly-notification-defaults` |
 | 2 | 2026-05-02 | Document branch-required workflow | `0859f8f` | `chore/require-work-branches` |
