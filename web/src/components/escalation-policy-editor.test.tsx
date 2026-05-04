@@ -38,6 +38,10 @@ vi.mock("react-i18next", () => ({
         "escalation.validation.tagTooLong": "单个 tag 最长 32 字符",
         "escalation.validation.tooManyTags": "每级最多 10 个 tag",
         "escalation.errors.conflict": "升级策略名称已存在",
+        "escalation.actions.cancel": "取消",
+        "escalation.actions.save": "保存",
+        "escalation.actions.saving": "保存中…",
+        "escalation.levels.noIntegrations": "暂无可用通道",
       };
       return map[key] ?? key;
     },

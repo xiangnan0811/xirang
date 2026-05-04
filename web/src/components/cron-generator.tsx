@@ -202,7 +202,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
           <div className="min-h-[60px]">
             {scheduleType === "minutes" && (
               <div className="flex items-center gap-2 text-sm">
-                <span>{t('cron.every', '每隔')}</span>
+                <span>{t('cron.every')}</span>
                 <Input
                   type="number"
                   min="1"
@@ -213,13 +213,13 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.minuteInterval')}
                 />
-                <span>{t('cron.minuteExec', '分钟执行一次')}</span>
+                <span>{t('cron.minuteExec')}</span>
               </div>
             )}
 
             {scheduleType === "hours" && (
               <div className="flex items-center gap-2 text-sm flex-wrap">
-                <span>{t('cron.every', '每隔')}</span>
+                <span>{t('cron.every')}</span>
                 <Input
                   type="number"
                   min="1"
@@ -230,7 +230,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.hourInterval')}
                 />
-                <span>{t('cron.hourAtMinute', '小时的第')}</span>
+                <span>{t('cron.hourAtMinute')}</span>
                 <Input
                   type="number"
                   min="0"
@@ -241,13 +241,13 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.minute')}
                 />
-                <span>{t('cron.exec', '分钟执行')}</span>
+                <span>{t('cron.exec')}</span>
               </div>
             )}
 
             {scheduleType === "daily" && (
               <div className="flex items-center gap-2 text-sm">
-                <span>{t('cron.dailyAt', '每天的')}</span>
+                <span>{t('cron.dailyAt')}</span>
                 <Input
                   type="time"
                   value={time}
@@ -256,7 +256,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.executionTime')}
                 />
-                <span>{t('cron.execute', '执行')}</span>
+                <span>{t('cron.execute')}</span>
               </div>
             )}
 
@@ -288,7 +288,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   ))}
                 </div>
                 <div className="flex items-center gap-2 text-sm mt-3">
-                  <span>{t('cron.at', '的')}</span>
+                  <span>{t('cron.at')}</span>
                   <Input
                     type="time"
                     value={time}
@@ -297,14 +297,14 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                     disabled={disabled}
                     aria-label={t('cron.executionTime')}
                   />
-                  <span>{t('cron.execute', '执行')}</span>
+                  <span>{t('cron.execute')}</span>
                 </div>
               </div>
             )}
 
             {scheduleType === "monthly" && (
               <div className="flex items-center gap-2 text-sm flex-wrap">
-                <span>{t('cron.everyMonth', '每月')}</span>
+                <span>{t('cron.everyMonth')}</span>
                 <Input
                   type="number"
                   min="1"
@@ -315,7 +315,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.date')}
                 />
-                <span>{t('cron.dayAt', '日的')}</span>
+                <span>{t('cron.dayAt')}</span>
                 <Input
                   type="time"
                   value={time}
@@ -324,14 +324,14 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
                   disabled={disabled}
                   aria-label={t('cron.executionTime')}
                 />
-                <span>{t('cron.execute', '执行')}</span>
+                <span>{t('cron.execute')}</span>
               </div>
             )}
 
             {scheduleType === "custom" && (
               <div className="text-sm text-muted-foreground flex items-center gap-2 p-2 bg-muted/50 rounded-md">
                 <Clock className="size-4" />
-                <span>{t('cron.customHint', '高级自定义模式下，请直接在上方输入框中编写完整的 Cron 表达式。')}</span>
+                <span>{t('cron.customHint')}</span>
               </div>
             )}
           </div>
@@ -343,7 +343,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
         <div className="rounded-md border bg-muted/30 p-3 text-sm">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
             <CalendarDays className="size-3.5" />
-            {t('cron.parseResult', '解析结果')}
+            {t('cron.parseResult')}
           </div>
           <p className="font-medium">{naturalDescription}</p>
           <p className="mt-1 text-xs text-info">{nextRun}</p>

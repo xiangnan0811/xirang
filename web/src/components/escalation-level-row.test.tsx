@@ -16,6 +16,7 @@ vi.mock("react-i18next", () => ({
         "escalation.levels.tags": "打标签",
         "escalation.levels.tagsHint": "每级最多 10 个",
         "escalation.levels.removeLevel": "删除此级",
+        "escalation.levels.noIntegrations": "暂无可用通道",
         "escalation.severityOverride.empty": "保持原严重度",
         "escalation.severity.info": "info",
         "escalation.severity.warning": "warning",
