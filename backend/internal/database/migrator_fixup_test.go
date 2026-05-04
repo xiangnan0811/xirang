@@ -14,7 +14,7 @@ import (
 // calls open separate connections in the database/sql pool.
 func openMemoryDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared",
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC",
 		strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
