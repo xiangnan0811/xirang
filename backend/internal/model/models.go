@@ -104,7 +104,10 @@ type Policy struct {
 	PreHook            string    `gorm:"type:text;not null;default:''" json:"pre_hook"`
 	PostHook           string    `gorm:"type:text;not null;default:''" json:"post_hook"`
 	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
-	MaxRetries         int       `gorm:"not null;default:2" json:"max_retries"`
+	// MaxExecutionSeconds 0 = 使用环境变量 TASK_MAX_EXECUTION_SECONDS（默认 86400=24h）。
+	// >0 = 该策略的任务最长执行秒数；超时后 ctx 被 cancel，executor 收到 SIGTERM 退出。
+	MaxExecutionSeconds int       `gorm:"not null;default:0" json:"max_execution_seconds"`
+	MaxRetries          int       `gorm:"not null;default:2" json:"max_retries"`
 	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
 	BandwidthSchedule  string    `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
 	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`

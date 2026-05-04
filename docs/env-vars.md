@@ -218,6 +218,7 @@
 |------|------|--------|------|------|
 | `TZ` | string | 镜像默认（UTC） | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换 |
 | `LOG_FILE` | string | — | 否 | 设置后应用日志同时写入该文件（保留 stdout 输出供 docker logs/journald 收集）。留空时仅 stdout |
+| `TASK_MAX_EXECUTION_SECONDS` | int | `86400` | 否 | 单次任务执行的全局最大秒数兜底，防 executor 卡死导致 goroutine 泄漏。Policy 级 `max_execution_seconds` >0 时优先于本变量。超时后任务被强制中止并 status=failed，last_error 含"超时"字样 |
 
 **读取位置**：`TZ` → 容器初始化时被 glibc/musl 解析，应用层 `time.Now()` 自动遵循；`LOG_FILE` → `backend/internal/util/logger.go`（PR-C 引入）。
 
