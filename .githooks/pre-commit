@@ -52,6 +52,18 @@ check "backend/internal/database/migrations/" "CLAUDE.md" \
 check "backend/internal/config/config.go" "docs/env-vars.md" \
   "config.go 已修改，请同步更新 docs/env-vars.md"
 
+# 规则 6：发布/镜像/部署/版本检查变更 → 发布相关文档
+# 与 scripts/check-doc-freshness.sh 规则对齐：保持两边检查规则一致，避免漂移。
+release_trigger_re='^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.prod\.yml|\.env\.deploy|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'
+release_doc_re='^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/release-maintainers\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'
+
+if echo "$STAGED" | grep -qE "$release_trigger_re"; then
+  if ! echo "$STAGED" | grep -qE "$release_doc_re"; then
+    MSGS+=("发布/镜像/部署/版本检查相关文件已修改，请同步更新配套文档（README/CONTRIBUTING/docs/deployment.md/docs/env-vars.md/docs/release-maintainers.md/AGENTS.md/PULL_REQUEST_TEMPLATE）")
+    WARN=$((WARN + 1))
+  fi
+fi
+
 if [ "$WARN" -gt 0 ]; then
   echo ""
   echo "[WARN] 文档同步检查未通过（${WARN} 项）："

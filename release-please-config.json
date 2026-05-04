@@ -4,7 +4,20 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "changelog-sections": [
+        { "type": "feat", "section": "✨ Features", "hidden": false },
+        { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
+        { "type": "perf", "section": "⚡ Performance", "hidden": false },
+        { "type": "revert", "section": "⏪ Reverts", "hidden": false },
+        { "type": "docs", "section": "📚 Documentation", "hidden": false },
+        { "type": "refactor", "section": "♻️ Refactor", "hidden": true },
+        { "type": "test", "section": "✅ Tests", "hidden": true },
+        { "type": "build", "section": "🛠 Build System", "hidden": true },
+        { "type": "ci", "section": "👷 CI", "hidden": true },
+        { "type": "chore", "section": "🧹 Chores", "hidden": true },
+        { "type": "style", "section": "💄 Style", "hidden": true }
+      ]
     }
   }
 }
