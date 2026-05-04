@@ -143,6 +143,10 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if err := validatePathChars(req.SourcePath, "source_path"); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
 	// 非 admin 不允许设置 hook 命令
 	if req.PreHook != "" || req.PostHook != "" {
@@ -312,6 +316,10 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	if err := validateCronSpec(req.CronSpec); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if err := validatePathChars(req.SourcePath, "source_path"); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	}
