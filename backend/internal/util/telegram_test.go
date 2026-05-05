@@ -100,11 +100,72 @@ func TestSanitizeDeliveryErrorTelegram(t *testing.T) {
 	}
 }
 
+// TestSanitizeDeliveryErrorNonTelegram 验证 Wave 2 (PR-C C6) 修复：
+// 非 Telegram 通道（webhook/feishu/dingtalk/wecom/slack）的错误也走统一
+// SanitizeError 路径——之前这里 return err.Error() 导致 webhook URL 中的
+// access_token 直接进 alert_deliveries.last_error。
 func TestSanitizeDeliveryErrorNonTelegram(t *testing.T) {
+	// 纯文本（无敏感模式）应原样返回
 	err := fmt.Errorf("webhook 发送失败")
 	result := SanitizeDeliveryError("webhook", err)
 	if result != "webhook 发送失败" {
-		t.Fatalf("期望非 Telegram 类型原样返回，实际: %s", result)
+		t.Fatalf("期望纯文本原样返回，实际: %s", result)
+	}
+
+	// 以下三个 fixture 字符串均为单元测试占位，不是真凭据；命名 FAKE_* 与
+	// TEST_ONLY_* 让 secret scanner（GitGuardian、gitleaks 等）容易识别为非真实。
+	// 含 webhook URL 应被屏蔽 path/query
+	const fakeAccessToken = "FAKE_ACCESS_TOKEN_FOR_TEST_ONLY"
+	urlErr := fmt.Errorf(`Post "https://oapi.dingtalk.com/robot/send?access_token=%s": http 500`, fakeAccessToken)
+	urlResult := SanitizeDeliveryError("dingtalk", urlErr)
+	if strings.Contains(urlResult, fakeAccessToken) {
+		t.Fatalf("期望 URL access_token 被屏蔽，实际: %s", urlResult)
+	}
+	// 应保留 host
+	if !strings.Contains(urlResult, "oapi.dingtalk.com") {
+		t.Fatalf("期望保留 host 用于诊断，实际: %s", urlResult)
+	}
+
+	// 含 token=secret 形式应被屏蔽
+	const fakeToken = "FAKE_TOKEN_FOR_TEST_ONLY"
+	tokenErr := fmt.Errorf("dingtalk failed: token=%s timeout", fakeToken)
+	tokenResult := SanitizeDeliveryError("dingtalk", tokenErr)
+	if strings.Contains(tokenResult, fakeToken) {
+		t.Fatalf("期望 token=value 被屏蔽，实际: %s", tokenResult)
+	}
+
+	// 含 password=xxx 形式应被屏蔽
+	const fakePassword = "FAKE_PASSWORD_FOR_TEST_ONLY"
+	pwErr := fmt.Errorf("auth failed: password=%s invalid", fakePassword)
+	pwResult := SanitizeDeliveryError("webhook", pwErr)
+	if strings.Contains(pwResult, fakePassword) {
+		t.Fatalf("期望 password=value 被屏蔽，实际: %s", pwResult)
+	}
+}
+
+// TestSanitizeError_FeishuWebhookURL 验证飞书 webhook URL（路径含 token）被
+// 屏蔽：/open-apis/bot/v2/hook/<token>。
+func TestSanitizeError_FeishuWebhookURL(t *testing.T) {
+	err := fmt.Errorf(`Post "https://open.feishu.cn/open-apis/bot/v2/hook/abc-123-def": connection reset`)
+	result := SanitizeError(err)
+	if strings.Contains(result, "abc-123-def") {
+		t.Fatalf("期望飞书 webhook 路径 token 被屏蔽，实际: %s", result)
+	}
+	if !strings.Contains(result, "feishu.cn") {
+		t.Fatalf("期望保留 host 用于诊断，实际: %s", result)
+	}
+}
+
+// TestSanitizeMessage_Truncates 验证超长消息被截断到 500 字符 + 省略号。
+func TestSanitizeMessage_Truncates(t *testing.T) {
+	long := strings.Repeat("a", 600)
+	result := SanitizeMessage(long)
+	// 500 个 a + … （rune 长度 501）
+	if !strings.HasSuffix(result, "…") {
+		t.Fatalf("期望以省略号结尾，实际后 5 字符: %s", result[len(result)-5:])
+	}
+	if len([]rune(result)) > 501 {
+		t.Fatalf("期望截断到 ≤ 501 runes，实际: %d", len([]rune(result)))
 	}
 }
 

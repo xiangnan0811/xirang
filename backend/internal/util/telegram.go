@@ -63,15 +63,16 @@ func SanitizeTelegramError(err error) string {
 	return botTokenSanitizer.ReplaceAllString(err.Error(), "bot***:***")
 }
 
-// SanitizeDeliveryError 根据通道类型对投递错误进行脱敏
+// SanitizeDeliveryError 根据通道类型对投递错误进行脱敏。
+//
+// Wave 2 (PR-C C6) 起，所有通道类型都走统一的 SanitizeMessage 流程：URL 凭证
+// + query string + path-segment 屏蔽 + bot token 屏蔽 + token/secret/password
+// 模式屏蔽。channelType 参数保留是为了向后兼容，目前仅作日志/审计的语义提示，
+// 不再影响过滤行为（之前仅 telegram 类型走脱敏，导致 webhook/feishu/dingtalk/
+// wecom 的 URL token 直接进了 alert_deliveries.last_error）。
 func SanitizeDeliveryError(channelType string, err error) string {
-	if err == nil {
-		return ""
-	}
-	if strings.ToLower(strings.TrimSpace(channelType)) == "telegram" {
-		return SanitizeTelegramError(err)
-	}
-	return err.Error()
+	_ = channelType
+	return SanitizeError(err)
 }
 
 // MaskBotToken 对字符串中出现的 bot token 进行掩码替换

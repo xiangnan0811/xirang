@@ -8,6 +8,27 @@
 * Wave 0 安全/稳定性/文档整改（基于全方位审查后实读复核清单） ([#105](https://github.com/xiangnan0811/xirang/issues/105)) ([6556214](https://github.com/xiangnan0811/xirang/commit/6556214f644f572bdfc916c734ab7fc886e7fbbf))
 * Wave 1 清理 Wave 0 Out-of-Scope 三项 (B-2 SFTP RealPath / B-8 UTC 迁移 / F-3 logs 虚拟化) ([#108](https://github.com/xiangnan0811/xirang/issues/108)) ([b59f7d8](https://github.com/xiangnan0811/xirang/commit/b59f7d8eda193b90bed47fc5a408661d32ab8778))
 
+
+**升级注意（必读）**：
+
+- 本版本包含数据库迁移 `000050_utc_cutover`，将所有时间列从本地时间（默认 +8 / Asia/Shanghai）一次性平移为 UTC。该迁移**不可幂等执行**——重复运行会让时间偏移翻倍，造成永久数据损坏。
+- 升级前**必须**先停服并阅读完整 runbook：`docs/migration-utc-cutover.md`（含 5 段步骤：备份 → 停服 → 迁移 → Verify → 启动）。
+- 当前 SQL 仅适配 `+8` 时区部署。其他时区的部署需 fork 该 migration 自行调整 hour 偏移量。
+- 升级后若发现时间显示异常（前端显示晚 8 小时等）属于浏览器侧 timezone 解析问题，不是数据回归——客户端应负责把 UTC ISO 时间格式化为本地展示。
+
+**安全修复亮点**：
+
+- 文件浏览器：远端 SFTP `RealPath` 校验闭环 symlink 逃逸（#108，B-2）。
+- 命令注入：`ShellEscape` 单引号包裹 + 16 类对抗性测试 + `validatePathChars` 拒控制字符（#105）。
+- 任务执行：`TASK_MAX_EXECUTION_SECONDS` 全局超时兜底，防 executor 卡死导致 goroutine 泄漏（#105）。
+- 加密字段类型：`Integration.endpoint` 由 `VARCHAR(255)` 升级为 `TEXT`（migration `000048`），消除长 webhook URL 加密后被截断的风险（#105）。
+
+**部署/运维加固**：
+
+- 容器镜像新增 `tzdata`、`HEALTHCHECK`、日志轮转支持；建议显式设置 `TZ=Asia/Shanghai`（参见 `docs/env-vars.md` §15）。
+- 新增 `LOG_FILE` 双写：日志同时写入 stdout 和文件（PR-A in #105）。
+- 异常告警通知由 `ANOMALY_ALERTS_ENABLED` 控制，默认关闭；事件仍正常入库。
+
 ## [0.19.1](https://github.com/xiangnan0811/xirang/compare/v0.19.0...v0.19.1) (2026-05-02)
 
 

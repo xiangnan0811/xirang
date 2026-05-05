@@ -8,6 +8,21 @@
 -- 必须在 maintenance window 执行；不能 in-flight 写入时迁移（否则 race condition）。
 -- 详细 runbook 见 docs/migration-utc-cutover.md
 --
+-- 事务保护：本 SQLite 迁移由 golang-migrate sqlite3 驱动在 driver 层使用
+-- tx.Begin/Commit 包裹整个 .sql 内容（参见 vendor 中 database/sqlite3/sqlite3.go
+-- 的 executeQuery 函数），所以以下所有 UPDATE 已被原子化执行 —— 任一语句失败
+-- → 整个迁移 ROLLBACK，绝不可能出现部分列已 -8h、部分列未平移的「双时区污染」
+-- 中间态。
+--
+-- 不要在本文件中再写显式 BEGIN/COMMIT —— sqlite3 不支持嵌套事务，会立刻报
+-- 「cannot start a transaction within a transaction」。
+-- （PostgreSQL 端不同：pgx v5 driver 不在 driver 层 wrap tx，所以
+-- migrations/postgres/000050_utc_cutover.up.sql 需要显式加 BEGIN/COMMIT。）
+--
+-- 但 schema_migrations.dirty=1 标记仍会被设置（驱动语义，发生在 commit 后才报错
+-- 的极端场景）；下次启动时由 migrator.go 通过 ALLOW_DIRTY_STARTUP 守卫拒绝启动，
+-- 强制运维介入修复。完整流程见 docs/migration-utc-cutover.md「Dirty 状态恢复」。
+--
 -- 平移涉及的所有 (table.column)：
 --   users.created_at, users.updated_at
 --   ssh_keys.created_at, ssh_keys.updated_at, ssh_keys.last_used_at

@@ -613,7 +613,84 @@ func TestSendReport_MissingIntegration_DoesNotPanic(t *testing.T) {
 	}
 	report := &model.Report{ID: 1}
 	// sendReport is fire-and-forget with panic recovery — call it directly.
-	sendReport(db, cfg, report)
+	sendReport(context.Background(), db, cfg, report)
+}
+
+// TestReportDispatcher_ShutdownWaitsForInFlight 验证 Wave 2 (PR-C C1) 修复：
+// dispatcher.Shutdown() 必须等所有 in-flight sendReport 完成才返回，不能像
+// 旧版那样裸 `go sendReport(...)` 在进程退出时丢弃半截投递。
+//
+// 用一个 sleep 100ms 的假 sendReport（通过替换 dispatcher 的 wg 跟踪），
+// Shutdown 触发取消但 worker 还在 sleep，断言 Shutdown 等到 sleep 结束
+// 才返回。
+func TestReportDispatcher_ShutdownWaitsForInFlight(t *testing.T) {
+	d := newReportDispatcher()
+
+	// 模拟一个 sendReport 在飞：sleep 100ms，期间 Shutdown 应一直阻塞
+	workStarted := make(chan struct{})
+	workFinished := make(chan struct{})
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		close(workStarted)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-d.ctx.Done():
+			// 收到取消也要继续 sleep 模拟 SMTP 协商必须跑完不可截断
+			time.Sleep(80 * time.Millisecond)
+		}
+		close(workFinished)
+	}()
+
+	// 等 worker 起来，再触发 Shutdown
+	<-workStarted
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer stopCancel()
+
+	shutdownStart := time.Now()
+	if err := d.Shutdown(stopCtx); err != nil {
+		t.Fatalf("Shutdown 不应超时: %v", err)
+	}
+	shutdownDuration := time.Since(shutdownStart)
+
+	// Shutdown 必须等到 work 完成
+	select {
+	case <-workFinished:
+	default:
+		t.Fatal("Shutdown 返回时 worker 还未完成，wg.Wait 失效")
+	}
+
+	// 至少消耗了 50ms（worker 内 sleep 80ms 与 ctx 同时触发的最短路径）
+	if shutdownDuration < 50*time.Millisecond {
+		t.Fatalf("Shutdown 返回得太快（%v），可能没有 wg.Wait", shutdownDuration)
+	}
+}
+
+// TestReportDispatcher_ShutdownTimeoutReturnsErr 验证 Shutdown 超时（stopCtx 过期）
+// 时返回 ctx.Err()，调用方能据此决定是否升级为强杀（kill -9 等）。
+func TestReportDispatcher_ShutdownTimeoutReturnsErr(t *testing.T) {
+	d := newReportDispatcher()
+
+	// 一个永不退出的 worker（除非 ctx 取消才退出，但我们不让它响应 ctx，
+	// 模拟"被 cancel 但仍在 SMTP 协商"的真实场景）
+	d.wg.Add(1)
+	stop := make(chan struct{})
+	go func() {
+		defer d.wg.Done()
+		<-stop // 测试结束才放行
+	}()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer stopCancel()
+
+	err := d.Shutdown(stopCtx)
+	if err == nil {
+		t.Fatal("期望 Shutdown 在 50ms 超时返回 err，got nil")
+	}
+
+	close(stop)
+	d.wg.Wait()
 }
 
 // seedReportFixtureFailureTopN seeds n+5 failed TaskRuns distributed across

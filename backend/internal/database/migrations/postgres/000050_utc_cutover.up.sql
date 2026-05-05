@@ -11,6 +11,21 @@
 -- 平移涉及的所有 (table.column) 与 SQLite 版本一致，详见 sqlite/000050_utc_cutover.up.sql 顶部清单。
 -- PostgreSQL 列类型为 timezone-naive TIMESTAMP（无时区），用 INTERVAL '8 hours' 做绝对值平移。
 -- WHERE col IS NOT NULL 是显式表达意图：NULL - INTERVAL = NULL 本身不影响，但显式过滤更清晰。
+--
+-- 事务保护：以下所有 UPDATE 语句包裹在显式 BEGIN/COMMIT 中，确保任一语句失败时整体回滚 ——
+-- 避免出现部分列已 -8h、部分列未平移的「双时区污染」永久性脏数据状态。
+--
+-- 与 SQLite 不同（sqlite3 driver 自身在 driver 层 wrap tx；嵌套 BEGIN 会报错），
+-- golang-migrate 的 pgx v5 driver 不在 driver 层 wrap tx（参见 pgx.go runStatement 直接
+-- ExecContext），所以 PostgreSQL 端必须由 SQL 文件自己加显式 BEGIN/COMMIT 才能获得原子性。
+-- PG 支持嵌套 BEGIN（subsequent BEGIN 报 warning 不报错），所以即使将来驱动改为 wrap tx
+-- 也能向前兼容。
+--
+-- schema_migrations.dirty=1 标记仍会被设置（驱动语义）；下次启动时由 migrator.go 通过
+-- ALLOW_DIRTY_STARTUP 守卫拒绝启动，强制运维介入修复。
+-- 完整流程见 docs/migration-utc-cutover.md「Rollback」与「Dirty 状态恢复」章节。
+
+BEGIN;
 
 UPDATE users SET created_at = created_at - INTERVAL '8 hours' WHERE created_at IS NOT NULL;
 UPDATE users SET updated_at = updated_at - INTERVAL '8 hours' WHERE updated_at IS NOT NULL;
@@ -117,3 +132,5 @@ UPDATE escalation_policies SET updated_at = updated_at - INTERVAL '8 hours' WHER
 UPDATE alert_escalation_events SET fired_at = fired_at - INTERVAL '8 hours' WHERE fired_at IS NOT NULL;
 
 UPDATE anomaly_events SET fired_at = fired_at - INTERVAL '8 hours' WHERE fired_at IS NOT NULL;
+
+COMMIT;

@@ -82,7 +82,7 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("escalation.levels.integrations")}</label>
         {integrations.length === 0 ? (
-          <p className="text-xs text-muted-foreground">暂无可用通道</p>
+          <p className="text-xs text-muted-foreground">{t("escalation.levels.noIntegrations")}</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {integrations.map((intg) => {

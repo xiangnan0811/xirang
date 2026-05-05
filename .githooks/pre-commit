@@ -52,9 +52,21 @@ check "backend/internal/database/migrations/" "CLAUDE.md" \
 check "backend/internal/config/config.go" "docs/env-vars.md" \
   "config.go 已修改，请同步更新 docs/env-vars.md"
 
+# 规则 6：发布/镜像/部署/版本检查变更 → 发布相关文档
+# 与 scripts/check-doc-freshness.sh 规则对齐：保持两边检查规则一致，避免漂移。
+release_trigger_re='^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.prod\.yml|\.env\.deploy|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'
+release_doc_re='^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/release-maintainers\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'
+
+if echo "$STAGED" | grep -qE "$release_trigger_re"; then
+  if ! echo "$STAGED" | grep -qE "$release_doc_re"; then
+    MSGS+=("发布/镜像/部署/版本检查相关文件已修改，请同步更新配套文档（README/CONTRIBUTING/docs/deployment.md/docs/env-vars.md/docs/release-maintainers.md/AGENTS.md/PULL_REQUEST_TEMPLATE）")
+    WARN=$((WARN + 1))
+  fi
+fi
+
 if [ "$WARN" -gt 0 ]; then
   echo ""
-  echo "⚠️  文档同步检查未通过（${WARN} 项）："
+  echo "[WARN] 文档同步检查未通过（${WARN} 项）："
   echo ""
   for msg in "${MSGS[@]}"; do
     echo "  - $msg"
@@ -62,6 +74,20 @@ if [ "$WARN" -gt 0 ]; then
   echo ""
   echo "请更新对应文档后重新提交，或使用 git commit --no-verify 跳过检查。"
   exit 1
+fi
+
+# 当 staged 改动涉及 migration 文件时，跑 UTC 安全 lint。
+# 避免在每次 commit 都跑（即使未触及 migrations），保持 hook 的快速反馈。
+if echo "$STAGED" | grep -qE "backend/internal/database/migrations/.*\.sql$"; then
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  if [ -x "${REPO_ROOT}/scripts/check-migration-utc-safety.sh" ]; then
+    if ! bash "${REPO_ROOT}/scripts/check-migration-utc-safety.sh"; then
+      echo ""
+      echo "[FAIL] migration UTC 安全检查未通过。修复违规或更新 EXCLUDE_GLOBS。"
+      echo "       使用 git commit --no-verify 跳过（不推荐）。"
+      exit 1
+    fi
+  fi
 fi
 
 exit 0

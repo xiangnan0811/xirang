@@ -181,6 +181,7 @@ const zh = {
 
   // ── command palette / global search ──
   search: {
+    title: "命令面板",
     placeholder: "搜索节点、任务、日志…",
     kbd: "⌘K",
     openLabel: "打开命令面板",
@@ -2009,6 +2010,7 @@ const zh = {
       account: "账户安全",
       users: "用户管理",
       channels: "通知渠道",
+      silences: "静默规则",
       system: "系统设置",
       maintenance: "系统维护",
     },
@@ -2263,11 +2265,17 @@ const zh = {
       delaySeconds: "延迟 (秒)",
       delayHint: "自告警触发后的延迟；首级固定为 0",
       integrations: "通知通道",
+      noIntegrations: "暂无可用通道",
       severityOverride: "严重度调整",
       tags: "打标签",
       tagsHint: "每级最多 10 个，每个最长 32 字符",
       addLevel: "添加下一级",
       removeLevel: "删除此级",
+    },
+    actions: {
+      cancel: "取消",
+      save: "保存",
+      saving: "保存中…",
     },
     validation: {
       nameRequired: "名称不能为空",

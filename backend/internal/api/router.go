@@ -36,6 +36,9 @@ type Dependencies struct {
 	LoginRateWindow           time.Duration
 	SettingsService           *settings.Service
 	RetryWorker               *alerting.RetryWorker
+	MetricsToken              string
+	MetricsRateLimit          int
+	MetricsRateWindow         time.Duration
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -322,7 +325,20 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	metricsRateLimit := dep.MetricsRateLimit
+	if metricsRateLimit <= 0 {
+		metricsRateLimit = 5
+	}
+	metricsRateWindow := dep.MetricsRateWindow
+	if metricsRateWindow <= 0 {
+		metricsRateWindow = time.Second
+	}
+	router.GET("/metrics",
+		middleware.MetricsRateLimit(metricsRateLimit, metricsRateWindow),
+		middleware.MetricsAuth(dep.MetricsToken),
+		gin.WrapH(promhttp.Handler()),
+	)
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	return router

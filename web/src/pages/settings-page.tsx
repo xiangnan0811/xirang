@@ -68,7 +68,7 @@ export function SettingsPage() {
     account: t("settings.tabs.account"),
     users: t("settings.tabs.users"),
     channels: t("settings.tabs.channels"),
-    silences: "静默规则",
+    silences: t("settings.tabs.silences"),
     escalation: t("escalation.tabTitle"),
     system: t("settings.tabs.system"),
     maintenance: t("settings.tabs.maintenance"),

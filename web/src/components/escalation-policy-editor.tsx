@@ -305,10 +305,10 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {t("escalation.actions.cancel")}
           </Button>
           <Button onClick={() => void handleSave()} disabled={!isValid || saving}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("escalation.actions.saving") : t("escalation.actions.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

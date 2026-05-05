@@ -101,7 +101,35 @@ jobs:
             org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
-      - name: Build and push image
+      # Step 1: 先构建 amd64 单架到本地 docker daemon（不 push），用于 Trivy 扫描。
+      # 失败时立即终止，避免发布带 HIGH/CRITICAL 漏洞的镜像。
+      - name: Build amd64 image (load for scan)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/allinone/Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: localhost/xirang-scan:${{ steps.version.outputs.version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=xirang
+          cache-to: type=gha,scope=xirang,mode=max
+
+      # Step 2: Trivy 扫描本地镜像；HIGH/CRITICAL 漏洞会让任务失败，阻断后续 push。
+      # 注：trivy-action 钉到稳定 tag 而非 @master，避免供应链攻击窗口。
+      # 升级时维护者请手动 bump 到最新 release 并参考 https://github.com/aquasecurity/trivy-action/releases
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: localhost/xirang-scan:${{ steps.version.outputs.version }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
+      # Step 3: 扫描通过后再 build & push 多架镜像；cache-from 复用 Step 1 的层。
+      - name: Build and push multi-arch image
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -113,15 +141,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=xirang
           cache-to: type=gha,scope=xirang,mode=max
-
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: docker.io/${{ env.IMAGE_NAMESPACE }}/xirang:v${{ steps.version.outputs.version }}
-          format: 'table'
-          exit-code: '1'
-          severity: 'HIGH,CRITICAL'
-          ignore-unfixed: true
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2

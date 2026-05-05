@@ -3,14 +3,12 @@ package alerting
 import (
 	"context"
 	"errors"
-	"net/url"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"gorm.io/gorm"
 )
@@ -228,50 +226,10 @@ func dispatchSingle(integ model.Integration, alert model.Alert) error {
 // alert_deliveries.last_error. Stored LastError is readable by any user with
 // alerts:deliveries permission (viewer included), so leaking webhook URLs
 // that embed bearer tokens or API keys is a direct A09 risk.
+//
+// Wave 2 (PR-C C6) 起，本函数委托给 util.SanitizeError，与首发路径
+// (dispatcher.go) 和 reporting/last_err 共享同一套规则（URL/path/query 屏蔽
+// + bot token + token/secret/password 模式）。
 func sanitizeDeliveryError(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	msg = redactURLs(msg)
-	for _, re := range sensitivePatterns {
-		msg = re.ReplaceAllString(msg, "$1=***")
-	}
-	if len(msg) > 500 {
-		msg = msg[:500] + "…"
-	}
-	return msg
-}
-
-var urlLike = regexp.MustCompile(`(https?|wss?)://[^\s"'<>]+`)
-
-var sensitivePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
-}
-
-// redactURLs drops credentials, query strings, and path-segment secrets from
-// any http(s)/ws URL embedded in msg. Webhook targets (Slack /services/T/B/X,
-// Feishu /open-apis/bot/v2/hook/<token>, DingTalk /robot/send?access_token=...,
-// Telegram /bot<token>/sendMessage, etc.) routinely carry bearer tokens in the
-// URL *path*, so keeping scheme+host alone is what's safe to persist. Query
-// strings are also redacted (DingTalk's access_token lives there).
-func redactURLs(msg string) string {
-	return urlLike.ReplaceAllStringFunc(msg, func(match string) string {
-		u, err := url.Parse(match)
-		if err != nil {
-			return match
-		}
-		if u.User != nil {
-			u.User = url.User("***")
-		}
-		if u.RawQuery != "" {
-			u.RawQuery = "***"
-		}
-		// Path can contain tokens — truncate to "/…" when non-trivial. A bare
-		// "/" or empty path is fine (no secrets).
-		if u.Path != "" && u.Path != "/" {
-			u.Path = "/***"
-		}
-		return strings.TrimSuffix(u.String(), "?")
-	})
+	return util.SanitizeError(err)
 }

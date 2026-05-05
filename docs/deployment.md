@@ -238,6 +238,31 @@ curl -fsS http://127.0.0.1/healthz
 curl -kfsS https://127.0.0.1/healthz
 ```
 
+### Prometheus 抓取 `/metrics`
+
+`/metrics` 暴露 Prometheus 标准指标。生产环境建议在 `.env` 配置 `METRICS_TOKEN`，
+未设置时端点保持公开（兼容旧行为）但每 10 分钟在日志中提示一次。详细变量见
+`docs/env-vars.md` §14.1。
+
+```bash
+# 未启用 token：直接抓取
+curl -fsS http://127.0.0.1/metrics | head
+
+# 启用 token：必须携带 Bearer 头，否则返回 401
+curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" http://127.0.0.1/metrics | head
+```
+
+Prometheus scrape 配置示例：
+
+```yaml
+scrape_configs:
+  - job_name: xirang
+    metrics_path: /metrics
+    bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
+    static_configs:
+      - targets: ['xirang:8080']
+```
+
 ### 常用运维命令
 
 ```bash
