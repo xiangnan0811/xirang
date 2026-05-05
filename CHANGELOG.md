@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.5](https://github.com/xiangnan0811/xirang/compare/v0.19.4...v0.19.5) (2026-05-05)
+
+
+### 📚 Documentation
+
+* **spec:** backend quality-guidelines 加测试 fixture 凭据命名约定 ([#114](https://github.com/xiangnan0811/xirang/issues/114)) ([676517d](https://github.com/xiangnan0811/xirang/commit/676517d430068543c6666c5e070f43c67078279b))
+
 ## [0.19.4](https://github.com/xiangnan0811/xirang/compare/v0.19.3...v0.19.4) (2026-05-05)
 
 
