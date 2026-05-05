@@ -250,13 +250,13 @@ export function OverviewPage() {
                   </div>
 
                   {hiddenNodeCount > 0 ? (
-                    <p className="pb-3 text-mini text-muted-foreground">
+                    <p className="pb-3 text-xs text-foreground/70">
                       {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
                     </p>
                   ) : null}
 
                   {nodes.length > 0 && (
-                    <div className="mt-auto shrink-0 flex items-center gap-4 text-mini text-muted-foreground pt-3 border-t border-border">
+                    <div className="mt-auto shrink-0 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
                       <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
@@ -334,7 +334,7 @@ export function OverviewPage() {
                 );
               })}
             </div>
-            <div className="mt-4 flex items-center gap-4 text-mini text-muted-foreground pt-3 border-t border-border">
+            <div className="mt-4 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />{t("overview.legendOnline")}</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning" />{t("overview.legendWarning")}</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />{t("overview.legendOffline")}</span>

@@ -73,7 +73,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
       <div className="flex items-center justify-between">
         <label className="block text-sm font-medium">{t('bandwidth.scheduleTitle')}</label>
         <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={addRule}>
-          <Plus className="mr-1 size-3" />
+          <Plus className="mr-1 size-3" aria-hidden="true" />
           {t('bandwidth.addRule')}
         </Button>
       </div>
@@ -109,7 +109,7 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
           />
           <span className="text-xs text-muted-foreground shrink-0">Mbps</span>
           <Button type="button" variant="ghost" size="sm" className="size-7 p-0 shrink-0" onClick={() => setPendingDelete(i)} aria-label={t('bandwidthEditor.deleteRule')}>
-            <Trash2 className="size-3.5 text-destructive" />
+            <Trash2 className="size-3.5 text-destructive" aria-hidden="true" />
           </Button>
         </div>
       ))}

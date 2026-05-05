@@ -22,6 +22,7 @@ examples so implementation and review agents match the existing codebase.
 | [State Management](./state-management.md) | Local state, global state, server state | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Filled |
 | [Type Safety](./type-safety.md) | Type patterns, validation | Filled |
+| [A11y Guidelines](./a11y-guidelines.md) | Accessibility baseline, axe / jsx-a11y tooling | Filled |
 
 ---
 

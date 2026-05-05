@@ -55,6 +55,15 @@ and predictable repeated workflows matter more than decorative UI.
   keyboard-visible states, and empty/error variants.
 - For async pages, cover loading, success, empty, error, and stale/refresh
   behavior when the code path is user-facing.
+- A11y smoke is part of the gate. Before merging frontend behavior changes:
+  - `npm run test` must include the existing `vitest-axe` smoke tests and they
+    must pass (see `web/src/components/ui/__tests__/dialog.a11y.test.tsx` and
+    the page-level smokes under `web/src/pages/**/__tests__/*.a11y.test.tsx`).
+  - `npm run lint` must report **0 `jsx-a11y` errors**. Warnings on debt rules
+    (see `eslint.config.js`) are tolerated; new errors are not.
+  - When you add a new top-level page or a non-trivial dialog, add a matching
+    `*.a11y.test.tsx` using the `runAxe` helper. Template lives in
+    `.trellis/spec/frontend/a11y-guidelines.md`.
 
 ---
 

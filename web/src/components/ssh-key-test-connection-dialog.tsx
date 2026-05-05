@@ -145,7 +145,6 @@ export function SSHKeyTestConnectionDialog({
 
             <ul
               className="max-h-48 space-y-1 overflow-y-auto thin-scrollbar"
-              role="list"
             >
               {associatedNodes.map((node) => (
                 <li key={node.id}>
@@ -177,7 +176,7 @@ export function SSHKeyTestConnectionDialog({
 
           {/* 测试结果 */}
           {hasResults && (
-            <ul className="space-y-1.5" role="list">
+            <ul className="space-y-1.5">
               {results.map((r) => (
                 <li
                   key={r.nodeId}

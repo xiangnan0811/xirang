@@ -98,7 +98,7 @@ export function SSHKeyAssociatedNodesSheet({
                 className="mt-8 border-none bg-transparent shadow-none"
               />
             ) : (
-              <ul className="space-y-2" role="list">
+              <ul className="space-y-2">
                 {associatedNodes.map((node) => (
                   <li key={node.id}>
                     <button

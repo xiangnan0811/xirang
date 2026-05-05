@@ -13,6 +13,9 @@ function renderWithProviders() {
         initialEntries={["/app/overview"]}
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
+        {/* `role` 是组件自定义 prop（用户角色），并非 ARIA role；
+             jsx-a11y 误判为 role 属性。 */}
+        {/* eslint-disable-next-line jsx-a11y/aria-role */}
         <MobileNavigation username="alice" role="admin" onLogout={vi.fn()} onRefresh={vi.fn()} />
       </MemoryRouter>
     </ThemeProvider>

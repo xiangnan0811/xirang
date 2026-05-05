@@ -47,7 +47,7 @@ export function TagChips({ value, onChange, placeholder, ...aria }: TagChipsProp
                 className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none"
                 onClick={() => removeTag(tag)}
               >
-                <X className="size-3" />
+                <X className="size-3" aria-hidden="true" />
               </button>
             </span>
           ))}

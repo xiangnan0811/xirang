@@ -2324,6 +2324,8 @@ const en = {
       savingLayout: "Saving layout...",
       layoutSaved: "Layout saved",
       unsavedLayoutConfirm: "Layout unsaved, leave anyway?",
+      moveUp: "Move panel up",
+      moveDown: "Move panel down",
     },
     editor: {
       title: { create: "New Panel", edit: "Edit Panel" },

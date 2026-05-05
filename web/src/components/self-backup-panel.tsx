@@ -69,7 +69,7 @@ export function SelfBackupPanel() {
           {t('selfBackup.desc')}
         </p>
         <Button size="sm" variant="outline" onClick={handleBackup} disabled={backing}>
-          {backing ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <DatabaseBackup className="mr-1 size-3.5" />}
+          {backing ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden="true" /> : <DatabaseBackup className="mr-1 size-3.5" aria-hidden="true" />}
           {t('selfBackup.backupNow')}
         </Button>
 

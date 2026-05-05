@@ -1,4 +1,4 @@
-import { MoreVertical, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Panel } from "@/types/domain";
 import type { PanelQueryResult } from "@/types/domain";
@@ -22,6 +22,13 @@ type PanelCardProps = {
   editMode: boolean;
   onEdit?: (panel: Panel) => void;
   onDelete?: (panel: Panel) => void;
+  /**
+   * Wave 4 PR-C：键盘可达的"上移"兜底——react-grid-layout 拖拽默认仅支持鼠标。
+   * 仅在编辑模式下出现。`undefined` 表示已是首位，不可上移。
+   */
+  onMoveUp?: () => void;
+  /** Wave 4 PR-C：与 onMoveUp 同思路；`undefined` 表示已是末位。 */
+  onMoveDown?: () => void;
 };
 
 export function PanelCard({
@@ -33,6 +40,8 @@ export function PanelCard({
   editMode,
   onEdit,
   onDelete,
+  onMoveUp,
+  onMoveDown,
 }: PanelCardProps) {
   const { t } = useTranslation();
   const { data, loading, error, retry } = usePanelData(
@@ -51,7 +60,35 @@ export function PanelCard({
           {panel.title}
         </span>
         {editMode && (
-          <DropdownMenu>
+          <div className="flex items-center gap-0.5">
+            {/* 键盘可达的"上移/下移"兜底，与鼠标拖拽并存。
+                react-grid-layout 拖拽默认仅支持鼠标——这里给键盘用户一条平行通路。 */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0"
+              aria-label={t("dashboards.panel.moveUp")}
+              disabled={!onMoveUp}
+              onClick={() => onMoveUp?.()}
+              // 阻止冒泡到 drag-handle 触发拖拽
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            >
+              <ChevronUp className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0"
+              aria-label={t("dashboards.panel.moveDown")}
+              disabled={!onMoveDown}
+              onClick={() => onMoveDown?.()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            >
+              <ChevronDown className="size-3.5" aria-hidden />
+            </Button>
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -76,6 +113,7 @@ export function PanelCard({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         )}
       </div>
 

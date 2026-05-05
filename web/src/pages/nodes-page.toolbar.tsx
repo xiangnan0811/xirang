@@ -121,6 +121,7 @@ export function NodesPageToolbar({
         type="file"
         accept=".csv,text/csv"
         className="hidden"
+        aria-label={t("nodes.csvImport")}
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (!file) {

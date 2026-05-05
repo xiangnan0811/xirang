@@ -187,7 +187,7 @@ export function OverviewTrafficChart({
               </div>
 
               {/* Legend — matching matrix style (border-t, inline dots) */}
-              <div className="mt-auto shrink-0 flex items-center gap-4 text-mini text-muted-foreground pt-3 border-t border-border">
+              <div className="mt-auto shrink-0 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
                 {[
                   { key: "throughput", label: t("overview.legendThroughput"), dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
                   { key: "activity", label: t("overview.legendActivity"), dotClass: "size-1.5 rounded-sm bg-[hsl(var(--chart-egress))]" },

@@ -63,24 +63,24 @@ export function SSHKeyActionsMenu({
           className="size-8 text-muted-foreground hover:text-foreground"
           aria-label={t("common.actions")}
         >
-          <MoreHorizontal className="size-4" />
+          <MoreHorizontal className="size-4" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem onClick={() => onEdit(sshKey)}>
-          <Pencil className="mr-2 size-4" />
+          <Pencil className="mr-2 size-4" aria-hidden="true" />
           {t("common.edit")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void handleCopyPublicKey()}>
-          <Copy className="mr-2 size-4" />
+          <Copy className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.copyPublicKey")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onTestConnection(sshKey)}>
-          <Plug className="mr-2 size-4" />
+          <Plug className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.testConnection")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onViewAssociatedNodes(sshKey)}>
-          <Monitor className="mr-2 size-4" />
+          <Monitor className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.viewAssociatedNodes")}
           {nodeCount > 0 && (
             <Badge tone="success" className="ml-auto">
@@ -89,7 +89,7 @@ export function SSHKeyActionsMenu({
           )}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onRotate(sshKey)}>
-          <RefreshCw className="mr-2 size-4" />
+          <RefreshCw className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.rotateKey")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -97,7 +97,7 @@ export function SSHKeyActionsMenu({
           className="text-destructive focus:text-destructive"
           onClick={() => onDelete(sshKey)}
         >
-          <Trash2 className="mr-2 size-4" />
+          <Trash2 className="mr-2 size-4" aria-hidden="true" />
           {t("common.delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
