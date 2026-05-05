@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/05-04-wave-2/prd.md", "reason": "总 PRD 与 AC 清单 — check 阶段比对每条 AC 是否真实达成"}
+{"file": ".trellis/tasks/05-04-wave-2/research/backend-audit.md", "reason": "PR-C check 时回扣 finding 是否被真正修复（reporting wg+ctx 是否在 Stop 时 wait、terminal TOCTOU 是否真的 atomic、alerting 慢通道是否隔离）"}
+{"file": ".trellis/tasks/05-04-wave-2/research/frontend-audit.md", "reason": "PR-D check 时回扣：DialogTitle 是否真加、14 个 i18n key 是否全补 en.ts、4 处硬编码中文是否清"}
+{"file": ".trellis/tasks/05-04-wave-2/research/deploy-ops-audit.md", "reason": "PR-A/B check 关键参考：migration 事务是否真包裹、dirty 是否真拒启、metrics 鉴权是否生效"}
+{"file": ".trellis/tasks/05-04-wave-2/research/docs-ci-audit.md", "reason": "PR-E check 时核对 .env.example 变量数、CHANGELOG 关键词、release-please-config 是否含 changelog-sections"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端 PR-A/B/C check 时遵循的质量门槛（go test / go vet / golangci-lint）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 PR-D check 时遵循的质量门槛（npm run check / vitest / bundle budget）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "PR-B metrics 鉴权 / PR-C 涉及 backend↔frontend 时的跨层一致性检查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "PR-C 修复 alerting 双 sanitize 函数对齐时的 code reuse 检查（避免再次引入第三个 sanitize）"}
