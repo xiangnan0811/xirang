@@ -134,6 +134,58 @@ export function DashboardDetailPage() {
     setEditorOpen(true);
   }
 
+  // ── 键盘可达的"上移/下移"兜底 ────────────────────────────────────
+  // react-grid-layout 拖拽默认仅支持鼠标，对键盘用户不友好（社区已知难题）。
+  // Wave 4 PR-C：提供并行的"上移/下移"按钮，按 (y, x) 顺序与上/下相邻面板交换 y 坐标。
+  // 不替换鼠标拖拽，只是补足键盘可达通路；变更同样会触发 layoutDirty，由"保存布局"持久化。
+  function getOrderedPanels(): Panel[] {
+    return [...(dashboard?.panels ?? [])].sort((a, b) => {
+      if (a.layout_y !== b.layout_y) return a.layout_y - b.layout_y;
+      return a.layout_x - b.layout_x;
+    });
+  }
+
+  function handleMovePanel(panel: Panel, direction: "up" | "down") {
+    if (!editMode || !dashboard) return;
+    const ordered = getOrderedPanels();
+    const index = ordered.findIndex((p) => p.id === panel.id);
+    if (index < 0) return;
+    const neighborIndex = direction === "up" ? index - 1 : index + 1;
+    if (neighborIndex < 0 || neighborIndex >= ordered.length) return;
+
+    const neighbor = ordered[neighborIndex];
+    // 交换两块面板的 y 坐标（保留 x/w/h，由 react-grid-layout vertical compactType 自动整理）
+    const items: LayoutItem[] = (dashboard.panels ?? []).map((p) => {
+      if (p.id === panel.id) {
+        return {
+          id: p.id,
+          layout_x: p.layout_x,
+          layout_y: neighbor.layout_y,
+          layout_w: p.layout_w,
+          layout_h: p.layout_h,
+        };
+      }
+      if (p.id === neighbor.id) {
+        return {
+          id: p.id,
+          layout_x: p.layout_x,
+          layout_y: panel.layout_y,
+          layout_w: p.layout_w,
+          layout_h: p.layout_h,
+        };
+      }
+      return {
+        id: p.id,
+        layout_x: p.layout_x,
+        layout_y: p.layout_y,
+        layout_w: p.layout_w,
+        layout_h: p.layout_h,
+      };
+    });
+    setPendingLayout(items);
+    setLayoutDirty(true);
+  }
+
   // ── 添加面板 ──────────────────────────────────────────────────────
   function handleAddPanel() {
     // Auto-enable edit mode so follow-up drag/resize affordances appear.
@@ -148,7 +200,22 @@ export function DashboardDetailPage() {
     refresh();
   }
 
-  const panels = dashboard.panels ?? [];
+  // 应用未保存的 layout 覆写（主要给键盘"上移/下移"用，让点击后视觉立即响应）
+  const rawPanels = dashboard.panels ?? [];
+  const layoutById = new Map(pendingLayout.map((item) => [item.id, item]));
+  const panels: Panel[] = layoutDirty
+    ? rawPanels.map((p) => {
+        const override = layoutById.get(p.id);
+        if (!override) return p;
+        return {
+          ...p,
+          layout_x: override.layout_x,
+          layout_y: override.layout_y,
+          layout_w: override.layout_w,
+          layout_h: override.layout_h,
+        };
+      })
+    : rawPanels;
 
   return (
     <div className="flex flex-col gap-0 min-h-screen">
@@ -270,19 +337,32 @@ export function DashboardDetailPage() {
             editMode={editMode}
             onLayoutChange={handleLayoutChange}
           >
-            {(panel) => (
-              <PanelCard
-                key={panel.id}
-                panel={panel}
-                start={start}
-                end={end}
-                token={token ?? ""}
-                refreshNonce={refreshNonce}
-                editMode={editMode}
-                onEdit={handleEditPanel}
-                onDelete={handleDeletePanel}
-              />
-            )}
+            {(panel) => {
+              const ordered = [...panels].sort((a, b) => {
+                if (a.layout_y !== b.layout_y) return a.layout_y - b.layout_y;
+                return a.layout_x - b.layout_x;
+              });
+              const idx = ordered.findIndex((p) => p.id === panel.id);
+              return (
+                <PanelCard
+                  key={panel.id}
+                  panel={panel}
+                  start={start}
+                  end={end}
+                  token={token ?? ""}
+                  refreshNonce={refreshNonce}
+                  editMode={editMode}
+                  onEdit={handleEditPanel}
+                  onDelete={handleDeletePanel}
+                  onMoveUp={idx > 0 ? () => handleMovePanel(panel, "up") : undefined}
+                  onMoveDown={
+                    idx >= 0 && idx < ordered.length - 1
+                      ? () => handleMovePanel(panel, "down")
+                      : undefined
+                  }
+                />
+              );
+            }}
           </PanelGrid>
         )}
       </div>

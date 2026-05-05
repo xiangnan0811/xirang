@@ -2333,6 +2333,8 @@ const zh = {
       savingLayout: "保存布局...",
       layoutSaved: "布局已保存",
       unsavedLayoutConfirm: "布局未保存，确认离开？",
+      moveUp: "上移面板",
+      moveDown: "下移面板",
     },
     editor: {
       title: { create: "新建面板", edit: "编辑面板" },

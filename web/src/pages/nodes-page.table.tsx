@@ -150,7 +150,7 @@ export const NodesTable = React.memo(function NodesTable({
                           }}
                         />
                       </div>
-                      <p className="mt-1 text-mini text-muted-foreground">
+                      <p className="mt-1 text-xs text-foreground/70">
                         {t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}
                       </p>
                     </div>
