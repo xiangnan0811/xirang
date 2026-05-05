@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
-import { getNodeLogConfig, updateNodeLogConfig } from "@/lib/api/node-logs";
+import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 
 const DENIED_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/", "/boot/", "/root/"];
@@ -39,7 +39,7 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
     if (!token || nodeId <= 0) return;
     setLoading(true);
     try {
-      const cfg = await getNodeLogConfig(token, nodeId);
+      const cfg = await apiClient.getNodeLogConfig(token, nodeId, { signal });
       if (!signal.aborted) {
         setLogPaths((cfg.log_paths ?? []).join("\n"));
         setJournalctlEnabled(cfg.log_journalctl_enabled);
@@ -83,7 +83,7 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
 
     setSaving(true);
     try {
-      const updated = await updateNodeLogConfig(token, nodeId, {
+      const updated = await apiClient.updateNodeLogConfig(token, nodeId, {
         log_paths: paths,
         log_journalctl_enabled: journalctlEnabled,
         log_retention_days: retentionDays,

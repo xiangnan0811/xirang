@@ -8,7 +8,6 @@ import { toast } from "@/components/ui/toast";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { apiClient } from "@/lib/api/client";
-import { retryDelivery } from "@/lib/api/alert-deliveries";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -256,7 +255,7 @@ export function AlertCenter({
   const handleRetryDelivery = async (alertId: string, deliveryId: string) => {
     setRetryingDeliveryKey(String(deliveryId));
     try {
-      await retryDelivery(token, deliveryId);
+      await apiClient.retryDelivery(token, deliveryId);
       toast.success(t("notifications.resendSuccess", { defaultValue: "重发成功" }));
       refreshDeliveries(alertId);
     } catch (err) {
@@ -271,7 +270,7 @@ export function AlertCenter({
     if (!failedDeliveries.length) return;
     setRetryingAllAlertId(alertId);
     const results = await Promise.allSettled(
-      failedDeliveries.map((d) => retryDelivery(token, d.id))
+      failedDeliveries.map((d) => apiClient.retryDelivery(token, d.id))
     );
     const failed = results.filter(r => r.status === "rejected").length;
     if (failed === 0) {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/auth-context";
-import { listNodeAnomalyEvents } from "@/lib/api/anomaly";
+import { apiClient } from "@/lib/api/client";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
 import AnomalyEventRow from "@/components/anomaly-event-row";
@@ -16,7 +16,7 @@ export default function AnomalyTab({ nodeId }: { nodeId: number }) {
   useEffect(() => {
     if (!token || nodeId <= 0) return;
     let cancelled = false;
-    listNodeAnomalyEvents(token, nodeId, { limit: 50 }).then(
+    apiClient.listNodeAnomalyEvents(token, nodeId, { limit: 50 }).then(
       (data) => {
         if (!cancelled) {
           setEvents(data ?? []);

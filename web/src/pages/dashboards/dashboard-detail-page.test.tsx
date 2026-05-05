@@ -25,13 +25,20 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/lib/api/dashboards", () => ({
-  getDashboard: vi.fn(),
-  queryPanel: vi.fn(),
-  deletePanel: vi.fn(),
-  updateLayout: vi.fn(),
-  updateDashboard: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getDashboard: vi.fn(),
+      queryPanel: vi.fn(),
+      deletePanel: vi.fn(),
+      updateLayout: vi.fn(),
+      updateDashboard: vi.fn(),
+    },
+  };
+});
 
 // react-grid-layout 在 jsdom 中需要 ResizeObserver
 global.ResizeObserver = class {
@@ -40,9 +47,9 @@ global.ResizeObserver = class {
   disconnect() {}
 };
 
-import { getDashboard, queryPanel } from "@/lib/api/dashboards";
-const mockGetDashboard = vi.mocked(getDashboard);
-const mockQueryPanel = vi.mocked(queryPanel);
+import { apiClient } from "@/lib/api/client";
+const mockGetDashboard = vi.mocked(apiClient.getDashboard);
+const mockQueryPanel = vi.mocked(apiClient.queryPanel);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 

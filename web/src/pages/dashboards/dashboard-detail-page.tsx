@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft, RefreshCw, Plus, Save } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/auth-context";
-import { deletePanel, updateLayout } from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/core";
 import type { Panel, DashboardTimeRange } from "@/types/domain";
 import { getErrorMessage } from "@/lib/utils";
@@ -106,7 +106,7 @@ export function DashboardDetailPage() {
     if (!dashboard) return;
     setSavingLayout(true);
     try {
-      await updateLayout(token ?? "", dashboard.id, pendingLayout);
+      await apiClient.updateLayout(token ?? "", dashboard.id, pendingLayout);
       setLayoutDirty(false);
       toast.success(t("dashboards.panel.layoutSaved"));
     } catch (err) {
@@ -120,7 +120,7 @@ export function DashboardDetailPage() {
   async function handleDeletePanel(panel: Panel) {
     if (!dashboard) return;
     try {
-      await deletePanel(token ?? "", dashboard.id, panel.id);
+      await apiClient.deletePanel(token ?? "", dashboard.id, panel.id);
       toast.success(t("common.success"));
       refresh();
     } catch (err) {

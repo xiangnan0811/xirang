@@ -21,7 +21,7 @@ export function SelfBackupPanel() {
     if (!token) return;
     setLoadingList(true);
     try {
-      const list = await apiClient.listBackups(token, signal);
+      const list = await apiClient.listBackups(token, { signal });
       if (!signal?.aborted) {
         setBackups(list);
       }

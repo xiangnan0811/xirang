@@ -26,20 +26,34 @@ function buildQuery(q: AnomalyListQuery): string {
   return s ? `?${s}` : ""
 }
 
-export const listAnomalyEvents = (token: string, q: AnomalyListQuery = {}) =>
-  request<AnomalyListResult>(`/anomaly-events${buildQuery(q)}`, { token })
+export function createAnomalyApi() {
+  return {
+    async listAnomalyEvents(
+      token: string,
+      q: AnomalyListQuery = {},
+      options?: { signal?: AbortSignal },
+    ): Promise<AnomalyListResult> {
+      return request<AnomalyListResult>(`/anomaly-events${buildQuery(q)}`, {
+        token,
+        signal: options?.signal,
+      })
+    },
 
-export const listNodeAnomalyEvents = (
-  token: string,
-  nodeID: number,
-  opts: { limit?: number; detector?: AnomalyDetector } = {},
-) => {
-  const params = new URLSearchParams()
-  if (opts.limit) params.set("limit", String(opts.limit))
-  if (opts.detector) params.set("detector", opts.detector)
-  const s = params.toString()
-  const suffix = s ? `?${s}` : ""
-  return request<AnomalyEvent[]>(`/nodes/${nodeID}/anomaly-events${suffix}`, {
-    token,
-  })
+    async listNodeAnomalyEvents(
+      token: string,
+      nodeID: number,
+      opts: { limit?: number; detector?: AnomalyDetector } = {},
+      options?: { signal?: AbortSignal },
+    ): Promise<AnomalyEvent[]> {
+      const params = new URLSearchParams()
+      if (opts.limit) params.set("limit", String(opts.limit))
+      if (opts.detector) params.set("detector", opts.detector)
+      const s = params.toString()
+      const suffix = s ? `?${s}` : ""
+      return request<AnomalyEvent[]>(`/nodes/${nodeID}/anomaly-events${suffix}`, {
+        token,
+        signal: options?.signal,
+      })
+    },
+  }
 }

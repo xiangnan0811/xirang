@@ -7,13 +7,20 @@ import { ApiError } from "@/lib/api/core";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
-vi.mock("@/lib/api/dashboards", () => ({
-  getDashboard: vi.fn(),
-  updateDashboard: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getDashboard: vi.fn(),
+      updateDashboard: vi.fn(),
+    },
+  };
+});
 
-import { getDashboard } from "@/lib/api/dashboards";
-const mockGetDashboard = vi.mocked(getDashboard);
+import { apiClient } from "@/lib/api/client";
+const mockGetDashboard = vi.mocked(apiClient.getDashboard);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 
@@ -58,7 +65,7 @@ describe("useDashboard", () => {
     expect(mockGetDashboard).toHaveBeenCalledWith(
       "test-token",
       1,
-      expect.any(AbortSignal)
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 

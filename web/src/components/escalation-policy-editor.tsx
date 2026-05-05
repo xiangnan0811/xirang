@@ -18,11 +18,8 @@ import {
 import { toast } from "@/components/ui/toast";
 import { EscalationLevelRow, type EscalationLevelRowErrors } from "./escalation-level-row";
 import { createIntegrationsApi } from "@/lib/api/integrations-api";
-import {
-  createEscalationPolicy,
-  updateEscalationPolicy,
-  type EscalationPolicyInput,
-} from "@/lib/api/escalation";
+import { apiClient } from "@/lib/api/client";
+import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context";
 import type { EscalationLevel, EscalationPolicy, IntegrationChannel } from "@/types/domain";
@@ -182,8 +179,8 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
     setNameConflict(false);
     try {
       const saved = isEdit && policy
-        ? await updateEscalationPolicy(token, policy.id, input)
-        : await createEscalationPolicy(token, input);
+        ? await apiClient.updateEscalationPolicy(token, policy.id, input)
+        : await apiClient.createEscalationPolicy(token, input);
       onSaved(saved);
       onOpenChange(false);
     } catch (err) {

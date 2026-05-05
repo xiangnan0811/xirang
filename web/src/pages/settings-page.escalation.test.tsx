@@ -33,11 +33,18 @@ const mockList = vi.fn();
 const mockUpdate = vi.fn();
 const mockDelete = vi.fn();
 
-vi.mock("@/lib/api/escalation", () => ({
-  listEscalationPolicies: (...args: unknown[]) => mockList(...args),
-  updateEscalationPolicy: (...args: unknown[]) => mockUpdate(...args),
-  deleteEscalationPolicy: (...args: unknown[]) => mockDelete(...args),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      listEscalationPolicies: (...args: unknown[]) => mockList(...args),
+      updateEscalationPolicy: (...args: unknown[]) => mockUpdate(...args),
+      deleteEscalationPolicy: (...args: unknown[]) => mockDelete(...args),
+    },
+  };
+});
 
 vi.mock("@/components/escalation-policy-editor", () => ({
   EscalationPolicyEditor: () => null,

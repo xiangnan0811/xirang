@@ -7,51 +7,66 @@ vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token", role: "admin" }),
 }));
 
-vi.mock("@/lib/api/slo", () => ({
-  listSLOs: vi.fn().mockResolvedValue([
-    {
-      id: 1,
-      name: "prod availability",
-      metric_type: "availability",
-      match_tags: '["prod"]',
-      threshold: 0.999,
-      window_days: 28,
-      enabled: true,
-      created_by: 1,
-      created_at: "2026-04-20T00:00:00Z",
-      updated_at: "2026-04-20T00:00:00Z",
+vi.mock("@/lib/api/slo", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/slo")>("@/lib/api/slo");
+  return {
+    ...actual,
+    parseSLOTags: (s: { match_tags: unknown }) =>
+      Array.isArray(s.match_tags)
+        ? s.match_tags
+        : s.match_tags
+          ? JSON.parse(s.match_tags as string)
+          : [],
+  };
+});
+
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      listSLOs: vi.fn().mockResolvedValue([
+        {
+          id: 1,
+          name: "prod availability",
+          metric_type: "availability",
+          match_tags: '["prod"]',
+          threshold: 0.999,
+          window_days: 28,
+          enabled: true,
+          created_by: 1,
+          created_at: "2026-04-20T00:00:00Z",
+          updated_at: "2026-04-20T00:00:00Z",
+        },
+      ]),
+      getSLOSummary: vi.fn().mockResolvedValue({
+        total: 1,
+        healthy: 1,
+        warning: 0,
+        breached: 0,
+        insufficient: 0,
+      }),
+      getSLOCompliance: vi.fn().mockResolvedValue({
+        slo_id: 1,
+        name: "prod availability",
+        metric_type: "availability",
+        window_start: "2026-03-23T00:00:00Z",
+        window_end: "2026-04-20T00:00:00Z",
+        threshold: 0.999,
+        observed: 0.9995,
+        sample_count: 33600,
+        error_budget_remaining_pct: 50,
+        burn_rate_1h: 0.1,
+        status: "healthy",
+      }),
+      createSLO: vi.fn(),
+      updateSLO: vi.fn(),
+      deleteSLO: vi.fn(),
+      listEscalationPolicies: vi.fn().mockResolvedValue([]),
     },
-  ]),
-  getSLOSummary: vi.fn().mockResolvedValue({
-    total: 1,
-    healthy: 1,
-    warning: 0,
-    breached: 0,
-    insufficient: 0,
-  }),
-  getSLOCompliance: vi.fn().mockResolvedValue({
-    slo_id: 1,
-    name: "prod availability",
-    metric_type: "availability",
-    window_start: "2026-03-23T00:00:00Z",
-    window_end: "2026-04-20T00:00:00Z",
-    threshold: 0.999,
-    observed: 0.9995,
-    sample_count: 33600,
-    error_budget_remaining_pct: 50,
-    burn_rate_1h: 0.1,
-    status: "healthy",
-  }),
-  createSLO: vi.fn(),
-  updateSLO: vi.fn(),
-  deleteSLO: vi.fn(),
-  parseSLOTags: (s: { match_tags: unknown }) =>
-    Array.isArray(s.match_tags)
-      ? s.match_tags
-      : s.match_tags
-        ? JSON.parse(s.match_tags as string)
-        : [],
-}));
+  };
+});
 
 describe("SLOPanel", () => {
   it("renders SLO list after load", async () => {

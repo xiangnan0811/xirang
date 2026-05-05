@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { getDashboard, updateDashboard } from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 import type { Dashboard, DashboardTimeRange } from "@/types/domain";
 import type { DashboardInput } from "@/lib/api/dashboards";
 
@@ -76,7 +76,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
       setDashboard((prev) =>
         prev ? { ...prev, auto_refresh_seconds: seconds } : prev
       );
-      updateDashboard(token, dashboard.id, {
+      apiClient.updateDashboard(token, dashboard.id, {
         name: dashboard.name,
         description: dashboard.description,
         time_range: dashboard.time_range,
@@ -111,7 +111,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(null);
 
-    getDashboard(token, Number(id), controller.signal)
+    apiClient.getDashboard(token, Number(id), { signal: controller.signal })
       .then((d) => {
         if (controller.signal.aborted) return;
         // eslint-disable-next-line react-hooks/set-state-in-effect

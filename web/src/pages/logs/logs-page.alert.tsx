@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/auth-context";
 import { useNodesContext } from "@/context/nodes-context";
-import { getAlertLogs } from "@/lib/api/node-logs";
+import { apiClient } from "@/lib/api/client";
 import type { AlertLogsResult, NodeLogEntry, NodeLogPriority } from "@/types/domain";
 import { toast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/utils";
@@ -41,7 +41,7 @@ export function AlertLogsPanel() {
     setLoading(true);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setResult(null);
-    getAlertLogs(token, alertId)
+    apiClient.getAlertLogs(token, alertId, { signal: controller.signal })
       .then((data) => { if (!controller.signal.aborted) setResult(data); })
       .catch((err) => { if (!controller.signal.aborted) toast.error(getErrorMessage(err)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });

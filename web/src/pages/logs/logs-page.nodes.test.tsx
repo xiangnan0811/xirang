@@ -21,9 +21,16 @@ vi.mock("@/context/auth-context", () => ({
 
 const queryNodeLogsMock = vi.fn();
 
-vi.mock("@/lib/api/node-logs", () => ({
-  queryNodeLogs: (...args: unknown[]) => queryNodeLogsMock(...args),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      queryNodeLogs: (...args: unknown[]) => queryNodeLogsMock(...args),
+    },
+  };
+});
 
 vi.mock("@/context/nodes-context", () => ({
   useNodesContext: () => ({

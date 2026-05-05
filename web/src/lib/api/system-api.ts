@@ -28,20 +28,20 @@ export type BackupEntry = {
 
 export function createSystemApi() {
   return {
-    async getVersion(signal?: AbortSignal): Promise<VersionInfo> {
-      return (await request<VersionInfo>("/version", { signal })) ?? { version: "", build_time: "", git_commit: "" };
+    async getVersion(options?: { signal?: AbortSignal }): Promise<VersionInfo> {
+      return (await request<VersionInfo>("/version", { signal: options?.signal })) ?? { version: "", build_time: "", git_commit: "" };
     },
 
-    async checkVersion(token: string, signal?: AbortSignal): Promise<VersionCheck> {
-      return (await request<VersionCheck>("/version/check", { token, signal })) ?? { update_available: false, current_version: "", latest_version: "", release_url: "" };
+    async checkVersion(token: string, options?: { signal?: AbortSignal }): Promise<VersionCheck> {
+      return (await request<VersionCheck>("/version/check", { token, signal: options?.signal })) ?? { update_available: false, current_version: "", latest_version: "", release_url: "" };
     },
 
     async backupDB(token: string): Promise<BackupResult> {
       return (await request<BackupResult>("/system/backup-db", { token, method: "POST" })) ?? { path: "", size: 0, sha256: "" };
     },
 
-    async listBackups(token: string, signal?: AbortSignal): Promise<BackupEntry[]> {
-      return (await request<BackupEntry[]>("/system/backups", { token, signal })) ?? [];
+    async listBackups(token: string, options?: { signal?: AbortSignal }): Promise<BackupEntry[]> {
+      return (await request<BackupEntry[]>("/system/backups", { token, signal: options?.signal })) ?? [];
     },
   };
 }

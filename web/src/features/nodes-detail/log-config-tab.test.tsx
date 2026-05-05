@@ -8,10 +8,17 @@ const { mockGetNodeLogConfig, mockUpdateNodeLogConfig } = vi.hoisted(() => ({
   mockUpdateNodeLogConfig: vi.fn(),
 }));
 
-vi.mock("@/lib/api/node-logs", () => ({
-  getNodeLogConfig: mockGetNodeLogConfig,
-  updateNodeLogConfig: mockUpdateNodeLogConfig,
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getNodeLogConfig: mockGetNodeLogConfig,
+      updateNodeLogConfig: mockUpdateNodeLogConfig,
+    },
+  };
+});
 
 const { mockToastSuccess, mockToastError } = vi.hoisted(() => ({
   mockToastSuccess: vi.fn(),

@@ -8,9 +8,16 @@ const { mockListNodeAnomalyEvents } = vi.hoisted(() => ({
   mockListNodeAnomalyEvents: vi.fn(),
 }));
 
-vi.mock("@/lib/api/anomaly", () => ({
-  listNodeAnomalyEvents: mockListNodeAnomalyEvents,
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      listNodeAnomalyEvents: mockListNodeAnomalyEvents,
+    },
+  };
+});
 
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),

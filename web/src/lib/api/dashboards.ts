@@ -47,41 +47,56 @@ export type PanelQueryInput = {
   end: string;
 };
 
-export const listDashboards = (token: string) =>
-  request<Dashboard[]>("/dashboards", { token });
+export function createDashboardsApi() {
+  return {
+    async listDashboards(token: string, options?: { signal?: AbortSignal }): Promise<Dashboard[]> {
+      return request<Dashboard[]>("/dashboards", { token, signal: options?.signal });
+    },
 
-export const getDashboard = (token: string, id: number, signal?: AbortSignal) =>
-  request<Dashboard>(`/dashboards/${id}`, { token, signal });
+    async getDashboard(token: string, id: number, options?: { signal?: AbortSignal }): Promise<Dashboard> {
+      return request<Dashboard>(`/dashboards/${id}`, { token, signal: options?.signal });
+    },
 
-export const createDashboard = (token: string, input: DashboardInput) =>
-  request<Dashboard>("/dashboards", { token, method: "POST", body: input });
+    async createDashboard(token: string, input: DashboardInput): Promise<Dashboard> {
+      return request<Dashboard>("/dashboards", { token, method: "POST", body: input });
+    },
 
-export const updateDashboard = (token: string, id: number, input: DashboardInput) =>
-  request<Dashboard>(`/dashboards/${id}`, { token, method: "PATCH", body: input });
+    async updateDashboard(token: string, id: number, input: DashboardInput): Promise<Dashboard> {
+      return request<Dashboard>(`/dashboards/${id}`, { token, method: "PATCH", body: input });
+    },
 
-export const deleteDashboard = (token: string, id: number) =>
-  request<{ deleted: boolean }>(`/dashboards/${id}`, { token, method: "DELETE" });
+    async deleteDashboard(token: string, id: number): Promise<{ deleted: boolean }> {
+      return request<{ deleted: boolean }>(`/dashboards/${id}`, { token, method: "DELETE" });
+    },
 
-export const addPanel = (token: string, dashboardID: number, input: PanelInput) =>
-  request<Panel>(`/dashboards/${dashboardID}/panels`, { token, method: "POST", body: input });
+    async addPanel(token: string, dashboardID: number, input: PanelInput): Promise<Panel> {
+      return request<Panel>(`/dashboards/${dashboardID}/panels`, { token, method: "POST", body: input });
+    },
 
-export const updatePanel = (token: string, dashboardID: number, panelID: number, input: PanelInput) =>
-  request<Panel>(`/dashboards/${dashboardID}/panels/${panelID}`, { token, method: "PATCH", body: input });
+    async updatePanel(token: string, dashboardID: number, panelID: number, input: PanelInput): Promise<Panel> {
+      return request<Panel>(`/dashboards/${dashboardID}/panels/${panelID}`, { token, method: "PATCH", body: input });
+    },
 
-export const deletePanel = (token: string, dashboardID: number, panelID: number) =>
-  request<{ deleted: boolean }>(`/dashboards/${dashboardID}/panels/${panelID}`, {
-    token, method: "DELETE",
-  });
+    async deletePanel(token: string, dashboardID: number, panelID: number): Promise<{ deleted: boolean }> {
+      return request<{ deleted: boolean }>(`/dashboards/${dashboardID}/panels/${panelID}`, {
+        token, method: "DELETE",
+      });
+    },
 
-export const updateLayout = (token: string, dashboardID: number, items: LayoutItem[]) =>
-  request<{ updated: number }>(`/dashboards/${dashboardID}/panels/layout`, {
-    token, method: "PUT", body: { items },
-  });
+    async updateLayout(token: string, dashboardID: number, items: LayoutItem[]): Promise<{ updated: number }> {
+      return request<{ updated: number }>(`/dashboards/${dashboardID}/panels/layout`, {
+        token, method: "PUT", body: { items },
+      });
+    },
 
-export const queryPanel = (token: string, input: PanelQueryInput, signal?: AbortSignal) =>
-  request<PanelQueryResult>("/dashboards/panel-query", {
-    token, method: "POST", body: input, signal,
-  });
+    async queryPanel(token: string, input: PanelQueryInput, options?: { signal?: AbortSignal }): Promise<PanelQueryResult> {
+      return request<PanelQueryResult>("/dashboards/panel-query", {
+        token, method: "POST", body: input, signal: options?.signal,
+      });
+    },
 
-export const listMetrics = (token: string) =>
-  request<MetricDescriptor[]>("/dashboards/metrics", { token });
+    async listMetrics(token: string, options?: { signal?: AbortSignal }): Promise<MetricDescriptor[]> {
+      return request<MetricDescriptor[]>("/dashboards/metrics", { token, signal: options?.signal });
+    },
+  };
+}

@@ -20,7 +20,7 @@ export function VersionBanner() {
 
     const controller = new AbortController();
 
-    void apiClient.checkVersion(token, controller.signal).then((result) => {
+    void apiClient.checkVersion(token, { signal: controller.signal }).then((result) => {
       if (controller.signal.aborted) return;
       setCurrentVersion(result.current_version);
       setLatestVersion(result.latest_version);

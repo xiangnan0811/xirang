@@ -14,11 +14,18 @@ export function parseSilenceTags(s: Pick<Silence, "match_tags">): string[] {
   }
 }
 
-export const listSilences = (token: string, activeOnly = false) =>
-  request<Silence[]>(`/silences${activeOnly ? "?active=true" : ""}`, { token })
+export function createSilencesApi() {
+  return {
+    async listSilences(token: string, activeOnly = false, options?: { signal?: AbortSignal }): Promise<Silence[]> {
+      return request<Silence[]>(`/silences${activeOnly ? "?active=true" : ""}`, { token, signal: options?.signal })
+    },
 
-export const createSilence = (token: string, s: SilenceInput) =>
-  request<Silence>("/silences", { method: "POST", token, body: s })
+    async createSilence(token: string, s: SilenceInput): Promise<Silence> {
+      return request<Silence>("/silences", { method: "POST", token, body: s })
+    },
 
-export const deleteSilence = (token: string, id: number) =>
-  request<void>(`/silences/${id}`, { method: "DELETE", token })
+    async deleteSilence(token: string, id: number): Promise<void> {
+      return request<void>(`/silences/${id}`, { method: "DELETE", token })
+    },
+  }
+}

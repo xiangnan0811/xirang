@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { listAlertEscalationEvents, listEscalationPolicies } from "@/lib/api/escalation";
-import { listAnomalyEvents } from "@/lib/api/anomaly";
+import { apiClient } from "@/lib/api/client";
 import type { AnomalyDetector, AnomalyEvent, EscalationEvent, EscalationPolicy } from "@/types/domain";
 
 type AlertEscalationTimelineProps = {
@@ -71,7 +70,7 @@ export function AlertEscalationTimeline({
   // Load policies once to resolve integration names via policy levels
   useEffect(() => {
     let cancelled = false;
-    listEscalationPolicies(token).then(
+    apiClient.listEscalationPolicies(token).then(
       (list) => { if (!cancelled) setPolicies(list); },
       () => {},
     );
@@ -80,7 +79,7 @@ export function AlertEscalationTimeline({
 
   useEffect(() => {
     let cancelled = false;
-    listAlertEscalationEvents(token, alertId).then(
+    apiClient.listAlertEscalationEvents(token, alertId).then(
       (evs) => {
         if (!cancelled) {
           setEvents(evs);
@@ -155,7 +154,7 @@ export function AnomalyAlertContext({
   useEffect(() => {
     if (!detector || !nodeId) return;
     let cancelled = false;
-    listAnomalyEvents(token, { node_id: nodeId, detector, page_size: 1 }).then(
+    apiClient.listAnomalyEvents(token, { node_id: nodeId, detector, page_size: 1 }).then(
       (res) => {
         if (!cancelled) {
           setEvent(res.data[0] ?? null);

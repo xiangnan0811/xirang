@@ -4,12 +4,8 @@ import { useTranslation } from "react-i18next";
 import { MoreVertical, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/auth-context";
-import {
-  listDashboards,
-  createDashboard,
-  deleteDashboard,
-  type DashboardInput,
-} from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
+import type { DashboardInput } from "@/lib/api/dashboards";
 import type { Dashboard, DashboardTimeRange } from "@/types/domain";
 import { getErrorMessage } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -152,7 +148,7 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
         time_range: timeRange,
         auto_refresh_seconds: parseInt(autoRefresh, 10),
       };
-      const created = await createDashboard(token ?? "", input);
+      const created = await apiClient.createDashboard(token ?? "", input);
       toast.success(t("common.success"));
       onCreated(created);
       reset();
@@ -298,7 +294,7 @@ export function DashboardsPage() {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    listDashboards(token ?? "")
+    apiClient.listDashboards(token ?? "")
       .then((list) => {
         if (!cancelled) setDashboards(list);
       })
@@ -319,7 +315,7 @@ export function DashboardsPage() {
   }
 
   async function handleDelete(id: number) {
-    await deleteDashboard(token ?? "", id);
+    await apiClient.deleteDashboard(token ?? "", id);
     setDashboards((prev) => prev.filter((d) => d.id !== id));
     toast.success(t("common.success"));
   }

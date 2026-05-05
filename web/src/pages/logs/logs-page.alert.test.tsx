@@ -19,9 +19,16 @@ vi.mock("@/context/auth-context", () => ({
 
 const getAlertLogsMock = vi.fn();
 
-vi.mock("@/lib/api/node-logs", () => ({
-  getAlertLogs: (...args: unknown[]) => getAlertLogsMock(...args),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getAlertLogs: (...args: unknown[]) => getAlertLogsMock(...args),
+    },
+  };
+});
 
 vi.mock("@/context/nodes-context", () => ({
   useNodesContext: () => ({
@@ -106,7 +113,11 @@ describe("AlertLogsPanel", () => {
     });
 
     expect(screen.getAllByText(/web-01/).length).toBeGreaterThan(0);
-    expect(getAlertLogsMock).toHaveBeenCalledWith("test-token", 42);
+    expect(getAlertLogsMock).toHaveBeenCalledWith(
+      "test-token",
+      42,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("renders platform hint and no table rows when node_id=0", async () => {
