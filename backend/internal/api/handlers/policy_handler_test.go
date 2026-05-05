@@ -164,7 +164,7 @@ func TestDrillCreateValid(t *testing.T) {
 		Code int            `json:"code"`
 		Data map[string]any `json:"data"`
 	}
-	json.Unmarshal(resp.Body.Bytes(), &envelope)
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
 	if envelope.Data["drill_enabled"] != true {
 		t.Error("expected drill_enabled=true")
 	}
@@ -308,7 +308,7 @@ func TestDrillUpdateAddConfig(t *testing.T) {
 		Code int            `json:"code"`
 		Data map[string]any `json:"data"`
 	}
-	json.Unmarshal(resp.Body.Bytes(), &envelope)
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
 	if envelope.Data["drill_enabled"] != true {
 		t.Error("expected drill_enabled=true after update")
 	}
@@ -347,7 +347,7 @@ func TestDrillGetIncludesFields(t *testing.T) {
 		Code int            `json:"code"`
 		Data map[string]any `json:"data"`
 	}
-	json.Unmarshal(resp.Body.Bytes(), &envelope)
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
 
 	// 检查 drill 字段存在
 	if _, ok := envelope.Data["drill_enabled"]; !ok {

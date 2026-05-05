@@ -818,7 +818,7 @@ func validateDrillRestorePath(path string) error {
 		return fmt.Errorf("drill_restore_path 必须是绝对路径")
 	}
 	if strings.Contains(path, "..") {
-		return fmt.Errorf("drill_restore_path 不能包含 ..")
+		return fmt.Errorf("drill_restore_path 不能包含 \"..\"")
 	}
 	// 禁止恢复到系统关键目录
 	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot"}

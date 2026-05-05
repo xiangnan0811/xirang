@@ -366,7 +366,7 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	rsyncBin := "rsync"
 	if executor.NeedsSudo(restoreTask.Node) {
@@ -445,7 +445,7 @@ func (m *Manager) runSSHCommandOnNode(ctx context.Context, node model.Node, comm
 	if err != nil {
 		return "", fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	return executor.RunSSHCommandOutput(ctx, client, command)
 }
@@ -456,7 +456,7 @@ func (m *Manager) runDrillSSHScript(ctx context.Context, node model.Node, script
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, script)
 	if err != nil {
@@ -480,11 +480,8 @@ func (m *Manager) drillLoop() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			m.runDrillScan()
-		}
+	for range ticker.C {
+		m.runDrillScan()
 	}
 }
 
