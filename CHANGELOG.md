@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.3](https://github.com/xiangnan0811/xirang/compare/v0.19.2...v0.19.3) (2026-05-05)
+
+
+### 🐛 Bug Fixes
+
+* Wave 2 全方位审查整改 (5 PR / migration 加固 / metrics 鉴权 / i18n / 文档 / 后端核心) ([#110](https://github.com/xiangnan0811/xirang/issues/110)) ([27ee709](https://github.com/xiangnan0811/xirang/commit/27ee709cc6475df78d8f49e297f9838ac4f05cff))
+
 ## [0.19.2](https://github.com/xiangnan0811/xirang/compare/v0.19.1...v0.19.2) (2026-05-04)
 
 
