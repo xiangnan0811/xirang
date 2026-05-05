@@ -65,6 +65,43 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   broader changes also run `cd backend && go build ./...` and `make lint-backend`
   when `golangci-lint` is available.
 
+### Test fixture credential naming
+
+Test fixtures that simulate secrets/credentials (passwords, tokens, keys,
+bearer tokens, base64-encoded auth headers, webhook URLs with embedded tokens)
+must be named so that **both human reviewers and automated secret scanners**
+(GitGuardian, gitleaks, ggshield, trufflehog) immediately recognize them as
+non-real test data.
+
+**Rule**: use the prefix `FAKE_` and the suffix `_FOR_TEST_ONLY` for any
+literal string that resembles a secret. Compute matching base64 / hex / hash
+values from the same fake string when needed (don't reuse pre-computed values
+from external examples or Stack Overflow snippets).
+
+**Why**: GitGuardian and similar ML-based scanners flag entropy-rich strings
+even in `*_test.go` / `*.test.tsx` files. False positives block PR merges and
+require either ggshield ignore comments (per-scanner syntax, fragile) or
+admin override (loses signal). Naming the fixture obviously fake is the only
+robust solution. Examples that have triggered scanners on this repo:
+
+| Forbidden in fixtures | Why scanners flag | Replacement |
+|---|---|---|
+| `hunter2` | XKCD password meme; on every scanner's blocklist | `FAKE_PASSWORD_FOR_TEST_ONLY` |
+| `secret-metrics-token` | Hyphen pattern + the word "secret" looks like real token | `FAKE_METRICS_TOKEN_FOR_TEST_ONLY` |
+| `c2VjcmV0LW1ldHJpY3MtdG9rZW4=` | base64 of the above; same problem | recompute from new fake string |
+| `SECRETXYZ` / `ABCD-1234-EFGH` | Looks like a real API key by entropy | `FAKE_TOKEN_FOR_TEST_ONLY` |
+| `replace-with-strong-random-secret` (in `.env*.example`) | Was OK historically but newer scanners may flag | Prefer `<set-strong-random-token>` style |
+
+**How to apply**:
+
+- Before committing any test fixture or `.env*.example` placeholder that
+  contains a secret-shaped string, mentally check: would a stranger reading
+  this think it's a real secret? If yes, rename.
+- For base64-encoded auth headers (`Authorization: Basic ...`), encode the
+  fake plaintext fresh: `echo -n "FAKE_FOO_FOR_TEST_ONLY" | base64`.
+- The `pre-commit` hook does not currently lint fixture names. Reviewers and
+  the AI assistant share responsibility for catching these in PR review.
+
 ---
 
 ## Code Review Checklist
