@@ -145,7 +145,7 @@ func TestIntegrationFullPipelineHostMySQL(t *testing.T) {
 		t.Fatalf("policy get: expected 200, got %d", getW.Code)
 	}
 	var getResp Response
-	json.Unmarshal(getW.Body.Bytes(), &getResp)
+	_ = json.Unmarshal(getW.Body.Bytes(), &getResp)
 	getData := getResp.Data.(map[string]interface{})
 	getPreHook := getData["pre_hook"].(string)
 	if !strings.Contains(getPreHook, "mysqldump") {
@@ -297,7 +297,7 @@ func TestIntegrationUserHookOverride(t *testing.T) {
 		t.Fatalf("policy get: expected 200, got %d", getW.Code)
 	}
 	var getResp Response
-	json.Unmarshal(getW.Body.Bytes(), &getResp)
+	_ = json.Unmarshal(getW.Body.Bytes(), &getResp)
 	getData := getResp.Data.(map[string]interface{})
 	if getData["pre_hook"].(string) != "echo custom backup start" {
 		t.Error("GET should return user-overridden pre_hook")
@@ -378,7 +378,7 @@ func TestIntegrationPolicyWithoutProfileBackwardCompat(t *testing.T) {
 	}
 
 	var policyResp Response
-	json.Unmarshal(policyW.Body.Bytes(), &policyResp)
+	_ = json.Unmarshal(policyW.Body.Bytes(), &policyResp)
 	policyData := policyResp.Data.(map[string]interface{})
 
 	if appProfile, _ := policyData["app_profile"].(string); appProfile != "" {
@@ -568,7 +568,7 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 
 	// API 响应不应暴露 password
 	var credResp Response
-	json.Unmarshal(credW.Body.Bytes(), &credResp)
+	_ = json.Unmarshal(credW.Body.Bytes(), &credResp)
 	credData := credResp.Data.(map[string]interface{})
 	cfg := credData["config"].(map[string]interface{})
 	if _, exists := cfg["password"]; exists {
@@ -587,7 +587,7 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 	}
 
 	var policyResp Response
-	json.Unmarshal(policyW.Body.Bytes(), &policyResp)
+	_ = json.Unmarshal(policyW.Body.Bytes(), &policyResp)
 	policyData := policyResp.Data.(map[string]interface{})
 	preHook := policyData["pre_hook"].(string)
 
