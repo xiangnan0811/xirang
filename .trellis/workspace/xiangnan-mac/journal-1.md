@@ -241,3 +241,36 @@ Audited and refreshed README/docs against current repo state, marked dated specs
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Wave 3 前端架构收敛: Tree immutable / dashboard 404 / API 工厂 / lib/ws 抽象
+
+**Date**: 2026-05-05
+**Task**: Wave 3 前端架构收敛: Tree immutable / dashboard 404 / API 工厂 / lib/ws 抽象
+**Branch**: `chore/post-wave3-archive-journal`
+
+### Summary
+
+收尾 Wave 2 frontend-audit 5 项 P3：F-10 Tree 懒加载 mutate item.children → useState<Map> immutable；F-11 dashboard 404 改 ApiError.status === 404 与 i18n 解耦；F-8/F-9 7 个裸函数 API 文件转工厂模式 + 全 GET 加 options.signal + system-api 风格统一 + 19 业务 + 15 测试 mock 迁移；F-5 抽 lib/ws/reconnecting-socket（指数退避 + jitter + heartbeat + token refresh + URL callback），logs-socket + web-terminal 都迁移，web-terminal 重连后 xterm.clear + 提示重新登录（SSH PTY 协议特性）。本 wave brainstorm 仅用 1 个 trellis-research 子代理做实读+设计（不再发审查 audit），子代理修正了 Wave 2 finding 的 3 项细节（files-api 已统一/裸函数 7 非 8/Tree 无业务调用方/不需改后端）。GitGuardian 这次没误报，证明 Wave 2 spec 沉淀的 FAKE_*_FOR_TEST_ONLY 命名约定起作用。bundle 净 +5.16 KiB（仍在 546 预算内 +12.33 headroom），70 文件 312 测试全过。本 session 严格遵守 [Never commit directly to main] + [finish-work must run on a work branch] 规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8061381` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
