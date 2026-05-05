@@ -1992,6 +1992,8 @@ const zh = {
   terminal: {
     disconnected: "连接已断开",
     wsError: "WebSocket 连接错误",
+    reconnected: "会话已重连，原 SSH 会话已失效，请重新登录。",
+    giveUp: "已达最大重连次数，请关闭终端后重新打开。",
   },
 
   // ── tree component ──

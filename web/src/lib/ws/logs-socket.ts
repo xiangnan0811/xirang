@@ -1,5 +1,6 @@
 import { formatTime } from "@/lib/api/core";
 import type { LogEvent } from "@/types/domain";
+import { ReconnectingSocket } from "@/lib/ws/reconnecting-socket";
 
 type MessageListener = (event: LogEvent) => void;
 type StatusListener = (connected: boolean) => void;
@@ -10,10 +11,6 @@ export type LogsSocketConnectOptions = {
   tokenGetter?: () => string | null;
 };
 
-const RETRY_BASE_DELAY_MS = 2500;
-const RETRY_MAX_DELAY_MS = 30_000;
-const RETRY_MAX_ATTEMPTS = 20;
-const HEARTBEAT_INTERVAL_MS = 25_000;
 const DEFAULT_DEV_DIRECT_API = "http://127.0.0.1:8080/api/v1";
 
 function normalizePath(path: string): string {
@@ -110,21 +107,15 @@ function normalizeIncoming(raw: unknown): LogEvent | null {
 }
 
 export class LogsSocketClient {
-  private socket: WebSocket | null = null;
-  private reconnectTimer: number | null = null;
-  private heartbeatTimer: number | null = null;
+  private socket: ReconnectingSocket | null = null;
   private token = "";
   private tokenGetter: (() => string | null) | null = null;
-  private manuallyClosed = false;
   private taskId: number | undefined;
   private sinceId: number | undefined;
-  private activeCandidateIndex = 0;
-  private connectAttempt = 0;
-  private reconnectAttempts = 0;
+  private candidateIndex = 0;
   private readonly listeners = new Set<MessageListener>();
   private readonly statusListeners = new Set<StatusListener>();
   private readonly wsCandidates: string[];
-  private visibilityHandler: (() => void) | null = null;
 
   constructor() {
     this.wsCandidates = buildWsCandidates();
@@ -135,11 +126,50 @@ export class LogsSocketClient {
     this.tokenGetter = options?.tokenGetter ?? null;
     this.taskId = options?.taskId;
     this.sinceId = options?.sinceId;
-    this.manuallyClosed = false;
-    this.activeCandidateIndex = 0;
-    this.reconnectAttempts = 0;
-    this.addVisibilityListener();
-    this.open();
+    this.candidateIndex = 0;
+
+    if (this.socket) {
+      this.socket.close(1000, "reconnect-with-new-token");
+      this.socket = null;
+    }
+
+    this.socket = new ReconnectingSocket({
+      url: () => this.buildRequestUrl(),
+      // logs 使用 JSON 文本协议：发送 {type:"ping"} 心跳
+      heartbeatPing: () => JSON.stringify({ type: "ping" }),
+      onOpen: (ws) => {
+        // 连接建立后立即用最新 token 发送 auth 消息
+        ws.send(JSON.stringify({ type: "auth", token: this.currentToken() }));
+        // 重置 candidate 索引：握手成功表示当前候选可用
+        this.candidateIndex = 0;
+        this.emitStatus(true);
+      },
+      onMessage: (event) => {
+        try {
+          const parsed = normalizeIncoming(JSON.parse(event.data));
+          if (parsed) {
+            this.listeners.forEach((listener) => listener(parsed));
+          }
+        } catch {
+          // 忽略非法消息（如 pong 字符串等）
+        }
+      },
+      onClose: () => {
+        this.emitStatus(false);
+        // 当前 candidate 失败 → 切换到下一个，下次 open 时由 url callback 选中
+        if (this.wsCandidates.length > 1) {
+          this.candidateIndex = (this.candidateIndex + 1) % this.wsCandidates.length;
+        }
+      },
+      onError: () => {
+        this.emitStatus(false);
+      },
+      onGiveUp: () => {
+        this.emitStatus(false);
+      },
+    });
+
+    this.socket.connect();
   }
 
   updateSinceId(sinceId: number | undefined) {
@@ -150,24 +180,10 @@ export class LogsSocketClient {
   }
 
   disconnect() {
-    this.manuallyClosed = true;
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.removeVisibilityListener();
-
     if (this.socket) {
-      const current = this.socket;
+      this.socket.close(1000, "manual-close");
       this.socket = null;
-
-      if (current.readyState === WebSocket.OPEN) {
-        current.close(1000, "manual-close");
-      } else if (current.readyState === WebSocket.CONNECTING) {
-        current.onopen = () => {
-          current.close(1000, "manual-close");
-        };
-      }
     }
-
     this.emitStatus(false);
   }
 
@@ -183,11 +199,14 @@ export class LogsSocketClient {
 
   /** 是否已达最大重试次数（不再自动重连） */
   isGivingUp(): boolean {
-    return this.reconnectAttempts >= RETRY_MAX_ATTEMPTS;
+    return this.socket?.isGivingUp() ?? false;
   }
 
   private buildRequestUrl() {
-    const base = this.wsCandidates[this.activeCandidateIndex] ?? this.wsCandidates[0] ?? toWebSocketUrl("/api/v1");
+    const base =
+      this.wsCandidates[this.candidateIndex] ??
+      this.wsCandidates[0] ??
+      toWebSocketUrl("/api/v1");
     const search = new URLSearchParams();
     if (this.taskId && Number.isFinite(this.taskId)) {
       search.set("task_id", String(this.taskId));
@@ -199,92 +218,6 @@ export class LogsSocketClient {
     return query ? `${base}?${query}` : base;
   }
 
-  private open() {
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-
-    const attempt = ++this.connectAttempt;
-    const socket = new WebSocket(this.buildRequestUrl());
-    this.socket = socket;
-
-    socket.onopen = () => {
-      if (attempt !== this.connectAttempt || this.manuallyClosed) {
-        socket.close(1000, "stale-open");
-        return;
-      }
-      // 连接建立后发送认证消息（使用最新 token）
-      socket.send(JSON.stringify({ type: "auth", token: this.currentToken() }));
-      this.emitStatus(true);
-      this.clearReconnectTimer();
-      this.activeCandidateIndex = 0;
-      this.reconnectAttempts = 0;
-      this.startHeartbeat();
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const parsed = normalizeIncoming(JSON.parse(event.data));
-        if (parsed) {
-          // sinceId 由消费者在实际保留日志后推进，避免裁剪日志后 cursor 越界
-          this.listeners.forEach((listener) => listener(parsed));
-        }
-      } catch {
-        // 忽略非法消息
-      }
-    };
-
-    socket.onclose = () => {
-      if (this.socket === socket) {
-        this.socket = null;
-      }
-      this.stopHeartbeat();
-      // 忽略已被新连接取代的旧 socket 的关闭事件（React 18 Strict Mode 双挂载场景）
-      if (attempt !== this.connectAttempt) return;
-      this.emitStatus(false);
-      if (!this.manuallyClosed) {
-        this.tryNextCandidateOrReconnect();
-      }
-    };
-
-    socket.onerror = () => {
-      if (attempt !== this.connectAttempt) return;
-      this.emitStatus(false);
-    };
-  }
-
-  private tryNextCandidateOrReconnect() {
-    if (this.activeCandidateIndex < this.wsCandidates.length - 1) {
-      this.activeCandidateIndex += 1;
-      this.open();
-      return;
-    }
-    this.activeCandidateIndex = 0;
-    this.scheduleReconnect();
-  }
-
-  private scheduleReconnect() {
-    if (this.reconnectAttempts >= RETRY_MAX_ATTEMPTS) {
-      // 已达最大重试次数，停止重连
-      return;
-    }
-    this.clearReconnectTimer();
-    // 指数退避 + jitter：base * 2^attempt * [0.5, 1.0)，上限 30s
-    const delay = Math.min(
-      RETRY_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
-      RETRY_MAX_DELAY_MS
-    ) * (0.5 + Math.random() * 0.5);
-    this.reconnectAttempts += 1;
-    this.reconnectTimer = window.setTimeout(() => this.open(), delay);
-  }
-
-  private clearReconnectTimer() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-
   /** 获取最新 token：优先调用 getter，fallback 到存储的 token */
   private currentToken(): string {
     if (this.tokenGetter) {
@@ -294,55 +227,6 @@ export class LogsSocketClient {
       }
     }
     return this.token;
-  }
-
-  private startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatTimer = window.setInterval(() => {
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        try {
-          this.socket.send(JSON.stringify({ type: "ping" }));
-        } catch {
-          // send 失败会触发 onclose，无需额外处理
-        }
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-  }
-
-  private stopHeartbeat() {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-  }
-
-  private addVisibilityListener() {
-    this.removeVisibilityListener();
-    this.visibilityHandler = () => {
-      if (document.visibilityState !== "visible" || this.manuallyClosed) {
-        return;
-      }
-      // 标签页回到前台：若已放弃重连则重置计数并立即重连
-      if (this.isGivingUp()) {
-        this.reconnectAttempts = 0;
-        this.open();
-        return;
-      }
-      // 若 socket 已关闭或不存在，清除等待中的定时器，立即尝试
-      // 注意：CONNECTING 状态由 open() 内部守卫，无需干预
-      if (!this.socket || this.socket.readyState === WebSocket.CLOSED || this.socket.readyState === WebSocket.CLOSING) {
-        this.clearReconnectTimer();
-        this.open();
-      }
-    };
-    document.addEventListener("visibilitychange", this.visibilityHandler);
-  }
-
-  private removeVisibilityListener() {
-    if (this.visibilityHandler) {
-      document.removeEventListener("visibilitychange", this.visibilityHandler);
-      this.visibilityHandler = null;
-    }
   }
 
   private emitStatus(connected: boolean) {

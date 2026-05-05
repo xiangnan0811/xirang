@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { ReconnectingSocket } from "@/lib/ws/reconnecting-socket";
 
 // Terminal color palette is intentionally decoupled from the Xirang site
 // theme. Two reasons:
@@ -57,7 +58,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     let active = true;
     let terminal: Terminal | null = null;
     let fitAddon: FitAddon | null = null;
-    let ws: WebSocket | null = null;
+    let socket: ReconnectingSocket | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let sendResize: (() => void) | null = null;
 
@@ -81,54 +82,66 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsURL = `${protocol}//${window.location.host}/api/v1/ws/terminal?node_id=${nodeId}`;
-      ws = new WebSocket(wsURL);
-      ws.binaryType = "arraybuffer";
 
-      ws.onopen = () => {
-        ws!.send(JSON.stringify({ type: "auth", token }));
-      };
+      socket = new ReconnectingSocket({
+        url: wsURL,
+        binaryType: "arraybuffer",
+        // SSH PTY 是状态化连接，重连后旧 session 已失效；这里不发心跳避免被旧 session 误识别
+        heartbeatIntervalMs: 0,
+        onOpen: (ws) => {
+          ws.send(JSON.stringify({ type: "auth", token }));
+        },
+        onMessage: (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            terminal!.write(new Uint8Array(event.data));
+          } else if (typeof event.data === "string") {
+            terminal!.write(event.data);
+          }
+        },
+        onReconnect: () => {
+          // SSH PTY 是状态化连接，重连后旧 session 已失效，必须提示用户重新登录
+          terminal?.clear();
+          terminal?.write(`\r\n\x1b[33m${t("terminal.reconnected")}\x1b[0m\r\n`);
+        },
+        onClose: (event) => {
+          const detail = event.reason
+            ? ` (${event.code}: ${event.reason})`
+            : ` (code: ${event.code})`;
+          terminal?.write(`\r\n\x1b[31m${t("terminal.disconnected")}${detail}\x1b[0m\r\n`);
+          // 正常关闭(1000)或服务端主动关闭(1001)时自动关闭弹窗（如用户输入 exit）
+          // 异常关闭保留弹窗以便用户查看错误信息（重连流程会接管）
+          if (active && (event.code === 1000 || event.code === 1001)) {
+            onDisconnect?.();
+          }
+        },
+        onError: () => {
+          terminal?.write(`\r\n\x1b[31m${t("terminal.wsError")}\x1b[0m\r\n`);
+        },
+        onGiveUp: () => {
+          terminal?.write(`\r\n\x1b[31m${t("terminal.giveUp")}\x1b[0m\r\n`);
+          if (active) {
+            onDisconnect?.();
+          }
+        },
+      });
 
-      ws.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          terminal!.write(new Uint8Array(event.data));
-        } else if (typeof event.data === "string") {
-          terminal!.write(event.data);
-        }
-      };
-
-      ws.onclose = (event) => {
-        const detail = event.reason ? ` (${event.code}: ${event.reason})` : ` (code: ${event.code})`;
-        terminal?.write(`\r\n\x1b[31m${t("terminal.disconnected")}${detail}\x1b[0m\r\n`);
-        // 正常关闭(1000)或服务端主动关闭(1001)时自动关闭弹窗（如用户输入 exit）
-        // 异常关闭保留弹窗以便用户查看错误信息
-        if (active && (event.code === 1000 || event.code === 1001)) {
-          onDisconnect?.();
-        }
-      };
-
-      ws.onerror = () => {
-        terminal?.write(`\r\n\x1b[31m${t("terminal.wsError")}\x1b[0m\r\n`);
-      };
+      socket.connect();
 
       // 键盘输入 → WebSocket
       terminal.onData((data) => {
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(data);
-        }
+        socket?.send(data);
       });
 
       // 窗口大小变化 → 通知后端
       sendResize = () => {
         fitAddon!.fit();
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: terminal!.cols,
-              rows: terminal!.rows,
-            })
-          );
-        }
+        socket?.send(
+          JSON.stringify({
+            type: "resize",
+            cols: terminal!.cols,
+            rows: terminal!.rows,
+          })
+        );
       };
 
       resizeObserver = new ResizeObserver(() => {
@@ -149,9 +162,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         window.removeEventListener("resize", sendResize);
       }
       resizeObserver?.disconnect();
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        ws.close();
-      }
+      socket?.close();
       terminal?.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
