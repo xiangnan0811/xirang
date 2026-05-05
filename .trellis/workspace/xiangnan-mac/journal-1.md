@@ -205,3 +205,39 @@ Audited and refreshed README/docs against current repo state, marked dated specs
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Wave 2 第二轮全方位审查 + Trivy hotfix + GitGuardian 教训沉淀
+
+**Date**: 2026-05-05
+**Task**: Wave 2 第二轮全方位审查 + Trivy hotfix + GitGuardian 教训沉淀
+**Branch**: `chore/post-wave2-archive-journal`
+
+### Summary
+
+用 trellis-research 子代理一阶段实读审查（避免 Wave 0 两阶段 40% 错报）扫 4 领域共 53 finding。范围 P1+P2 ~25 项分 5 PR (A migration 加固 / B /metrics 鉴权 / C 后端 reporting+terminal+alerting+silence / D 前端 i18n / E 文档+CI) 入 PR #110 squash 合并。中间踩两次坑：(1) GitGuardian 误报 fixture 凭据 (hunter2 / SECRETXYZ / secret-metrics-token base64) 阻 PR #110，admin override 合并；(2) PR-E 子代理把 trivy-action 钉到不存在的 @0.28.0 → release v0.19.3 publish workflow 失败，hotfix #112 改 @v0.36.0 触发 v0.19.4 成功 + v0.19.3 删除清理。事后沉淀：auto-memory 加 'subagent 版本号必须核验'、spec 加 'Test fixture credential naming FAKE_*_FOR_TEST_ONLY 约定'。本 session 严格遵守 [Never commit directly to main] 与 [finish-work must run on a work branch] 规范，所有 chore commit 都先切工作分支再做。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27ee709` | (see git log) |
+| `47e533b` | (see git log) |
+| `676517d` | (see git log) |
+| `c765d2c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

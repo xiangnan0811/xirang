@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/05-04-wave-2/prd.md", "reason": "本任务总 PRD：5 PR 拆分计划、每 PR 的具体 finding 编号与可执行清单、AC、Out of Scope"}
+{"file": ".trellis/tasks/05-04-wave-2/research/backend-audit.md", "reason": "PR-C 后端真实修复的源 finding 详情（reporting / terminal / alerting / silence 各项 文件:行 + 实读片段 + 修复方向）"}
+{"file": ".trellis/tasks/05-04-wave-2/research/frontend-audit.md", "reason": "PR-D 前端 i18n + DialogTitle 修复的源 finding（command-palette、cron-generator、settings、escalation 具体行号）"}
+{"file": ".trellis/tasks/05-04-wave-2/research/docs-ci-audit.md", "reason": "PR-E 文档与 CI 治理的源 finding（CHANGELOG / .env.example 缺失变量清单 / release-please-config / Trivy 等）"}
+{"file": ".trellis/tasks/05-04-wave-2/research/deploy-ops-audit.md", "reason": "PR-A 与 PR-B 的源 finding（migration 000050 缺事务/dirty 不拒启 / migration lint / /metrics 公开 / runbook 占位等）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR-A migration 加事务时遵循的项目数据库规范（双轨迁移、down 对称等）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PR-C reporting/terminal/alerting 错误处理与 sanitize 应遵循的统一约定"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "PR-C terminal SSH 失败 audit_log 写入应遵循的 zerolog + audit logger 模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR-D Radix Dialog 组件正确组合方式（DialogTitle 强制要求等）"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "5 PR 串行实施时遵循的分支策略（每 PR 独立分支 / 不直接 commit 到 main / finish-work 切 chore branch）"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "PR-E 更新 CLAUDE.md / CHANGELOG / .env.example 时的真相同步原则"}
