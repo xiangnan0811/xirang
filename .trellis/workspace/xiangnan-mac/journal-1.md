@@ -340,3 +340,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 自动恢复演练 (Recovery Drill) 完整实现
+
+**Date**: 2026-05-06
+**Task**: 自动恢复演练 (Recovery Drill) 完整实现
+**Branch**: `main`
+
+### Summary
+
+实现 recovery drill：Policy 加 8 个 drill 字段；Scheduler drillLoop 60s 扫描 cron 触发；Manager.TriggerDrill 完整管线（沙箱预检→restore→verify→cleanup→RTO）；3 个 drill 告警 error_code；POST /policies/:id/drill-trigger 手动触发；前端 Policy 编辑页 drill 配置区；迁移 000052；15 drill 单测+6 handler 测试+2 集成测试；全量 CI GREEN。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87bf80c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
