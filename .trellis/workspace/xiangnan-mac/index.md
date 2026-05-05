@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-05-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~243 | Active |
+| `journal-1.md` | ~276 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-05-05 | Wave 3 前端架构收敛: Tree immutable / dashboard 404 / API 工厂 / lib/ws 抽象 | `8061381` | `chore/post-wave3-archive-journal` |
 | 7 | 2026-05-05 | Wave 2 第二轮全方位审查 + Trivy hotfix + GitGuardian 教训沉淀 | `27ee709`, `47e533b`, `676517d`, `c765d2c` | `chore/post-wave2-archive-journal` |
 | 6 | 2026-05-04 | Wave 1 清理 Wave 0 Out-of-Scope: SFTP RealPath + UTC 全量迁移 + logs 虚拟化 | `b59f7d8`, `7eb7a22` | `chore/post-wave1-archive-journal` |
 | 5 | 2026-05-04 | Wave 0 全方位审查整改：14 项真问题落地（剔除 9 项子代理误报） | `6556214` | `main` |
