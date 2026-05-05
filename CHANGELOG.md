@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/xiangnan0811/xirang/compare/v0.19.3...v0.19.4) (2026-05-05)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** trivy-action [@0](https://github.com/0).28.0 → [@v0](https://github.com/v0).36.0 修复 release publish 失败 ([#112](https://github.com/xiangnan0811/xirang/issues/112)) ([47e533b](https://github.com/xiangnan0811/xirang/commit/47e533b9bbefa31fe8ca7f56169645f2e330b0a7))
+
 ## [0.19.3](https://github.com/xiangnan0811/xirang/compare/v0.19.2...v0.19.3) (2026-05-05)
 
 
