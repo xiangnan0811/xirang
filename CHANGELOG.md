@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/xiangnan0811/xirang/compare/v0.21.0...v0.22.0) (2026-05-05)
+
+
+### ✨ Features
+
+* **backup:** 自动恢复演练 (Recovery Drill) ([#124](https://github.com/xiangnan0811/xirang/issues/124)) ([87bf80c](https://github.com/xiangnan0811/xirang/commit/87bf80cfd2e91061dd81f78568d987050bbe3268))
+
 ## [0.21.0](https://github.com/xiangnan0811/xirang/compare/v0.20.0...v0.21.0) (2026-05-05)
 
 
