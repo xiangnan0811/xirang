@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁：所有 profile 渲染 / AppCredential 加解密 / 引用校验的单测 + 集成测试必须 GREEN"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000048 的 up/down 脚本完整性校验"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查 error 处理：credential 引用冲突 409 / Not Found / 解密失败等"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "AppCredential 操作审计日志记录（创建/更新/删除）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁：npm run check 全绿 + vitest 覆盖新增组件"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "AppCredential 管理页 / Policy form profile 选择器的键盘可操作 + aria 属性"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "TypeScript 类型：AppCredential API 类型 / profile 枚举类型 / 无 any"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新组件复用 ui/ 组件，avoid prop drilling"}
+{"file": ".trellis/tasks/05-05-db-aware-backup-profiles/prd.md", "reason": "AC 逐项对照：profile e2e / 密码同步 / 引用保护 / 容器化预校验 / 向后兼容"}

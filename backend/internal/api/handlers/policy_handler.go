@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
+	"xirang/backend/internal/profile"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -43,6 +45,8 @@ type policyRequest struct {
 	MaxRetries          *int   `json:"max_retries"`
 	RetryBaseSeconds   *int   `json:"retry_base_seconds"`
 	BandwidthSchedule  string `json:"bandwidth_schedule"`
+	AppProfile         string `json:"app_profile"`
+	AppCredentialID    *uint  `json:"app_credential_id"`
 	NodeIDs            []uint `json:"node_ids"`
 }
 
@@ -112,7 +116,7 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 
 // Create godoc
 // @Summary      创建备份策略
-// @Description  创建新的备份策略
+// @Description  创建新的备份策略（支持应用感知备份：可通过 app_profile 选择数据库类型并关联凭据，自动生成 dump hook）
 // @Tags         policies
 // @Security     Bearer
 // @Accept       json
@@ -194,6 +198,51 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		isTemplate = *req.IsTemplate
 	}
 
+	// 应用感知备份：app_profile 非空时渲染 hook
+	preHook := strings.TrimSpace(req.PreHook)
+	postHook := strings.TrimSpace(req.PostHook)
+	appProfile := strings.TrimSpace(req.AppProfile)
+
+	if appProfile != "" {
+		if _, ok := profile.GetProfile(appProfile); !ok {
+			respondBadRequest(c, "不支持的应用类型: "+appProfile)
+			return
+		}
+		// 用户手动提供了 hook → 保留用户值（用户 override 优先级最高）
+		userProvidedPre := preHook != ""
+		userProvidedPost := postHook != ""
+
+		if !userProvidedPre || !userProvidedPost {
+			// 需要从 profile 渲染 hook
+			if req.AppCredentialID == nil || *req.AppCredentialID == 0 {
+				respondBadRequest(c, "选择应用类型后必须指定凭据")
+				return
+			}
+			var cred model.AppCredential
+			if err := h.db.First(&cred, *req.AppCredentialID).Error; err != nil {
+				respondBadRequest(c, "指定的凭据不存在")
+				return
+			}
+			// AfterFind 已解密 Config
+			var configMap map[string]interface{}
+			if err := json.Unmarshal([]byte(cred.Config), &configMap); err != nil {
+				respondInternalError(c, err)
+				return
+			}
+			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, configMap)
+			if err != nil {
+				respondInternalError(c, err)
+				return
+			}
+			if !userProvidedPre {
+				preHook = renderedPre
+			}
+			if !userProvidedPost {
+				postHook = renderedPost
+			}
+		}
+	}
+
 	p := model.Policy{
 		Name:              req.Name,
 		Description:       strings.TrimSpace(req.Description),
@@ -208,8 +257,10 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		VerifyEnabled:     verifyEnabled,
 		VerifySampleRate:  verifySampleRate,
 		IsTemplate:        isTemplate,
-		PreHook:           strings.TrimSpace(req.PreHook),
-		PostHook:          strings.TrimSpace(req.PostHook),
+		PreHook:           preHook,
+		PostHook:          postHook,
+		AppProfile:        appProfile,
+		AppCredentialID:   req.AppCredentialID,
 		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
 	}
 	if req.HookTimeoutSeconds != nil {
@@ -274,7 +325,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 
 // Update godoc
 // @Summary      更新备份策略
-// @Description  更新备份策略配置
+// @Description  更新备份策略配置（支持应用感知备份：可通过 app_profile 选择数据库类型并关联凭据，自动生成 dump hook）
 // @Tags         policies
 // @Security     Bearer
 // @Accept       json
@@ -366,6 +417,48 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		}
 	}
 
+	// 应用感知备份：app_profile 非空时渲染 hook
+	appProfile := strings.TrimSpace(req.AppProfile)
+	updatePreHook := strings.TrimSpace(req.PreHook)
+	updatePostHook := strings.TrimSpace(req.PostHook)
+
+	if appProfile != "" {
+		if _, ok := profile.GetProfile(appProfile); !ok {
+			respondBadRequest(c, "不支持的应用类型: "+appProfile)
+			return
+		}
+		userProvidedPre := updatePreHook != ""
+		userProvidedPost := updatePostHook != ""
+
+		if !userProvidedPre || !userProvidedPost {
+			if req.AppCredentialID == nil || *req.AppCredentialID == 0 {
+				respondBadRequest(c, "选择应用类型后必须指定凭据")
+				return
+			}
+			var cred model.AppCredential
+			if err := h.db.First(&cred, *req.AppCredentialID).Error; err != nil {
+				respondBadRequest(c, "指定的凭据不存在")
+				return
+			}
+			var configMap map[string]interface{}
+			if err := json.Unmarshal([]byte(cred.Config), &configMap); err != nil {
+				respondInternalError(c, err)
+				return
+			}
+			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, configMap)
+			if err != nil {
+				respondInternalError(c, err)
+				return
+			}
+			if !userProvidedPre {
+				updatePreHook = renderedPre
+			}
+			if !userProvidedPost {
+				updatePostHook = renderedPost
+			}
+		}
+	}
+
 	previousEnabled := p.Enabled
 
 	p.Name = req.Name
@@ -389,8 +482,10 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.IsTemplate != nil {
 		p.IsTemplate = *req.IsTemplate
 	}
-	p.PreHook = strings.TrimSpace(req.PreHook)
-	p.PostHook = strings.TrimSpace(req.PostHook)
+	p.PreHook = updatePreHook
+	p.PostHook = updatePostHook
+	p.AppProfile = appProfile
+	p.AppCredentialID = req.AppCredentialID
 	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
@@ -584,6 +679,8 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"max_retries":           p.MaxRetries,
 		"retry_base_seconds":   p.RetryBaseSeconds,
 		"bandwidth_schedule":   p.BandwidthSchedule,
+		"app_profile":          p.AppProfile,
+		"app_credential_id":    p.AppCredentialID,
 		"node_ids":             nodeIDs,
 		"created_at":           p.CreatedAt,
 		"updated_at":           p.UpdatedAt,

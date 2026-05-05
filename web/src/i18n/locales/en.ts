@@ -94,6 +94,7 @@ const en = {
     audit: "Audit",
     reports: "Reports",
     backups: "Backups",
+    credentials: "Credentials",
     settings: "Settings",
     group: {
       core: "Core",
@@ -644,6 +645,12 @@ const en = {
     bandwidthSchedule: "Bandwidth Schedule",
     backupStorageInfo: "Each node's data will be stored under /backup/{node backup dir}/",
     perNodePathPreview: "Per-node backup paths",
+    appAwareBackup: "App-Aware Backup",
+    selectProfile: "App Type",
+    appProfileNone: "Disabled (manual hooks)",
+    selectCredential: "Credential",
+    appCredentialNone: "Select credential",
+    appAwareHint: "Hooks will be auto-injected (you can still modify them)",
   },
 
   // ── tasks page ──
@@ -2416,6 +2423,40 @@ const en = {
     },
     errors: {
       loadFailed: "Failed to load anomaly events",
+    },
+  },
+
+  // ── credentials ──
+  credentials: {
+    pageTitle: "App Credentials",
+    pageDesc: "Manage database and Docker connection credentials for backup policies.",
+    createBtn: "New Credential",
+    createTitle: "Create Credential",
+    createDesc: "Select a credential type and fill in connection details.",
+    editTitle: "Edit Credential",
+    editDesc: "Modify credential name, description, or connection details.",
+    empty: "No credentials",
+    password: "Password",
+    references: "Refs",
+    configured: "Configured",
+    none: "None",
+    selectType: "Select credential type",
+    groupNonDocker: "Databases & Services",
+    groupDocker: "Docker Containers",
+    namePlaceholder: "e.g. Prod MySQL",
+    descPlaceholder: "Optional description",
+    leaveEmptyToKeep: "Leave empty to keep unchanged",
+    deleted: "Deleted {{name}}",
+    created: "Credential created",
+    updated: "Credential updated",
+    confirmDeleteTitle: "Confirm Delete",
+    confirmDeleteDesc: "Delete credential \"{{name}}\"? If referenced by policies, the deletion will fail.",
+    validation: {
+      nameRequired: "Credential name is required",
+      typeRequired: "Credential type is required",
+      invalidProfile: "Invalid credential type",
+      fieldRequired: "{{field}} is required",
+      containerNameRequired: "Container name is required for Docker types",
     },
   },
 

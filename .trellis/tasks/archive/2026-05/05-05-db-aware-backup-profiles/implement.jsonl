@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000048 SQLite+Postgres 双轨；AppCredential 表设计 + Policy 加列"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCredential CRUD handler 错误处理规范"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 profile/ 包 + app_credential_handler.go 的文件位置约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "profile 渲染 / AppCredential 加密 / credential 级联更新的单测要求"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "AppCredential 编辑页 / Policy form profile 选择器 / credential 选择器组件规范"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新增 pages/credentials-page.tsx + components/credential-editor.tsx 的文件位置"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "新组件 a11y 审核要求"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "AppCredential + profile 的 TypeScript 类型定义"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useCredentials / useProfiles 自定义 hooks 的写法"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "credential 列表 state 管理；Policy 编辑页 profile→credential 联动状态"}
+{"file": ".trellis/tasks/05-05-db-aware-backup-profiles/prd.md", "reason": "完整 PRD：需求 / 范围 / 架构决策 / PR 拆分 / AC"}

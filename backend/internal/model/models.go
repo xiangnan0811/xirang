@@ -104,6 +104,8 @@ type Policy struct {
 	PreHook            string    `gorm:"type:text;not null;default:''" json:"pre_hook"`
 	PostHook           string    `gorm:"type:text;not null;default:''" json:"post_hook"`
 	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
+	AppProfile         string    `gorm:"size:32;not null;default:''" json:"app_profile"`
+	AppCredentialID    *uint     `gorm:"index" json:"app_credential_id"`
 	// MaxExecutionSeconds 0 = 使用环境变量 TASK_MAX_EXECUTION_SECONDS（默认 86400=24h）。
 	// >0 = 该策略的任务最长执行秒数；超时后 ctx 被 cancel，executor 收到 SIGTERM 退出。
 	MaxExecutionSeconds int       `gorm:"not null;default:0" json:"max_execution_seconds"`
@@ -121,6 +123,52 @@ type PolicyNode struct {
 	PolicyID  uint      `gorm:"primaryKey"`
 	NodeID    uint      `gorm:"primaryKey"`
 	CreatedAt time.Time
+}
+
+// AppCredential 独立凭据资源，用于 Policy 引用数据库连接信息。
+// Config 字段存储完整 JSON（含 password），通过 GORM hooks 加解密。
+// API 响应不返回原始 Config，改为返回 SanitizedConfig() 的结果。
+type AppCredential struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Type        string    `gorm:"size:32;not null" json:"type"`
+	Description string    `gorm:"size:255" json:"description"`
+	Config      string    `gorm:"type:text;not null;default:'{}'" json:"-"`
+	HasPassword bool      `gorm:"-" json:"has_password"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func (a *AppCredential) BeforeSave(_ *gorm.DB) error {
+	if a.Config != "" && !secure.IsEncrypted(a.Config) {
+		encrypted, err := secure.EncryptIfNeeded(a.Config)
+		if err != nil {
+			return err
+		}
+		a.Config = encrypted
+	}
+	return nil
+}
+
+func (a *AppCredential) AfterFind(_ *gorm.DB) error {
+	if a.Config != "" {
+		decrypted, err := secure.DecryptIfNeeded(a.Config)
+		if err != nil {
+			return err
+		}
+		a.Config = decrypted
+	}
+	return nil
+}
+
+// SanitizedConfig 返回去除 password 的配置 JSON map，用于 API 响应。
+func (a *AppCredential) SanitizedConfig() map[string]interface{} {
+	raw := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(a.Config), &raw); err != nil {
+		return map[string]interface{}{}
+	}
+	delete(raw, "password")
+	return raw
 }
 
 type Integration struct {

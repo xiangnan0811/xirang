@@ -151,6 +151,17 @@ go run ./cmd/server
 | POST | /integrations/:id/test | 🔒 测试发送 |
 | DELETE | /integrations/:id | 🔒 删除渠道 |
 
+### 应用凭据
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /app-credentials/profiles | 🔒 profile 列表（含配置 schema） |
+| GET | /app-credentials | 🔒 凭据列表 |
+| GET | /app-credentials/:id | 🔒 凭据详情 |
+| POST | /app-credentials | 🔒 创建凭据 |
+| PUT | /app-credentials/:id | 🔒 更新凭据 |
+| DELETE | /app-credentials/:id | 🔒 删除凭据（有引用时阻止） |
+
 ### 告警
 
 | 方法 | 路径 | 说明 |

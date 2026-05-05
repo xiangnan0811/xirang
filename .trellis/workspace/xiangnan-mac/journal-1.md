@@ -307,3 +307,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: 应用感知备份 (App-Aware Backup Profiles) 完整实现
+
+**Date**: 2026-05-05
+**Task**: 应用感知备份 (App-Aware Backup Profiles) 完整实现
+**Branch**: `feat/app-aware-backup`
+
+### Summary
+
+实现 app-aware backup：新增 AppCredential 模型+CRUD+加密; 8 个内置 profile (4主机+4容器化); Policy 保存时自动渲染 hook; credential 更新触发级联重渲染; 容器化预校验; 迁移 000051; 前端凭据管理页+Policy form profile 选择器; 35 handler 单测+10 集成测试+20 profile 测试; Swagger+Docs+deprecation。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `51623ec` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
