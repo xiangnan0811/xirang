@@ -382,6 +382,70 @@ const docTemplate = `{
                 }
             }
         },
+        "/alerts/{id}/group-info": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回告警在内存分组窗口内的累计计数",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerts"
+                ],
+                "summary": "获取告警分组计数",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "告警 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.AlertGroupInfo"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/alerts/{id}/resolve": {
             "post": {
                 "security": [
@@ -585,6 +649,341 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/app-credentials": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回所有应用凭据列表（password 已脱敏）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "列出凭据",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api_handlers.appCredentialResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "创建新的应用凭据（password 加密入库）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "创建凭据",
+                "parameters": [
+                    {
+                        "description": "创建凭据请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.appCredentialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.appCredentialResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/app-credentials/profiles": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回所有 8 个内置 profile 的公开信息（schema 供前端动态渲染表单，不含 hook 模板）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "列出应用感知备份 profile",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/xirang_backend_internal_profile.ProfileDefinition"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/app-credentials/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回单个凭据的详细信息（password 已脱敏）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "获取凭据详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "凭据 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.appCredentialResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "完整更新凭据配置（password 为空字符串则不修改）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "更新凭据",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "凭据 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新凭据请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.appCredentialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.appCredentialResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "删除指定凭据（有 Policy 引用时阻止删除）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "删除凭据",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "凭据 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -1418,6 +1817,7 @@ const docTemplate = `{
                     "templates"
                 ],
                 "summary": "列出 Hook 模板",
+                "deprecated": true,
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -3067,7 +3467,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "创建新的备份策略",
+                "description": "创建新的备份策略（支持应用感知备份：可通过 app_profile 选择数据库类型并关联凭据，自动生成 dump hook）",
                 "consumes": [
                     "application/json"
                 ],
@@ -3313,7 +3713,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "更新备份策略配置",
+                "description": "更新备份策略配置（支持应用感知备份：可通过 app_profile 选择数据库类型并关联凭据，自动生成 dump hook）",
                 "consumes": [
                     "application/json"
                 ],
@@ -4547,6 +4947,43 @@ const docTemplate = `{
                     },
                     "501": {
                         "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/encryption-status": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回当前数据库中仍以 enc:v1: 前缀加密的字段总数。运维侧用于\n判断是否所有敏感字段都已迁移到 V2 (argon2id)，是后续退役 V1\n解密支持的前置条件。返回 0 表示可以安全裁掉 V1 兼容代码。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "查询加密 V1 残留状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -6295,6 +6732,20 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "internal_api_handlers.AlertGroupInfo": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "sibling_node_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
         "internal_api_handlers.MigratePreflightRequest": {
             "type": "object",
             "required": [
@@ -6448,6 +6899,73 @@ const docTemplate = `{
                 },
                 "data": {},
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.appCredentialRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "type"
+            ],
+            "properties": {
+                "container_name": {
+                    "description": "ContainerName 容器类必须。",
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "host": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "user": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.appCredentialResponse": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "has_password": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reference_count": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -6745,6 +7263,12 @@ const docTemplate = `{
                 "source_path"
             ],
             "properties": {
+                "app_credential_id": {
+                    "type": "integer"
+                },
+                "app_profile": {
+                    "type": "string"
+                },
                 "bandwidth_schedule": {
                     "type": "string"
                 },
@@ -6770,6 +7294,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "max_concurrent": {
+                    "type": "integer"
+                },
+                "max_execution_seconds": {
                     "type": "integer"
                 },
                 "max_retries": {
@@ -7056,6 +7583,9 @@ const docTemplate = `{
                 "id": {
                     "type": "integer"
                 },
+                "last_level_fired": {
+                    "type": "integer"
+                },
                 "last_notified_at": {
                     "type": "string"
                 },
@@ -7077,7 +7607,13 @@ const docTemplate = `{
                 "severity": {
                     "type": "string"
                 },
+                "slo_id": {
+                    "type": "integer"
+                },
                 "status": {
+                    "type": "string"
+                },
+                "tags": {
                     "type": "string"
                 },
                 "task_id": {
@@ -7100,10 +7636,10 @@ const docTemplate = `{
                 "alert_id": {
                     "type": "integer"
                 },
-                "created_at": {
-                    "type": "string"
+                "attempt_count": {
+                    "type": "integer"
                 },
-                "error": {
+                "created_at": {
                     "type": "string"
                 },
                 "id": {
@@ -7112,7 +7648,14 @@ const docTemplate = `{
                 "integration_id": {
                     "type": "integer"
                 },
+                "last_error": {
+                    "type": "string"
+                },
+                "next_retry_at": {
+                    "type": "string"
+                },
                 "status": {
+                    "description": "pending|sent|retrying|failed",
                     "type": "string"
                 }
             }
@@ -7226,6 +7769,9 @@ const docTemplate = `{
                 "disk_used_gb": {
                     "type": "integer"
                 },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
                 "expiry_date": {
                     "type": "string"
                 },
@@ -7243,6 +7789,15 @@ const docTemplate = `{
                 },
                 "last_seen_at": {
                     "type": "string"
+                },
+                "log_journalctl_enabled": {
+                    "type": "boolean"
+                },
+                "log_paths": {
+                    "type": "string"
+                },
+                "log_retention_days": {
+                    "type": "integer"
                 },
                 "maintenance_end": {
                     "type": "string"
@@ -7288,6 +7843,12 @@ const docTemplate = `{
         "xirang_backend_internal_model.Policy": {
             "type": "object",
             "properties": {
+                "app_credential_id": {
+                    "type": "integer"
+                },
+                "app_profile": {
+                    "type": "string"
+                },
                 "bandwidth_schedule": {
                     "type": "string"
                 },
@@ -7306,6 +7867,9 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
                 "exclude_rules": {
                     "type": "string"
                 },
@@ -7319,6 +7883,10 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "max_concurrent": {
+                    "type": "integer"
+                },
+                "max_execution_seconds": {
+                    "description": "MaxExecutionSeconds 0 = 使用环境变量 TASK_MAX_EXECUTION_SECONDS（默认 86400=24h）。\n\u003e0 = 该策略的任务最长执行秒数；超时后 ctx 被 cancel，executor 收到 SIGTERM 退出。",
                     "type": "integer"
                 },
                 "max_retries": {
@@ -7467,13 +8035,11 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
-                "private_key": {
-                    "type": "string"
-                },
                 "updated_at": {
                     "type": "string"
                 },
                 "username": {
+                    "description": "PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem\n+ toSSHKeyResponse() 脱敏，此处 json:\"-\" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})",
                     "type": "string"
                 }
             }
@@ -7498,6 +8064,9 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "escalation_policy_id": {
+                    "type": "integer"
                 },
                 "executor_config": {
                     "type": "string"
@@ -7633,6 +8202,54 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "verify_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_profile.ConfigField": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "placeholder": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "description": "text, password, number",
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_profile.ProfileDefinition": {
+            "type": "object",
+            "properties": {
+                "config_schema": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_profile.ConfigField"
+                    }
+                },
+                "credential_type": {
+                    "description": "期望的 AppCredential.Type",
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_docker": {
+                    "type": "boolean"
+                },
+                "name": {
                     "type": "string"
                 }
             }

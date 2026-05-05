@@ -39,6 +39,11 @@ const ReportsPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/pages/settings-page").then((m) => ({ default: m.SettingsPage }))
 );
+const CredentialsPage = lazy(() =>
+  import("@/pages/credentials-page").then((m) => ({
+    default: m.CredentialsPage,
+  }))
+);
 const MorePage = lazy(() =>
   import("@/pages/more-page").then((m) => ({ default: m.MorePage }))
 );
@@ -136,6 +141,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "reports",
         element: <LazyPage><ReportsPage /></LazyPage>
+      },
+      {
+        path: "credentials",
+        element: <LazyPage><CredentialsPage /></LazyPage>
       },
       {
         path: "settings",

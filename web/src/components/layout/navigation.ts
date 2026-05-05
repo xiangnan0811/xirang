@@ -10,6 +10,7 @@ import {
   Monitor,
   Server,
   Settings,
+  Shield,
   type LucideIcon
 } from "lucide-react";
 
@@ -108,6 +109,13 @@ export const navItems: NavItem[] = [
     path: "/app/reports",
     icon: FileText,
     group: "observe",
+    mobileTab: false
+  },
+  {
+    titleKey: "nav.credentials",
+    path: "/app/credentials",
+    icon: Shield,
+    group: "automate",
     mobileTab: false
   },
   {

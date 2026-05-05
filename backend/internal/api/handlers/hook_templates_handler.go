@@ -66,7 +66,10 @@ func NewHookTemplatesHandler() *HookTemplatesHandler {
 // @Produce      json
 // @Success      200  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
+// @Deprecated  请迁移到 GET /api/v1/app-credentials/profiles（应用感知备份 profile）
 // @Router       /hook-templates [get]
 func (h *HookTemplatesHandler) List(c *gin.Context) {
+	c.Writer.Header().Set("Deprecation", "true")
+	c.Writer.Header().Set("Sunset", "Sat, 01 Nov 2026 00:00:00 GMT")
 	respondOK(c, builtinHookTemplates)
 }

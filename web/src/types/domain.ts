@@ -113,6 +113,8 @@ export interface PolicyRecord {
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
   escalation_policy_id?: number | null;
+  app_profile?: string;
+  app_credential_id?: number | null;
 }
 
 export interface NewPolicyInput {
@@ -132,6 +134,8 @@ export interface NewPolicyInput {
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
   escalation_policy_id?: number | null;
+  app_profile?: string;
+  app_credential_id?: number | null;
 }
 
 export interface TaskRecord {
@@ -438,6 +442,35 @@ export interface HookTemplate {
   preHook: string;
   postHook: string;
   description: string;
+}
+
+export interface AppCredential {
+  id: number;
+  name: string;
+  type: string;
+  description: string;
+  config: Record<string, string>;
+  has_password: boolean;
+  reference_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConfigField {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder?: string;
+}
+
+export interface ProfileSchema {
+  id: string;
+  name: string;
+  description: string;
+  credential_type: string;
+  is_docker: boolean;
+  config_schema: ConfigField[];
 }
 
 export type SLOMetricType = "availability" | "success_rate";

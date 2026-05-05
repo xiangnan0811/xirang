@@ -106,6 +106,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
 	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService)
+	appCredentialHandler := handlers.NewAppCredentialHandler(dep.DB)
 	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
@@ -214,6 +215,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PATCH("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Patch)
 	secured.POST("/integrations/:id/test", middleware.RBAC("integrations:write"), integrationHandler.Test)
 	secured.DELETE("/integrations/:id", middleware.RBAC("integrations:write"), integrationHandler.Delete)
+
+	secured.GET("/app-credentials", middleware.RBAC("app_credentials:read"), appCredentialHandler.List)
+	secured.GET("/app-credentials/profiles", middleware.RBAC("app_credentials:read"), appCredentialHandler.ListProfiles)
+	secured.GET("/app-credentials/:id", middleware.RBAC("app_credentials:read"), appCredentialHandler.Get)
+	secured.POST("/app-credentials", middleware.RBAC("app_credentials:write"), appCredentialHandler.Create)
+	secured.PUT("/app-credentials/:id", middleware.RBAC("app_credentials:write"), appCredentialHandler.Update)
+	secured.DELETE("/app-credentials/:id", middleware.RBAC("app_credentials:write"), appCredentialHandler.Delete)
 
 	secured.GET("/alerts", middleware.RBAC("alerts:read"), alertHandler.List)
 	secured.GET("/alerts/unread-count", middleware.RBAC("alerts:read"), alertHandler.UnreadCount)

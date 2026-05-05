@@ -94,6 +94,7 @@ const zh = {
     audit: "审计",
     reports: "报告",
     backups: "备份",
+    credentials: "应用凭据",
     settings: "设置",
     group: {
       core: "核心",
@@ -644,6 +645,12 @@ const zh = {
     bandwidthSchedule: "带宽调度",
     backupStorageInfo: "每个关联节点的数据将自动存储到 /backup/{节点备份目录}/ 下",
     perNodePathPreview: "各节点实际备份路径",
+    appAwareBackup: "应用感知备份",
+    selectProfile: "应用类型",
+    appProfileNone: "不启用（手动配置钩子）",
+    selectCredential: "凭据",
+    appCredentialNone: "选择凭据",
+    appAwareHint: "备份将自动注入以下钩子（您仍可手动修改）",
   },
 
   // ── tasks page ──
@@ -2425,6 +2432,40 @@ const zh = {
     },
     errors: {
       loadFailed: "加载异常事件失败",
+    },
+  },
+
+  // ── credentials ──
+  credentials: {
+    pageTitle: "应用凭据",
+    pageDesc: "管理数据库、Docker 等应用连接凭据，供备份策略引用。",
+    createBtn: "新建凭据",
+    createTitle: "新建应用凭据",
+    createDesc: "选择凭据类型并填写连接信息。",
+    editTitle: "编辑应用凭据",
+    editDesc: "修改凭据名称、描述或连接信息。",
+    empty: "暂无凭据",
+    password: "密码",
+    references: "引用",
+    configured: "已配置",
+    none: "无",
+    selectType: "选择凭据类型",
+    groupNonDocker: "数据库与服务",
+    groupDocker: "Docker 容器",
+    namePlaceholder: "例如：生产 MySQL",
+    descPlaceholder: "可选描述",
+    leaveEmptyToKeep: "留空则不修改",
+    deleted: "已删除 {{name}}",
+    created: "凭据创建成功",
+    updated: "凭据已更新",
+    confirmDeleteTitle: "确认删除",
+    confirmDeleteDesc: "确定要删除凭据「{{name}}」吗？如果该凭据被策略引用，删除将失败。",
+    validation: {
+      nameRequired: "请输入凭据名称",
+      typeRequired: "请选择凭据类型",
+      invalidProfile: "无效的凭据类型",
+      fieldRequired: "{{field}} 为必填项",
+      containerNameRequired: "Docker 类型必须填写容器名称",
     },
   },
 

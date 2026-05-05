@@ -11,7 +11,7 @@ import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context";
-import type { EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
+import type { AppCredential, EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -34,6 +34,8 @@ const emptyDraft: PolicyDraft = {
   retryBaseSeconds: 30,
   bandwidthSchedule: "",
   escalation_policy_id: null,
+  app_profile: "",
+  app_credential_id: null,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -63,6 +65,8 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     retryBaseSeconds: policy.retryBaseSeconds ?? 30,
     bandwidthSchedule: policy.bandwidthSchedule ?? "",
     escalation_policy_id: policy.escalation_policy_id ?? null,
+    app_profile: policy.app_profile ?? "",
+    app_credential_id: policy.app_credential_id ?? null,
   };
 }
 
@@ -88,6 +92,8 @@ export function PolicyEditorDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [hookTemplates, setHookTemplates] = useState<HookTemplate[]>([]);
   const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
+  const [profiles, setProfiles] = useState<ProfileSchema[]>([]);
+  const [credentials, setCredentials] = useState<AppCredential[]>([]);
 
   useEffect(() => {
     if (!open || !token) return;
@@ -95,6 +101,8 @@ export function PolicyEditorDialog({
     apiClient.listEscalationPolicies(token)
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
+    apiClient.getProfiles(token).then(setProfiles).catch(() => {});
+    apiClient.getCredentials(token).then(setCredentials).catch(() => {});
   }, [open, token]);
 
   const isEditing = Boolean(draft.id);
@@ -116,6 +124,11 @@ export function PolicyEditorDialog({
         : prev.nodeIds.filter((id) => id !== nodeId),
     }));
   };
+
+  const selectedProfileMeta = profiles.find((p) => p.id === draft.app_profile);
+  const filteredCredentials = credentials.filter(
+    (c) => !draft.app_profile ? false : c.type === selectedProfileMeta?.credential_type
+  );
 
   return (
     <FormDialog
@@ -257,6 +270,71 @@ export function PolicyEditorDialog({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* 应用感知备份 */}
+      {profiles.length > 0 && (
+        <div className="rounded-md border border-border/60 p-3 space-y-3">
+          <div className="text-sm font-medium">{t('policyEditor.appAwareBackup')}</div>
+
+          <div>
+            <label htmlFor="policy-edit-app-profile" className="mb-1 block text-sm font-medium">
+              {t('policyEditor.selectProfile')}
+            </label>
+            <Select
+              id="policy-edit-app-profile"
+              value={draft.app_profile ?? ""}
+              onChange={(e) => {
+                const profileId = e.target.value;
+                setDraft((prev) => ({
+                  ...prev,
+                  app_profile: profileId,
+                  app_credential_id: profileId === "" || profileId !== prev.app_profile ? null : prev.app_credential_id,
+                }));
+              }}
+            >
+              <option value="">{t('policyEditor.appProfileNone')}</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {selectedProfileMeta && (
+            <p className="text-xs text-muted-foreground">{selectedProfileMeta.description}</p>
+          )}
+
+          {draft.app_profile && (
+            <div>
+              <label htmlFor="policy-edit-app-credential" className="mb-1 block text-sm font-medium">
+                {t('policyEditor.selectCredential')}
+              </label>
+              <Select
+                id="policy-edit-app-credential"
+                value={draft.app_credential_id == null ? "" : String(draft.app_credential_id)}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    app_credential_id: e.target.value === "" ? null : Number(e.target.value),
+                  }))
+                }
+              >
+                <option value="">{t('policyEditor.appCredentialNone')}</option>
+                {filteredCredentials.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name} ({c.type})
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+
+          {draft.app_profile && draft.app_credential_id != null && (
+            <p className="text-xs text-muted-foreground">{t('policyEditor.appAwareHint')}</p>
+          )}
         </div>
       )}
 
