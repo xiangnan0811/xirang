@@ -63,8 +63,9 @@
 
    发布步骤为 **build amd64 (load) → Trivy 扫描 → build & push 多架 → attest**。
    当扫描到 HIGH/CRITICAL 漏洞时，整个 workflow 会在 push 之前失败，不会污染
-   Docker Hub 的 `latest` 标签。Trivy 当前钉版到 `aquasecurity/trivy-action@0.28.0`
-   防止浮动 ref 供应链攻击；维护者按需 bump（建议查看
+   Docker Hub 的 `latest` 标签。Trivy 当前钉版到 `aquasecurity/trivy-action@v0.36.0`
+   防止浮动 ref 供应链攻击；该 tag 已通过 `gh release list -R aquasecurity/trivy-action`
+   在 2026-05-04 核验为 latest stable。维护者按需 bump（建议查看
    <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag 或 SHA pin）。
 6. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
