@@ -55,7 +55,9 @@
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/coverage-v8": "^4.1.4",
     "autoprefixer": "^10.4.20",
+    "axe-core": "^4.11.4",
     "eslint": "^9.39.4",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "jsdom": "^26.1.0",
@@ -65,6 +67,7 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.58.2",
     "vite": "^7.3.1",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "vitest-axe": "^0.1.0"
   }
 }

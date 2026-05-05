@@ -1,4 +1,12 @@
 import "@testing-library/jest-dom/vitest";
+// Wave 4 PR-A: vitest-axe 自定义 matcher（toHaveNoViolations 等）。
+// 注：
+// 1. vitest-axe@0.1.0 的 `extend-expect.js` 是空文件，必须显式 expect.extend(matchers) 才能在 vitest 4 注册。
+// 2. 上游 extend-expect.d.ts 只 augment `Vi` namespace，与 vitest 4 的 `@vitest/expect#Matchers` 不匹配；
+//    因此 TypeScript 类型扩展放在 `src/types/vitest-axe.d.ts`（被 tsconfig include）。
+import * as axeMatchers from "vitest-axe/matchers";
+import { expect } from "vitest";
+expect.extend(axeMatchers);
 
 function createMemoryStorage(): Storage {
   const store = new Map<string, string>();
