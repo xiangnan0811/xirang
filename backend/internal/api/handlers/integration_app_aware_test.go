@@ -557,7 +557,7 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 	r.POST("/policies", policyHandler.Create)
 
 	// 创建含密码的凭据
-	credBody := `{"type":"mysql","name":"pw-check","host":"10.0.0.5","password":"FAKE_PASSWORD_FOR_FINAL_TEST"}`
+	credBody := `{"type":"mysql","name":"pw-check","host":"10.0.0.5","password":"FAKE_PASSWORD_FOR_TEST_ONLY"}`
 	credReq := httptest.NewRequest("POST", "/app-credentials", strings.NewReader(credBody))
 	credReq.Header.Set("Content-Type", "application/json")
 	credW := httptest.NewRecorder()
@@ -591,7 +591,7 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 	policyData := policyResp.Data.(map[string]interface{})
 	preHook := policyData["pre_hook"].(string)
 
-	if !strings.Contains(preHook, "FAKE_PASSWORD_FOR_FINAL_TEST") {
+	if !strings.Contains(preHook, "FAKE_PASSWORD_FOR_TEST_ONLY") {
 		t.Errorf("password should appear in rendered pre-hook, got: %s", preHook)
 	}
 }
