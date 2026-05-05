@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-05-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~309 | Active |
+| `journal-1.md` | ~342 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-05-05 | 应用感知备份 (App-Aware Backup Profiles) 完整实现 | `51623ec` | `feat/app-aware-backup` |
 | 9 | 2026-05-05 | Wave 4 前端 a11y 全审 (vitest-axe CI + WCAG AA 修复 + spec 沉淀) | `427dd42` | `chore/post-wave4-archive-journal` |
 | 8 | 2026-05-05 | Wave 3 前端架构收敛: Tree immutable / dashboard 404 / API 工厂 / lib/ws 抽象 | `8061381` | `chore/post-wave3-archive-journal` |
 | 7 | 2026-05-05 | Wave 2 第二轮全方位审查 + Trivy hotfix + GitGuardian 教训沉淀 | `27ee709`, `47e533b`, `676517d`, `c765d2c` | `chore/post-wave2-archive-journal` |
