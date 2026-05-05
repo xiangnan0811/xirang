@@ -51,6 +51,13 @@ function createPolicy(id: number, name: string): PolicyRecord {
     nodeIds: [],
     verifyEnabled: false,
     verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true,
   };
 }
 

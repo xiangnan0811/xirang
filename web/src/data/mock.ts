@@ -115,7 +115,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 2,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 2,
@@ -128,7 +135,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 3,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 3,
@@ -141,7 +155,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 1,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 4,
@@ -154,7 +175,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 1,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 5,
@@ -167,7 +195,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 4,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 6,
@@ -180,7 +215,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 2,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 7,
@@ -193,7 +235,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 2,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 8,
@@ -206,7 +255,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 3,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 9,
@@ -219,7 +275,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 2,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 10,
@@ -232,7 +295,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 3,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 11,
@@ -245,7 +315,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 2,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   },
   {
     id: 12,
@@ -258,7 +335,14 @@ export const mockPolicies: PolicyRecord[] = [
     criticalThreshold: 1,
     nodeIds: [],
     verifyEnabled: false,
-    verifySampleRate: 0
+    verifySampleRate: 0,
+    drill_enabled: false,
+    drill_cron: "",
+    drill_restore_path: "/tmp/xirang-drill",
+    drill_pre_verify: "",
+    drill_verify: "",
+    drill_post_verify: "",
+    drill_auto_cleanup: true
   }
 ];
 

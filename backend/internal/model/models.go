@@ -52,76 +52,85 @@ func (n Node) Sanitized() Node {
 }
 
 type Node struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	Name                string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Host                string     `gorm:"size:255;not null" json:"host"`
-	Port                int        `gorm:"not null;default:22" json:"port"`
-	Username            string     `gorm:"size:128;not null" json:"username"`
-	AuthType            string     `gorm:"size:32;not null;default:key" json:"auth_type"`
-	Password            string     `gorm:"size:255" json:"password,omitempty"`
-	PrivateKey          string     `gorm:"type:text" json:"private_key,omitempty"`
-	SSHKeyID            *uint      `gorm:"index" json:"ssh_key_id"`
-	SSHKey              *SSHKey    `json:"ssh_key,omitempty"`
-	Tags                string     `gorm:"size:512" json:"tags"`
-	Status              string     `gorm:"size:32;not null;default:offline" json:"status"`
-	BasePath            string     `gorm:"size:255" json:"base_path"`
-	BackupDir           string     `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
-	UseSudo             bool       `gorm:"not null;default:false" json:"use_sudo"`
-	ConnectionLatency   int        `gorm:"not null;default:0" json:"connection_latency_ms"`
-	DiskUsedGB          int        `gorm:"not null;default:0" json:"disk_used_gb"`
-	DiskTotalGB         int        `gorm:"not null;default:0" json:"disk_total_gb"`
-	LastSeenAt          *time.Time `json:"last_seen_at"`
-	LastBackupAt        *time.Time `json:"last_backup_at"`
-	LastProbeAt         *time.Time `json:"last_probe_at"`
-	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
-	MaintenanceStart    *time.Time `json:"maintenance_start,omitempty"`
-	MaintenanceEnd      *time.Time `json:"maintenance_end,omitempty"`
-	ExpiryDate          *time.Time `gorm:"" json:"expiry_date,omitempty"`
-	Archived                bool       `gorm:"not null;default:false" json:"archived"`
-	LogPaths                string     `gorm:"type:text" json:"log_paths"`
-	LogJournalctlEnabled    bool       `gorm:"not null;default:true" json:"log_journalctl_enabled"`
-	LogRetentionDays        int        `gorm:"not null;default:0" json:"log_retention_days"`
-	EscalationPolicyID      *uint      `gorm:"index" json:"escalation_policy_id"`
-	CreatedAt               time.Time  `json:"created_at"`
-	UpdatedAt               time.Time  `json:"updated_at"`
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	Name                 string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Host                 string     `gorm:"size:255;not null" json:"host"`
+	Port                 int        `gorm:"not null;default:22" json:"port"`
+	Username             string     `gorm:"size:128;not null" json:"username"`
+	AuthType             string     `gorm:"size:32;not null;default:key" json:"auth_type"`
+	Password             string     `gorm:"size:255" json:"password,omitempty"`
+	PrivateKey           string     `gorm:"type:text" json:"private_key,omitempty"`
+	SSHKeyID             *uint      `gorm:"index" json:"ssh_key_id"`
+	SSHKey               *SSHKey    `json:"ssh_key,omitempty"`
+	Tags                 string     `gorm:"size:512" json:"tags"`
+	Status               string     `gorm:"size:32;not null;default:offline" json:"status"`
+	BasePath             string     `gorm:"size:255" json:"base_path"`
+	BackupDir            string     `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
+	UseSudo              bool       `gorm:"not null;default:false" json:"use_sudo"`
+	ConnectionLatency    int        `gorm:"not null;default:0" json:"connection_latency_ms"`
+	DiskUsedGB           int        `gorm:"not null;default:0" json:"disk_used_gb"`
+	DiskTotalGB          int        `gorm:"not null;default:0" json:"disk_total_gb"`
+	LastSeenAt           *time.Time `json:"last_seen_at"`
+	LastBackupAt         *time.Time `json:"last_backup_at"`
+	LastProbeAt          *time.Time `json:"last_probe_at"`
+	ConsecutiveFailures  int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	MaintenanceStart     *time.Time `json:"maintenance_start,omitempty"`
+	MaintenanceEnd       *time.Time `json:"maintenance_end,omitempty"`
+	ExpiryDate           *time.Time `gorm:"" json:"expiry_date,omitempty"`
+	Archived             bool       `gorm:"not null;default:false" json:"archived"`
+	LogPaths             string     `gorm:"type:text" json:"log_paths"`
+	LogJournalctlEnabled bool       `gorm:"not null;default:true" json:"log_journalctl_enabled"`
+	LogRetentionDays     int        `gorm:"not null;default:0" json:"log_retention_days"`
+	EscalationPolicyID   *uint      `gorm:"index" json:"escalation_policy_id"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type Policy struct {
-	ID               uint      `gorm:"primaryKey" json:"id"`
-	Name             string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Description      string    `gorm:"size:255" json:"description"`
-	SourcePath       string    `gorm:"size:512;not null" json:"source_path"`
-	TargetPath       string    `gorm:"size:512;not null" json:"target_path"`
-	CronSpec         string    `gorm:"size:128;not null" json:"cron_spec"`
-	ExcludeRules     string    `gorm:"type:text" json:"exclude_rules"`
-	BwLimit          int       `gorm:"column:bwlimit;not null;default:0" json:"bwlimit"`
-	RetentionDays    int       `gorm:"not null;default:7" json:"retention_days"`
-	MaxConcurrent    int       `gorm:"not null;default:1" json:"max_concurrent"`
-	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
-	VerifyEnabled    bool      `gorm:"not null;default:true" json:"verify_enabled"`
-	VerifySampleRate int       `gorm:"not null;default:0" json:"verify_sample_rate"`
-	IsTemplate         bool      `gorm:"not null;default:false" json:"is_template"`
-	PreHook            string    `gorm:"type:text;not null;default:''" json:"pre_hook"`
-	PostHook           string    `gorm:"type:text;not null;default:''" json:"post_hook"`
-	HookTimeoutSeconds int       `gorm:"not null;default:300" json:"hook_timeout_seconds"`
-	AppProfile         string    `gorm:"size:32;not null;default:''" json:"app_profile"`
-	AppCredentialID    *uint     `gorm:"index" json:"app_credential_id"`
+	ID                 uint   `gorm:"primaryKey" json:"id"`
+	Name               string `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Description        string `gorm:"size:255" json:"description"`
+	SourcePath         string `gorm:"size:512;not null" json:"source_path"`
+	TargetPath         string `gorm:"size:512;not null" json:"target_path"`
+	CronSpec           string `gorm:"size:128;not null" json:"cron_spec"`
+	ExcludeRules       string `gorm:"type:text" json:"exclude_rules"`
+	BwLimit            int    `gorm:"column:bwlimit;not null;default:0" json:"bwlimit"`
+	RetentionDays      int    `gorm:"not null;default:7" json:"retention_days"`
+	MaxConcurrent      int    `gorm:"not null;default:1" json:"max_concurrent"`
+	Enabled            bool   `gorm:"not null;default:true" json:"enabled"`
+	VerifyEnabled      bool   `gorm:"not null;default:true" json:"verify_enabled"`
+	VerifySampleRate   int    `gorm:"not null;default:0" json:"verify_sample_rate"`
+	IsTemplate         bool   `gorm:"not null;default:false" json:"is_template"`
+	PreHook            string `gorm:"type:text;not null;default:''" json:"pre_hook"`
+	PostHook           string `gorm:"type:text;not null;default:''" json:"post_hook"`
+	HookTimeoutSeconds int    `gorm:"not null;default:300" json:"hook_timeout_seconds"`
+	AppProfile         string `gorm:"size:32;not null;default:''" json:"app_profile"`
+	AppCredentialID    *uint  `gorm:"index" json:"app_credential_id"`
 	// MaxExecutionSeconds 0 = 使用环境变量 TASK_MAX_EXECUTION_SECONDS（默认 86400=24h）。
 	// >0 = 该策略的任务最长执行秒数；超时后 ctx 被 cancel，executor 收到 SIGTERM 退出。
-	MaxExecutionSeconds int       `gorm:"not null;default:0" json:"max_execution_seconds"`
-	MaxRetries          int       `gorm:"not null;default:2" json:"max_retries"`
-	RetryBaseSeconds   int       `gorm:"not null;default:30" json:"retry_base_seconds"`
-	BandwidthSchedule  string    `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
-	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`
-	Nodes              []Node    `gorm:"many2many:policy_nodes" json:"-"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	MaxExecutionSeconds int    `gorm:"not null;default:0" json:"max_execution_seconds"`
+	MaxRetries          int    `gorm:"not null;default:2" json:"max_retries"`
+	RetryBaseSeconds    int    `gorm:"not null;default:30" json:"retry_base_seconds"`
+	BandwidthSchedule   string `gorm:"type:text;not null;default:''" json:"bandwidth_schedule"`
+	EscalationPolicyID  *uint  `gorm:"index" json:"escalation_policy_id"`
+	// Drill 恢复演练配置
+	DrillEnabled      bool      `gorm:"not null;default:false" json:"drill_enabled"`
+	DrillCron         string    `gorm:"size:128;not null;default:''" json:"drill_cron"`
+	DrillTargetNodeID *uint     `gorm:"index" json:"drill_target_node_id"`
+	DrillRestorePath  string    `gorm:"size:512;not null;default:'/tmp/xirang-drill'" json:"drill_restore_path"`
+	DrillPreVerify    string    `gorm:"type:text;not null;default:''" json:"drill_pre_verify"`
+	DrillVerify       string    `gorm:"type:text;not null;default:''" json:"drill_verify"`
+	DrillPostVerify   string    `gorm:"type:text;not null;default:''" json:"drill_post_verify"`
+	DrillAutoCleanup  bool      `gorm:"not null;default:true" json:"drill_auto_cleanup"`
+	Nodes             []Node    `gorm:"many2many:policy_nodes" json:"-"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // PolicyNode 策略-节点关联表
 type PolicyNode struct {
-	PolicyID  uint      `gorm:"primaryKey"`
-	NodeID    uint      `gorm:"primaryKey"`
+	PolicyID  uint `gorm:"primaryKey"`
+	NodeID    uint `gorm:"primaryKey"`
 	CreatedAt time.Time
 }
 
@@ -270,29 +279,29 @@ type AlertDelivery struct {
 }
 
 type Task struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	Name             string     `gorm:"size:128;not null" json:"name"`
-	NodeID           uint       `gorm:"not null;index" json:"node_id"`
-	Node             Node       `json:"node,omitempty"`
-	PolicyID         *uint      `gorm:"index" json:"policy_id,omitempty"`
-	Policy           *Policy    `json:"policy,omitempty"`
-	DependsOnTaskID  *uint      `gorm:"index" json:"depends_on_task_id,omitempty"`
-	Command          string     `gorm:"type:text" json:"command"`
-	RsyncSource      string     `gorm:"size:512" json:"rsync_source"`
-	RsyncTarget      string     `gorm:"size:512" json:"rsync_target"`
-	ExecutorType     string     `gorm:"size:32;not null;default:local" json:"executor_type"`
-	ExecutorConfig   string     `gorm:"type:text" json:"executor_config,omitempty"`
-	CronSpec         string     `gorm:"size:128" json:"cron_spec"`
-	Status           string     `gorm:"size:32;not null;index" json:"status"`
-	BatchID          string     `gorm:"size:64;index" json:"batch_id,omitempty"`
-	Source           string     `gorm:"size:32;not null;default:manual" json:"source"`
-	VerifyStatus     string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	RetryCount       int        `gorm:"not null;default:0" json:"retry_count"`
-	Enabled          bool       `gorm:"not null;default:true" json:"enabled"`
-	SkipNext         bool       `gorm:"not null;default:false" json:"skip_next"`
-	LastError        string     `gorm:"type:text" json:"last_error"`
-	LastRunAt        *time.Time `json:"last_run_at"`
-	NextRunAt        *time.Time `json:"next_run_at"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	Name               string     `gorm:"size:128;not null" json:"name"`
+	NodeID             uint       `gorm:"not null;index" json:"node_id"`
+	Node               Node       `json:"node,omitempty"`
+	PolicyID           *uint      `gorm:"index" json:"policy_id,omitempty"`
+	Policy             *Policy    `json:"policy,omitempty"`
+	DependsOnTaskID    *uint      `gorm:"index" json:"depends_on_task_id,omitempty"`
+	Command            string     `gorm:"type:text" json:"command"`
+	RsyncSource        string     `gorm:"size:512" json:"rsync_source"`
+	RsyncTarget        string     `gorm:"size:512" json:"rsync_target"`
+	ExecutorType       string     `gorm:"size:32;not null;default:local" json:"executor_type"`
+	ExecutorConfig     string     `gorm:"type:text" json:"executor_config,omitempty"`
+	CronSpec           string     `gorm:"size:128" json:"cron_spec"`
+	Status             string     `gorm:"size:32;not null;index" json:"status"`
+	BatchID            string     `gorm:"size:64;index" json:"batch_id,omitempty"`
+	Source             string     `gorm:"size:32;not null;default:manual" json:"source"`
+	VerifyStatus       string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	RetryCount         int        `gorm:"not null;default:0" json:"retry_count"`
+	Enabled            bool       `gorm:"not null;default:true" json:"enabled"`
+	SkipNext           bool       `gorm:"not null;default:false" json:"skip_next"`
+	LastError          string     `gorm:"type:text" json:"last_error"`
+	LastRunAt          *time.Time `json:"last_run_at"`
+	NextRunAt          *time.Time `json:"next_run_at"`
 	Progress           *int       `gorm:"-" json:"progress,omitempty"`
 	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
 	CreatedAt          time.Time  `json:"created_at"`
@@ -324,23 +333,23 @@ func (t *Task) AfterFind(_ *gorm.DB) error {
 }
 
 type TaskRun struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	TaskID             uint       `gorm:"not null;index" json:"task_id"`
-	Task               Task       `gorm:"foreignKey:TaskID" json:"-"`
-	TriggerType        string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
-	Status             string     `gorm:"size:32;not null;default:pending;index" json:"status"`
-	ChainRunID         string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
-	UpstreamTaskRunID  *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
-	SkipReason         string     `gorm:"type:text" json:"skip_reason,omitempty"`
-	StartedAt          *time.Time `json:"started_at"`
-	FinishedAt         *time.Time `json:"finished_at"`
-	DurationMs         int64      `gorm:"not null;default:0" json:"duration_ms"`
-	VerifyStatus       string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	ThroughputMbps     float64    `gorm:"not null;default:0" json:"throughput_mbps"`
-	Progress           int        `gorm:"not null;default:0" json:"progress"`
-	LastError          string     `gorm:"type:text" json:"last_error"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                uint       `gorm:"primaryKey" json:"id"`
+	TaskID            uint       `gorm:"not null;index" json:"task_id"`
+	Task              Task       `gorm:"foreignKey:TaskID" json:"-"`
+	TriggerType       string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
+	Status            string     `gorm:"size:32;not null;default:pending;index" json:"status"`
+	ChainRunID        string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
+	UpstreamTaskRunID *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
+	SkipReason        string     `gorm:"type:text" json:"skip_reason,omitempty"`
+	StartedAt         *time.Time `json:"started_at"`
+	FinishedAt        *time.Time `json:"finished_at"`
+	DurationMs        int64      `gorm:"not null;default:0" json:"duration_ms"`
+	VerifyStatus      string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	ThroughputMbps    float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	Progress          int        `gorm:"not null;default:0" json:"progress"`
+	LastError         string     `gorm:"type:text" json:"last_error"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type AuditLog struct {
@@ -467,21 +476,21 @@ type ReportConfig struct {
 
 // Report 已生成的 SLA 报告
 type Report struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	ConfigID      uint      `gorm:"not null;index" json:"config_id"`
+	ID            uint          `gorm:"primaryKey" json:"id"`
+	ConfigID      uint          `gorm:"not null;index" json:"config_id"`
 	Config        *ReportConfig `gorm:"foreignKey:ConfigID" json:"config"`
-	PeriodStart   time.Time `gorm:"not null;index" json:"period_start"`
-	PeriodEnd     time.Time `gorm:"not null" json:"period_end"`
-	TotalRuns     int       `gorm:"not null;default:0" json:"total_runs"`
-	SuccessRuns   int       `gorm:"not null;default:0" json:"success_runs"`
-	FailedRuns    int       `gorm:"not null;default:0" json:"failed_runs"`
-	SuccessRate   float64   `gorm:"not null;default:0" json:"success_rate"`
-	AvgDurationMs int64     `gorm:"not null;default:0" json:"avg_duration_ms"`
-	TopFailures   string    `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
-	DiskTrend     string    `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
-	GeneratedAt   time.Time `gorm:"not null" json:"generated_at"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	PeriodStart   time.Time     `gorm:"not null;index" json:"period_start"`
+	PeriodEnd     time.Time     `gorm:"not null" json:"period_end"`
+	TotalRuns     int           `gorm:"not null;default:0" json:"total_runs"`
+	SuccessRuns   int           `gorm:"not null;default:0" json:"success_runs"`
+	FailedRuns    int           `gorm:"not null;default:0" json:"failed_runs"`
+	SuccessRate   float64       `gorm:"not null;default:0" json:"success_rate"`
+	AvgDurationMs int64         `gorm:"not null;default:0" json:"avg_duration_ms"`
+	TopFailures   string        `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
+	DiskTrend     string        `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
+	GeneratedAt   time.Time     `gorm:"not null" json:"generated_at"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
 // Silence 告警静默规则：在指定时间窗口内抑制匹配的告警
@@ -628,17 +637,17 @@ type SystemSetting struct {
 
 // SLODefinition is a service-level objective target, matched by node tags.
 type SLODefinition struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	Name       string    `gorm:"size:128;not null" json:"name"`
-	MetricType string    `gorm:"size:32;not null" json:"metric_type"` // success_rate | availability
-	MatchTags  string    `gorm:"type:text" json:"match_tags"`         // JSON-encoded []string (nil = all)
-	Threshold  float64   `gorm:"not null" json:"threshold"`           // 0–1 range
-	WindowDays int       `gorm:"not null;default:28" json:"window_days"`
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	Name               string    `gorm:"size:128;not null" json:"name"`
+	MetricType         string    `gorm:"size:32;not null" json:"metric_type"` // success_rate | availability
+	MatchTags          string    `gorm:"type:text" json:"match_tags"`         // JSON-encoded []string (nil = all)
+	Threshold          float64   `gorm:"not null" json:"threshold"`           // 0–1 range
+	WindowDays         int       `gorm:"not null;default:28" json:"window_days"`
 	Enabled            bool      `gorm:"not null;default:true;index" json:"enabled"`
 	EscalationPolicyID *uint     `gorm:"index" json:"escalation_policy_id"`
-	CreatedBy  uint      `gorm:"not null" json:"created_by"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CreatedBy          uint      `gorm:"not null" json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // DecodedMatchTags returns the parsed tag list. Returns nil on NULL/empty/invalid JSON.

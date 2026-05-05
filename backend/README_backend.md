@@ -108,6 +108,7 @@ go run ./cmd/server
 | POST | /policies/from-template/:id | 🔒 从模板创建 |
 | PUT | /policies/:id | 🔒 更新策略 |
 | DELETE | /policies/:id | 🔒 删除策略 |
+| POST | /policies/:id/drill-trigger | 🔒 手动触发恢复演练 |
 
 ### 任务与执行
 
