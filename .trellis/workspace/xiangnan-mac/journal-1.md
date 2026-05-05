@@ -274,3 +274,36 @@ Audited and refreshed README/docs against current repo state, marked dated specs
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Wave 4 前端 a11y 全审 (vitest-axe CI + WCAG AA 修复 + spec 沉淀)
+
+**Date**: 2026-05-05
+**Task**: Wave 4 前端 a11y 全审 (vitest-axe CI + WCAG AA 修复 + spec 沉淀)
+**Branch**: `chore/post-wave4-archive-journal`
+
+### Summary
+
+a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳入 CI: vitest-axe + axe-core + eslint-plugin-jsx-a11y 接入；修一批已知真违规：P0 i18n lang 同步 (WCAG 3.1.1)、P1 装饰 lucide icon ~18 处加 aria-hidden、version-banner sr-only、select ChevronDown、隐藏 input file aria-label、ssh-key role=list 冗余去除；P2 颜色对比 5 处局部 patch (text-mini → text-xs text-foreground/70，不动全局 token 避免视觉回归)；react-grid-layout 拖拽加键盘上下移按钮兜底；3 个 jsx-a11y 规则 warn → error (aria-role / no-redundant-roles / anchor-is-valid)，5 个保持 warn 带 TODO 注释（label-has-associated-control / no-noninteractive-tabindex / click-events-have-key-events / no-static-element-interactions / no-autofocus，需 UX/design review）；新增 7 个 a11y smoke 测试 + runAxe helper + a11y-guidelines spec (8 条规范 + 测试模板 + decorative-vs-semantic icon 判定 + i18n+lang 样板 + Known exemptions)。关键发现: 当前 a11y 比预期好 (47% aria-* 覆盖、Dialog 全有 Title)，是收敛而非重写。学到的 Wave 2 教训用：所有 npm 版本号都用 npm view 核验最新 stable 后再写入。77 文件 / 319 测试全过；lint 0 errors / 73 warnings (jsx-a11y 16 → 12)；bundle 534/546 KiB。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `427dd42` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
