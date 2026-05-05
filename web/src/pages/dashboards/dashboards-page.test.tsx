@@ -25,21 +25,24 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/lib/api/dashboards", () => ({
-  listDashboards: vi.fn(),
-  createDashboard: vi.fn(),
-  deleteDashboard: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      listDashboards: vi.fn(),
+      createDashboard: vi.fn(),
+      deleteDashboard: vi.fn(),
+    },
+  };
+});
 
-import {
-  listDashboards,
-  createDashboard,
-  deleteDashboard,
-} from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 
-const mockListDashboards = vi.mocked(listDashboards);
-const mockCreateDashboard = vi.mocked(createDashboard);
-const mockDeleteDashboard = vi.mocked(deleteDashboard);
+const mockListDashboards = vi.mocked(apiClient.listDashboards);
+const mockCreateDashboard = vi.mocked(apiClient.createDashboard);
+const mockDeleteDashboard = vi.mocked(apiClient.deleteDashboard);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 

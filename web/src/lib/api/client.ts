@@ -19,6 +19,13 @@ import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
 import { createSettingsApi } from "./settings-api";
 import { createSnapshotDiffApi } from "./snapshot-diff-api";
+import { createDashboardsApi } from "./dashboards";
+import { createSilencesApi } from "./silences";
+import { createSLOApi } from "./slo";
+import { createAnomalyApi } from "./anomaly";
+import { createEscalationApi } from "./escalation";
+import { createNodeLogsApi } from "./node-logs";
+import { createAlertDeliveriesApi } from "./alert-deliveries";
 
 export { ApiError } from "./core";
 
@@ -44,4 +51,11 @@ export const apiClient = {
   ...createStorageGuideApi(),
   ...createSettingsApi(),
   ...createSnapshotDiffApi(),
+  ...createDashboardsApi(),
+  ...createSilencesApi(),
+  ...createSLOApi(),
+  ...createAnomalyApi(),
+  ...createEscalationApi(),
+  ...createNodeLogsApi(),
+  ...createAlertDeliveriesApi(),
 };

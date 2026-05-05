@@ -6,12 +6,19 @@ import type { Panel, PanelQueryResult } from "@/types/domain";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
-vi.mock("@/lib/api/dashboards", () => ({
-  queryPanel: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      queryPanel: vi.fn(),
+    },
+  };
+});
 
-import { queryPanel } from "@/lib/api/dashboards";
-const mockQueryPanel = vi.mocked(queryPanel);
+import { apiClient } from "@/lib/api/client";
+const mockQueryPanel = vi.mocked(apiClient.queryPanel);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 
@@ -78,14 +85,14 @@ describe("usePanelData", () => {
     expect(mockQueryPanel).toHaveBeenLastCalledWith(
       "test-token",
       expect.objectContaining({ start: START, end: NEW_END }),
-      expect.any(AbortSignal)
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 
   it("卸载时 abort 取消请求", async () => {
     let capturedSignal: AbortSignal | undefined;
-    mockQueryPanel.mockImplementation((_token, _input, signal) => {
-      capturedSignal = signal;
+    mockQueryPanel.mockImplementation((_token, _input, options) => {
+      capturedSignal = options?.signal;
       return new Promise(() => {
         // 永远不 resolve，用于测试 abort
       });

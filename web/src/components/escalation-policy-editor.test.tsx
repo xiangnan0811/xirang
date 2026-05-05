@@ -70,10 +70,17 @@ vi.mock("@/lib/api/integrations-api", () => ({
 const mockCreate = vi.fn();
 const mockUpdate = vi.fn();
 
-vi.mock("@/lib/api/escalation", () => ({
-  createEscalationPolicy: (...args: unknown[]) => mockCreate(...args),
-  updateEscalationPolicy: (...args: unknown[]) => mockUpdate(...args),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      createEscalationPolicy: (...args: unknown[]) => mockCreate(...args),
+      updateEscalationPolicy: (...args: unknown[]) => mockUpdate(...args),
+    },
+  };
+});
 
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ token: "test-token" }),

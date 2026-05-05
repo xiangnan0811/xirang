@@ -1,4 +1,9 @@
 import { request } from "./core"
 
-export const retryDelivery = (token: string, id: string | number) =>
-  request<void>(`/alert-deliveries/${id}/retry`, { method: "POST", token })
+export function createAlertDeliveriesApi() {
+  return {
+    async retryDelivery(token: string, id: string | number): Promise<void> {
+      return request<void>(`/alert-deliveries/${id}/retry`, { method: "POST", token })
+    },
+  }
+}

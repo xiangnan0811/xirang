@@ -3,16 +3,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useDashboard } from "./use-dashboard";
 import type { Dashboard } from "@/types/domain";
+import { ApiError } from "@/lib/api/core";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
-vi.mock("@/lib/api/dashboards", () => ({
-  getDashboard: vi.fn(),
-  updateDashboard: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getDashboard: vi.fn(),
+      updateDashboard: vi.fn(),
+    },
+  };
+});
 
-import { getDashboard } from "@/lib/api/dashboards";
-const mockGetDashboard = vi.mocked(getDashboard);
+import { apiClient } from "@/lib/api/client";
+const mockGetDashboard = vi.mocked(apiClient.getDashboard);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 
@@ -57,8 +65,40 @@ describe("useDashboard", () => {
     expect(mockGetDashboard).toHaveBeenCalledWith(
       "test-token",
       1,
-      expect.any(AbortSignal)
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("拉取 404 时保留 ApiError 实例（status 字段）暴露给消费方", async () => {
+    const apiErr = new ApiError(404, "看板不存在");
+    mockGetDashboard.mockRejectedValue(apiErr);
+
+    const { result } = renderHook(() =>
+      useDashboard("1", "test-token")
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    const err = result.current.error;
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(404);
+  });
+
+  it("拉取非 ApiError 异常时仍包装为 Error 暴露 message", async () => {
+    mockGetDashboard.mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(() =>
+      useDashboard("1", "test-token")
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.error?.message).toBe("network down");
   });
 
   it("调用 refresh() 递增 refreshNonce，并触发重新拉取", async () => {

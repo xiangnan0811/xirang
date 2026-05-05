@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/auth-context";
 import { useNodesContext } from "@/context/nodes-context";
-import { queryNodeLogs, type NodeLogQuery } from "@/lib/api/node-logs";
+import { apiClient } from "@/lib/api/client";
+import type { NodeLogQuery } from "@/lib/api/node-logs";
 import type { NodeLogEntry, NodeLogPriority, NodeLogQueryResult, NodeLogSource } from "@/types/domain";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -95,7 +96,7 @@ export function NodeLogsPanel() {
     setFilter(f);
     setLoading(true);
     try {
-      const data = await queryNodeLogs(token, filterToQuery(f));
+      const data = await apiClient.queryNodeLogs(token, filterToQuery(f));
       setResult(data);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));

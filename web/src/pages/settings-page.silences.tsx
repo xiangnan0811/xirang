@@ -12,9 +12,6 @@ import { toast } from "@/components/ui/toast"
 import { useAuth } from "@/context/auth-context"
 import { apiClient } from "@/lib/api/client"
 import {
-  createSilence,
-  deleteSilence,
-  listSilences,
   parseSilenceTags,
   type Silence,
   type SilenceInput,
@@ -138,7 +135,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
     }
     setSubmitting(true)
     try {
-      await createSilence(token, input)
+      await apiClient.createSilence(token, input)
       toast.success(t("silences.title"))
       onOpenChange(false)
       onCreated()
@@ -295,7 +292,7 @@ export function SilencesPanel() {
   const refresh = useCallback(() => {
     if (!token) return
     setLoading(true)
-    listSilences(token)
+    apiClient.listSilences(token)
       .then(setSilences)
       .catch((err) => toast.error(getErrorMessage(err)))
       .finally(() => setLoading(false))
@@ -309,7 +306,7 @@ export function SilencesPanel() {
     if (!token) return
     setRevoking(id)
     try {
-      await deleteSilence(token, id)
+      await apiClient.deleteSilence(token, id)
       toast.success(t("silences.revoke"))
       refresh()
     } catch (err) {

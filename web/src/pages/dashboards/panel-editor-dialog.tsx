@@ -15,12 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { getErrorMessage } from "@/lib/utils";
-import {
-  addPanel,
-  updatePanel,
-  queryPanel,
-  listMetrics,
-} from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 import { createNodesApi } from "@/lib/api/nodes-api";
 import { createTasksApi } from "@/lib/api/tasks-api";
 import { PanelRenderer } from "./panel-renderer";
@@ -185,7 +180,7 @@ export function PanelEditorDialog({
 
     // 加载指标列表（只加载一次）
     if (!metricsLoaded) {
-      listMetrics(token)
+      apiClient.listMetrics(token)
         .then((list) => {
           setMetrics(list);
           setMetricsLoaded(true);
@@ -250,7 +245,7 @@ export function PanelEditorDialog({
       setPreviewLoading(true);
       setPreviewError(null);
 
-      queryPanel(
+      apiClient.queryPanel(
         token,
         {
           metric: metricKey,
@@ -262,7 +257,7 @@ export function PanelEditorDialog({
           start,
           end,
         },
-        ctrl.signal,
+        { signal: ctrl.signal },
       )
         .then((result) => {
           setPreviewData(result);
@@ -336,9 +331,9 @@ export function PanelEditorDialog({
     try {
       let saved: Panel;
       if (isEdit && panel) {
-        saved = await updatePanel(token, dashboardID, panel.id, input);
+        saved = await apiClient.updatePanel(token, dashboardID, panel.id, input);
       } else {
-        saved = await addPanel(token, dashboardID, input);
+        saved = await apiClient.addPanel(token, dashboardID, input);
       }
       onSaved(saved);
       onOpenChange(false);

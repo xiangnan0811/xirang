@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { apiClient } from "@/lib/api/client";
-import { getLogsSettings, updateLogsSettings } from "@/lib/api/node-logs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
@@ -30,7 +29,7 @@ export function SystemTab() {
     try {
       const [res, logSettings] = await Promise.all([
         apiClient.getSettings(token),
-        getLogsSettings(token),
+        apiClient.getLogsSettings(token),
       ]);
       setDefinitions(res.definitions);
       setValues(res.values);
@@ -51,7 +50,7 @@ export function SystemTab() {
     if (!token) return;
     setLogRetentionSaving(true);
     try {
-      const updated = await updateLogsSettings(token, { default_retention_days: logRetentionDays });
+      const updated = await apiClient.updateLogsSettings(token, { default_retention_days: logRetentionDays });
       setLogRetentionDays(updated.default_retention_days);
       toast.success(t("settings.system.saved"));
     } catch (err: unknown) {

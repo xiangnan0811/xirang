@@ -1992,6 +1992,8 @@ const en = {
   terminal: {
     disconnected: "Disconnected",
     wsError: "WebSocket connection error",
+    reconnected: "Session reconnected. The previous SSH session is invalid; please sign in again.",
+    giveUp: "Maximum reconnection attempts reached. Please close this terminal and reopen.",
   },
 
   // ── tree component ──

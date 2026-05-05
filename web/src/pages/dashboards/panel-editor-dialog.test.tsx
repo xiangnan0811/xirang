@@ -9,12 +9,19 @@ import type { MetricDescriptor, Panel } from "@/types/domain";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
-vi.mock("@/lib/api/dashboards", () => ({
-  listMetrics: vi.fn(),
-  addPanel: vi.fn(),
-  updatePanel: vi.fn(),
-  queryPanel: vi.fn(),
-}));
+vi.mock("@/lib/api/client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      listMetrics: vi.fn(),
+      addPanel: vi.fn(),
+      updatePanel: vi.fn(),
+      queryPanel: vi.fn(),
+    },
+  };
+});
 
 vi.mock("@/lib/api/nodes-api", () => ({
   createNodesApi: vi.fn(() => ({
@@ -44,17 +51,12 @@ global.ResizeObserver = class {
   disconnect() {}
 };
 
-import {
-  listMetrics,
-  addPanel,
-  updatePanel,
-  queryPanel,
-} from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 
-const mockListMetrics = vi.mocked(listMetrics);
-const mockAddPanel = vi.mocked(addPanel);
-const mockUpdatePanel = vi.mocked(updatePanel);
-const mockQueryPanel = vi.mocked(queryPanel);
+const mockListMetrics = vi.mocked(apiClient.listMetrics);
+const mockAddPanel = vi.mocked(apiClient.addPanel);
+const mockUpdatePanel = vi.mocked(apiClient.updatePanel);
+const mockQueryPanel = vi.mocked(apiClient.queryPanel);
 
 // ─── 测试数据 ─────────────────────────────────────────────────────
 

@@ -33,32 +33,72 @@ function buildQuery(q: NodeLogQuery): string {
   return s ? `?${s}` : ""
 }
 
-export const queryNodeLogs = (token: string, q: NodeLogQuery) =>
-  request<NodeLogQueryResult>(`/node-logs${buildQuery(q)}`, { token })
+export function createNodeLogsApi() {
+  return {
+    async queryNodeLogs(
+      token: string,
+      q: NodeLogQuery,
+      options?: { signal?: AbortSignal },
+    ): Promise<NodeLogQueryResult> {
+      return request<NodeLogQueryResult>(`/node-logs${buildQuery(q)}`, {
+        token,
+        signal: options?.signal,
+      })
+    },
 
-export const getAlertLogs = (token: string, alertId: number) =>
-  request<AlertLogsResult>(`/alerts/${alertId}/logs`, { token })
+    async getAlertLogs(
+      token: string,
+      alertId: number,
+      options?: { signal?: AbortSignal },
+    ): Promise<AlertLogsResult> {
+      return request<AlertLogsResult>(`/alerts/${alertId}/logs`, {
+        token,
+        signal: options?.signal,
+      })
+    },
 
-export const getNodeLogConfig = (token: string, nodeId: number) =>
-  request<NodeLogConfig>(`/nodes/${nodeId}/log-config`, { token })
+    async getNodeLogConfig(
+      token: string,
+      nodeId: number,
+      options?: { signal?: AbortSignal },
+    ): Promise<NodeLogConfig> {
+      return request<NodeLogConfig>(`/nodes/${nodeId}/log-config`, {
+        token,
+        signal: options?.signal,
+      })
+    },
 
-export const updateNodeLogConfig = (
-  token: string,
-  nodeId: number,
-  config: NodeLogConfig,
-) =>
-  request<NodeLogConfig>(`/nodes/${nodeId}/log-config`, {
-    token,
-    method: "PATCH",
-    body: config,
-  })
+    async updateNodeLogConfig(
+      token: string,
+      nodeId: number,
+      config: NodeLogConfig,
+    ): Promise<NodeLogConfig> {
+      return request<NodeLogConfig>(`/nodes/${nodeId}/log-config`, {
+        token,
+        method: "PATCH",
+        body: config,
+      })
+    },
 
-export const getLogsSettings = (token: string) =>
-  request<NodeLogsSettings>("/settings/logs", { token })
+    async getLogsSettings(
+      token: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<NodeLogsSettings> {
+      return request<NodeLogsSettings>("/settings/logs", {
+        token,
+        signal: options?.signal,
+      })
+    },
 
-export const updateLogsSettings = (token: string, s: NodeLogsSettings) =>
-  request<NodeLogsSettings>("/settings/logs", {
-    token,
-    method: "PATCH",
-    body: s,
-  })
+    async updateLogsSettings(
+      token: string,
+      s: NodeLogsSettings,
+    ): Promise<NodeLogsSettings> {
+      return request<NodeLogsSettings>("/settings/logs", {
+        token,
+        method: "PATCH",
+        body: s,
+      })
+    },
+  }
+}

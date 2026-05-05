@@ -15,24 +15,6 @@ export type SLOInput = {
   escalation_policy_id?: number | null
 }
 
-export const listSLOs = (token: string) =>
-  request<SLODefinition[]>("/slos", { token })
-
-export const createSLO = (token: string, input: SLOInput) =>
-  request<SLODefinition>("/slos", { method: "POST", token, body: input })
-
-export const updateSLO = (token: string, id: number, input: SLOInput) =>
-  request<SLODefinition>(`/slos/${id}`, { method: "PATCH", token, body: input })
-
-export const deleteSLO = (token: string, id: number) =>
-  request<void>(`/slos/${id}`, { method: "DELETE", token })
-
-export const getSLOCompliance = (token: string, id: number) =>
-  request<SLOComplianceResult>(`/slos/${id}/compliance`, { token })
-
-export const getSLOSummary = (token: string) =>
-  request<SLOSummary>("/slos/compliance-summary", { token })
-
 // Parse match_tags from server representation (JSON string, array, or null)
 // to canonical string[] for UI use.
 export function parseSLOTags(s: Pick<SLODefinition, "match_tags">): string[] {
@@ -43,5 +25,33 @@ export function parseSLOTags(s: Pick<SLODefinition, "match_tags">): string[] {
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
+  }
+}
+
+export function createSLOApi() {
+  return {
+    async listSLOs(token: string, options?: { signal?: AbortSignal }): Promise<SLODefinition[]> {
+      return request<SLODefinition[]>("/slos", { token, signal: options?.signal })
+    },
+
+    async createSLO(token: string, input: SLOInput): Promise<SLODefinition> {
+      return request<SLODefinition>("/slos", { method: "POST", token, body: input })
+    },
+
+    async updateSLO(token: string, id: number, input: SLOInput): Promise<SLODefinition> {
+      return request<SLODefinition>(`/slos/${id}`, { method: "PATCH", token, body: input })
+    },
+
+    async deleteSLO(token: string, id: number): Promise<void> {
+      return request<void>(`/slos/${id}`, { method: "DELETE", token })
+    },
+
+    async getSLOCompliance(token: string, id: number, options?: { signal?: AbortSignal }): Promise<SLOComplianceResult> {
+      return request<SLOComplianceResult>(`/slos/${id}/compliance`, { token, signal: options?.signal })
+    },
+
+    async getSLOSummary(token: string, options?: { signal?: AbortSignal }): Promise<SLOSummary> {
+      return request<SLOSummary>("/slos/compliance-summary", { token, signal: options?.signal })
+    },
   }
 }

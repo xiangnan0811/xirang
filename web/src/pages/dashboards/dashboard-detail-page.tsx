@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft, RefreshCw, Plus, Save } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/auth-context";
-import { deletePanel, updateLayout } from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/core";
 import type { Panel, DashboardTimeRange } from "@/types/domain";
 import { getErrorMessage } from "@/lib/utils";
 import { useDashboard } from "./hooks/use-dashboard";
@@ -82,11 +83,8 @@ export function DashboardDetailPage() {
   // ── 404 处理 ────────────────────────────────────────────────────
   useEffect(() => {
     if (error) {
-      const is404 =
-        error.includes("404") ||
-        error.toLowerCase().includes("not found") ||
-        error.includes(t("dashboards.errors.notFound"));
-      toast.error(is404 ? t("dashboards.errors.notFound") : error);
+      const is404 = error instanceof ApiError && error.status === 404;
+      toast.error(is404 ? t("dashboards.errors.notFound") : error.message);
       navigate("/app/dashboards");
     }
   }, [error, navigate, t]);
@@ -108,7 +106,7 @@ export function DashboardDetailPage() {
     if (!dashboard) return;
     setSavingLayout(true);
     try {
-      await updateLayout(token ?? "", dashboard.id, pendingLayout);
+      await apiClient.updateLayout(token ?? "", dashboard.id, pendingLayout);
       setLayoutDirty(false);
       toast.success(t("dashboards.panel.layoutSaved"));
     } catch (err) {
@@ -122,7 +120,7 @@ export function DashboardDetailPage() {
   async function handleDeletePanel(panel: Panel) {
     if (!dashboard) return;
     try {
-      await deletePanel(token ?? "", dashboard.id, panel.id);
+      await apiClient.deletePanel(token ?? "", dashboard.id, panel.id);
       toast.success(t("common.success"));
       refresh();
     } catch (err) {

@@ -26,37 +26,75 @@ function decodePolicy(p: PolicyWire): EscalationPolicy {
   return { ...p, levels };
 }
 
-export const listEscalationPolicies = (token: string) =>
-  request<PolicyWire[]>("/escalation-policies", { token }).then((list) =>
-    list.map(decodePolicy),
-  );
+export function createEscalationApi() {
+  return {
+    async listEscalationPolicies(
+      token: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<EscalationPolicy[]> {
+      const list = await request<PolicyWire[]>("/escalation-policies", {
+        token,
+        signal: options?.signal,
+      });
+      return list.map(decodePolicy);
+    },
 
-export const getEscalationPolicy = (token: string, id: number) =>
-  request<PolicyWire>(`/escalation-policies/${id}`, { token }).then(decodePolicy);
+    async getEscalationPolicy(
+      token: string,
+      id: number,
+      options?: { signal?: AbortSignal },
+    ): Promise<EscalationPolicy> {
+      const p = await request<PolicyWire>(`/escalation-policies/${id}`, {
+        token,
+        signal: options?.signal,
+      });
+      return decodePolicy(p);
+    },
 
-export const createEscalationPolicy = (token: string, input: EscalationPolicyInput) =>
-  request<PolicyWire>("/escalation-policies", {
-    token,
-    method: "POST",
-    body: input,
-  }).then(decodePolicy);
+    async createEscalationPolicy(
+      token: string,
+      input: EscalationPolicyInput,
+    ): Promise<EscalationPolicy> {
+      const p = await request<PolicyWire>("/escalation-policies", {
+        token,
+        method: "POST",
+        body: input,
+      });
+      return decodePolicy(p);
+    },
 
-export const updateEscalationPolicy = (
-  token: string,
-  id: number,
-  input: EscalationPolicyInput,
-) =>
-  request<PolicyWire>(`/escalation-policies/${id}`, {
-    token,
-    method: "PATCH",
-    body: input,
-  }).then(decodePolicy);
+    async updateEscalationPolicy(
+      token: string,
+      id: number,
+      input: EscalationPolicyInput,
+    ): Promise<EscalationPolicy> {
+      const p = await request<PolicyWire>(`/escalation-policies/${id}`, {
+        token,
+        method: "PATCH",
+        body: input,
+      });
+      return decodePolicy(p);
+    },
 
-export const deleteEscalationPolicy = (token: string, id: number) =>
-  request<{ deleted: boolean }>(`/escalation-policies/${id}`, {
-    token,
-    method: "DELETE",
-  });
+    async deleteEscalationPolicy(
+      token: string,
+      id: number,
+    ): Promise<{ deleted: boolean }> {
+      return request<{ deleted: boolean }>(`/escalation-policies/${id}`, {
+        token,
+        method: "DELETE",
+      });
+    },
 
-export const listAlertEscalationEvents = (token: string, alertId: number) =>
-  request<EscalationEvent[]>(`/alerts/${alertId}/escalation-events`, { token });
+    async listAlertEscalationEvents(
+      token: string,
+      alertId: number,
+      options?: { signal?: AbortSignal },
+    ): Promise<EscalationEvent[]> {
+      return request<EscalationEvent[]>(`/alerts/${alertId}/escalation-events`, {
+        token,
+        signal: options?.signal,
+      });
+    },
+  };
+}

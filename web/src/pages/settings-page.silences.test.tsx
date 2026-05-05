@@ -28,27 +28,14 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
 }))
 
-vi.mock("@/lib/api/silences", () => ({
-  listSilences: vi.fn().mockResolvedValue([
-    {
-      id: 1,
-      name: "maint-A",
-      match_node_id: 1,
-      match_category: "XR-NODE",
-      match_tags: ["prod"],
-      starts_at: "2026-04-19T00:00:00Z",
-      ends_at: "2026-04-19T02:00:00Z",
-      created_by: 1,
-      note: "",
-      created_at: "",
-      updated_at: "",
-    },
-  ]),
-  createSilence: vi.fn(),
-  deleteSilence: vi.fn(),
-  parseSilenceTags: (s: { match_tags: string | string[] | null }) =>
-    Array.isArray(s.match_tags) ? s.match_tags : [],
-}))
+vi.mock("@/lib/api/silences", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/silences")>("@/lib/api/silences")
+  return {
+    ...actual,
+    parseSilenceTags: (s: { match_tags: string | string[] | null }) =>
+      Array.isArray(s.match_tags) ? s.match_tags : [],
+  }
+})
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
@@ -56,6 +43,23 @@ vi.mock("@/lib/api/client", () => ({
       { id: 1, name: "node-1" },
       { id: 2, name: "node-2" },
     ]),
+    listSilences: vi.fn().mockResolvedValue([
+      {
+        id: 1,
+        name: "maint-A",
+        match_node_id: 1,
+        match_category: "XR-NODE",
+        match_tags: ["prod"],
+        starts_at: "2026-04-19T00:00:00Z",
+        ends_at: "2026-04-19T02:00:00Z",
+        created_by: 1,
+        note: "",
+        created_at: "",
+        updated_at: "",
+      },
+    ]),
+    createSilence: vi.fn(),
+    deleteSilence: vi.fn(),
   },
 }))
 
@@ -77,8 +81,8 @@ describe("SilencesPanel", () => {
   })
 
   it("rejects invalid time window", async () => {
-    const { createSilence } = await import("@/lib/api/silences")
-    const createSilenceMock = vi.mocked(createSilence)
+    const { apiClient } = await import("@/lib/api/client")
+    const createSilenceMock = vi.mocked(apiClient.createSilence)
     createSilenceMock.mockReset()
 
     render(<SilencesPanel />)

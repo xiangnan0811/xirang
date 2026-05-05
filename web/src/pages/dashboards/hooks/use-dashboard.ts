@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { getDashboard, updateDashboard } from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 import type { Dashboard, DashboardTimeRange } from "@/types/domain";
 import type { DashboardInput } from "@/lib/api/dashboards";
 
@@ -30,7 +30,7 @@ export type UseDashboardReturn = {
   start: string;
   end: string;
   loading: boolean;
-  error: string | null;
+  error: Error | null;
   refreshNonce: number;
   refresh: () => void;
   setTimeRange: (tr: DashboardTimeRange, custom?: { start: string; end: string }) => void;
@@ -41,7 +41,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
   const { t } = useTranslation();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [timeRange, setTimeRangeState] = useState<DashboardTimeRange>("1h");
   const [customRange, setCustomRange] = useState<{ start: string; end: string } | undefined>();
@@ -76,7 +76,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
       setDashboard((prev) =>
         prev ? { ...prev, auto_refresh_seconds: seconds } : prev
       );
-      updateDashboard(token, dashboard.id, {
+      apiClient.updateDashboard(token, dashboard.id, {
         name: dashboard.name,
         description: dashboard.description,
         time_range: dashboard.time_range,
@@ -111,7 +111,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(null);
 
-    getDashboard(token, Number(id), controller.signal)
+    apiClient.getDashboard(token, Number(id), { signal: controller.signal })
       .then((d) => {
         if (controller.signal.aborted) return;
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -129,10 +129,10 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        const msg =
-          err instanceof Error ? err.message : "加载失败";
+        const normalized =
+          err instanceof Error ? err : new Error(String(err ?? "unknown error"));
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setError(msg);
+        setError(normalized);
       })
       .finally(() => {
         if (controller.signal.aborted) return;

@@ -10,7 +10,6 @@ import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
-import { listEscalationPolicies } from "@/lib/api/escalation";
 import { useAuth } from "@/context/auth-context";
 import type { EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
@@ -93,7 +92,7 @@ export function PolicyEditorDialog({
   useEffect(() => {
     if (!open || !token) return;
     apiClient.getHookTemplates(token).then(setHookTemplates).catch(() => {});
-    listEscalationPolicies(token)
+    apiClient.listEscalationPolicies(token)
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
   }, [open, token]);

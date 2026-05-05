@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { queryPanel } from "@/lib/api/dashboards";
+import { apiClient } from "@/lib/api/client";
 import type { Panel, PanelQueryResult } from "@/types/domain";
 
 export type UsePanelDataReturn = {
@@ -41,7 +41,7 @@ export function usePanelData(
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(null);
 
-    queryPanel(
+    apiClient.queryPanel(
       token,
       {
         metric: panel.metric,
@@ -50,7 +50,7 @@ export function usePanelData(
         start,
         end,
       },
-      controller.signal
+      { signal: controller.signal }
     )
       .then((result) => {
         if (controller.signal.aborted) return;

@@ -21,6 +21,8 @@ type TreeItemProps = {
   /** 懒加载：展开时获取子节点 */
   onLoadChildren?: (item: TreeItemData) => Promise<TreeItemData[]>;
   loadingIds?: Set<string>;
+  /** 懒加载结果缓存（由 Tree 组件管理，避免 mutate item.children） */
+  childrenMap?: Map<string, TreeItemData[]>;
 };
 
 function TreeItem({
@@ -32,12 +34,15 @@ function TreeItem({
   onToggle,
   onLoadChildren,
   loadingIds,
+  childrenMap,
 }: TreeItemProps) {
   const { t } = useTranslation();
   const isExpanded = expanded?.has(item.id) ?? false;
   const isSelected = selected === item.id;
   const isLoading = loadingIds?.has(item.id) ?? false;
-  const hasChildren = item.isDir || (item.children && item.children.length > 0);
+  // 优先使用懒加载缓存，回退到 props 上的静态 children
+  const resolvedChildren = childrenMap?.get(item.id) ?? item.children;
+  const hasChildren = item.isDir || (resolvedChildren && resolvedChildren.length > 0);
 
   const handleClick = () => {
     if (hasChildren) {
@@ -96,9 +101,9 @@ function TreeItem({
         <span className="truncate">{item.label}</span>
       </button>
 
-      {hasChildren && isExpanded && item.children && item.children.length > 0 && (
+      {hasChildren && isExpanded && resolvedChildren && resolvedChildren.length > 0 && (
         <div role="group">
-          {item.children.map((child) => (
+          {resolvedChildren.map((child) => (
             <TreeItem
               key={child.id}
               item={child}
@@ -109,6 +114,7 @@ function TreeItem({
               onToggle={onToggle}
               onLoadChildren={onLoadChildren}
               loadingIds={loadingIds}
+              childrenMap={childrenMap}
             />
           ))}
         </div>
@@ -135,6 +141,8 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
   const [internalSelected, setInternalSelected] = useState<string | undefined>(selected);
   const [internalExpanded, setInternalExpanded] = useState<Set<string>>(expanded ?? new Set());
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  // 懒加载结果缓存：避免直接 mutate items prop（保持 props 不可变）
+  const [childrenMap, setChildrenMap] = useState<Map<string, TreeItemData[]>>(new Map());
 
   const isControlled = selected !== undefined || expanded !== undefined;
 
@@ -154,12 +162,20 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
   const handleToggle = useCallback(
     async (item: TreeItemData) => {
       const willExpand = !currentExpanded.has(item.id);
+      const cached = childrenMap.get(item.id);
+      const hasInlineChildren = item.children && item.children.length > 0;
+      const needsLoad = willExpand && !!onLoadChildren && !hasInlineChildren && !cached;
 
-      if (willExpand && onLoadChildren && (!item.children || item.children.length === 0)) {
+      if (needsLoad && onLoadChildren) {
         setLoadingIds((prev) => new Set(prev).add(item.id));
         try {
           const children = await onLoadChildren(item);
-          item.children = children;
+          // 用 immutable 更新写入缓存，绝不 mutate item.children
+          setChildrenMap((prev) => {
+            const next = new Map(prev);
+            next.set(item.id, children);
+            return next;
+          });
         } finally {
           setLoadingIds((prev) => {
             const next = new Set(prev);
@@ -182,7 +198,7 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
       }
       onToggle?.(item);
     },
-    [isControlled, currentExpanded, onLoadChildren, onToggle]
+    [isControlled, currentExpanded, childrenMap, onLoadChildren, onToggle]
   );
 
   return (
@@ -197,6 +213,7 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
           onToggle={handleToggle}
           onLoadChildren={onLoadChildren}
           loadingIds={loadingIds}
+          childrenMap={childrenMap}
         />
       ))}
     </div>

@@ -109,6 +109,12 @@ vi.mock("@/lib/api/client", () => ({
     // Default resolves with count=1 so badge never renders in existing
     // tests; individual tests can override via mockResolvedValueOnce.
     getAlertGroupInfo: vi.fn().mockResolvedValue({ count: 1, siblingNodeIds: [] }),
+    retryDelivery: mockRetryDelivery,
+    // Used by AlertEscalationTimeline / AnomalyAlertContext rendered inside
+    // alert detail; default to empty so nothing renders by default.
+    listEscalationPolicies: vi.fn().mockResolvedValue([]),
+    listAlertEscalationEvents: vi.fn().mockResolvedValue([]),
+    listAnomalyEvents: vi.fn().mockResolvedValue({ data: [], total: 0 }),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -117,10 +123,6 @@ vi.mock("@/lib/api/client", () => ({
       this.status = status;
     }
   },
-}));
-
-vi.mock("@/lib/api/alert-deliveries", () => ({
-  retryDelivery: mockRetryDelivery,
 }));
 
 /* ---------- default mock return values ---------- */

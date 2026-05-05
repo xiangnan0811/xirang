@@ -12,17 +12,11 @@ import { Badge } from "@/components/ui/badge";
 import { TagChips } from "@/components/ui/tag-chips";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { toast } from "@/components/ui/toast";
+import { apiClient } from "@/lib/api/client";
 import {
-  listSLOs,
-  createSLO,
-  updateSLO,
-  deleteSLO,
-  getSLOCompliance,
-  getSLOSummary,
   parseSLOTags,
   type SLOInput,
 } from "@/lib/api/slo";
-import { listEscalationPolicies } from "@/lib/api/escalation";
 import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOSummary } from "@/types/domain";
 
 const METRIC_TYPES = [
@@ -42,14 +36,14 @@ export function SLOPanel() {
 
   const refresh = async () => {
     if (!token) return;
-    const [list, sum] = await Promise.all([listSLOs(token), getSLOSummary(token)]);
+    const [list, sum] = await Promise.all([apiClient.listSLOs(token), apiClient.getSLOSummary(token)]);
     setRows(list);
     setSummary(sum);
     const comps: Record<number, SLOComplianceResult> = {};
     await Promise.all(
       list.filter((r) => r.enabled).map(async (r) => {
         try {
-          comps[r.id] = await getSLOCompliance(token, r.id);
+          comps[r.id] = await apiClient.getSLOCompliance(token, r.id);
         } catch {
           /* ignore per-row errors */
         }
@@ -67,7 +61,7 @@ export function SLOPanel() {
     if (!token) return;
     if (!window.confirm(t("slo.deleteConfirm", { name: row.name }))) return;
     try {
-      await deleteSLO(token, row.id);
+      await apiClient.deleteSLO(token, row.id);
       toast.success(t("common.success"));
       await refresh();
     } catch (err) {
@@ -235,7 +229,7 @@ function SLODialog({
 
   useEffect(() => {
     if (!open || !token) return;
-    listEscalationPolicies(token)
+    apiClient.listEscalationPolicies(token)
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
   }, [open, token]);
@@ -279,9 +273,9 @@ function SLODialog({
     setSaving(true);
     try {
       if (existing) {
-        await updateSLO(token, existing.id, input);
+        await apiClient.updateSLO(token, existing.id, input);
       } else {
-        await createSLO(token, input);
+        await apiClient.createSLO(token, input);
       }
       toast.success(t("common.success"));
       onSubmitted();

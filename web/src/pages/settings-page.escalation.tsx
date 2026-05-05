@@ -7,12 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { EscalationPolicyEditor } from "@/components/escalation-policy-editor";
-import {
-  deleteEscalationPolicy,
-  listEscalationPolicies,
-  updateEscalationPolicy,
-  type EscalationPolicyInput,
-} from "@/lib/api/escalation";
+import { apiClient } from "@/lib/api/client";
+import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context";
 import type { EscalationPolicy } from "@/types/domain";
@@ -43,7 +39,7 @@ export function SettingsPageEscalation() {
   const refresh = useCallback(() => {
     if (!token) return;
     setLoading(true);
-    listEscalationPolicies(token)
+    apiClient.listEscalationPolicies(token)
       .then(setPolicies)
       .catch((err) => toast.error(getErrorMessage(err)))
       .finally(() => setLoading(false));
@@ -90,7 +86,7 @@ export function SettingsPageEscalation() {
         enabled: checked,
         levels: policy.levels,
       };
-      const updated = await updateEscalationPolicy(token, policy.id, input);
+      const updated = await apiClient.updateEscalationPolicy(token, policy.id, input);
       setPolicies((prev) =>
         prev.map((p) => (p.id === updated.id ? updated : p))
       );
@@ -111,7 +107,7 @@ export function SettingsPageEscalation() {
     if (!confirmed) return;
     setDeletingId(policy.id);
     try {
-      await deleteEscalationPolicy(token, policy.id);
+      await apiClient.deleteEscalationPolicy(token, policy.id);
       setPolicies((prev) => prev.filter((p) => p.id !== policy.id));
     } catch (err) {
       toast.error(getErrorMessage(err));
