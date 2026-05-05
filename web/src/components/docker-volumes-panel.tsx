@@ -49,7 +49,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-6">
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
         <span className="ml-2 text-sm text-muted-foreground">
           {t('dockerVolumes.scanning')}
         </span>
@@ -66,7 +66,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
   if (volumes.length === 0) {
     return (
       <div className="py-4 text-center text-sm text-muted-foreground">
-        <HardDrive className="mx-auto mb-2 size-5 opacity-40" />
+        <HardDrive className="mx-auto mb-2 size-5 opacity-40" aria-hidden="true" />
         <p>{t('dockerVolumes.noVolumes')}</p>
         {warning && (
           <p className="mt-1 text-xs text-muted-foreground/70">{warning}</p>
@@ -113,7 +113,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
                       aria-label={t('dockerVolumes.usePathAriaLabel', { name: vol.name })}
                       title={t('dockerVolumes.useAsSource')}
                     >
-                      <FolderInput className="size-3.5" />
+                      <FolderInput className="size-3.5" aria-hidden="true" />
                       {t('dockerVolumes.usePath')}
                     </button>
                   </td>

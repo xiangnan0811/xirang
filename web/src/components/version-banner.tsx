@@ -73,7 +73,7 @@ export function VersionBanner() {
           className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-primary/80"
         >
           {t('versionBanner.viewDetails')}
-          <ExternalLink className="size-3" />
+          <ExternalLink className="size-3" aria-hidden="true" />
         </a>
       ) : null}
       <button
@@ -82,7 +82,8 @@ export function VersionBanner() {
         className="ml-auto shrink-0 rounded p-0.5 hover:bg-primary/10 transition-colors"
         aria-label={t('versionBanner.closeAriaLabel')}
       >
-        <X className="size-3.5" />
+        <X className="size-3.5" aria-hidden="true" />
+        <span className="sr-only">{t('common.close')}</span>
       </button>
     </div>
   );

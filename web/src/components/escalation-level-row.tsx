@@ -53,7 +53,7 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
             onClick={onRemove}
             aria-label={t("escalation.levels.removeLevel")}
           >
-            <X className="size-4 mr-1" />
+            <X className="size-4 mr-1" aria-hidden="true" />
             {t("escalation.levels.removeLevel")}
           </Button>
         )}
