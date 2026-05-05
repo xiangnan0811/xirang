@@ -117,3 +117,261 @@ func TestPolicyUpdateWarningUsesEnvelope(t *testing.T) {
 		t.Fatalf("期望 envelope.message 包含旧路径 '/legacy/backup'，实际: %q", envelope.Message)
 	}
 }
+
+// DrillConfig 测试辅助函数：创建 Gin 路由并设置 admin 角色
+func setupDrillTestRouter(handler *PolicyHandler) *gin.Engine {
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	r.POST("/policies", handler.Create)
+	r.GET("/policies/:id", handler.Get)
+	r.PUT("/policies/:id", handler.Update)
+	return r
+}
+
+// TestDrillCreateValid 测试创建启用 drill 的有效策略
+func TestDrillCreateValid(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	sandbox := model.Node{Name: "sandbox-node", Host: "10.0.0.100", BackupDir: "/backup/sandbox-node"}
+	db.Create(&sandbox)
+	source := model.Node{Name: "source-node", Host: "10.0.0.1", BackupDir: "/backup/source-node"}
+	db.Create(&source)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":                 "drill-policy-valid",
+		"source_path":          "/data",
+		"cron_spec":            "0 2 * * *",
+		"drill_enabled":        true,
+		"drill_cron":           "0 3 * * *",
+		"drill_target_node_id": sandbox.ID,
+		"drill_restore_path":   "/tmp/drill-test",
+		"drill_verify":         "echo ok",
+		"node_ids":             []uint{source.ID},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+	if envelope.Data["drill_enabled"] != true {
+		t.Error("expected drill_enabled=true")
+	}
+	if envelope.Data["drill_cron"] != "0 3 * * *" {
+		t.Errorf("expected drill_cron='0 3 * * *', got %v", envelope.Data["drill_cron"])
+	}
+	if envelope.Data["drill_target_node_id"] != float64(sandbox.ID) {
+		t.Errorf("expected drill_target_node_id=%d", sandbox.ID)
+	}
+}
+
+// TestDrillCreateMissingCron 测试启用 drill 但未设置 cron 时报错
+func TestDrillCreateMissingCron(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	sandbox := model.Node{Name: "sandbox-node", Host: "10.0.0.100", BackupDir: "/backup/sandbox-cron"}
+	db.Create(&sandbox)
+	source := model.Node{Name: "source-node", Host: "10.0.0.1", BackupDir: "/backup/source-cron"}
+	db.Create(&source)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":                 "drill-no-cron",
+		"source_path":          "/data",
+		"cron_spec":            "0 2 * * *",
+		"drill_enabled":        true,
+		"drill_target_node_id": sandbox.ID,
+		"drill_restore_path":   "/tmp/drill-test",
+		"node_ids":             []uint{source.ID},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestDrillCreateSandboxEqualsSource 测试沙箱节点与源节点相同时报错
+func TestDrillCreateSandboxEqualsSource(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	node := model.Node{Name: "dual-role-node", Host: "10.0.0.1", BackupDir: "/backup/dual-role"}
+	db.Create(&node)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":                 "drill-same-node",
+		"source_path":          "/data",
+		"cron_spec":            "0 2 * * *",
+		"drill_enabled":        true,
+		"drill_cron":           "0 3 * * *",
+		"drill_target_node_id": node.ID,
+		"drill_restore_path":   "/tmp/drill-test",
+		"node_ids":             []uint{node.ID},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestDrillCreateDisabled 测试 drill_enabled=false 时不校验 drill 字段
+func TestDrillCreateDisabled(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	// drill_enabled=false, drill_cron 留空 → 应该成功
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":          "drill-disabled",
+		"source_path":   "/data",
+		"cron_spec":     "0 2 * * *",
+		"drill_enabled": false,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestDrillUpdateAddConfig 测试更新策略添加 drill 配置
+func TestDrillUpdateAddConfig(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	sandbox := model.Node{Name: "sandbox-node", Host: "10.0.0.100", BackupDir: "/backup/sandbox-update"}
+	db.Create(&sandbox)
+	source := model.Node{Name: "source-node", Host: "10.0.0.1", BackupDir: "/backup/source-update"}
+	db.Create(&source)
+
+	// 先创建一个不含 drill 的策略
+	p := model.Policy{
+		Name:       "no-drill-initially",
+		SourcePath: "/data",
+		CronSpec:   "0 2 * * *",
+		Enabled:    true,
+	}
+	db.Create(&p)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	// 更新策略添加 drill 配置
+	body := map[string]any{
+		"name":                 "no-drill-initially",
+		"source_path":          "/data",
+		"cron_spec":            "0 2 * * *",
+		"drill_enabled":        true,
+		"drill_cron":           "0 4 * * *",
+		"drill_target_node_id": sandbox.ID,
+		"drill_restore_path":   "/tmp/drill-update",
+		"drill_verify":         "echo updated",
+		"drill_auto_cleanup":   false,
+		"node_ids":             []uint{source.ID},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("PUT", fmt.Sprintf("/policies/%d", p.ID), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+	if envelope.Data["drill_enabled"] != true {
+		t.Error("expected drill_enabled=true after update")
+	}
+	if envelope.Data["drill_auto_cleanup"] != false {
+		t.Error("expected drill_auto_cleanup=false after update")
+	}
+}
+
+// TestDrillGetIncludesFields 测试获取策略时响应包含 drill 字段
+func TestDrillGetIncludesFields(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	p := model.Policy{
+		Name:             "drill-inspect",
+		SourcePath:       "/data",
+		CronSpec:         "0 2 * * *",
+		Enabled:          true,
+		DrillEnabled:     true,
+		DrillCron:        "0 5 * * *",
+		DrillRestorePath: "/tmp/drill-inspect",
+		DrillVerify:      "echo inspect",
+	}
+	db.Create(&p)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/policies/%d", p.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+
+	// 检查 drill 字段存在
+	if _, ok := envelope.Data["drill_enabled"]; !ok {
+		t.Error("response missing drill_enabled")
+	}
+	if _, ok := envelope.Data["drill_cron"]; !ok {
+		t.Error("response missing drill_cron")
+	}
+	if _, ok := envelope.Data["drill_target_node_id"]; !ok {
+		t.Error("response missing drill_target_node_id")
+	}
+	if _, ok := envelope.Data["drill_restore_path"]; !ok {
+		t.Error("response missing drill_restore_path")
+	}
+	if _, ok := envelope.Data["drill_pre_verify"]; !ok {
+		t.Error("response missing drill_pre_verify")
+	}
+	if _, ok := envelope.Data["drill_verify"]; !ok {
+		t.Error("response missing drill_verify")
+	}
+	if _, ok := envelope.Data["drill_post_verify"]; !ok {
+		t.Error("response missing drill_post_verify")
+	}
+	if _, ok := envelope.Data["drill_auto_cleanup"]; !ok {
+		t.Error("response missing drill_auto_cleanup")
+	}
+}

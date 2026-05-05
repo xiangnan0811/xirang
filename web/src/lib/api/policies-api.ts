@@ -19,6 +19,15 @@ type PolicyResponse = {
   max_retries?: number;
   retry_base_seconds?: number;
   bandwidth_schedule?: string;
+  // Recovery drill
+  drill_enabled?: boolean;
+  drill_cron?: string;
+  drill_target_node_id?: number | null;
+  drill_restore_path?: string;
+  drill_pre_verify?: string;
+  drill_verify?: string;
+  drill_post_verify?: string;
+  drill_auto_cleanup?: boolean;
 };
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
@@ -43,6 +52,14 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     maxRetries: row.max_retries ?? undefined,
     retryBaseSeconds: row.retry_base_seconds ?? undefined,
     bandwidthSchedule: row.bandwidth_schedule ?? undefined,
+    drill_enabled: row.drill_enabled ?? false,
+    drill_cron: row.drill_cron ?? "",
+    drill_target_node_id: row.drill_target_node_id ?? null,
+    drill_restore_path: row.drill_restore_path ?? "/tmp/xirang-drill",
+    drill_pre_verify: row.drill_pre_verify ?? "",
+    drill_verify: row.drill_verify ?? "",
+    drill_post_verify: row.drill_post_verify ?? "",
+    drill_auto_cleanup: row.drill_auto_cleanup ?? true,
   };
 }
 
@@ -72,6 +89,14 @@ export function createPoliciesApi() {
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
+          drill_enabled: input.drill_enabled ?? undefined,
+          drill_cron: input.drill_cron ?? undefined,
+          drill_target_node_id: input.drill_target_node_id ?? undefined,
+          drill_restore_path: input.drill_restore_path ?? undefined,
+          drill_pre_verify: input.drill_pre_verify ?? undefined,
+          drill_verify: input.drill_verify ?? undefined,
+          drill_post_verify: input.drill_post_verify ?? undefined,
+          drill_auto_cleanup: input.drill_auto_cleanup ?? undefined,
         }
       });
       return mapPolicy(row);
@@ -96,6 +121,14 @@ export function createPoliciesApi() {
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
+          drill_enabled: input.drill_enabled ?? undefined,
+          drill_cron: input.drill_cron ?? undefined,
+          drill_target_node_id: input.drill_target_node_id ?? undefined,
+          drill_restore_path: input.drill_restore_path ?? undefined,
+          drill_pre_verify: input.drill_pre_verify ?? undefined,
+          drill_verify: input.drill_verify ?? undefined,
+          drill_post_verify: input.drill_post_verify ?? undefined,
+          drill_auto_cleanup: input.drill_auto_cleanup ?? undefined,
         }
       });
       return mapPolicy(row);
@@ -122,6 +155,13 @@ export function createPoliciesApi() {
         token
       });
       return mapPolicy(row);
+    },
+
+    async triggerDrill(token: string, policyId: number): Promise<{task_run_id: number; message: string}> {
+      return request<{task_run_id: number; message: string}>(`/policies/${policyId}/drill-trigger`, {
+        method: "POST",
+        token
+      });
     }
   };
 }

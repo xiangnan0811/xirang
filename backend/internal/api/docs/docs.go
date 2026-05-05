@@ -3826,6 +3826,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/policies/{id}/drill-trigger": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "立即对指定策略执行一次恢复演练（不等 cron）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policies"
+                ],
+                "summary": "手动触发恢复演练",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "策略 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/report-configs": {
             "get": {
                 "security": [
@@ -7281,6 +7339,30 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "drill_auto_cleanup": {
+                    "type": "boolean"
+                },
+                "drill_cron": {
+                    "type": "string"
+                },
+                "drill_enabled": {
+                    "type": "boolean"
+                },
+                "drill_post_verify": {
+                    "type": "string"
+                },
+                "drill_pre_verify": {
+                    "type": "string"
+                },
+                "drill_restore_path": {
+                    "type": "string"
+                },
+                "drill_target_node_id": {
+                    "type": "integer"
+                },
+                "drill_verify": {
+                    "type": "string"
+                },
                 "enabled": {
                     "type": "boolean"
                 },
@@ -7862,6 +7944,31 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "description": {
+                    "type": "string"
+                },
+                "drill_auto_cleanup": {
+                    "type": "boolean"
+                },
+                "drill_cron": {
+                    "type": "string"
+                },
+                "drill_enabled": {
+                    "description": "Drill 恢复演练配置",
+                    "type": "boolean"
+                },
+                "drill_post_verify": {
+                    "type": "string"
+                },
+                "drill_pre_verify": {
+                    "type": "string"
+                },
+                "drill_restore_path": {
+                    "type": "string"
+                },
+                "drill_target_node_id": {
+                    "type": "integer"
+                },
+                "drill_verify": {
                     "type": "string"
                 },
                 "enabled": {

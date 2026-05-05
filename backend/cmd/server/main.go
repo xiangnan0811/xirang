@@ -149,6 +149,7 @@ func main() {
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
+	taskManager.StartDrillLoop()
 
 	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
 

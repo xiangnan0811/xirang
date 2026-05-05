@@ -115,6 +115,16 @@ export interface PolicyRecord {
   escalation_policy_id?: number | null;
   app_profile?: string;
   app_credential_id?: number | null;
+
+  // Recovery drill
+  drill_enabled: boolean;
+  drill_cron: string;
+  drill_target_node_id?: number | null;
+  drill_restore_path: string;
+  drill_pre_verify: string;
+  drill_verify: string;
+  drill_post_verify: string;
+  drill_auto_cleanup: boolean;
 }
 
 export interface NewPolicyInput {
@@ -136,6 +146,16 @@ export interface NewPolicyInput {
   escalation_policy_id?: number | null;
   app_profile?: string;
   app_credential_id?: number | null;
+
+  // Recovery drill
+  drill_enabled?: boolean;
+  drill_cron?: string;
+  drill_target_node_id?: number | null;
+  drill_restore_path?: string;
+  drill_pre_verify?: string;
+  drill_verify?: string;
+  drill_post_verify?: string;
+  drill_auto_cleanup?: boolean;
 }
 
 export interface TaskRecord {
@@ -182,7 +202,7 @@ export interface NewTaskInput {
   cronSpec?: string;
 }
 
-export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore" | "chain";
+export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore" | "chain" | "drill";
 
 export interface TaskRunRecord {
   id: number;

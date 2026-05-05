@@ -25,20 +25,20 @@ import (
 )
 
 type Dependencies struct {
-	AppContext                context.Context
-	DB                        *gorm.DB
-	AuthService               *auth.Service
-	JWTManager                *auth.JWTManager
-	TaskManager               *task.Manager
-	Hub                       *ws.Hub
-	AllowedOrigins            []string
-	LoginRateLimit            int
-	LoginRateWindow           time.Duration
-	SettingsService           *settings.Service
-	RetryWorker               *alerting.RetryWorker
-	MetricsToken              string
-	MetricsRateLimit          int
-	MetricsRateWindow         time.Duration
+	AppContext        context.Context
+	DB                *gorm.DB
+	AuthService       *auth.Service
+	JWTManager        *auth.JWTManager
+	TaskManager       *task.Manager
+	Hub               *ws.Hub
+	AllowedOrigins    []string
+	LoginRateLimit    int
+	LoginRateWindow   time.Duration
+	SettingsService   *settings.Service
+	RetryWorker       *alerting.RetryWorker
+	MetricsToken      string
+	MetricsRateLimit  int
+	MetricsRateWindow time.Duration
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -243,6 +243,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/policies/from-template/:id", middleware.RBAC("policies:write"), policyHandler.CloneFromTemplate)
 	secured.PUT("/policies/:id", middleware.RBAC("policies:write"), policyHandler.Update)
 	secured.DELETE("/policies/:id", middleware.RBAC("policies:write"), policyHandler.Delete)
+	secured.POST("/policies/:id/drill-trigger", middleware.RBAC("tasks:trigger"), policyHandler.TriggerDrill)
 
 	secured.GET("/tasks", middleware.RBAC("tasks:read"), taskHandler.List)
 	secured.GET("/tasks/:id", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Get)

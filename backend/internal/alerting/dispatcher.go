@@ -238,6 +238,31 @@ func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, n
 	return raiseAndDispatch(db, &alert)
 }
 
+// RaiseDrillFailure 触发恢复演练相关的告警。
+// errorCode 必须是以下之一：
+//   - "drill_sandbox_unreachable" (severity=warning) — 沙箱节点离线
+//   - "drill_verify_failed" (severity=critical) — 校验脚本失败
+//   - "drill_restore_failed" (severity=critical) — 恢复本身失败
+func RaiseDrillFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, errorCode string, message string) error {
+	severity := "critical"
+	if errorCode == "drill_sandbox_unreachable" {
+		severity = "warning"
+	}
+	errorCodeFull := fmt.Sprintf("XR-DRILL-%s-%d", errorCode, policyID)
+	alert := model.Alert{
+		NodeID:      nodeID,
+		NodeName:    nodeName,
+		PolicyName:  policyName,
+		Severity:    severity,
+		Status:      "open",
+		ErrorCode:   errorCodeFull,
+		Message:     message,
+		Retryable:   false,
+		TriggeredAt: time.Now(),
+	}
+	return raiseAndDispatch(db, &alert)
+}
+
 func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",

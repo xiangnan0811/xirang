@@ -6,11 +6,22 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/confirm-dialog";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context";
+import { toast } from "@/components/ui/toast";
 import type { AppCredential, EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
@@ -36,6 +47,14 @@ const emptyDraft: PolicyDraft = {
   escalation_policy_id: null,
   app_profile: "",
   app_credential_id: null,
+  drill_enabled: false,
+  drill_cron: "",
+  drill_target_node_id: null,
+  drill_restore_path: "/tmp/xirang-drill",
+  drill_pre_verify: "",
+  drill_verify: "",
+  drill_post_verify: "",
+  drill_auto_cleanup: true,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -67,6 +86,14 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     escalation_policy_id: policy.escalation_policy_id ?? null,
     app_profile: policy.app_profile ?? "",
     app_credential_id: policy.app_credential_id ?? null,
+    drill_enabled: policy.drill_enabled ?? false,
+    drill_cron: policy.drill_cron ?? "",
+    drill_target_node_id: policy.drill_target_node_id ?? null,
+    drill_restore_path: policy.drill_restore_path ?? "/tmp/xirang-drill",
+    drill_pre_verify: policy.drill_pre_verify ?? "",
+    drill_verify: policy.drill_verify ?? "",
+    drill_post_verify: policy.drill_post_verify ?? "",
+    drill_auto_cleanup: policy.drill_auto_cleanup ?? true,
   };
 }
 
@@ -90,6 +117,9 @@ export function PolicyEditorDialog({
   const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [drillOpen, setDrillOpen] = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [drillConfirmOpen, setDrillConfirmOpen] = useState(false);
   const [hookTemplates, setHookTemplates] = useState<HookTemplate[]>([]);
   const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
   const [profiles, setProfiles] = useState<ProfileSchema[]>([]);
@@ -125,10 +155,26 @@ export function PolicyEditorDialog({
     }));
   };
 
+  const handleTriggerDrill = async () => {
+    if (!draft.id || !token) return;
+    setDrillConfirmOpen(false);
+    setTriggering(true);
+    try {
+      const result = await apiClient.triggerDrill(token, draft.id);
+      toast.success(t('policyEditor.drill.triggerSuccess', { id: result.task_run_id }));
+    } catch {
+      toast.error(t('policyEditor.drill.triggerFailed'));
+    } finally {
+      setTriggering(false);
+    }
+  };
+
   const selectedProfileMeta = profiles.find((p) => p.id === draft.app_profile);
   const filteredCredentials = credentials.filter(
     (c) => !draft.app_profile ? false : c.type === selectedProfileMeta?.credential_type
   );
+  const sourceNodeIds = new Set(draft.nodeIds);
+  const sandboxNodes = nodes.filter((n) => !sourceNodeIds.has(n.id));
 
   return (
     <FormDialog
@@ -546,6 +592,186 @@ export function PolicyEditorDialog({
           </div>
         )}
       </div>
+
+      {/* 恢复演练 */}
+      <div className="rounded-md border border-border/60">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/40 transition-colors"
+          onClick={() => setDrillOpen(!drillOpen)}
+          aria-expanded={drillOpen}
+        >
+          {t('policyEditor.drill.title')}
+          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${drillOpen ? "rotate-180" : ""}`} />
+        </button>
+
+        {drillOpen && (
+          <div className="space-y-3 border-t border-border/40 px-3 py-3 animate-in slide-in-from-top-1 fade-in duration-150">
+            {/* 启用开关 */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm">{t('policyEditor.drill.enable')}</span>
+              <Switch
+                aria-label={t('policyEditor.drill.enable')}
+                checked={draft.drill_enabled ?? false}
+                onCheckedChange={(checked) =>
+                  setDraft((prev) => ({ ...prev, drill_enabled: checked }))
+                }
+              />
+            </div>
+
+            {draft.drill_enabled && (
+              <>
+                {/* Cron 表达式 */}
+                <div>
+                  <label htmlFor="policy-edit-drill-cron" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.cron')}
+                  </label>
+                  <CronGenerator
+                    id="policy-edit-drill-cron"
+                    value={draft.drill_cron ?? ""}
+                    onChange={(val) => setDraft((prev) => ({ ...prev, drill_cron: val }))}
+                    disabled={saving}
+                  />
+                </div>
+
+                {/* 沙箱节点 */}
+                <div>
+                  <label htmlFor="policy-edit-drill-node" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.sandboxNode')}
+                  </label>
+                  <Select
+                    id="policy-edit-drill-node"
+                    value={draft.drill_target_node_id == null ? "" : String(draft.drill_target_node_id)}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        drill_target_node_id: e.target.value === "" ? null : Number(e.target.value),
+                      }))
+                    }
+                  >
+                    <option value="">{t('policyEditor.drill.sandboxNodeSelect')}</option>
+                    {sandboxNodes.map((n) => (
+                      <option key={n.id} value={String(n.id)}>
+                        {n.name} ({n.host})
+                      </option>
+                    ))}
+                  </Select>
+                  {sandboxNodes.length === 0 && nodes.length > 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.drill.sandboxMustNotBeSource')}</p>
+                  )}
+                </div>
+
+                {/* 恢复路径 */}
+                <div>
+                  <label htmlFor="policy-edit-drill-path" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.restorePath')}
+                  </label>
+                  <Input
+                    id="policy-edit-drill-path"
+                    placeholder="/tmp/xirang-drill"
+                    value={draft.drill_restore_path ?? "/tmp/xirang-drill"}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, drill_restore_path: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {/* pre_verify */}
+                <div>
+                  <label htmlFor="policy-edit-drill-pre-verify" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.preVerify')}
+                  </label>
+                  <Textarea
+                    id="policy-edit-drill-pre-verify"
+                    className="min-h-16 text-xs font-mono"
+                    placeholder={t('policyEditor.drill.preVerifyPlaceholder')}
+                    value={draft.drill_pre_verify ?? ""}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, drill_pre_verify: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {/* verify */}
+                <div>
+                  <label htmlFor="policy-edit-drill-verify" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.verify')}
+                  </label>
+                  <Textarea
+                    id="policy-edit-drill-verify"
+                    className="min-h-16 text-xs font-mono"
+                    placeholder={t('policyEditor.drill.verifyPlaceholder')}
+                    value={draft.drill_verify ?? ""}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, drill_verify: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {/* post_verify */}
+                <div>
+                  <label htmlFor="policy-edit-drill-post-verify" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.drill.postVerify')}
+                  </label>
+                  <Textarea
+                    id="policy-edit-drill-post-verify"
+                    className="min-h-16 text-xs font-mono"
+                    placeholder={t('policyEditor.drill.postVerifyPlaceholder')}
+                    value={draft.drill_post_verify ?? ""}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, drill_post_verify: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {/* 自动清理开关 */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">{t('policyEditor.drill.autoCleanup')}</span>
+                  <Switch
+                    aria-label={t('policyEditor.drill.autoCleanup')}
+                    checked={draft.drill_auto_cleanup ?? true}
+                    onCheckedChange={(checked) =>
+                      setDraft((prev) => ({ ...prev, drill_auto_cleanup: checked }))
+                    }
+                  />
+                </div>
+
+                {/* 手动触发按钮（仅编辑已有策略时可用） */}
+                {isEditing && (
+                  <div>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                      disabled={triggering}
+                      onClick={() => setDrillConfirmOpen(true)}
+                    >
+                      {triggering ? t('common.executing') : t('policyEditor.drill.trigger')}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 手动触发确认对话框 */}
+      <AlertDialog open={drillConfirmOpen} onOpenChange={setDrillConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('policyEditor.drill.trigger')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('policyEditor.drill.triggerConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleTriggerDrill}>
+              {t('common.confirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </FormDialog>
   );
 }

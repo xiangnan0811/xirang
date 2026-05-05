@@ -15,39 +15,58 @@ import (
 	"gorm.io/gorm"
 )
 
+// drillTriggerer 定义恢复演练触发接口，由 *task.Manager 实现。
+// 独立接口便于测试注入，避免 handler 直接依赖 task 包。
+type drillTriggerer interface {
+	TriggerDrill(policyID uint) (uint, error)
+}
+
 type PolicyHandler struct {
-	db     *gorm.DB
-	runner policy.TaskRunner
+	db             *gorm.DB
+	runner         policy.TaskRunner
+	drillTriggerer drillTriggerer
 }
 
 func NewPolicyHandler(db *gorm.DB, runner policy.TaskRunner) *PolicyHandler {
-	return &PolicyHandler{db: db, runner: runner}
+	var dt drillTriggerer
+	if t, ok := runner.(drillTriggerer); ok {
+		dt = t
+	}
+	return &PolicyHandler{db: db, runner: runner, drillTriggerer: dt}
 }
 
 type policyRequest struct {
-	Name               string `json:"name" binding:"required"`
-	Description        string `json:"description"`
-	SourcePath         string `json:"source_path" binding:"required"`
-	TargetPath         string `json:"target_path"`
-	CronSpec           string `json:"cron_spec" binding:"required"`
-	ExcludeRules       string `json:"exclude_rules"`
-	BwLimit            int    `json:"bwlimit"`
-	RetentionDays      int    `json:"retention_days"`
-	MaxConcurrent      int    `json:"max_concurrent"`
-	Enabled            *bool  `json:"enabled"`
-	VerifyEnabled      *bool  `json:"verify_enabled"`
-	VerifySampleRate   *int   `json:"verify_sample_rate"`
-	IsTemplate         *bool  `json:"is_template"`
-	PreHook            string `json:"pre_hook"`
-	PostHook           string `json:"post_hook"`
+	Name                string `json:"name" binding:"required"`
+	Description         string `json:"description"`
+	SourcePath          string `json:"source_path" binding:"required"`
+	TargetPath          string `json:"target_path"`
+	CronSpec            string `json:"cron_spec" binding:"required"`
+	ExcludeRules        string `json:"exclude_rules"`
+	BwLimit             int    `json:"bwlimit"`
+	RetentionDays       int    `json:"retention_days"`
+	MaxConcurrent       int    `json:"max_concurrent"`
+	Enabled             *bool  `json:"enabled"`
+	VerifyEnabled       *bool  `json:"verify_enabled"`
+	VerifySampleRate    *int   `json:"verify_sample_rate"`
+	IsTemplate          *bool  `json:"is_template"`
+	PreHook             string `json:"pre_hook"`
+	PostHook            string `json:"post_hook"`
 	HookTimeoutSeconds  *int   `json:"hook_timeout_seconds"`
 	MaxExecutionSeconds *int   `json:"max_execution_seconds"`
 	MaxRetries          *int   `json:"max_retries"`
-	RetryBaseSeconds   *int   `json:"retry_base_seconds"`
-	BandwidthSchedule  string `json:"bandwidth_schedule"`
-	AppProfile         string `json:"app_profile"`
-	AppCredentialID    *uint  `json:"app_credential_id"`
-	NodeIDs            []uint `json:"node_ids"`
+	RetryBaseSeconds    *int   `json:"retry_base_seconds"`
+	BandwidthSchedule   string `json:"bandwidth_schedule"`
+	AppProfile          string `json:"app_profile"`
+	AppCredentialID     *uint  `json:"app_credential_id"`
+	DrillEnabled        *bool  `json:"drill_enabled"`
+	DrillCron           string `json:"drill_cron"`
+	DrillTargetNodeID   *uint  `json:"drill_target_node_id"`
+	DrillRestorePath    string `json:"drill_restore_path"`
+	DrillPreVerify      string `json:"drill_pre_verify"`
+	DrillVerify         string `json:"drill_verify"`
+	DrillPostVerify     string `json:"drill_post_verify"`
+	DrillAutoCleanup    *bool  `json:"drill_auto_cleanup"`
+	NodeIDs             []uint `json:"node_ids"`
 }
 
 // List godoc
@@ -243,6 +262,58 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		}
 	}
 
+	// drill 演练配置校验
+	drillEnabled := false
+	if req.DrillEnabled != nil {
+		drillEnabled = *req.DrillEnabled
+	}
+	if drillEnabled {
+		if req.DrillCron == "" {
+			respondBadRequest(c, "启用恢复演练后必须设置 drill_cron")
+			return
+		}
+		if err := validateCronSpec(req.DrillCron); err != nil {
+			respondBadRequest(c, "drill_cron 格式不合法: "+err.Error())
+			return
+		}
+		if req.DrillTargetNodeID == nil || *req.DrillTargetNodeID == 0 {
+			respondBadRequest(c, "启用恢复演练后必须指定沙箱节点 drill_target_node_id")
+			return
+		}
+		// 沙箱节点不能等于任一备份源节点
+		for _, nid := range req.NodeIDs {
+			if nid == *req.DrillTargetNodeID {
+				respondBadRequest(c, "沙箱节点不能与备份源节点相同")
+				return
+			}
+		}
+		drillPath := strings.TrimSpace(req.DrillRestorePath)
+		if drillPath == "" {
+			drillPath = "/tmp/xirang-drill"
+		}
+		if err := validateDrillRestorePath(drillPath); err != nil {
+			respondBadRequest(c, err.Error())
+			return
+		}
+		// 校验 drill 脚本长度
+		if len(req.DrillPreVerify) > 4096 {
+			respondBadRequest(c, "drill_pre_verify 长度不能超过 4096 个字符")
+			return
+		}
+		if len(req.DrillVerify) > 4096 {
+			respondBadRequest(c, "drill_verify 长度不能超过 4096 个字符")
+			return
+		}
+		if len(req.DrillPostVerify) > 4096 {
+			respondBadRequest(c, "drill_post_verify 长度不能超过 4096 个字符")
+			return
+		}
+	}
+	drillAutoCleanup := true
+	if req.DrillAutoCleanup != nil {
+		drillAutoCleanup = *req.DrillAutoCleanup
+	}
+
 	p := model.Policy{
 		Name:              req.Name,
 		Description:       strings.TrimSpace(req.Description),
@@ -262,6 +333,14 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		AppProfile:        appProfile,
 		AppCredentialID:   req.AppCredentialID,
 		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
+		DrillEnabled:      drillEnabled,
+		DrillCron:         strings.TrimSpace(req.DrillCron),
+		DrillTargetNodeID: req.DrillTargetNodeID,
+		DrillRestorePath:  strings.TrimSpace(req.DrillRestorePath),
+		DrillPreVerify:    strings.TrimSpace(req.DrillPreVerify),
+		DrillVerify:       strings.TrimSpace(req.DrillVerify),
+		DrillPostVerify:   strings.TrimSpace(req.DrillPostVerify),
+		DrillAutoCleanup:  drillAutoCleanup,
 	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
@@ -459,6 +538,54 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		}
 	}
 
+	// drill 演练配置校验
+	drillEnabledUpdate := false
+	if req.DrillEnabled != nil {
+		drillEnabledUpdate = *req.DrillEnabled
+	}
+	if drillEnabledUpdate {
+		if req.DrillCron == "" {
+			respondBadRequest(c, "启用恢复演练后必须设置 drill_cron")
+			return
+		}
+		if err := validateCronSpec(req.DrillCron); err != nil {
+			respondBadRequest(c, "drill_cron 格式不合法: "+err.Error())
+			return
+		}
+		if req.DrillTargetNodeID == nil || *req.DrillTargetNodeID == 0 {
+			respondBadRequest(c, "启用恢复演练后必须指定沙箱节点 drill_target_node_id")
+			return
+		}
+		// 沙箱节点不能等于任一备份源节点
+		if req.NodeIDs != nil {
+			for _, nid := range req.NodeIDs {
+				if nid == *req.DrillTargetNodeID {
+					respondBadRequest(c, "沙箱节点不能与备份源节点相同")
+					return
+				}
+			}
+		}
+		drillPathUpdate := strings.TrimSpace(req.DrillRestorePath)
+		if drillPathUpdate == "" {
+			drillPathUpdate = "/tmp/xirang-drill"
+		}
+		if err := validateDrillRestorePath(drillPathUpdate); err != nil {
+			respondBadRequest(c, err.Error())
+			return
+		}
+		if len(req.DrillPreVerify) > 4096 {
+			respondBadRequest(c, "drill_pre_verify 长度不能超过 4096 个字符")
+			return
+		}
+		if len(req.DrillVerify) > 4096 {
+			respondBadRequest(c, "drill_verify 长度不能超过 4096 个字符")
+			return
+		}
+		if len(req.DrillPostVerify) > 4096 {
+			respondBadRequest(c, "drill_post_verify 长度不能超过 4096 个字符")
+			return
+		}
+	}
 	previousEnabled := p.Enabled
 
 	p.Name = req.Name
@@ -487,6 +614,18 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	p.AppProfile = appProfile
 	p.AppCredentialID = req.AppCredentialID
 	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
+	if req.DrillEnabled != nil {
+		p.DrillEnabled = *req.DrillEnabled
+	}
+	p.DrillCron = strings.TrimSpace(req.DrillCron)
+	p.DrillTargetNodeID = req.DrillTargetNodeID
+	p.DrillRestorePath = strings.TrimSpace(req.DrillRestorePath)
+	p.DrillPreVerify = strings.TrimSpace(req.DrillPreVerify)
+	p.DrillVerify = strings.TrimSpace(req.DrillVerify)
+	p.DrillPostVerify = strings.TrimSpace(req.DrillPostVerify)
+	if req.DrillAutoCleanup != nil {
+		p.DrillAutoCleanup = *req.DrillAutoCleanup
+	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
 			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
@@ -621,7 +760,76 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	respondMessage(c, "deleted")
 }
 
+// TriggerDrill godoc
+// @Summary      手动触发恢复演练
+// @Description  立即对指定策略执行一次恢复演练（不等 cron）
+// @Tags         policies
+// @Security     Bearer
+// @Produce      json
+// @Param        id   path      int  true  "策略 ID"
+// @Success      200  {object}  handlers.Response{data=object}
+// @Failure      400  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Router       /policies/{id}/drill-trigger [post]
+func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var policy model.Policy
+	if err := h.db.First(&policy, id).Error; err != nil {
+		respondNotFound(c, "策略不存在")
+		return
+	}
+	if allowed, err := authorizePolicyOwnership(c, h.db, policy); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
+		respondForbidden(c, "无权访问该策略")
+		return
+	}
+	if !policy.DrillEnabled {
+		respondBadRequest(c, "该策略未启用恢复演练")
+		return
+	}
+
+	if h.drillTriggerer == nil {
+		respondInternalError(c, fmt.Errorf("恢复演练功能不可用"))
+		return
+	}
+
+	taskRunID, err := h.drillTriggerer.TriggerDrill(policy.ID)
+	if err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"task_run_id": taskRunID, "message": "恢复演练已触发"})
+}
+
 // validateHookCommand 校验 hook 命令的安全性（白名单：禁止 shell 元字符 + 危险程序名）。
+// validateDrillRestorePath 校验 drill 恢复路径的安全性。
+// 要求绝对路径，不含 ..，禁止恢复到系统关键目录。
+func validateDrillRestorePath(path string) error {
+	if path == "" {
+		return nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("drill_restore_path 必须是绝对路径")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("drill_restore_path 不能包含 \"..\"")
+	}
+	// 禁止恢复到系统关键目录
+	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot"}
+	for _, p := range forbidden {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return fmt.Errorf("drill_restore_path 禁止恢复到系统目录: %s", p)
+		}
+	}
+	return nil
+}
+
 func validateHookCommand(cmd string) error {
 	if len(cmd) > 2048 {
 		return fmt.Errorf("hook 命令长度不能超过 2048 个字符")
@@ -658,32 +866,40 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		nodeIDs[i] = n.ID
 	}
 	return gin.H{
-		"id":                   p.ID,
-		"name":                 p.Name,
-		"description":          p.Description,
-		"source_path":          p.SourcePath,
-		"target_path":          p.TargetPath,
-		"cron_spec":            p.CronSpec,
-		"exclude_rules":        p.ExcludeRules,
-		"bwlimit":              p.BwLimit,
-		"retention_days":       p.RetentionDays,
-		"max_concurrent":       p.MaxConcurrent,
-		"enabled":              p.Enabled,
-		"verify_enabled":       p.VerifyEnabled,
-		"verify_sample_rate":   p.VerifySampleRate,
-		"is_template":          p.IsTemplate,
-		"pre_hook":             p.PreHook,
-		"post_hook":            p.PostHook,
+		"id":                    p.ID,
+		"name":                  p.Name,
+		"description":           p.Description,
+		"source_path":           p.SourcePath,
+		"target_path":           p.TargetPath,
+		"cron_spec":             p.CronSpec,
+		"exclude_rules":         p.ExcludeRules,
+		"bwlimit":               p.BwLimit,
+		"retention_days":        p.RetentionDays,
+		"max_concurrent":        p.MaxConcurrent,
+		"enabled":               p.Enabled,
+		"verify_enabled":        p.VerifyEnabled,
+		"verify_sample_rate":    p.VerifySampleRate,
+		"is_template":           p.IsTemplate,
+		"pre_hook":              p.PreHook,
+		"post_hook":             p.PostHook,
 		"hook_timeout_seconds":  p.HookTimeoutSeconds,
 		"max_execution_seconds": p.MaxExecutionSeconds,
 		"max_retries":           p.MaxRetries,
-		"retry_base_seconds":   p.RetryBaseSeconds,
-		"bandwidth_schedule":   p.BandwidthSchedule,
-		"app_profile":          p.AppProfile,
-		"app_credential_id":    p.AppCredentialID,
-		"node_ids":             nodeIDs,
-		"created_at":           p.CreatedAt,
-		"updated_at":           p.UpdatedAt,
+		"retry_base_seconds":    p.RetryBaseSeconds,
+		"bandwidth_schedule":    p.BandwidthSchedule,
+		"drill_enabled":         p.DrillEnabled,
+		"drill_cron":            p.DrillCron,
+		"drill_target_node_id":  p.DrillTargetNodeID,
+		"drill_restore_path":    p.DrillRestorePath,
+		"drill_pre_verify":      p.DrillPreVerify,
+		"drill_verify":          p.DrillVerify,
+		"drill_post_verify":     p.DrillPostVerify,
+		"drill_auto_cleanup":    p.DrillAutoCleanup,
+		"app_profile":           p.AppProfile,
+		"app_credential_id":     p.AppCredentialID,
+		"node_ids":              nodeIDs,
+		"created_at":            p.CreatedAt,
+		"updated_at":            p.UpdatedAt,
 	}
 }
 
@@ -785,6 +1001,14 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		VerifyEnabled:     tmpl.VerifyEnabled,
 		VerifySampleRate:  tmpl.VerifySampleRate,
 		IsTemplate:        false,
+		DrillEnabled:      false,
+		DrillCron:         tmpl.DrillCron,
+		DrillTargetNodeID: tmpl.DrillTargetNodeID,
+		DrillRestorePath:  tmpl.DrillRestorePath,
+		DrillPreVerify:    tmpl.DrillPreVerify,
+		DrillVerify:       tmpl.DrillVerify,
+		DrillPostVerify:   tmpl.DrillPostVerify,
+		DrillAutoCleanup:  tmpl.DrillAutoCleanup,
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
