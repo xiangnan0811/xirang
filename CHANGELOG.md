@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/xiangnan0811/xirang/compare/v0.19.5...v0.20.0) (2026-05-05)
+
+
+### ✨ Features
+
+* **web:** Wave 4 a11y 全审 (vitest-axe + eslint-jsx-a11y + 真违规修复 + spec) ([#119](https://github.com/xiangnan0811/xirang/issues/119)) ([427dd42](https://github.com/xiangnan0811/xirang/commit/427dd427def47ebf67da9978e583cfb4a35155a1))
+
 ## [0.19.5](https://github.com/xiangnan0811/xirang/compare/v0.19.4...v0.19.5) (2026-05-05)
 
 
