@@ -1,6 +1,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { axe } from "vitest-axe";
+
+import { runAxe } from "@/test/a11y-helpers";
 
 import {
   Dialog,
@@ -14,6 +15,7 @@ import {
 describe("Dialog a11y", () => {
   // Wave 4 PR-A: vitest-axe smoke 测试 — 确保 a11y 流水线绿色（在线性 jsdom 环境）。
   // Radix Dialog 通过 portal 渲染到 document.body，因此用整个 body 作为 axe 扫描根。
+  // PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
   it("smoke: 默认渲染无 axe 违规", async () => {
     render(
       <Dialog open onOpenChange={() => {}}>
@@ -29,7 +31,7 @@ describe("Dialog a11y", () => {
       </Dialog>,
     );
 
-    const results = await axe(document.body);
+    const results = await runAxe(document.body);
     expect(results).toHaveNoViolations();
   });
 });

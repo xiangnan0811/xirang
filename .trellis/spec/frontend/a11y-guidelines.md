@@ -53,27 +53,105 @@ are out of scope for this revision.
 
 | Tool | Where | Purpose |
 |---|---|---|
-| `eslint-plugin-jsx-a11y` | `web/eslint.config.js` | Static check (warn during PR-A; promoted to error in PR-D) |
+| `eslint-plugin-jsx-a11y` | `web/eslint.config.js` | Static check. `aria-role`, `no-redundant-roles`, `anchor-is-valid`, plus all default-error rules from `jsx-a11y/recommended` are `error`. Five rules with remaining debt stay `warn` (see config comments). |
 | `vitest-axe` | `web/vitest.setup.ts` | Runtime axe-core check via `expect(results).toHaveNoViolations()` |
 | `axe-core` | transitive | The actual rule engine |
+| `runAxe` helper | `web/src/test/a11y-helpers.ts` | Wraps `axe()` with `color-contrast` disabled (jsdom limitation, see below) |
 
 ### Test template
+
+Use the shared `runAxe` helper instead of calling `axe()` directly. It centralises
+the color-contrast exemption and keeps individual tests free of duplicated rules
+config.
 
 ```tsx
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { axe } from "vitest-axe";
+
+import { runAxe } from "@/test/a11y-helpers";
 
 describe("MyComponent a11y", () => {
   it("smoke: 默认渲染无 axe 违规", async () => {
-    render(<MyComponent />);
-    // Radix portals render to document.body; scan the whole body to catch
-    // dialog/menu/tooltip portal content.
-    const results = await axe(document.body);
+    const { container } = render(<MyComponent />);
+    const results = await runAxe(container);
     expect(results).toHaveNoViolations();
   });
 });
 ```
+
+For Radix `Dialog` / `DropdownMenu` / `Tooltip` etc. that render via portal to
+`document.body`, scan the body instead of the render container so portal content
+is included:
+
+```tsx
+const results = await runAxe(document.body);
+```
+
+When the page under test depends on context providers, follow the existing
+PR-C page tests (`web/src/pages/__tests__/*-page.a11y.test.tsx`) — mock each
+context with `vi.mock(...)` and seed minimal data via a `buildContext()` helper
+inside the test file. Avoid pulling real API or WebSocket modules; a smoke test
+only needs the first paint to be axe-clean.
+
+### Decorative vs semantic icons
+
+`lucide-react` icons render as inline SVG. By default screen readers see them
+as a graphic with the icon name as accessible name, which is almost always
+noise next to a visible label.
+
+- **Decorative icon** (icon next to a visible text label, or inside an
+  already-labeled button): add `aria-hidden`. Examples:
+  - `<Button>` with `<Save />` and the text "保存" — the icon is decorative.
+  - Status pill with both `<CircleAlert />` and the text "失败".
+  - Icon used purely as a visual bullet inside a list item.
+- **Semantic icon** (icon-only button or icon used to convey meaning the text
+  does not): the surrounding interactive element must have an accessible name
+  via `aria-label`, `aria-labelledby`, or a `<span className="sr-only">` child.
+  Do not add `aria-hidden` to the icon itself in this case.
+
+Heuristic: if removing the icon still leaves the same information for a
+screen-reader user, the icon is decorative — hide it.
+
+### i18n + `<html lang>` sync
+
+Whenever the user changes UI language, `document.documentElement.lang` must
+follow. The current implementation lives in `web/src/i18n/index.ts` and looks
+like:
+
+```ts
+import i18n from "i18next";
+
+// Map i18next internal codes to BCP 47 values for the `<html lang>` attribute.
+function mapLangToHtml(lng: string): string {
+  if (lng?.startsWith("zh")) return "zh-CN";
+  return "en";
+}
+
+function syncDocumentLang(lng: string) {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = mapLangToHtml(lng);
+}
+
+// Sync once on init, then every time the user switches language.
+syncDocumentLang(i18n.language);
+i18n.on("languageChanged", syncDocumentLang);
+```
+
+Mirror this pattern in any new locale entry-point. Without it, screen readers
+keep announcing the page in the wrong language and WCAG 3.1.1 / 3.1.2 fail.
+
+---
+
+## Known exemptions
+
+The following gaps are intentional and do not need a fix in component code.
+Document the reason if you add a new exemption.
+
+| Surface | Reason | Mitigation |
+|---|---|---|
+| `react-grid-layout` drag-and-drop | Upstream community issue — keyboard parity for grid drag is not feasible without forking. | We expose explicit "move up / down" buttons (see `panel-editor-dialog.tsx`) so keyboard users can reorder panels without dragging. |
+| `xterm.js` terminal pane | Terminal emulators render content into a canvas; SR support is not part of WCAG conformance for terminal apps. | We label the wrapper element and expose copy/paste shortcuts; we do not attempt to make the terminal buffer screen-reader friendly. |
+| `axe-core` `color-contrast` rule under jsdom | jsdom does not implement `HTMLCanvasElement.prototype.getContext`, so axe cannot compute contrast ratios. Running it produces stderr noise and unreliable results. | `runAxe` disables the rule. Validate contrast manually in the browser via the axe DevTools extension before shipping color tokens or muted text styles. |
 
 ---
 

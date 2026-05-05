@@ -1,10 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import { axe } from "vitest-axe";
+
+import { runAxe } from "@/test/a11y-helpers";
 
 // Wave 4 PR-B：version-banner a11y smoke 测试，回归保护
 // 关闭按钮 aria-label + sr-only + 装饰图标 aria-hidden 的修复。
+// PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
 
 const { checkVersionMock, useAuthMock } = vi.hoisted(() => ({
   checkVersionMock: vi.fn(),
@@ -46,7 +48,7 @@ describe("VersionBanner a11y", () => {
       expect(container.querySelector("[role=status]")).toBeInTheDocument();
     });
 
-    const results = await axe(container);
+    const results = await runAxe(container);
     expect(results).toHaveNoViolations();
   });
 });

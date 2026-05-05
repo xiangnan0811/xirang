@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
-import { axe } from "vitest-axe";
 import { MemoryRouter } from "react-router-dom";
 
+import { runAxe } from "@/test/a11y-helpers";
+
 // Wave 4 PR-C：nodes 页 a11y smoke 测试。
-// 关闭 color-contrast——jsdom 限制；浏览器侧手动 axe 兜底。
+// PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
 
 const { toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
@@ -146,11 +147,7 @@ describe("NodesPage a11y smoke", () => {
       </MemoryRouter>
     );
 
-    const results = await axe(container, {
-      rules: {
-        "color-contrast": { enabled: false },
-      },
-    });
+    const results = await runAxe(container);
     expect(results).toHaveNoViolations();
   });
 });

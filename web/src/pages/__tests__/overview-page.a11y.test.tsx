@@ -1,11 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import { axe } from "vitest-axe";
+
+import { runAxe } from "@/test/a11y-helpers";
 
 // Wave 4 PR-C：overview 页 a11y smoke 测试。
-// 关闭 color-contrast 规则——jsdom 不支持 canvas/computed style，axe 无法可靠计算对比度；
-// 浏览器侧仍由 dev tool/axe DevTools 兜底。
+// PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
 
 const mockNavigate = vi.fn();
 
@@ -161,11 +161,7 @@ describe("OverviewPage a11y smoke", () => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalled();
     });
 
-    const results = await axe(container, {
-      rules: {
-        "color-contrast": { enabled: false },
-      },
-    });
+    const results = await runAxe(container);
     expect(results).toHaveNoViolations();
   });
 });

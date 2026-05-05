@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
-import { axe } from "vitest-axe";
 import type { LogEvent } from "@/types/domain";
 
+import { runAxe } from "@/test/a11y-helpers";
+
 // Wave 4 PR-C：logs 页 a11y smoke 测试。
-// 关闭 color-contrast——jsdom 限制；浏览器侧手动 axe 兜底。
+// PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
 //
 // 与 logs-page.test.tsx 一致：jsdom 下需要 patch HTMLElement 高度，
 // 否则 @tanstack/react-virtual 不渲染任何 row。
@@ -189,11 +190,7 @@ describe("LogsPage a11y smoke", () => {
   it("初始渲染无 axe violations（关 color-contrast）", async () => {
     const { container } = render(<LogsPage />);
 
-    const results = await axe(container, {
-      rules: {
-        "color-contrast": { enabled: false },
-      },
-    });
+    const results = await runAxe(container);
     expect(results).toHaveNoViolations();
   });
 });
