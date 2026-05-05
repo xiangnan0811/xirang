@@ -5,6 +5,7 @@ import { ArrowLeft, RefreshCw, Plus, Save } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/auth-context";
 import { deletePanel, updateLayout } from "@/lib/api/dashboards";
+import { ApiError } from "@/lib/api/core";
 import type { Panel, DashboardTimeRange } from "@/types/domain";
 import { getErrorMessage } from "@/lib/utils";
 import { useDashboard } from "./hooks/use-dashboard";
@@ -82,11 +83,8 @@ export function DashboardDetailPage() {
   // ── 404 处理 ────────────────────────────────────────────────────
   useEffect(() => {
     if (error) {
-      const is404 =
-        error.includes("404") ||
-        error.toLowerCase().includes("not found") ||
-        error.includes(t("dashboards.errors.notFound"));
-      toast.error(is404 ? t("dashboards.errors.notFound") : error);
+      const is404 = error instanceof ApiError && error.status === 404;
+      toast.error(is404 ? t("dashboards.errors.notFound") : error.message);
       navigate("/app/dashboards");
     }
   }, [error, navigate, t]);

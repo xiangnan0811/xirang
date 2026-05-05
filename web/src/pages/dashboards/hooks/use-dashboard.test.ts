@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useDashboard } from "./use-dashboard";
 import type { Dashboard } from "@/types/domain";
+import { ApiError } from "@/lib/api/core";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
@@ -59,6 +60,38 @@ describe("useDashboard", () => {
       1,
       expect.any(AbortSignal)
     );
+  });
+
+  it("拉取 404 时保留 ApiError 实例（status 字段）暴露给消费方", async () => {
+    const apiErr = new ApiError(404, "看板不存在");
+    mockGetDashboard.mockRejectedValue(apiErr);
+
+    const { result } = renderHook(() =>
+      useDashboard("1", "test-token")
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    const err = result.current.error;
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(404);
+  });
+
+  it("拉取非 ApiError 异常时仍包装为 Error 暴露 message", async () => {
+    mockGetDashboard.mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(() =>
+      useDashboard("1", "test-token")
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.error?.message).toBe("network down");
   });
 
   it("调用 refresh() 递增 refreshNonce，并触发重新拉取", async () => {
