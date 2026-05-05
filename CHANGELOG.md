@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/xiangnan0811/xirang/compare/v0.20.0...v0.21.0) (2026-05-05)
+
+
+### ✨ Features
+
+* **backup:** 应用感知备份 (App-Aware Backup Profiles) ([#122](https://github.com/xiangnan0811/xirang/issues/122)) ([783f7a8](https://github.com/xiangnan0811/xirang/commit/783f7a8b7fe776c2e72c21a6c510c3f8eb2f2e2c))
+
 ## [0.20.0](https://github.com/xiangnan0811/xirang/compare/v0.19.5...v0.20.0) (2026-05-05)
 
 
