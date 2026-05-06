@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/xiangnan0811/xirang/compare/v0.25.0...v0.26.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** RPO/RTO 目标 + GFS 保留策略 ([#134](https://github.com/xiangnan0811/xirang/issues/134)) ([915de3a](https://github.com/xiangnan0811/xirang/commit/915de3ab204767289b782a57dcc707520129beb2))
+
 ## [0.25.0](https://github.com/xiangnan0811/xirang/compare/v0.24.0...v0.25.0) (2026-05-06)
 
 
