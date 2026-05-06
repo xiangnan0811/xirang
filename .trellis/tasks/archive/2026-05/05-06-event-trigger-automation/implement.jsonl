@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000056 SQLite+Postgres 双轨；automation_rules+automation_rule_logs 表设计"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "规则匹配/action 执行/模板渲染的错误处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Dispatcher dispatch/规则 CRUD/模板变量渲染的单测"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "规则管理页+创建/编辑对话框+日志查看组件"}
+{"file": ".trellis/tasks/05-06-event-trigger-automation/prd.md", "reason": "完整 PRD：需求/范围/决策/PR 拆分/AC"}

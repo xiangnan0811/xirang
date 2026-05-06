@@ -39,7 +39,7 @@ func TestRaise_DefaultSettings_WritesEventWithoutAlertUpgrade(t *testing.T) {
 		t.Fatal("raiser should not be called when anomaly.alerts_enabled defaults false")
 		return 0, false, nil
 	}
-	fn := NewRaiseFn(db, settings.NewService(db), raiser)
+	fn := NewRaiseFn(db, settings.NewService(db), raiser, nil)
 	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30,
 		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
@@ -69,7 +69,7 @@ func TestRaise_NewFinding_WritesEventAndLinksAlert(t *testing.T) {
 	raiser := func(_ *gorm.DB, _ uint, _, _, _ string) (uint, bool, error) {
 		return 42, true, nil
 	}
-	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser)
+	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
 	sigma := 3.5
 	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Sigma: &sigma,
@@ -100,7 +100,7 @@ func TestRaise_DedupFinding_EventStillWritten_RaisedAlertFalse(t *testing.T) {
 	raiser := func(_ *gorm.DB, _ uint, _, _, _ string) (uint, bool, error) {
 		return 99, false, nil // deduped to existing alert 99
 	}
-	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser)
+	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
 	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30,
 		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
@@ -123,7 +123,7 @@ func TestRaise_AlertError_EventStillWritten(t *testing.T) {
 	raiser := func(_ *gorm.DB, _ uint, _, _, _ string) (uint, bool, error) {
 		return 0, false, gorm.ErrInvalidDB
 	}
-	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser)
+	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
 	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
 		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/automation"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
 
@@ -22,7 +23,9 @@ const alertsEnabledSettingKey = "anomaly.alerts_enabled"
 // NewRaiseFn returns a RaiseFn bound to db + settings + raiser. The returned callback
 // persists an AnomalyEvent row for every finding, whether or not a new Alert
 // was created.
-func NewRaiseFn(db *gorm.DB, settingsSvc *settings.Service, raiser AlertRaiser) RaiseFn {
+// If dispatcher is non-nil, it also dispatches an automation event after the
+// AnomalyEvent is persisted.
+func NewRaiseFn(db *gorm.DB, settingsSvc *settings.Service, raiser AlertRaiser, dispatcher *automation.Dispatcher) RaiseFn {
 	return func(ctx context.Context, f Finding) error {
 		var (
 			alertID   uint
@@ -61,6 +64,18 @@ func NewRaiseFn(db *gorm.DB, settingsSvc *settings.Service, raiser AlertRaiser) 
 		if err := db.WithContext(ctx).Create(&evt).Error; err != nil {
 			return err
 		}
+		// Dispatch automation event if dispatcher is wired
+		if dispatcher != nil {
+			_ = dispatcher.Dispatch(ctx, automation.Event{
+				Type: automation.EventAnomalyDetected,
+				Context: map[string]interface{}{
+					"detector": f.Detector,
+					"metric":   f.Metric,
+					"severity": f.Severity,
+					"node_id":  f.NodeID,
+				},
+			})
+		}
 		return alertErr
 	}
 }
@@ -89,6 +104,8 @@ func (a alertSinkFunc) Raise(ctx context.Context, f Finding) error { return a(ct
 // to the supplied AlertRaiser only when anomaly.alerts_enabled is true.
 // main.go constructs the AlertRaiser as a thin wrapper around
 // alerting.DefaultRaiser.RaiseAnomalyAlert.
-func NewSink(db *gorm.DB, settingsSvc *settings.Service, raiser AlertRaiser) AlertSink {
-	return alertSinkFunc(NewRaiseFn(db, settingsSvc, raiser))
+// If dispatcher is non-nil, automation events will be dispatched on each
+// anomaly detection.
+func NewSink(db *gorm.DB, settingsSvc *settings.Service, raiser AlertRaiser, dispatcher *automation.Dispatcher) AlertSink {
+	return alertSinkFunc(NewRaiseFn(db, settingsSvc, raiser, dispatcher))
 }

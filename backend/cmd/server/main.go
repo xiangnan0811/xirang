@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/api"
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/automation"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/dashboards"
@@ -94,6 +95,9 @@ func main() {
 	alerting.InitSettings(settingsSvc)
 	raiser := alerting.DefaultRaiser{DB: db}
 
+	// 自动化规则引擎 —— 在任务/异常事件发生时匹配规则并执行动作
+	autoDispatcher := automation.NewDispatcher(db)
+
 	escSvc := escalation.NewService(db)
 
 	// Inject resolver into alerting so RaiseXxx functions know whether to defer to engine
@@ -134,7 +138,7 @@ func main() {
 		return raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
 			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
 		})
-	})
+	}, autoDispatcher)
 	anomalyEngine := anomaly.NewEngine(
 		db, settingsSvc,
 		anomalySink,
@@ -147,6 +151,7 @@ func main() {
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetAnomalySink(anomalySink)
+	taskManager.SetAutomationDispatcher(autoDispatcher)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}

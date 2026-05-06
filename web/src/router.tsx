@@ -56,6 +56,9 @@ const DashboardsPage = lazy(() =>
 const DashboardDetailPage = lazy(() =>
   import("@/pages/dashboards/dashboard-detail-page").then((m) => ({ default: m.DashboardDetailPage }))
 );
+const AutomationRulesPage = lazy(() =>
+  import("@/pages/automation-rules-page").then((m) => ({ default: m.AutomationRulesPage }))
+);
 
 function PageLoader() {
   return (
@@ -153,6 +156,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "more",
         element: <LazyPage><MorePage /></LazyPage>
+      },
+      {
+        path: "automation-rules",
+        element: <LazyPage><AutomationRulesPage /></LazyPage>
       }
     ]
   },

@@ -12,6 +12,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
+	"xirang/backend/internal/automation"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
@@ -329,6 +330,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  errorMsg,
 			})
+			m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 			return
 		}
 		m.emitLog(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
@@ -360,6 +362,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
 			"last_error":  errorMsg,
 		})
+		m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 		return
 	}
 
@@ -523,6 +526,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			}()
 		}
 
+		m.dispatchAutomation(automation.EventBackupSucceeded, taskEntity, runIDPtr)
 		m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 		return
 	}
@@ -598,6 +602,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
 	}
 	m.skipDownstreamIfAny(taskEntity, runID, chainRunID, errorMsg)
+	m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 }
 
 // runRestoreTask 执行恢复任务。与 runTask 不同，恢复不影响原始 Task 的状态，
@@ -772,7 +777,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 
 	// 恢复成功后强制执行完整性校验（不再依赖 Policy.VerifyEnabled）
 	verifyStatus := "none" //nolint:ineffassign
-	sampleRate := 100     // 默认全量校验
+	sampleRate := 100      // 默认全量校验
 	if restoreTask.Policy != nil && restoreTask.Policy.VerifySampleRate > 0 {
 		sampleRate = restoreTask.Policy.VerifySampleRate
 	}

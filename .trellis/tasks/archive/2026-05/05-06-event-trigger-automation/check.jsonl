@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "规则 CRUD/dispatch/action 执行/模板渲染/规则日志全部单测覆盖"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000056 up/down 双向完整；索引设计合理"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + 规则管理页组件测试"}
+{"file": ".trellis/tasks/05-06-event-trigger-automation/prd.md", "reason": "逐项 AC：ransomware→pause/backup_failed→notify/禁用规则/日志记录"}

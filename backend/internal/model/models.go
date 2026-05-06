@@ -107,6 +107,7 @@ type Policy struct {
 	KeepYearly         int    `gorm:"not null;default:0" json:"keep_yearly"`
 	MaxConcurrent      int    `gorm:"not null;default:1" json:"max_concurrent"`
 	Enabled            bool   `gorm:"not null;default:true" json:"enabled"`
+	SkipNext           bool   `gorm:"not null;default:false" json:"skip_next"`
 	VerifyEnabled      bool   `gorm:"not null;default:true" json:"verify_enabled"`
 	VerifySampleRate   int    `gorm:"not null;default:0" json:"verify_sample_rate"`
 	IsTemplate         bool   `gorm:"not null;default:false" json:"is_template"`
@@ -891,6 +892,32 @@ type SnapshotFileIndex struct {
 	Path       string    `gorm:"type:text;not null;uniqueIndex:idx_sfi_task_snap_path;index:idx_sfi_path" json:"path"`
 	Size       int64     `gorm:"not null;default:0" json:"size"`
 	Mtime      string    `gorm:"size:64;not null;default:''" json:"mtime"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// AutomationRule 自动化规则：事件触发条件 → 执行动作
+type AutomationRule struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	Name         string    `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Description  string    `gorm:"size:255" json:"description"`
+	EventType    string    `gorm:"size:64;not null;index" json:"event_type"`
+	EventFilter  string    `gorm:"type:text;not null;default:'{}'" json:"event_filter"` // JSON
+	ActionType   string    `gorm:"size:64;not null" json:"action_type"`
+	ActionConfig string    `gorm:"type:text;not null;default:'{}'" json:"action_config"` // JSON
+	Enabled      bool      `gorm:"not null" json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AutomationRuleLog 自动化规则执行日志
+type AutomationRuleLog struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	RuleID     uint      `gorm:"not null;index" json:"rule_id"`
+	EventType  string    `gorm:"size:64;not null" json:"event_type"`
+	ActionType string    `gorm:"size:64;not null" json:"action_type"`
+	Result     string    `gorm:"size:16;not null" json:"result"` // "success" | "error"
+	Error      string    `gorm:"type:text" json:"error,omitempty"`
+	Details    string    `gorm:"type:text" json:"details,omitempty"` // JSON
 	CreatedAt  time.Time `json:"created_at"`
 }
 

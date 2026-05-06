@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/anomaly"
+	"xirang/backend/internal/automation"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
@@ -77,22 +78,22 @@ type queuedTaskSample struct {
 }
 
 type Manager struct {
-	db              *gorm.DB
-	stateMachine    *StateMachine
-	executorFactory executor.Factory
-	hub             *ws.Hub
-	scheduler       *scheduler.CronScheduler
-	locks           sync.Map
-	strategyLocks   sync.Map
-	nodeLocks       sync.Map // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
-	hookRunFunc     func(ctx context.Context, task model.Task, command string) error // 可测试注入
-	runningCancels  sync.Map
-	pendingRuns     sync.Map
-	restoreNodes    sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
-	retryTimers          sync.Map
-	retryChainContexts   sync.Map // taskID → chainContext
-	semaphore            chan struct{}
-	taskWG          sync.WaitGroup
+	db                 *gorm.DB
+	stateMachine       *StateMachine
+	executorFactory    executor.Factory
+	hub                *ws.Hub
+	scheduler          *scheduler.CronScheduler
+	locks              sync.Map
+	strategyLocks      sync.Map
+	nodeLocks          sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
+	hookRunFunc        func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	runningCancels     sync.Map
+	pendingRuns        sync.Map
+	restoreNodes       sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
+	retryTimers        sync.Map
+	retryChainContexts sync.Map // taskID → chainContext
+	semaphore          chan struct{}
+	taskWG             sync.WaitGroup
 
 	logQueue         chan queuedTaskLog
 	logBatchSize     int
@@ -100,24 +101,26 @@ type Manager struct {
 	logWorkerCancel  context.CancelFunc
 	logWorkerDone    chan struct{}
 
-	sampleQueue            chan queuedTaskSample
-	sampleBatchSize        int
-	sampleFlushInterval    time.Duration
-	sampleWorkerCancel     context.CancelFunc
-	sampleWorkerDone       chan struct{}
-	lastSampleBucketByTask    sync.Map
+	sampleQueue              chan queuedTaskSample
+	sampleBatchSize          int
+	sampleFlushInterval      time.Duration
+	sampleWorkerCancel       context.CancelFunc
+	sampleWorkerDone         chan struct{}
+	lastSampleBucketByTask   sync.Map
 	lastProgressBucketByTask sync.Map
 	sampleRetentionDays      int
-	lastSampleCleanupAt    time.Time
-	sampleCleanupMu        sync.Mutex
+	lastSampleCleanupAt      time.Time
+	sampleCleanupMu          sync.Mutex
 
-	taskRunRetentionDays    int
-	lastTaskRunCleanupAt    time.Time
-	taskRunCleanupMu        sync.Mutex
+	taskRunRetentionDays int
+	lastTaskRunCleanupAt time.Time
+	taskRunCleanupMu     sync.Mutex
 
 	settingsSvc *settings.Service
 
 	anomalySink anomaly.AlertSink // optional; set via SetAnomalySink
+
+	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
 
 	shuttingDown atomic.Bool
 }
@@ -153,6 +156,12 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 // 若未调用，runTask 中的快照差异检测将静默跳过。
 func (m *Manager) SetAnomalySink(sink anomaly.AlertSink) {
 	m.anomalySink = sink
+}
+
+// SetAutomationDispatcher 注入 automation.Dispatcher，用于在任务完成/失败时
+// 触发自动化规则。若未调用，事件将不被派发。
+func (m *Manager) SetAutomationDispatcher(dispatcher *automation.Dispatcher) {
+	m.autoDispatcher = dispatcher
 }
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {
@@ -519,4 +528,45 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// dispatchAutomation 在任务完成/失败时向 automation.Dispatcher 派发事件。
+// 若 dispatcher 未注入（nil），则静默跳过（向后兼容）。
+func (m *Manager) dispatchAutomation(eventType string, taskEntity model.Task, runIDPtr *uint) {
+	if m.autoDispatcher == nil {
+		return
+	}
+	var policyID uint
+	if taskEntity.PolicyID != nil {
+		policyID = *taskEntity.PolicyID
+	}
+	var runID uint
+	if runIDPtr != nil {
+		runID = *runIDPtr
+	}
+	_ = m.autoDispatcher.Dispatch(context.Background(), automation.Event{
+		Type: eventType,
+		Context: map[string]interface{}{
+			"task_id":       taskEntity.ID,
+			"task_run_id":   runID,
+			"policy_id":     policyID,
+			"node_id":       taskEntity.NodeID,
+			"executor_type": taskEntity.ExecutorType,
+			"status":        taskEntity.Status,
+		},
+	})
+}
+
+// dispatchDrillFailure 在恢复演练失败时向 automation.Dispatcher 派发事件。
+func (m *Manager) dispatchDrillFailure(policyID, taskRunID uint) {
+	if m.autoDispatcher == nil {
+		return
+	}
+	_ = m.autoDispatcher.Dispatch(context.Background(), automation.Event{
+		Type: automation.EventDrillFailed,
+		Context: map[string]interface{}{
+			"policy_id":   policyID,
+			"task_run_id": taskRunID,
+		},
+	})
 }
