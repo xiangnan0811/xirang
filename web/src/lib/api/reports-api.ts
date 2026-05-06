@@ -26,6 +26,10 @@ export type Report = {
   avg_duration_ms: number;
   top_failures: string; // JSON array
   disk_trend: string;   // JSON array
+  actual_rpo_minutes?: number | null;
+  actual_rto_minutes?: number | null;
+  rpo_compliant?: boolean | null;
+  rto_compliant?: boolean | null;
   generated_at: string;
   created_at: string;
 };

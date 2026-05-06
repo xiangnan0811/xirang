@@ -66,6 +66,13 @@ type policyRequest struct {
 	DrillVerify         string `json:"drill_verify"`
 	DrillPostVerify     string `json:"drill_post_verify"`
 	DrillAutoCleanup    *bool  `json:"drill_auto_cleanup"`
+	RPOMinutes          *int   `json:"rpo_minutes"`
+	RTOMinutes          *int   `json:"rto_minutes"`
+	RetentionMode       string `json:"retention_mode"`
+	KeepDaily           *int   `json:"keep_daily"`
+	KeepWeekly          *int   `json:"keep_weekly"`
+	KeepMonthly         *int   `json:"keep_monthly"`
+	KeepYearly          *int   `json:"keep_yearly"`
 	NodeIDs             []uint `json:"node_ids"`
 }
 
@@ -314,6 +321,45 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		drillAutoCleanup = *req.DrillAutoCleanup
 	}
 
+	// GFS 保留模式校验
+	retentionMode := strings.TrimSpace(req.RetentionMode)
+	if retentionMode == "" {
+		retentionMode = "simple"
+	}
+	if retentionMode != "simple" && retentionMode != "gfs" {
+		respondBadRequest(c, "retention_mode 只能是 simple 或 gfs")
+		return
+	}
+	keepDaily := 0
+	if req.KeepDaily != nil {
+		keepDaily = *req.KeepDaily
+	}
+	keepWeekly := 0
+	if req.KeepWeekly != nil {
+		keepWeekly = *req.KeepWeekly
+	}
+	keepMonthly := 0
+	if req.KeepMonthly != nil {
+		keepMonthly = *req.KeepMonthly
+	}
+	keepYearly := 0
+	if req.KeepYearly != nil {
+		keepYearly = *req.KeepYearly
+	}
+	if retentionMode == "gfs" && keepDaily == 0 && keepWeekly == 0 && keepMonthly == 0 && keepYearly == 0 {
+		respondBadRequest(c, "GFS 模式下至少需要设置一个保留数量（keep_daily/weekly/monthly/yearly）")
+		return
+	}
+	// RPO/RTO 目标
+	rpoMinutes := 0
+	if req.RPOMinutes != nil {
+		rpoMinutes = *req.RPOMinutes
+	}
+	rtoMinutes := 0
+	if req.RTOMinutes != nil {
+		rtoMinutes = *req.RTOMinutes
+	}
+
 	p := model.Policy{
 		Name:              req.Name,
 		Description:       strings.TrimSpace(req.Description),
@@ -341,6 +387,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		DrillVerify:       strings.TrimSpace(req.DrillVerify),
 		DrillPostVerify:   strings.TrimSpace(req.DrillPostVerify),
 		DrillAutoCleanup:  drillAutoCleanup,
+		RPOMinutes:        rpoMinutes,
+		RTOMinutes:        rtoMinutes,
+		RetentionMode:     retentionMode,
+		KeepDaily:         keepDaily,
+		KeepWeekly:        keepWeekly,
+		KeepMonthly:       keepMonthly,
+		KeepYearly:        keepYearly,
 	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
@@ -588,6 +641,48 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 	previousEnabled := p.Enabled
 
+	// GFS 保留模式校验
+	retentionModeUpdate := strings.TrimSpace(req.RetentionMode)
+	if retentionModeUpdate == "" {
+		retentionModeUpdate = p.RetentionMode
+		if retentionModeUpdate == "" {
+			retentionModeUpdate = "simple"
+		}
+	}
+	if retentionModeUpdate != "simple" && retentionModeUpdate != "gfs" {
+		respondBadRequest(c, "retention_mode 只能是 simple 或 gfs")
+		return
+	}
+	keepDailyUpdate := p.KeepDaily
+	if req.KeepDaily != nil {
+		keepDailyUpdate = *req.KeepDaily
+	}
+	keepWeeklyUpdate := p.KeepWeekly
+	if req.KeepWeekly != nil {
+		keepWeeklyUpdate = *req.KeepWeekly
+	}
+	keepMonthlyUpdate := p.KeepMonthly
+	if req.KeepMonthly != nil {
+		keepMonthlyUpdate = *req.KeepMonthly
+	}
+	keepYearlyUpdate := p.KeepYearly
+	if req.KeepYearly != nil {
+		keepYearlyUpdate = *req.KeepYearly
+	}
+	if retentionModeUpdate == "gfs" && keepDailyUpdate == 0 && keepWeeklyUpdate == 0 && keepMonthlyUpdate == 0 && keepYearlyUpdate == 0 {
+		respondBadRequest(c, "GFS 模式下至少需要设置一个保留数量（keep_daily/weekly/monthly/yearly）")
+		return
+	}
+	// RPO/RTO 目标
+	rpoMinutesUpdate := p.RPOMinutes
+	if req.RPOMinutes != nil {
+		rpoMinutesUpdate = *req.RPOMinutes
+	}
+	rtoMinutesUpdate := p.RTOMinutes
+	if req.RTOMinutes != nil {
+		rtoMinutesUpdate = *req.RTOMinutes
+	}
+
 	p.Name = req.Name
 	p.Description = strings.TrimSpace(req.Description)
 	p.SourcePath = req.SourcePath
@@ -626,6 +721,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if req.DrillAutoCleanup != nil {
 		p.DrillAutoCleanup = *req.DrillAutoCleanup
 	}
+	p.RPOMinutes = rpoMinutesUpdate
+	p.RTOMinutes = rtoMinutesUpdate
+	p.RetentionMode = retentionModeUpdate
+	p.KeepDaily = keepDailyUpdate
+	p.KeepWeekly = keepWeeklyUpdate
+	p.KeepMonthly = keepMonthlyUpdate
+	p.KeepYearly = keepYearlyUpdate
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
 			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
@@ -897,6 +999,13 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"drill_auto_cleanup":    p.DrillAutoCleanup,
 		"app_profile":           p.AppProfile,
 		"app_credential_id":     p.AppCredentialID,
+		"rpo_minutes":           p.RPOMinutes,
+		"rto_minutes":           p.RTOMinutes,
+		"retention_mode":        p.RetentionMode,
+		"keep_daily":            p.KeepDaily,
+		"keep_weekly":           p.KeepWeekly,
+		"keep_monthly":          p.KeepMonthly,
+		"keep_yearly":           p.KeepYearly,
 		"node_ids":              nodeIDs,
 		"created_at":            p.CreatedAt,
 		"updated_at":            p.UpdatedAt,
@@ -1009,6 +1118,13 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		DrillVerify:       tmpl.DrillVerify,
 		DrillPostVerify:   tmpl.DrillPostVerify,
 		DrillAutoCleanup:  tmpl.DrillAutoCleanup,
+		RPOMinutes:        tmpl.RPOMinutes,
+		RTOMinutes:        tmpl.RTOMinutes,
+		RetentionMode:     tmpl.RetentionMode,
+		KeepDaily:         tmpl.KeepDaily,
+		KeepWeekly:        tmpl.KeepWeekly,
+		KeepMonthly:       tmpl.KeepMonthly,
+		KeepYearly:        tmpl.KeepYearly,
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {

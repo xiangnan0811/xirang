@@ -116,6 +116,16 @@ export interface PolicyRecord {
   app_profile?: string;
   app_credential_id?: number | null;
 
+  // Retention & SLA
+  retention_days?: number;
+  retention_mode?: string;
+  keep_daily?: number;
+  keep_weekly?: number;
+  keep_monthly?: number;
+  keep_yearly?: number;
+  rpo_minutes?: number;
+  rto_minutes?: number;
+
   // Recovery drill
   drill_enabled: boolean;
   drill_cron: string;
@@ -146,6 +156,16 @@ export interface NewPolicyInput {
   escalation_policy_id?: number | null;
   app_profile?: string;
   app_credential_id?: number | null;
+
+  // Retention & SLA
+  retention_days?: number;
+  retention_mode?: string;
+  keep_daily?: number;
+  keep_weekly?: number;
+  keep_monthly?: number;
+  keep_yearly?: number;
+  rpo_minutes?: number;
+  rto_minutes?: number;
 
   // Recovery drill
   drill_enabled?: boolean;

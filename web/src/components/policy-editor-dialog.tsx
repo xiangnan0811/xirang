@@ -44,6 +44,14 @@ const emptyDraft: PolicyDraft = {
   maxRetries: 2,
   retryBaseSeconds: 30,
   bandwidthSchedule: "",
+  retention_days: 7,
+  retention_mode: "simple",
+  keep_daily: 0,
+  keep_weekly: 0,
+  keep_monthly: 0,
+  keep_yearly: 0,
+  rpo_minutes: 0,
+  rto_minutes: 0,
   escalation_policy_id: null,
   app_profile: "",
   app_credential_id: null,
@@ -83,6 +91,14 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     maxRetries: policy.maxRetries ?? 2,
     retryBaseSeconds: policy.retryBaseSeconds ?? 30,
     bandwidthSchedule: policy.bandwidthSchedule ?? "",
+    retention_days: policy.retention_days ?? 7,
+    retention_mode: policy.retention_mode ?? "simple",
+    keep_daily: policy.keep_daily ?? 0,
+    keep_weekly: policy.keep_weekly ?? 0,
+    keep_monthly: policy.keep_monthly ?? 0,
+    keep_yearly: policy.keep_yearly ?? 0,
+    rpo_minutes: policy.rpo_minutes ?? 0,
+    rto_minutes: policy.rto_minutes ?? 0,
     escalation_policy_id: policy.escalation_policy_id ?? null,
     app_profile: policy.app_profile ?? "",
     app_credential_id: policy.app_credential_id ?? null,
@@ -117,6 +133,7 @@ export function PolicyEditorDialog({
   const [draft, setDraft] = useDialogDraft<PolicyDraft, PolicyRecord>(open, emptyDraft, editingPolicy, toDraft);
   const [saving, setSaving] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [retentionOpen, setRetentionOpen] = useState(false);
   const [drillOpen, setDrillOpen] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [drillConfirmOpen, setDrillConfirmOpen] = useState(false);
@@ -443,6 +460,206 @@ export function PolicyEditorDialog({
             </option>
           ))}
         </Select>
+      </div>
+
+      {/* 保留策略与 SLA 目标 */}
+      <div className="rounded-md border border-border/60">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/40 transition-colors"
+          onClick={() => setRetentionOpen(!retentionOpen)}
+          aria-expanded={retentionOpen}
+        >
+          {t('policyEditor.retentionTitle')}
+          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${retentionOpen ? "rotate-180" : ""}`} />
+        </button>
+
+        {retentionOpen && (
+          <div className="space-y-3 border-t border-border/40 px-3 py-3 animate-in slide-in-from-top-1 fade-in duration-150">
+            {/* 保留模式切换 */}
+            <div>
+              <div className="mb-1 text-sm font-medium">{t('policyEditor.retentionMode')}</div>
+              <div className="flex gap-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="retention_mode"
+                    value="simple"
+                    checked={draft.retention_mode === "simple"}
+                    onChange={() =>
+                      setDraft((prev) => ({ ...prev, retention_mode: "simple" }))
+                    }
+                  />
+                  {t('policyEditor.retentionSimple')}
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="retention_mode"
+                    value="gfs"
+                    checked={draft.retention_mode === "gfs"}
+                    onChange={() =>
+                      setDraft((prev) => ({ ...prev, retention_mode: "gfs" }))
+                    }
+                  />
+                  {t('policyEditor.retentionGFS')}
+                </label>
+              </div>
+              {draft.retention_mode === "gfs" && (
+                <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.retentionGFSHint')}</p>
+              )}
+            </div>
+
+            {/* Simple 模式：retention_days */}
+            {draft.retention_mode === "simple" && (
+              <div>
+                <label htmlFor="policy-edit-retention-days" className="mb-1 block text-sm font-medium">
+                  {t('policyEditor.retentionDays')}
+                </label>
+                <Input
+                  id="policy-edit-retention-days"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={draft.retention_days ?? 7}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      retention_days: toBoundedInt(e.target.value, 7, 1, 3650),
+                    }))
+                  }
+                />
+                <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.retentionDaysHint')}</p>
+              </div>
+            )}
+
+            {/* GFS 模式：keep_daily/weekly/monthly/yearly */}
+            {draft.retention_mode === "gfs" && (
+              <>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label htmlFor="policy-edit-keep-daily" className="mb-1 block text-sm font-medium">
+                      {t('policyEditor.keepDaily')}
+                    </label>
+                    <Input
+                      id="policy-edit-keep-daily"
+                      type="number"
+                      min={0}
+                      max={365}
+                      value={draft.keep_daily ?? 0}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          keep_daily: toBoundedInt(e.target.value, 0, 0, 365),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="policy-edit-keep-weekly" className="mb-1 block text-sm font-medium">
+                      {t('policyEditor.keepWeekly')}
+                    </label>
+                    <Input
+                      id="policy-edit-keep-weekly"
+                      type="number"
+                      min={0}
+                      max={104}
+                      value={draft.keep_weekly ?? 0}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          keep_weekly: toBoundedInt(e.target.value, 0, 0, 104),
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label htmlFor="policy-edit-keep-monthly" className="mb-1 block text-sm font-medium">
+                      {t('policyEditor.keepMonthly')}
+                    </label>
+                    <Input
+                      id="policy-edit-keep-monthly"
+                      type="number"
+                      min={0}
+                      max={120}
+                      value={draft.keep_monthly ?? 0}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          keep_monthly: toBoundedInt(e.target.value, 0, 0, 120),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="policy-edit-keep-yearly" className="mb-1 block text-sm font-medium">
+                      {t('policyEditor.keepYearly')}
+                    </label>
+                    <Input
+                      id="policy-edit-keep-yearly"
+                      type="number"
+                      min={0}
+                      max={30}
+                      value={draft.keep_yearly ?? 0}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          keep_yearly: toBoundedInt(e.target.value, 0, 0, 30),
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* RPO/RTO 目标 */}
+            <div className="border-t border-border/20 pt-3">
+              <div className="mb-2 text-sm font-medium">{t('policyEditor.slaTargets')}</div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label htmlFor="policy-edit-rpo-minutes" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.rpoTarget')}
+                  </label>
+                  <Input
+                    id="policy-edit-rpo-minutes"
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={draft.rpo_minutes ?? 0}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        rpo_minutes: toBoundedInt(e.target.value, 0, 0, 10080),
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label htmlFor="policy-edit-rto-minutes" className="mb-1 block text-sm font-medium">
+                    {t('policyEditor.rtoTarget')}
+                  </label>
+                  <Input
+                    id="policy-edit-rto-minutes"
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={draft.rto_minutes ?? 0}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        rto_minutes: toBoundedInt(e.target.value, 0, 0, 10080),
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.slaTargetsHint')}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 高级设置 */}

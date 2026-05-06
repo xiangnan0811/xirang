@@ -87,15 +87,24 @@ type Node struct {
 }
 
 type Policy struct {
-	ID                 uint   `gorm:"primaryKey" json:"id"`
-	Name               string `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Description        string `gorm:"size:255" json:"description"`
-	SourcePath         string `gorm:"size:512;not null" json:"source_path"`
-	TargetPath         string `gorm:"size:512;not null" json:"target_path"`
-	CronSpec           string `gorm:"size:128;not null" json:"cron_spec"`
-	ExcludeRules       string `gorm:"type:text" json:"exclude_rules"`
-	BwLimit            int    `gorm:"column:bwlimit;not null;default:0" json:"bwlimit"`
-	RetentionDays      int    `gorm:"not null;default:7" json:"retention_days"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Name          string `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Description   string `gorm:"size:255" json:"description"`
+	SourcePath    string `gorm:"size:512;not null" json:"source_path"`
+	TargetPath    string `gorm:"size:512;not null" json:"target_path"`
+	CronSpec      string `gorm:"size:128;not null" json:"cron_spec"`
+	ExcludeRules  string `gorm:"type:text" json:"exclude_rules"`
+	BwLimit       int    `gorm:"column:bwlimit;not null;default:0" json:"bwlimit"`
+	RetentionDays int    `gorm:"not null;default:7" json:"retention_days"`
+	// RPO/RTO 目标（分钟，0=未设置）
+	RPOMinutes int `gorm:"not null;default:0" json:"rpo_minutes"`
+	RTOMinutes int `gorm:"not null;default:0" json:"rto_minutes"`
+	// GFS 保留模式: "simple" | "gfs"
+	RetentionMode      string `gorm:"size:16;not null;default:'simple'" json:"retention_mode"`
+	KeepDaily          int    `gorm:"not null;default:0" json:"keep_daily"`
+	KeepWeekly         int    `gorm:"not null;default:0" json:"keep_weekly"`
+	KeepMonthly        int    `gorm:"not null;default:0" json:"keep_monthly"`
+	KeepYearly         int    `gorm:"not null;default:0" json:"keep_yearly"`
 	MaxConcurrent      int    `gorm:"not null;default:1" json:"max_concurrent"`
 	Enabled            bool   `gorm:"not null;default:true" json:"enabled"`
 	VerifyEnabled      bool   `gorm:"not null;default:true" json:"verify_enabled"`
@@ -476,21 +485,25 @@ type ReportConfig struct {
 
 // Report 已生成的 SLA 报告
 type Report struct {
-	ID            uint          `gorm:"primaryKey" json:"id"`
-	ConfigID      uint          `gorm:"not null;index" json:"config_id"`
-	Config        *ReportConfig `gorm:"foreignKey:ConfigID" json:"config"`
-	PeriodStart   time.Time     `gorm:"not null;index" json:"period_start"`
-	PeriodEnd     time.Time     `gorm:"not null" json:"period_end"`
-	TotalRuns     int           `gorm:"not null;default:0" json:"total_runs"`
-	SuccessRuns   int           `gorm:"not null;default:0" json:"success_runs"`
-	FailedRuns    int           `gorm:"not null;default:0" json:"failed_runs"`
-	SuccessRate   float64       `gorm:"not null;default:0" json:"success_rate"`
-	AvgDurationMs int64         `gorm:"not null;default:0" json:"avg_duration_ms"`
-	TopFailures   string        `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
-	DiskTrend     string        `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
-	GeneratedAt   time.Time     `gorm:"not null" json:"generated_at"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	ID               uint          `gorm:"primaryKey" json:"id"`
+	ConfigID         uint          `gorm:"not null;index" json:"config_id"`
+	Config           *ReportConfig `gorm:"foreignKey:ConfigID" json:"config"`
+	PeriodStart      time.Time     `gorm:"not null;index" json:"period_start"`
+	PeriodEnd        time.Time     `gorm:"not null" json:"period_end"`
+	TotalRuns        int           `gorm:"not null;default:0" json:"total_runs"`
+	SuccessRuns      int           `gorm:"not null;default:0" json:"success_runs"`
+	FailedRuns       int           `gorm:"not null;default:0" json:"failed_runs"`
+	SuccessRate      float64       `gorm:"not null;default:0" json:"success_rate"`
+	AvgDurationMs    int64         `gorm:"not null;default:0" json:"avg_duration_ms"`
+	ActualRPOMinutes *int          `json:"actual_rpo_minutes"`
+	ActualRTOMinutes *int          `json:"actual_rto_minutes"`
+	RPOCompliant     *bool         `json:"rpo_compliant"`
+	RTOCompliant     *bool         `json:"rto_compliant"`
+	TopFailures      string        `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
+	DiskTrend        string        `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
+	GeneratedAt      time.Time     `gorm:"not null" json:"generated_at"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
 }
 
 // Silence 告警静默规则：在指定时间窗口内抑制匹配的告警

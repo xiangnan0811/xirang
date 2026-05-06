@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000055 SQLite+Postgres 双轨；Policy/Report 字段扩展"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "GFS 参数校验/restic forget 失败/RPO 计算无数据等错误处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "RPO/RTO 计算/retention mode 切换/GFS cmd 构建的单测"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "retention 执行/RPO/RTO 计算的结构化日志"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Policy 编辑页 GFS 字段/report 页 RPO/RTO 对比组件"}
+{"file": ".trellis/tasks/05-06-rpo-rto-gfs/prd.md", "reason": "完整 PRD：需求/范围/决策/PR 拆分/AC"}

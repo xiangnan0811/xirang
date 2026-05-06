@@ -36,6 +36,8 @@ func openReportingTestDB(t *testing.T) *gorm.DB {
 		&model.ReportConfig{},
 		&model.Report{},
 		&model.Integration{},
+		&model.Policy{},
+		&model.PolicyNode{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -724,5 +726,344 @@ func seedReportFixtureFailureTopN(t *testing.T, db *gorm.DB, base time.Time, n i
 				t.Fatalf("seed topn run: %v", err)
 			}
 		}
+	}
+}
+
+func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	// 创建一个策略带 RPO/RTO 目标
+	node := model.Node{ID: 1, Name: "rpo-node", Host: "h", Username: "u", BackupDir: "/b"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	policy := model.Policy{
+		ID:            10,
+		Name:          "rpo-policy",
+		SourcePath:    "/data",
+		TargetPath:    "/backup",
+		CronSpec:      "@daily",
+		RPOMinutes:    60,
+		RTOMinutes:    120,
+		KeepDaily:     7,
+		RetentionMode: "gfs",
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	// 关联节点到策略
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("seed policy_node: %v", err)
+	}
+	// 创建任务
+	task := model.Task{
+		ID:       20,
+		Name:     "rpo-task",
+		NodeID:   node.ID,
+		PolicyID: &policy.ID,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	// 创建多个成功备份 TaskRun（间隔 ~2h）
+	for i := 0; i < 5; i++ {
+		started := base.Add(-time.Duration(i) * 2 * time.Hour)
+		finished := started.Add(10 * time.Minute)
+		if err := db.Create(&model.TaskRun{
+			TaskID:      task.ID,
+			Status:      "success",
+			TriggerType: "cron",
+			StartedAt:   &started,
+			FinishedAt:  &finished,
+			DurationMs:  600000,
+		}).Error; err != nil {
+			t.Fatalf("seed run %d: %v", i, err)
+		}
+	}
+	// 创建一个 restore TaskRun（RTO）
+	restoreStarted := base.Add(-30 * time.Minute)
+	restoreFinished := restoreStarted.Add(5 * time.Minute)
+	if err := db.Create(&model.TaskRun{
+		TaskID:      task.ID,
+		Status:      "success",
+		TriggerType: "restore",
+		StartedAt:   &restoreStarted,
+		FinishedAt:  &restoreFinished,
+		DurationMs:  300000, // 5 min = 300000ms
+	}).Error; err != nil {
+		t.Fatalf("seed restore run: %v", err)
+	}
+
+	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, []uint{node.ID})
+
+	if actualRPO == nil {
+		t.Fatal("expected actualRPO not nil")
+	}
+	// 间隔 = 2h = 120 分钟
+	if *actualRPO != 120 {
+		t.Fatalf("expected actualRPO=120, got %d", *actualRPO)
+	}
+	if *rpoCompliant != false {
+		t.Fatal("expected rpoCompliant=false (120 > 60)")
+	}
+
+	if actualRTO == nil {
+		t.Fatal("expected actualRTO not nil")
+	}
+	if *actualRTO != 5 { // 300000ms / 60000 = 5
+		t.Fatalf("expected actualRTO=5, got %d", *actualRTO)
+	}
+	if *rtoCompliant != true {
+		t.Fatal("expected rtoCompliant=true (5 <= 120)")
+	}
+}
+
+func TestComputeRPOAndRTO_NoTargets(t *testing.T) {
+	db := openReportingTestDB(t)
+	_ = reportingTimeAnchor
+
+	node := model.Node{ID: 1, Name: "no-target-node", Host: "h", Username: "u", BackupDir: "/b"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	policy := model.Policy{
+		ID:         10,
+		Name:       "no-target-policy",
+		SourcePath: "/data",
+		TargetPath: "/backup",
+		CronSpec:   "@daily",
+		// RPO/RTO 均为 0（未设置）
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("seed policy_node: %v", err)
+	}
+
+	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, []uint{node.ID})
+
+	if actualRPO != nil {
+		t.Fatalf("expected actualRPO nil when no RPO target, got %d", *actualRPO)
+	}
+	if actualRTO != nil {
+		t.Fatalf("expected actualRTO nil when no RTO target, got %d", *actualRTO)
+	}
+	if rpoCompliant != nil {
+		t.Fatal("expected rpoCompliant nil when no RPO target")
+	}
+	if rtoCompliant != nil {
+		t.Fatal("expected rtoCompliant nil when no RTO target")
+	}
+}
+
+func TestComputeRPOAndRTO_NoRuns(t *testing.T) {
+	db := openReportingTestDB(t)
+
+	node := model.Node{ID: 1, Name: "no-runs-node", Host: "h", Username: "u", BackupDir: "/b"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	policy := model.Policy{
+		ID:         10,
+		Name:       "no-runs-policy",
+		SourcePath: "/data",
+		TargetPath: "/backup",
+		CronSpec:   "@daily",
+		RPOMinutes: 60,
+		RTOMinutes: 120,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("seed policy_node: %v", err)
+	}
+
+	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, []uint{node.ID})
+
+	// 无 TaskRun 数据 → actual 为 nil（无数据），compliant 为 false（不达标）
+	if actualRPO != nil {
+		t.Fatalf("expected actualRPO nil when no backup runs, got %d", *actualRPO)
+	}
+	if actualRTO != nil {
+		t.Fatalf("expected actualRTO nil when no restore runs, got %d", *actualRTO)
+	}
+	if rpoCompliant == nil || *rpoCompliant != false {
+		t.Fatal("expected rpoCompliant=false when no backup data")
+	}
+	if rtoCompliant == nil || *rtoCompliant != false {
+		t.Fatal("expected rtoCompliant=false when no restore data")
+	}
+}
+
+func TestGenerate_IncludesRPOAndRTO(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	// 使用基础数据集 + 添加一个带 RPO/RTO 目标的策略
+	seedReportFixtureBasic(t, db, base)
+
+	// 为节点 1 创建一个带 RPO/RTO 目标的策略并关联
+	policy := model.Policy{
+		ID:            100,
+		Name:          "rpo-report-policy",
+		SourcePath:    "/data",
+		TargetPath:    "/backup",
+		CronSpec:      "@daily",
+		RPOMinutes:    1440, // 1 day target
+		RTOMinutes:    60,
+		RetentionDays: 7,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: 1}).Error; err != nil {
+		t.Fatalf("seed policy_node: %v", err)
+	}
+	// 创建任务
+	task := model.Task{
+		ID:       200,
+		Name:     "rpo-report-task",
+		NodeID:   1,
+		PolicyID: &policy.ID,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	// 创建 3 个成功备份 TaskRun（间隔 12h，RPO=720 < 1440 → compliant）
+	for i := 0; i < 3; i++ {
+		started := base.Add(-time.Duration(i) * 12 * time.Hour)
+		finished := started.Add(10 * time.Minute)
+		if err := db.Create(&model.TaskRun{
+			TaskID:      task.ID,
+			Status:      "success",
+			TriggerType: "cron",
+			StartedAt:   &started,
+			FinishedAt:  &finished,
+			DurationMs:  600000,
+		}).Error; err != nil {
+			t.Fatalf("seed run %d: %v", i, err)
+		}
+	}
+	// 创建 restore TaskRun (RTO=10 < 60 → compliant)
+	restoreStarted := base.Add(-1 * time.Hour)
+	restoreFinished := restoreStarted.Add(10 * time.Minute)
+	if err := db.Create(&model.TaskRun{
+		TaskID:      task.ID,
+		Status:      "success",
+		TriggerType: "restore",
+		StartedAt:   &restoreStarted,
+		FinishedAt:  &restoreFinished,
+		DurationMs:  600000, // 10 min
+	}).Error; err != nil {
+		t.Fatalf("seed restore run: %v", err)
+	}
+
+	cfg := model.ReportConfig{
+		Name: "rpo-report", ScopeType: "all", Period: "weekly",
+		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed cfg: %v", err)
+	}
+
+	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if report.ActualRPOMinutes == nil {
+		t.Fatal("expected ActualRPOMinutes not nil")
+	}
+	if *report.ActualRPOMinutes != 720 {
+		t.Fatalf("expected ActualRPOMinutes=720, got %d", *report.ActualRPOMinutes)
+	}
+	if report.ActualRTOMinutes == nil {
+		t.Fatal("expected ActualRTOMinutes not nil")
+	}
+	if *report.ActualRTOMinutes != 10 {
+		t.Fatalf("expected ActualRTOMinutes=10, got %d", *report.ActualRTOMinutes)
+	}
+	if report.RPOCompliant == nil || *report.RPOCompliant != true {
+		t.Fatal("expected RPOCompliant=true")
+	}
+	if report.RTOCompliant == nil || *report.RTOCompliant != true {
+		t.Fatal("expected RTOCompliant=true")
+	}
+
+	// 验证持久化 — 从 DB 重新读取
+	var got model.Report
+	if err := db.First(&got, report.ID).Error; err != nil {
+		t.Fatalf("re-read report: %v", err)
+	}
+	if got.ActualRPOMinutes == nil || *got.ActualRPOMinutes != 720 {
+		t.Fatalf("persisted actual_rpo_minutes mismatch")
+	}
+	if got.ActualRTOMinutes == nil || *got.ActualRTOMinutes != 10 {
+		t.Fatalf("persisted actual_rto_minutes mismatch")
+	}
+	if got.RPOCompliant == nil || *got.RPOCompliant != true {
+		t.Fatal("persisted rpo_compliant mismatch")
+	}
+}
+
+func TestComputeRPOAndRTO_EmptyNodeIDs(t *testing.T) {
+	db := openReportingTestDB(t)
+
+	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, []uint{})
+
+	if actualRPO != nil || actualRTO != nil || rpoCompliant != nil || rtoCompliant != nil {
+		t.Fatal("expected all nil for empty nodeIDs")
+	}
+}
+
+func TestComputePolicyRPO_SingleRun(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	task := model.Task{ID: 1, Name: "solo-task", NodeID: 1}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	started := base.Add(-1 * time.Hour)
+	finished := started.Add(5 * time.Minute)
+	if err := db.Create(&model.TaskRun{
+		TaskID: task.ID, Status: "success", TriggerType: "manual",
+		StartedAt: &started, FinishedAt: &finished, DurationMs: 300000,
+	}).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	rpo := computePolicyRPO(db, []uint{task.ID})
+	if rpo != nil {
+		t.Fatalf("expected nil RPO with single run, got %d", *rpo)
+	}
+}
+
+func TestComputePolicyRPO_ExcludesRestoreAndDrill(t *testing.T) {
+	db := openReportingTestDB(t)
+	base := reportingTimeAnchor
+
+	task := model.Task{ID: 1, Name: "exclude-task", NodeID: 1}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	// 创建 restore 和 drill 的 TaskRun（应被排除）
+	for i, triggerType := range []string{"restore", "drill"} {
+		started := base.Add(-time.Duration(i+1) * time.Hour)
+		finished := started.Add(5 * time.Minute)
+		if err := db.Create(&model.TaskRun{
+			TaskID: task.ID, Status: "success", TriggerType: triggerType,
+			StartedAt: &started, FinishedAt: &finished, DurationMs: 300000,
+		}).Error; err != nil {
+			t.Fatalf("seed %s run: %v", triggerType, err)
+		}
+	}
+
+	rpo := computePolicyRPO(db, []uint{task.ID})
+	if rpo != nil {
+		t.Fatalf("expected nil RPO when only restore/drill runs, got %d", *rpo)
 	}
 }

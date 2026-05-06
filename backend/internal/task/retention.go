@@ -20,7 +20,8 @@ func (m *Manager) enforceRetention() {
 	log := logger.Module("task")
 
 	var policies []model.Policy
-	if err := m.db.Where("retention_days > 0 AND enabled = ?", true).Preload("Nodes").Find(&policies).Error; err != nil {
+	// GFS 模式策略也纳入保留清理（即使 retention_days=0）
+	if err := m.db.Where("(retention_days > 0 OR retention_mode = 'gfs') AND enabled = ?", true).Preload("Nodes").Find(&policies).Error; err != nil {
 		log.Error().Err(err).Msg("查询保留策略失败")
 		return
 	}
@@ -151,9 +152,14 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 	}
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
-	keepWithin := fmt.Sprintf("%dd", policy.RetentionDays)
-	cmd := fmt.Sprintf("%s %s forget -r %s --keep-within %s --prune 2>&1",
-		envPrefix, resticBin, shellEscape(repo), keepWithin)
+	var keepArgs string
+	if policy.RetentionMode == "gfs" {
+		keepArgs = buildGFSKeepArgs(policy)
+	} else {
+		keepArgs = fmt.Sprintf("--keep-within %dd", policy.RetentionDays)
+	}
+	cmd := fmt.Sprintf("%s %s forget -r %s %s --prune 2>&1",
+		envPrefix, resticBin, shellEscape(repo), keepArgs)
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -162,7 +168,7 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 		m.emitLog(0, nil, "error", errMsg, "")
 		_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
-		m.emitLog(0, nil, "info", fmt.Sprintf("restic 保留清理完成 (策略: %s, 仓库: %s, 保留: %s)", policy.Name, repo, keepWithin), "")
+		m.emitLog(0, nil, "info", fmt.Sprintf("restic 保留清理完成 (策略: %s, 仓库: %s, 保留: %s)", policy.Name, repo, keepArgs), "")
 	}
 }
 
@@ -202,6 +208,30 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 // shellEscape delegates to executor.ShellEscape for consistency.
 func shellEscape(s string) string {
 	return executor.ShellEscape(s)
+}
+
+// buildGFSKeepArgs 根据 Policy 的 GFS 保留设置构建 restic forget 参数。
+// GFS 模式下忽略 retention_days，使用 --keep-daily/--keep-weekly/--keep-monthly/--keep-yearly。
+// 若 GFS 模式但所有 keep 字段均为 0，回退到 --keep-within 7d（安全兜底）。
+func buildGFSKeepArgs(policy model.Policy) string {
+	var parts []string
+	if policy.KeepDaily > 0 {
+		parts = append(parts, fmt.Sprintf("--keep-daily %d", policy.KeepDaily))
+	}
+	if policy.KeepWeekly > 0 {
+		parts = append(parts, fmt.Sprintf("--keep-weekly %d", policy.KeepWeekly))
+	}
+	if policy.KeepMonthly > 0 {
+		parts = append(parts, fmt.Sprintf("--keep-monthly %d", policy.KeepMonthly))
+	}
+	if policy.KeepYearly > 0 {
+		parts = append(parts, fmt.Sprintf("--keep-yearly %d", policy.KeepYearly))
+	}
+	if len(parts) == 0 {
+		// GFS mode but no keep values → fallback to keep-within 7d
+		return "--keep-within 7d"
+	}
+	return strings.Join(parts, " ")
 }
 
 // extractResticPassword 从 ExecutorConfig JSON 中提取 repository_password 字段
