@@ -375,3 +375,174 @@ func TestDrillGetIncludesFields(t *testing.T) {
 		t.Error("response missing drill_auto_cleanup")
 	}
 }
+
+// TestGFSCreateValid 测试创建 GFS 保留模式的策略
+func TestGFSCreateValid(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":           "gfs-policy-valid",
+		"source_path":    "/data",
+		"cron_spec":      "0 2 * * *",
+		"retention_mode": "gfs",
+		"keep_daily":     7,
+		"keep_weekly":    4,
+		"keep_monthly":   12,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+	if envelope.Data["retention_mode"] != "gfs" {
+		t.Errorf("expected retention_mode='gfs', got %v", envelope.Data["retention_mode"])
+	}
+	if envelope.Data["keep_daily"] != float64(7) {
+		t.Errorf("expected keep_daily=7, got %v", envelope.Data["keep_daily"])
+	}
+	if envelope.Data["keep_weekly"] != float64(4) {
+		t.Errorf("expected keep_weekly=4, got %v", envelope.Data["keep_weekly"])
+	}
+}
+
+// TestGFSCreateNoKeepValues 测试 GFS 模式但未设置任何 keep 值 → 400
+func TestGFSCreateNoKeepValues(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":           "gfs-no-keep",
+		"source_path":    "/data",
+		"cron_spec":      "0 2 * * *",
+		"retention_mode": "gfs",
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for GFS without keep values, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestRPORTOFieldsInResponse 测试创建带 RPO/RTO 目标的策略 → 响应包含这些字段
+func TestRPORTOFieldsInResponse(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":        "rpo-rto-policy",
+		"source_path": "/data",
+		"cron_spec":   "0 2 * * *",
+		"rpo_minutes": 60,
+		"rto_minutes": 120,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+	if envelope.Data["rpo_minutes"] != float64(60) {
+		t.Errorf("expected rpo_minutes=60, got %v", envelope.Data["rpo_minutes"])
+	}
+	if envelope.Data["rto_minutes"] != float64(120) {
+		t.Errorf("expected rto_minutes=120, got %v", envelope.Data["rto_minutes"])
+	}
+	if envelope.Data["retention_mode"] != "simple" {
+		t.Errorf("expected default retention_mode='simple', got %v", envelope.Data["retention_mode"])
+	}
+}
+
+// TestGFSUpdateAddKeepValues 测试更新策略添加 GFS 保留配置
+func TestGFSUpdateAddKeepValues(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	p := model.Policy{
+		Name:       "gfs-update-test",
+		SourcePath: "/data",
+		CronSpec:   "0 2 * * *",
+		Enabled:    true,
+	}
+	db.Create(&p)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":           "gfs-update-test",
+		"source_path":    "/data",
+		"cron_spec":      "0 2 * * *",
+		"retention_mode": "gfs",
+		"keep_daily":     14,
+		"keep_weekly":    8,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("PUT", fmt.Sprintf("/policies/%d", p.ID), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &envelope)
+	if envelope.Data["retention_mode"] != "gfs" {
+		t.Errorf("expected retention_mode='gfs' after update, got %v", envelope.Data["retention_mode"])
+	}
+	if envelope.Data["keep_daily"] != float64(14) {
+		t.Errorf("expected keep_daily=14, got %v", envelope.Data["keep_daily"])
+	}
+}
+
+// TestInvalidRetentionMode 测试非法 retention_mode → 400
+func TestInvalidRetentionMode(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	body := map[string]any{
+		"name":           "invalid-mode",
+		"source_path":    "/data",
+		"cron_spec":      "0 2 * * *",
+		"retention_mode": "invalid",
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid retention_mode, got %d: %s", resp.Code, resp.Body.String())
+	}
+}

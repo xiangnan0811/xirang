@@ -63,18 +63,25 @@ func Generate(db *gorm.DB, cfg model.ReportConfig, start, end time.Time) (*model
 		successRate = float64(stats.Success) / float64(stats.Total) * 100
 	}
 
+	// 6. RPO/RTO 实际值及达标计算
+	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, nodeIDs)
+
 	report := &model.Report{
-		ConfigID:      cfg.ID,
-		PeriodStart:   start,
-		PeriodEnd:     end,
-		TotalRuns:     stats.Total,
-		SuccessRuns:   stats.Success,
-		FailedRuns:    stats.Failed,
-		SuccessRate:   successRate,
-		AvgDurationMs: stats.AvgMs,
-		TopFailures:   string(topFailuresJSON),
-		DiskTrend:     string(diskTrendJSON),
-		GeneratedAt:   time.Now(),
+		ConfigID:         cfg.ID,
+		PeriodStart:      start,
+		PeriodEnd:        end,
+		TotalRuns:        stats.Total,
+		SuccessRuns:      stats.Success,
+		FailedRuns:       stats.Failed,
+		SuccessRate:      successRate,
+		AvgDurationMs:    stats.AvgMs,
+		ActualRPOMinutes: actualRPO,
+		ActualRTOMinutes: actualRTO,
+		RPOCompliant:     rpoCompliant,
+		RTOCompliant:     rtoCompliant,
+		TopFailures:      string(topFailuresJSON),
+		DiskTrend:        string(diskTrendJSON),
+		GeneratedAt:      time.Now(),
 	}
 
 	if err := db.Create(report).Error; err != nil {
@@ -212,6 +219,149 @@ func buildDiskTrend(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]DiskTr
 		entries = append(entries, DiskTrendEntry(r))
 	}
 	return entries, nil
+}
+
+// computeRPOAndRTO 计算报告中所有相关策略的 RPO/RTO 实际值及达标状态。
+//
+// RPO 实际值：对于每个设置了 rpo_minutes 目标的策略，找到其关联的备份 TaskRun（非 restore/drill），
+// 取最近 20 次成功运行，计算相邻两次 started_at 的最大间隔（分钟），取所有策略中的最差值。
+//
+// RTO 实际值：对于每个设置了 rto_minutes 目标的策略，找到最近一次 restore TaskRun 的 duration_ms / 60000，
+// 取所有策略中的最差值。
+//
+// 达标：所有策略都达标时 rpoCompliant/rtoCompliant 为 true；若任一策略不达标则为 false。
+// 若没有任何策略设置了该目标，返回 nil。
+func computeRPOAndRTO(db *gorm.DB, nodeIDs []uint) (actualRPO *int, actualRTO *int, rpoCompliant *bool, rtoCompliant *bool) {
+	if len(nodeIDs) == 0 {
+		return nil, nil, nil, nil
+	}
+
+	// 查找与报告作用域节点关联的所有策略
+	var policyIDs []uint
+	if err := db.Table("policy_nodes").
+		Where("node_id IN ?", nodeIDs).
+		Pluck("DISTINCT policy_id", &policyIDs).Error; err != nil || len(policyIDs) == 0 {
+		return nil, nil, nil, nil
+	}
+
+	var policies []model.Policy
+	if err := db.Where("id IN ?", policyIDs).Find(&policies).Error; err != nil {
+		return nil, nil, nil, nil
+	}
+
+	var (
+		maxRPO          *int
+		allRPOCompliant = true
+		hasRPOTarget    bool
+
+		maxRTO          *int
+		allRTOCompliant = true
+		hasRTOTarget    bool
+	)
+
+	for _, policy := range policies {
+		// 查找该策略关联的所有任务
+		var taskIDs []uint
+		db.Model(&model.Task{}).Where("policy_id = ?", policy.ID).Pluck("id", &taskIDs)
+
+		// ---- RPO 计算 ----
+		if policy.RPOMinutes > 0 {
+			hasRPOTarget = true
+			if len(taskIDs) > 0 {
+				rpo := computePolicyRPO(db, taskIDs)
+				if rpo != nil {
+					if maxRPO == nil || *rpo > *maxRPO {
+						maxRPO = rpo
+					}
+					if *rpo > policy.RPOMinutes {
+						allRPOCompliant = false
+					}
+				} else {
+					// 无成功备份数据 → 视为不达标
+					allRPOCompliant = false
+				}
+			} else {
+				// 无关联任务 → 视为不达标
+				allRPOCompliant = false
+			}
+		}
+
+		// ---- RTO 计算 ----
+		if policy.RTOMinutes > 0 {
+			hasRTOTarget = true
+			if len(taskIDs) > 0 {
+				rto := computePolicyRTO(db, taskIDs)
+				if rto != nil {
+					if maxRTO == nil || *rto > *maxRTO {
+						maxRTO = rto
+					}
+					if *rto > policy.RTOMinutes {
+						allRTOCompliant = false
+					}
+				} else {
+					// 无 restore 数据 → 视为不达标
+					allRTOCompliant = false
+				}
+			} else {
+				// 无关联任务 → 视为不达标
+				allRTOCompliant = false
+			}
+		}
+	}
+
+	if hasRPOTarget {
+		rpoCompliant = &allRPOCompliant
+		actualRPO = maxRPO
+	}
+	if hasRTOTarget {
+		rtoCompliant = &allRTOCompliant
+		actualRTO = maxRTO
+	}
+	return
+}
+
+// computePolicyRPO 计算单个策略的 RPO 实际值：
+// 取该策略下所有 task 的最近 20 次成功备份 TaskRun，
+// 按 started_at DESC 排序，计算相邻两次之间的最大间隔（分钟）。
+func computePolicyRPO(db *gorm.DB, taskIDs []uint) *int {
+	var runs []model.TaskRun
+	if err := db.Where("task_id IN ? AND status = ? AND trigger_type NOT IN ?",
+		taskIDs, "success", []string{"restore", "drill"}).
+		Order("started_at DESC").
+		Limit(20).
+		Find(&runs).Error; err != nil || len(runs) < 2 {
+		return nil
+	}
+
+	maxIntervalMin := 0
+	for i := 0; i < len(runs)-1; i++ {
+		if runs[i].StartedAt != nil && runs[i+1].StartedAt != nil {
+			interval := runs[i].StartedAt.Sub(*runs[i+1].StartedAt)
+			intervalMin := int(interval.Minutes())
+			if intervalMin > maxIntervalMin {
+				maxIntervalMin = intervalMin
+			}
+		}
+	}
+	if maxIntervalMin == 0 {
+		return nil
+	}
+	return &maxIntervalMin
+}
+
+// computePolicyRTO 计算单个策略的 RTO 实际值：
+// 取最近一次 restore TaskRun 的 duration_ms / 60000。
+func computePolicyRTO(db *gorm.DB, taskIDs []uint) *int {
+	var run model.TaskRun
+	if err := db.Where("task_id IN ? AND status = ? AND trigger_type = ?",
+		taskIDs, "success", "restore").
+		Order("started_at DESC").
+		Limit(1).
+		First(&run).Error; err != nil {
+		return nil
+	}
+	rto := int(run.DurationMs / 60000)
+	return &rto
 }
 
 // sendReport 真正完成一份 SLA 报告的对外通知。

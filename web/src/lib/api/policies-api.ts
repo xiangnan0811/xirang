@@ -19,6 +19,15 @@ type PolicyResponse = {
   max_retries?: number;
   retry_base_seconds?: number;
   bandwidth_schedule?: string;
+  // Retention & SLA
+  retention_days?: number;
+  retention_mode?: string;
+  keep_daily?: number;
+  keep_weekly?: number;
+  keep_monthly?: number;
+  keep_yearly?: number;
+  rpo_minutes?: number;
+  rto_minutes?: number;
   // Recovery drill
   drill_enabled?: boolean;
   drill_cron?: string;
@@ -52,6 +61,14 @@ function mapPolicy(row: PolicyResponse): PolicyRecord {
     maxRetries: row.max_retries ?? undefined,
     retryBaseSeconds: row.retry_base_seconds ?? undefined,
     bandwidthSchedule: row.bandwidth_schedule ?? undefined,
+    retention_days: row.retention_days ?? 7,
+    retention_mode: row.retention_mode ?? "simple",
+    keep_daily: row.keep_daily ?? 0,
+    keep_weekly: row.keep_weekly ?? 0,
+    keep_monthly: row.keep_monthly ?? 0,
+    keep_yearly: row.keep_yearly ?? 0,
+    rpo_minutes: row.rpo_minutes ?? 0,
+    rto_minutes: row.rto_minutes ?? 0,
     drill_enabled: row.drill_enabled ?? false,
     drill_cron: row.drill_cron ?? "",
     drill_target_node_id: row.drill_target_node_id ?? null,
@@ -89,6 +106,14 @@ export function createPoliciesApi() {
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
+          retention_days: input.retention_days ?? undefined,
+          retention_mode: input.retention_mode ?? undefined,
+          keep_daily: input.keep_daily ?? undefined,
+          keep_weekly: input.keep_weekly ?? undefined,
+          keep_monthly: input.keep_monthly ?? undefined,
+          keep_yearly: input.keep_yearly ?? undefined,
+          rpo_minutes: input.rpo_minutes ?? undefined,
+          rto_minutes: input.rto_minutes ?? undefined,
           drill_enabled: input.drill_enabled ?? undefined,
           drill_cron: input.drill_cron ?? undefined,
           drill_target_node_id: input.drill_target_node_id ?? undefined,
@@ -121,6 +146,14 @@ export function createPoliciesApi() {
           max_retries: input.maxRetries ?? undefined,
           retry_base_seconds: input.retryBaseSeconds ?? undefined,
           bandwidth_schedule: input.bandwidthSchedule ?? undefined,
+          retention_days: input.retention_days ?? undefined,
+          retention_mode: input.retention_mode ?? undefined,
+          keep_daily: input.keep_daily ?? undefined,
+          keep_weekly: input.keep_weekly ?? undefined,
+          keep_monthly: input.keep_monthly ?? undefined,
+          keep_yearly: input.keep_yearly ?? undefined,
+          rpo_minutes: input.rpo_minutes ?? undefined,
+          rto_minutes: input.rto_minutes ?? undefined,
           drill_enabled: input.drill_enabled ?? undefined,
           drill_cron: input.drill_cron ?? undefined,
           drill_target_node_id: input.drill_target_node_id ?? undefined,
