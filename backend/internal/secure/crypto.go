@@ -50,17 +50,48 @@ func loadKey() {
 		raw = defaultDevKey
 	}
 
-	// 路径 A：base64 编码的 32+ 字节密钥——直接使用，无需 KDF
-	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil && len(decoded) >= 32 {
-		primaryKey = append([]byte(nil), decoded[:32]...)
-		legacyKey = primaryKey // v1/v2 使用同一密钥
+	primary, legacy, err := deriveKeyPair(raw)
+	if err != nil {
+		keyErr = err
 		return
 	}
+	primaryKey = primary
+	legacyKey = legacy
 
-	// 路径 B：字符串密钥——用 argon2id 派生 v2 密钥，sha256 派生 v1 兼容密钥
-	primaryKey = argon2.IDKey([]byte(raw), kdfSalt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	legacyRaw := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_LEGACY_KEY"))
+	if legacyRaw != "" {
+		legacy, err := deriveLegacyKey(legacyRaw)
+		if err != nil {
+			keyErr = err
+			return
+		}
+		legacyKey = legacy
+	}
+}
+
+func deriveKeyPair(raw string) ([]byte, []byte, error) {
+	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil && len(decoded) >= 32 {
+		key := append([]byte(nil), decoded[:32]...)
+		return key, key, nil
+	}
+
+	primary := argon2.IDKey([]byte(raw), kdfSalt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	legacy, err := deriveLegacyKey(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return primary, legacy, nil
+}
+
+func deriveLegacyKey(raw string) ([]byte, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, errors.New("DATA_ENCRYPTION_LEGACY_KEY 不能为空")
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil && len(decoded) >= 32 {
+		return append([]byte(nil), decoded[:32]...), nil
+	}
 	sum := sha256.Sum256([]byte(raw))
-	legacyKey = append([]byte(nil), sum[:]...)
+	return append([]byte(nil), sum[:]...), nil
 }
 
 func getPrimaryKey() ([]byte, error) {

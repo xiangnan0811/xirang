@@ -145,7 +145,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 通过 len() 检查的 TOCTOU。失败立即 503，不消耗任何 SSH/WS 资源。
 	pendingID := h.reserveSlotID()
 	if pendingID == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "终端会话数已达上限"})
+		respondServiceUnavailable(c, "终端会话数已达上限")
 		return
 	}
 	// 失败路径必须释放槽位；成功路径会用 promoteSlot 转正后清掉 pendingID。

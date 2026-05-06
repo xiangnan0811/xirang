@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,7 +44,7 @@ func isSQLiteRuntime() bool {
 // @Router       /system/backup-db [post]
 func (h *SystemHandler) BackupDB(c *gin.Context) {
 	if !isSQLiteRuntime() {
-		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})
+		respondNotImplemented(c, "当前仅支持 SQLite 数据库备份")
 		return
 	}
 
@@ -114,6 +113,7 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 
 	respondOK(c, gin.H{
 		"filename": backupFilename,
+		"path":     backupPath,
 		"size":     size,
 		"sha256":   checksum,
 	})
@@ -131,7 +131,7 @@ func (h *SystemHandler) BackupDB(c *gin.Context) {
 // @Router       /system/backups [get]
 func (h *SystemHandler) ListBackups(c *gin.Context) {
 	if !isSQLiteRuntime() {
-		c.JSON(http.StatusNotImplemented, gin.H{"error": "当前仅支持 SQLite 数据库备份"})
+		respondNotImplemented(c, "当前仅支持 SQLite 数据库备份")
 		return
 	}
 

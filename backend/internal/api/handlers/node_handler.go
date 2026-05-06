@@ -633,9 +633,10 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
-	c.JSON(http.StatusForbidden, gin.H{
-		"error": "节点远程执行能力已禁用",
-		"code":  nodeExecDisabledCode,
+	c.JSON(http.StatusForbidden, Response{
+		Code:    http.StatusForbidden,
+		Message: "节点远程执行能力已禁用",
+		Data:    gin.H{"error_code": nodeExecDisabledCode},
 	})
 }
 

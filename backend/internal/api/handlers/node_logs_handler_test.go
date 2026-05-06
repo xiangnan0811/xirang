@@ -147,6 +147,26 @@ func TestNodeLogs_Pagination(t *testing.T) {
 	}
 }
 
+func TestNodeLogs_ReturnsInternalErrorWhenCountFails(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	if err := db.Migrator().DropTable(&model.NodeLog{}); err != nil {
+		t.Fatalf("删除节点日志表失败: %v", err)
+	}
+
+	r := newNodeLogsRouter(t, db, "admin")
+	w := doNodeLogs(r, "GET", "/api/v1/node-logs", "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("日志计数失败期望 500，实际: %d，响应: %s", w.Code, w.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError {
+		t.Fatalf("期望标准错误信封，实际: %+v", envelope)
+	}
+}
+
 func TestNodeLogs_KeywordExclusion(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})

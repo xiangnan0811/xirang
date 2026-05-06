@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
@@ -14,6 +15,16 @@ import (
 
 // DefaultTickInterval is the engine's poll cadence.
 const DefaultTickInterval = 30 * time.Second
+
+type alertFireLockRef struct {
+	mu   sync.Mutex
+	refs int
+}
+
+var (
+	alertFireLocksMu sync.Mutex
+	alertFireLocks   = map[uint]*alertFireLockRef{}
+)
 
 // Dispatcher is escalation's inbound interface for dispatching the
 // fired-level integration list. Defined here so the engine does not import
@@ -173,6 +184,8 @@ func (e *Engine) evaluate(ctx context.Context, alert *model.Alert, now time.Time
 //  5. after tx commit, dispatch to integrations (unless silenced-skip)
 func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.EscalationPolicy,
 	idx int, level model.EscalationLevel, now time.Time) {
+	lock := acquireAlertFireLock(alert.ID)
+	defer releaseAlertFireLock(alert.ID, lock)
 
 	severityBefore := alert.Severity
 	severityAfter := severityBefore
@@ -265,6 +278,31 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 }
 
 var errConcurrentFire = errors.New("concurrent fire detected")
+
+func acquireAlertFireLock(alertID uint) *alertFireLockRef {
+	alertFireLocksMu.Lock()
+	lock := alertFireLocks[alertID]
+	if lock == nil {
+		lock = &alertFireLockRef{}
+		alertFireLocks[alertID] = lock
+	}
+	lock.refs++
+	alertFireLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return lock
+}
+
+func releaseAlertFireLock(alertID uint, lock *alertFireLockRef) {
+	lock.mu.Unlock()
+
+	alertFireLocksMu.Lock()
+	lock.refs--
+	if lock.refs == 0 {
+		delete(alertFireLocks, alertID)
+	}
+	alertFireLocksMu.Unlock()
+}
 
 // appendUniqueTags returns existing ∪ add, preserving order of first appearance.
 func appendUniqueTags(existing, add []string) []string {

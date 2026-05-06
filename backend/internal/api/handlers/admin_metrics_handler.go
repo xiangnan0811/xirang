@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"database/sql"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -63,7 +62,7 @@ func (h *AdminMetricsHandler) RollupStatus(c *gin.Context) {
 		return gin.H{"latest_bucket": latest, "lag_seconds": lagSec}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"hourly": tier(hourlyLatest),
 		"daily":  tier(dailyLatest),
 	})

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,6 +45,13 @@ func TestSystemHandlerBackupDBRejectsNonSQLite(t *testing.T) {
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("期望状态码 %d，实际 %d", http.StatusNotImplemented, recorder.Code)
 	}
+	var resp Response
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if resp.Code != http.StatusNotImplemented || resp.Message != "当前仅支持 SQLite 数据库备份" {
+		t.Fatalf("期望标准 501 响应，实际: %+v", resp)
+	}
 }
 
 func TestSystemHandlerListBackupsRejectsNonSQLite(t *testing.T) {
@@ -59,6 +67,13 @@ func TestSystemHandlerListBackupsRejectsNonSQLite(t *testing.T) {
 
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("期望状态码 %d，实际 %d", http.StatusNotImplemented, recorder.Code)
+	}
+	var resp Response
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if resp.Code != http.StatusNotImplemented || resp.Message != "当前仅支持 SQLite 数据库备份" {
+		t.Fatalf("期望标准 501 响应，实际: %+v", resp)
 	}
 }
 
@@ -96,6 +111,21 @@ func TestSystemHandlerBackupDBUsesSQLiteByDefault(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("期望状态码 %d，实际 %d", http.StatusOK, recorder.Code)
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+			Size     int64  `json:"size"`
+			SHA256   string `json:"sha256"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if resp.Code != 0 || resp.Data.Filename == "" || resp.Data.Path == "" || resp.Data.Size <= 0 || resp.Data.SHA256 == "" {
+		t.Fatalf("备份响应缺少必要字段: %+v", resp)
 	}
 
 	entries, err := os.ReadDir(backupDir)

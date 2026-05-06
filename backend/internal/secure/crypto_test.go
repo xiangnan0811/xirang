@@ -118,6 +118,41 @@ func TestReEncryptV1Value(t *testing.T) {
 	}
 }
 
+func TestReEncryptV1ValueUsesLegacyKeyEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "old-test-string-key")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	resetCryptoKeyState()
+
+	oldLegacyKey, err := getLegacyKey()
+	if err != nil {
+		t.Fatalf("获取旧 legacy key 失败: %v", err)
+	}
+	v1Encrypted, err := encryptWithKey("secret-data", encryptedPrefixV1, oldLegacyKey)
+	if err != nil {
+		t.Fatalf("v1 加密失败: %v", err)
+	}
+
+	t.Setenv("DATA_ENCRYPTION_KEY", "new-test-string-key")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "old-test-string-key")
+	resetCryptoKeyState()
+
+	v2Encrypted, changed, err := ReEncryptV1Value(v1Encrypted)
+	if err != nil {
+		t.Fatalf("使用 DATA_ENCRYPTION_LEGACY_KEY 重加密失败: %v", err)
+	}
+	if !changed || !strings.HasPrefix(v2Encrypted, encryptedPrefixV2) {
+		t.Fatalf("期望迁移为 v2 密文，changed=%v value=%s", changed, v2Encrypted)
+	}
+	plain, err := DecryptString(v2Encrypted)
+	if err != nil {
+		t.Fatalf("解密新 v2 密文失败: %v", err)
+	}
+	if plain != "secret-data" {
+		t.Fatalf("解密内容不匹配，期望 secret-data，实际: %s", plain)
+	}
+}
+
 func TestBase64KeyUseSameForV1V2(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	// 提供一个 base64 编码的 32 字节密钥

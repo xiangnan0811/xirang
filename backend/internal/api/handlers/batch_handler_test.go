@@ -164,3 +164,50 @@ func TestBatchDeleteRejectsUnownedBatchForOperator(t *testing.T) {
 		t.Fatalf("未授权删除不应移除批次任务，实际剩余数量: %d", count)
 	}
 }
+
+func TestBatchDeleteReturnsInternalErrorWhenCleanupFails(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-owned", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "node-owned"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	taskEntity := model.Task{
+		Name:         "batch-task",
+		NodeID:       node.ID,
+		ExecutorType: "command",
+		Command:      "echo hello",
+		Status:       "pending",
+		BatchID:      "batch-cleanup-fail",
+		Source:       "batch",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建批量任务失败: %v", err)
+	}
+
+	handler := NewBatchHandler(db, &mockTaskRunner{})
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "admin")
+		c.Next()
+	})
+	r.DELETE("/batch-commands/:batch_id", handler.Delete)
+
+	req := httptest.NewRequest(http.MethodDelete, "/batch-commands/batch-cleanup-fail", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("关联表缺失时期望 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var count int64
+	if err := db.Model(&model.Task{}).Where("batch_id = ?", "batch-cleanup-fail").Count(&count).Error; err != nil {
+		t.Fatalf("统计批量任务失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("清理失败时事务应回滚保留任务，实际剩余数量: %d", count)
+	}
+}

@@ -10,6 +10,9 @@ import (
 )
 
 func TestEngine_ConcurrentTicks_OnlyOneFires(t *testing.T) {
+	alertFireLocksMu.Lock()
+	alertFireLocks = map[uint]*alertFireLockRef{}
+	alertFireLocksMu.Unlock()
 	db := openEngineDB(t)
 	svc := NewService(db)
 	policy := seedPolicy(t, svc, "p", []model.EscalationLevel{
@@ -41,6 +44,12 @@ func TestEngine_ConcurrentTicks_OnlyOneFires(t *testing.T) {
 	db.Model(&model.AlertEscalationEvent{}).Where("alert_id = ?", a.ID).Count(&n)
 	if n != 1 {
 		t.Fatalf("event rows=%d want 1", n)
+	}
+	alertFireLocksMu.Lock()
+	_, ok := alertFireLocks[a.ID]
+	alertFireLocksMu.Unlock()
+	if ok {
+		t.Fatalf("alert fire lock for alert %d should be released after fire", a.ID)
 	}
 }
 

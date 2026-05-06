@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,12 +63,12 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
-	adminPassword := "Admin#Pass2026"
-	operatorPassword := "Operator#Pass2026"
+	adminPassword := "FAKE_AdminPass2026!_FOR_TEST_ONLY"
+	operatorPassword := "FAKE_OperatorPass2026!_FOR_TEST_ONLY"
 	adminUser := seedAuthUser(t, db, "admin", "admin", adminPassword)
 	operatorUser := seedAuthUser(t, db, "operator", "operator", operatorPassword)
 
-	jwtManager := auth.NewJWTManager("test-secret", time.Hour)
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
 		FailLockThreshold: 5,
 		FailLockDuration:  time.Minute,
@@ -128,16 +129,16 @@ func TestAuthHandlerChangePasswordSuccess(t *testing.T) {
 		http.MethodPost,
 		"/auth/change-password",
 		fx.adminToken,
-		`{"current_password":"Admin#Pass2026","new_password":"Admin#Pass2026!"}`,
+		`{"current_password":"FAKE_AdminPass2026!_FOR_TEST_ONLY","new_password":"FAKE_NewAdminPass2026!_FOR_TEST_ONLY"}`,
 	)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 
-	if _, err := fx.service.Login("admin", "Admin#Pass2026", "127.0.0.1"); err == nil {
+	if _, err := fx.service.Login("admin", "FAKE_AdminPass2026!_FOR_TEST_ONLY", "127.0.0.1"); err == nil {
 		t.Fatalf("旧密码不应继续可用")
 	}
-	if _, err := fx.service.Login("admin", "Admin#Pass2026!", "127.0.0.1"); err != nil {
+	if _, err := fx.service.Login("admin", "FAKE_NewAdminPass2026!_FOR_TEST_ONLY", "127.0.0.1"); err != nil {
 		t.Fatalf("新密码应可登录，实际错误: %v", err)
 	}
 }
@@ -170,7 +171,7 @@ func TestUserHandlerCRUDAsAdmin(t *testing.T) {
 		http.MethodPost,
 		"/users",
 		fx.adminToken,
-		`{"username":"alice","password":"Alice#Pass2026","role":"operator"}`,
+		`{"username":"alice","password":"FAKE_AlicePass2026!_FOR_TEST_ONLY","role":"operator"}`,
 	)
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("创建接口期望 201，实际: %d，响应: %s", createResp.Code, createResp.Body.String())
@@ -196,13 +197,13 @@ func TestUserHandlerCRUDAsAdmin(t *testing.T) {
 		http.MethodPut,
 		fmt.Sprintf("/users/%d", createPayload.Data.ID),
 		fx.adminToken,
-		`{"role":"viewer","password":"Alice#Pass2026!"}`,
+		`{"role":"viewer","password":"FAKE_NewAlicePass2026!_FOR_TEST_ONLY"}`,
 	)
 	if updateResp.Code != http.StatusOK {
 		t.Fatalf("更新接口期望 200，实际: %d，响应: %s", updateResp.Code, updateResp.Body.String())
 	}
 
-	if _, err := fx.service.Login("alice", "Alice#Pass2026!", "127.0.0.1"); err != nil {
+	if _, err := fx.service.Login("alice", "FAKE_NewAlicePass2026!_FOR_TEST_ONLY", "127.0.0.1"); err != nil {
 		t.Fatalf("更新后的密码应可登录，实际错误: %v", err)
 	}
 
@@ -233,5 +234,107 @@ func TestUserHandlerForbiddenForNonAdmin(t *testing.T) {
 	resp := performJSONRequest(t, fx.router, http.MethodGet, "/users", fx.operatorToken, "")
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("非 admin 访问期望 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAuthHandlerTOTPLoginConsumesRecoveryCodeBeforeIssuingToken(t *testing.T) {
+	fx := setupAuthUserFixture(t)
+	authHandler := NewAuthHandler(fx.service, fx.jwtManager, nil).WithDB(fx.db)
+	router := gin.New()
+	router.POST("/auth/2fa/login", authHandler.TOTPLogin)
+
+	recoveryCodes := []string{
+		"FAKE_RECOVERY_CODE_ONE_FOR_TEST_ONLY",
+		"FAKE_RECOVERY_CODE_TWO_FOR_TEST_ONLY",
+	}
+	recoveryJSON, err := json.Marshal(recoveryCodes)
+	if err != nil {
+		t.Fatalf("序列化恢复码失败: %v", err)
+	}
+	fx.adminUser.TOTPEnabled = true
+	fx.adminUser.TOTPSecret = "FAKE_TOTP_SECRET_FOR_TEST_ONLY"
+	fx.adminUser.RecoveryCodes = string(recoveryJSON)
+	if err := fx.db.Save(&fx.adminUser).Error; err != nil {
+		t.Fatalf("保存 2FA 用户失败: %v", err)
+	}
+	loginToken, err := fx.jwtManager.Generate2FAPendingToken(fx.adminUser)
+	if err != nil {
+		t.Fatalf("生成 2FA 中间 token 失败: %v", err)
+	}
+
+	resp := performJSONRequest(
+		t,
+		router,
+		http.MethodPost,
+		"/auth/2fa/login",
+		"",
+		fmt.Sprintf(`{"login_token":%q,"totp_code":"FAKE_RECOVERY_CODE_ONE_FOR_TEST_ONLY"}`, loginToken),
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("恢复码登录期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var user model.User
+	if err := fx.db.First(&user, fx.adminUser.ID).Error; err != nil {
+		t.Fatalf("重新加载用户失败: %v", err)
+	}
+	var remaining []string
+	if err := json.Unmarshal([]byte(user.RecoveryCodes), &remaining); err != nil {
+		t.Fatalf("解析剩余恢复码失败: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0] != "FAKE_RECOVERY_CODE_TWO_FOR_TEST_ONLY" {
+		t.Fatalf("期望只保留未使用恢复码，实际: %v", remaining)
+	}
+}
+
+func TestAuthHandlerTOTPLoginRejectsWhenRecoveryCodeCannotBeSaved(t *testing.T) {
+	db := openAuthUserHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("初始化用户表失败: %v", err)
+	}
+	user := seedAuthUser(t, db, "admin", "admin", "FAKE_AdminPass2026!_FOR_TEST_ONLY")
+	recoveryCodes := []string{"FAKE_RECOVERY_CODE_FOR_TEST_ONLY"}
+	recoveryJSON, err := json.Marshal(recoveryCodes)
+	if err != nil {
+		t.Fatalf("序列化恢复码失败: %v", err)
+	}
+	user.TOTPEnabled = true
+	user.TOTPSecret = "FAKE_TOTP_SECRET_FOR_TEST_ONLY"
+	user.RecoveryCodes = string(recoveryJSON)
+	if err := db.Save(&user).Error; err != nil {
+		t.Fatalf("保存 2FA 用户失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5,
+		FailLockDuration:  time.Minute,
+	})
+	authHandler := NewAuthHandler(service, jwtManager, nil).WithDB(db)
+	router := gin.New()
+	router.POST("/auth/2fa/login", authHandler.TOTPLogin)
+	loginToken, err := jwtManager.Generate2FAPendingToken(user)
+	if err != nil {
+		t.Fatalf("生成 2FA 中间 token 失败: %v", err)
+	}
+
+	if err := db.Callback().Update().Before("gorm:update").Register("xirang:test_recovery_code_save_error", func(tx *gorm.DB) {
+		if err := tx.AddError(errors.New("forced recovery code save failure")); err != nil {
+			tx.Logger.Error(tx.Statement.Context, "failed to add forced recovery code save failure: %v", err)
+		}
+	}); err != nil {
+		t.Fatalf("注册保存失败回调失败: %v", err)
+	}
+
+	resp := performJSONRequest(
+		t,
+		router,
+		http.MethodPost,
+		"/auth/2fa/login",
+		"",
+		fmt.Sprintf(`{"login_token":%q,"totp_code":"FAKE_RECOVERY_CODE_FOR_TEST_ONLY"}`, loginToken),
+	)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("恢复码保存失败时应返回 500 且不签发 token，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 }

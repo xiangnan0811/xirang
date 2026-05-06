@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"net/http"
-
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/ws"
@@ -32,7 +30,7 @@ func NewWSHandler(hub *ws.Hub, jwtManager *auth.JWTManager, db *gorm.DB) *WSHand
 // @Router       /ws/logs [get]
 func (h *WSHandler) ServeWS(c *gin.Context) {
 	if h.hub == nil || h.jwtManager == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "websocket 服务不可用"})
+		respondServiceUnavailable(c, "websocket 服务不可用")
 		return
 	}
 	// WebSocket 无法通过 HTTP 头传递 JWT，认证在升级后通过首条消息完成。

@@ -19,12 +19,16 @@ import (
 )
 
 type mockTaskRunner struct {
-	syncErrs    []error
-	syncCalls   []model.Task
-	removeCalls []uint
+	triggerManualRunID uint
+	syncErrs           []error
+	syncCalls          []model.Task
+	removeCalls        []uint
 }
 
 func (m *mockTaskRunner) TriggerManual(taskID uint) (uint, error) {
+	if m.triggerManualRunID != 0 {
+		return m.triggerManualRunID, nil
+	}
 	return 0, nil
 }
 
@@ -59,6 +63,36 @@ func (m *mockTaskRunner) Resume(taskID uint) error {
 
 func (m *mockTaskRunner) SetSkipNext(taskID uint) error {
 	return nil
+}
+
+func TestTaskTriggerReturnsAcceptedEnvelope(t *testing.T) {
+	runner := &mockTaskRunner{triggerManualRunID: 42}
+	handler := NewTaskHandler(openTaskHandlerTestDB(t), runner)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/tasks/:id/trigger", handler.Trigger)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/7/trigger", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("期望状态码 202，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Message string `json:"message"`
+			RunID   uint   `json:"run_id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != 0 || envelope.Data.Message != "triggered" || envelope.Data.RunID != 42 {
+		t.Fatalf("期望标准 202 信封响应，实际: %+v", envelope)
+	}
 }
 
 func TestTaskListFilterPaginationSort(t *testing.T) {
