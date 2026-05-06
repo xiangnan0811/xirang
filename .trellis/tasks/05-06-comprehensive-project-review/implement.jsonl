@@ -1,0 +1,19 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend guideline index for comprehensive backend audit and fixes"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend module ownership and layout conventions"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database and migration conventions for audit fixes"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error handling conventions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality gates and forbidden patterns"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured logging conventions"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend guideline index for comprehensive UI audit and fixes"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Frontend page/component layout conventions"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Component API and composition conventions"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Hook and data-fetching conventions"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Frontend state-management conventions"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gates and forbidden patterns"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Frontend type-safety conventions"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Accessibility audit and fix conventions"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-cutting thinking guide index"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Branch workflow guardrails"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse checks before refactors or helper changes"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer audit coverage"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Public docs and release/deploy truth review"}

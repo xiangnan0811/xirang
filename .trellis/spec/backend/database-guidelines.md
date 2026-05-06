@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000047_alert_deliveries_drop_error`.
+  latest migration is `000057_service_uptime`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
