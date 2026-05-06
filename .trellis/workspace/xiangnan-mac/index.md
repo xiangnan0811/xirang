@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
+- **Total Sessions**: 17
 - **Last Active**: 2026-05-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~540 | Active |
+| `journal-1.md` | ~573 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-05-06 | HTTP/TCP Uptime 探测 + Status Page 完整实现 | `9f6f134` | `feat/uptime-probe-status-page` |
 | 16 | 2026-05-06 | 事件触发-动作编排 (Event-Trigger Automation) 完整实现 | `b0d3fe1` | `feat/event-trigger-automation` |
 | 15 | 2026-05-06 | RPO/RTO + GFS 保留策略完整实现 | `f6d7058` | `feat/gfs-retention-rpo-rto` |
 | 14 | 2026-05-06 | 跨快照内容搜索 (Snapshot File Search) 完整实现 | `90d26cb` | `feat/snapshot-search` |

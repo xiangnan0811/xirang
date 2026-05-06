@@ -173,6 +173,17 @@ go run ./cmd/server
 | PUT | /automation-rules/:id | 🔒 更新规则 |
 | DELETE | /automation-rules/:id | 🔒 删除规则 |
 
+### 服务监控
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /status-page | 公开状态页（无需认证） |
+| GET | /service-monitors | 🔒 监控列表 |
+| GET | /service-monitors/:id | 🔒 监控详情 |
+| POST | /service-monitors | 🔒 创建监控 |
+| PUT | /service-monitors/:id | 🔒 更新监控 |
+| DELETE | /service-monitors/:id | 🔒 删除监控 |
+
 ### 告警
 
 | 方法 | 路径 | 说明 |

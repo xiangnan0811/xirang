@@ -35,6 +35,7 @@ import (
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
+	"xirang/backend/internal/uptime"
 	"xirang/backend/internal/version"
 	"xirang/backend/internal/ws"
 )
@@ -166,6 +167,31 @@ func main() {
 	metricSink := metrics.NewFanSink(sinks...)
 	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
 
+	uptimeProber := uptime.NewProber(db, 60*time.Second)
+	uptimeProber.SetAlertCallback(func(monitor model.ServiceMonitor, oldStatus, newStatus string) {
+		if newStatus == "down" {
+			_, _, alertErr := raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
+				NodeID:    0, // service monitors are not node-scoped
+				NodeName:  monitor.Name,
+				Severity:  "critical",
+				ErrorCode: fmt.Sprintf("XR-SERVICE-DOWN-%d", monitor.ID),
+				Message:   fmt.Sprintf("服务 %s 不可达 (%s)", monitor.Name, monitor.Target),
+			})
+			if alertErr != nil {
+				logger.Module("uptime").Warn().Uint("monitor_id", monitor.ID).Err(alertErr).Msg("创建 down 告警失败")
+			}
+		} else if newStatus == "up" && oldStatus == "down" {
+			if resolveErr := db.Model(&model.Alert{}).Where("error_code = ? AND status = 'open'",
+				fmt.Sprintf("XR-SERVICE-DOWN-%d", monitor.ID)).
+				Updates(map[string]interface{}{
+					"status":     "resolved",
+					"updated_at": time.Now(),
+				}).Error; resolveErr != nil {
+				logger.Module("uptime").Warn().Uint("monitor_id", monitor.ID).Err(resolveErr).Msg("恢复 down 告警失败")
+			}
+		}
+	})
+
 	aggregator := metrics.NewAggregator(db, cfg.DBType)
 
 	reportScheduler := reporting.NewScheduler(db)
@@ -185,6 +211,7 @@ func main() {
 	// LIFECYCLE PHASE: assemble workers in startup order, then start all.
 	workers := []lifecycle.Worker{
 		prober,
+		uptimeProber,
 		aggregator,
 		taskManager,
 		taskRetention,

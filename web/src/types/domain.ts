@@ -757,3 +757,43 @@ export interface AutomationRuleInput {
   action_config?: Record<string, string>;
   enabled?: boolean;
 }
+
+export interface ServiceMonitor {
+  id: number;
+  name: string;
+  description: string;
+  type: "http" | "tcp";
+  target: string;
+  interval_seconds: number;
+  timeout_seconds: number;
+  http_method: string;
+  http_expected_status: number;
+  http_headers: string; // JSON string from backend, parsed on client side
+  enabled: boolean;
+  last_status: "up" | "down" | "unknown";
+  uptime_pct: number;
+  last_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewServiceMonitorInput {
+  name: string;
+  description?: string;
+  type: "http" | "tcp";
+  target: string;
+  interval_seconds?: number;
+  timeout_seconds?: number;
+  http_method?: string;
+  http_expected_status?: number;
+  http_headers?: string; // JSON.stringify(headersObject)
+  enabled?: boolean;
+}
+
+export interface StatusPageItem {
+  name: string;
+  type: string;
+  status: "up" | "down" | "unknown";
+  uptime_pct: number;
+  last_checked_at: string | null;
+}
