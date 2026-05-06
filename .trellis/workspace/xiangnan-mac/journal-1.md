@@ -406,3 +406,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 不可变备份 (Immutable Backup) 完整实现
+
+**Date**: 2026-05-06
+**Task**: 不可变备份 (Immutable Backup) 完整实现
+**Branch**: `feat/immutable-backup`
+
+### Summary
+
+实现 restic append-only 不可变备份：ResticConfig 加 append_only 字段；init 自动 --repository-version 2；已有仓库版本不匹配时 warn 不中断；前端 Task 编辑页 append-only 开关；14 个单测。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `134ae52` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
