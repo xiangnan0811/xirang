@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/xiangnan0811/xirang/compare/v0.27.0...v0.28.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** HTTP/TCP Uptime 探测 + Status Page ([#138](https://github.com/xiangnan0811/xirang/issues/138)) ([3260bae](https://github.com/xiangnan0811/xirang/commit/3260bae90e557d2842d4c8006e844341a7c75a81))
+
 ## [0.27.0](https://github.com/xiangnan0811/xirang/compare/v0.26.0...v0.27.0) (2026-05-06)
 
 
