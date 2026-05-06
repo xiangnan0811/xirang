@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "基线算法/后缀匹配/阈值判断全部单测覆盖；test fixture FAKE_ 前缀"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000053 up/down 双向完整；SnapshotDiffHistory 索引合理"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSH 失败/非restic跳过/首次无基线跳过/基线数据不足的错误处理"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "diff 分析结果 + 异常事件的审计日志完整性"}
+{"file": ".trellis/tasks/05-06-anomaly-snapshot-diff-detection/prd.md", "reason": "逐项对照 AC：正常基线/异常变更/勒索后缀/首次跳过/非restic跳过/现有detector回归"}

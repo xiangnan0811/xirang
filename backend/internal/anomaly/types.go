@@ -15,8 +15,8 @@ var (
 // always turns it into an AnomalyEvent row, and may also promote it to an Alert.
 type Finding struct {
 	NodeID        uint
-	Detector      string // "ewma" | "disk_forecast"
-	Metric        string // "cpu_pct" | "mem_pct" | "load_1m" | "disk_pct"
+	Detector      string // "ewma" | "disk_forecast" | "snapshot_diff"
+	Metric        string // "cpu_pct" | "mem_pct" | "load_1m" | "disk_pct" | "snapshot_churn" | "ransomware_pattern"
 	Severity      string // "warning" | "critical"
 	ObservedValue float64
 	BaselineValue float64

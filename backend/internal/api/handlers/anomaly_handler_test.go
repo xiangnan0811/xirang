@@ -146,6 +146,27 @@ func TestAnomalyHandler_ForNode_404(t *testing.T) {
 	}
 }
 
+func TestAnomalyHandler_ListInvalidDetector_400(t *testing.T) {
+	db := openAnomalyTestDB(t)
+	r := newAnomalyRouter(t, db, "viewer")
+	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector=bogus")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid detector, got %d", w.Code)
+	}
+}
+
+func TestAnomalyHandler_ListValidDetectors(t *testing.T) {
+	db := openAnomalyTestDB(t)
+	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
+	r := newAnomalyRouter(t, db, "viewer")
+	for _, det := range []string{"ewma", "disk_forecast", "snapshot_diff"} {
+		w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector="+det)
+		if w.Code != http.StatusOK {
+			t.Fatalf("detector=%s should be accepted, got %d: %s", det, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestAnomalyHandler_Pagination(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")

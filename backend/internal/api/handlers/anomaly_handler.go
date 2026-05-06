@@ -40,9 +40,9 @@ func (h *AnomalyHandler) List(c *gin.Context) {
 	}
 	if v := c.Query("detector"); v != "" {
 		switch v {
-		case "ewma", "disk_forecast":
+		case "ewma", "disk_forecast", "snapshot_diff":
 		default:
-			respondBadRequest(c, "detector: 仅支持 ewma / disk_forecast")
+			respondBadRequest(c, "detector: 仅支持 ewma / disk_forecast / snapshot_diff")
 			return
 		}
 		q = q.Where("detector = ?", v)

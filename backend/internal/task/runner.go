@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
@@ -493,6 +494,35 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 		}
+
+		// 快照差异异常检测（异步，best-effort）
+		if m.anomalySink != nil && taskEntity.ExecutorType == "restic" && taskEntity.PolicyID != nil {
+			sink := m.anomalySink
+			taskCopy := taskEntity
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				findings, err := anomaly.AnalyzeSnapshotDiff(ctx, m.db, taskCopy, runID)
+				if err != nil {
+					logger.Module("task").Warn().
+						Err(err).
+						Uint("task_id", taskID).
+						Msg("快照差异异常检测失败")
+					return
+				}
+				for _, f := range findings {
+					if raiseErr := sink.Raise(ctx, f); raiseErr != nil {
+						logger.Module("task").Warn().
+							Err(raiseErr).
+							Str("detector", f.Detector).
+							Str("metric", f.Metric).
+							Uint("task_id", taskID).
+							Msg("提升异常告警失败")
+					}
+				}
+			}()
+		}
+
 		m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 		return
 	}

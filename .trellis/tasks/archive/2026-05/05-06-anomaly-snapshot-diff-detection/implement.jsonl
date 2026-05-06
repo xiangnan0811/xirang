@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000053 SQLite+Postgres 双轨；SnapshotDiffHistory 表设计"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSH 超时/restic diff 失败/基线不足等错误处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "基线算法/后缀匹配/阈值判断的单测要求；test fixture 命名规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检测结果（正常/异常/跳过）的结构化日志"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新文件放在 anomaly/ 包下的位置约定"}
+{"file": ".trellis/tasks/05-06-anomaly-snapshot-diff-detection/prd.md", "reason": "完整 PRD：需求 / 范围 / 架构决策 / PR 拆分 / AC"}
