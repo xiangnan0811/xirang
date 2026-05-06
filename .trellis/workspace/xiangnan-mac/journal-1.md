@@ -472,3 +472,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: RPO/RTO + GFS 保留策略完整实现
+
+**Date**: 2026-05-06
+**Task**: RPO/RTO + GFS 保留策略完整实现
+**Branch**: `feat/gfs-retention-rpo-rto`
+
+### Summary
+
+实现 RPO/RTO 目标+GFS 保留：Policy 加 8 字段（rpo/rto_minutes+retention_mode+keep_*）；Report 加 compliance 字段；restic GFS forget --keep-daily/weekly/monthly/yearly；RPO/RTO 自动计算；前端 Policy 编辑 GFS 切换+SLA 输入；迁移 000055；12 新测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f6d7058` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
