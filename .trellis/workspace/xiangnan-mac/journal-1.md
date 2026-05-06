@@ -571,3 +571,39 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Comprehensive project audit
+
+**Date**: 2026-05-06
+**Task**: Comprehensive project audit
+**Branch**: `audit/comprehensive-project-review`
+
+### Summary
+
+Completed a comprehensive Xirang audit across backend contracts, frontend console behavior, deploy/release docs, repo hygiene, and Trellis specs. Fixed audit findings, verified backend/frontend/docs gates, and archived the task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `68762b7` | (see git log) |
+| `5002633` | (see git log) |
+| `bcad0b5` | (see git log) |
+| `4844a0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
