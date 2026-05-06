@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/xiangnan0811/xirang/compare/v0.22.1...v0.23.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** 快照异常变更检测 (Anomaly Snapshot Diff Detection) ([#128](https://github.com/xiangnan0811/xirang/issues/128)) ([17287b7](https://github.com/xiangnan0811/xirang/commit/17287b72e819503c930e54a358f3b3a6298fb23b))
+
 ## [0.22.1](https://github.com/xiangnan0811/xirang/compare/v0.22.0...v0.22.1) (2026-05-06)
 
 
