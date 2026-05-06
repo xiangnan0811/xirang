@@ -59,6 +59,12 @@ const DashboardDetailPage = lazy(() =>
 const AutomationRulesPage = lazy(() =>
   import("@/pages/automation-rules-page").then((m) => ({ default: m.AutomationRulesPage }))
 );
+const ServiceMonitorsPage = lazy(() =>
+  import("@/pages/service-monitors-page").then((m) => ({ default: m.ServiceMonitorsPage }))
+);
+const StatusPage = lazy(() =>
+  import("@/pages/status-page").then((m) => ({ default: m.StatusPage }))
+);
 
 function PageLoader() {
   return (
@@ -80,6 +86,10 @@ export const AppRouter = createBrowserRouter([
   {
     path: "/login",
     element: <LoginPage />
+  },
+  {
+    path: "/status",
+    element: <LazyPage><StatusPage /></LazyPage>
   },
   {
     path: "/app",
@@ -160,6 +170,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "automation-rules",
         element: <LazyPage><AutomationRulesPage /></LazyPage>
+      },
+      {
+        path: "service-monitors",
+        element: <LazyPage><ServiceMonitorsPage /></LazyPage>
       }
     ]
   },

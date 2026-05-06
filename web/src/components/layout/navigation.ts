@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bell,
   ClipboardList,
   FileSearch,
@@ -116,6 +117,13 @@ export const navItems: NavItem[] = [
     titleKey: "nav.reports",
     path: "/app/reports",
     icon: FileText,
+    group: "observe",
+    mobileTab: false
+  },
+  {
+    titleKey: "nav.serviceMonitors",
+    path: "/app/service-monitors",
+    icon: Activity,
     group: "observe",
     mobileTab: false
   },

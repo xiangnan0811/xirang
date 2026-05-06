@@ -921,6 +921,36 @@ type AutomationRuleLog struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// ServiceMonitor is an HTTP/TCP uptime probe target. Probes run from the Xirang
+// server itself (no SSH), collecting uptime samples into service_uptime_samples.
+type ServiceMonitor struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	Name               string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Description        string     `gorm:"size:255" json:"description"`
+	Type               string     `gorm:"size:16;not null" json:"type"` // "http" | "tcp"
+	Target             string     `gorm:"size:512;not null" json:"target"` // URL or host:port
+	IntervalSeconds    int        `gorm:"not null;default:60" json:"interval_seconds"`
+	TimeoutSeconds     int        `gorm:"not null;default:10" json:"timeout_seconds"`
+	HTTPMethod         string     `gorm:"size:8;not null;default:'GET'" json:"http_method"`
+	HTTPExpectedStatus int        `gorm:"not null;default:200" json:"http_expected_status"`
+	HTTPHeaders        string     `gorm:"type:text;not null;default:'{}'" json:"http_headers"` // JSON
+	Enabled            bool       `gorm:"not null;default:true" json:"enabled"`
+	LastStatus         string     `gorm:"size:8;not null;default:'unknown'" json:"last_status"` // "up"|"down"|"unknown"
+	UptimePct          float64    `gorm:"not null;default:0" json:"uptime_pct"`                 // trailing 24h
+	LastCheckedAt      *time.Time `json:"last_checked_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+// ServiceUptimeSample records hourly probe aggregation for a ServiceMonitor.
+type ServiceUptimeSample struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	MonitorID  uint      `gorm:"not null;index:idx_sus_monitor_hour,unique" json:"monitor_id"`
+	Hour       time.Time `gorm:"not null;index:idx_sus_monitor_hour,unique" json:"hour"` // truncated to hour
+	ProbeCount int       `gorm:"not null;default:0" json:"probe_count"`
+	ProbeOK    int       `gorm:"not null;default:0" json:"probe_ok"`
+}
+
 // DecodedDetails returns the parsed details map; empty on invalid JSON.
 func (e *AnomalyEvent) DecodedDetails() map[string]any {
 	out := map[string]any{}

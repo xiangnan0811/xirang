@@ -195,6 +195,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
+	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB)
+	secured.GET("/service-monitors", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.List)
+	secured.GET("/service-monitors/:id", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.Get)
+	secured.POST("/service-monitors", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Create)
+	secured.PUT("/service-monitors/:id", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Update)
+	secured.DELETE("/service-monitors/:id", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Delete)
+
 	automationRuleHandler := handlers.NewAutomationRuleHandler(dep.DB)
 	secured.GET("/automation-rules", middleware.RBAC("automation:read"), automationRuleHandler.List)
 	secured.POST("/automation-rules", middleware.RBAC("automation:write"), automationRuleHandler.Create)
@@ -334,6 +341,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 	secured.POST("/nodes/:id/migrate/preflight", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.MigratePreflight)
+
+	// Status Page 无需认证的公开端点
+	v1.GET("/status-page", serviceMonitorHandler.StatusPage)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。
