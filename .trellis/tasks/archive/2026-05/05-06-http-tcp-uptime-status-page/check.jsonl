@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "HTTP/TCP probe/uptime 计算/状态机(up↔down)/Alert 集成全部单测"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000057 up/down 双向；service_monitors + service_uptime_samples 表"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + Status Page + monitor 管理页"}
+{"file": ".trellis/tasks/05-06-http-tcp-uptime-status-page/prd.md", "reason": "逐项 AC：HTTP probe/TCP probe/up→down alert/down→up resolve/Status Page 公开"}
