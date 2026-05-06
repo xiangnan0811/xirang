@@ -505,3 +505,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 事件触发-动作编排 (Event-Trigger Automation) 完整实现
+
+**Date**: 2026-05-06
+**Task**: 事件触发-动作编排 (Event-Trigger Automation) 完整实现
+**Branch**: `feat/event-trigger-automation`
+
+### Summary
+
+实现 automation rule engine：AutomationRule+Log 模型+迁移 000056；6 事件类型+4 动作类型；Dispatcher 接入 anomaly/task-runner/drill；模板变量渲染；前端规则管理页+动态配置；64+ 单测。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b0d3fe1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
