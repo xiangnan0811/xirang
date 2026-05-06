@@ -373,3 +373,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 快照异常变更检测 (Anomaly Snapshot Diff Detection) 完整实现
+
+**Date**: 2026-05-06
+**Task**: 快照异常变更检测 (Anomaly Snapshot Diff Detection) 完整实现
+**Branch**: `feat/anomaly-snapshot-diff`
+
+### Summary
+
+实现 anomaly snapshot diff detection：SnapshotDiffHistory 模型+迁移 000053；AnalyzeSnapshotDiff 完整管线（SSH→restic diff→基线 μ+3σ→Finding）；12 个勒索后缀检测；Runner 异步集成→AnomalyEvent+Alert；snapshot_churn/ransomware_pattern 两个 metric；8 单测+10 集成测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5d75855` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

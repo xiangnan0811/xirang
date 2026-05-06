@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-05-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~375 | Active |
+| `journal-1.md` | ~408 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-05-06 | 快照异常变更检测 (Anomaly Snapshot Diff Detection) 完整实现 | `5d75855` | `feat/anomaly-snapshot-diff` |
 | 11 | 2026-05-06 | 自动恢复演练 (Recovery Drill) 完整实现 | `87bf80c` | `main` |
 | 10 | 2026-05-05 | 应用感知备份 (App-Aware Backup Profiles) 完整实现 | `51623ec` | `feat/app-aware-backup` |
 | 9 | 2026-05-05 | Wave 4 前端 a11y 全审 (vitest-axe CI + WCAG AA 修复 + spec 沉淀) | `427dd42` | `chore/post-wave4-archive-journal` |
