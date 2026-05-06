@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/xiangnan0811/xirang/compare/v0.24.0...v0.25.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** 跨快照内容搜索 (Snapshot File Search) ([#132](https://github.com/xiangnan0811/xirang/issues/132)) ([dfeac6b](https://github.com/xiangnan0811/xirang/commit/dfeac6b6ab5db6f0b7d8961563cef9c5e8630094))
+
 ## [0.24.0](https://github.com/xiangnan0811/xirang/compare/v0.23.0...v0.24.0) (2026-05-06)
 
 
