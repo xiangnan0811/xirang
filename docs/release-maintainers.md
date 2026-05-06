@@ -12,7 +12,10 @@
 
 ## Release Please 状态与基线
 
-当前仓库已启用 Release Please，manifest 基线见 `.release-please-manifest.json`；当前仓库内基线为 `0.19.0`，`CHANGELOG.md` 已由 Release Please 维护。
+当前仓库已启用 Release Please，当前版本基线见 `.release-please-manifest.json`；
+截至本次审查仓库内 manifest 为 `0.28.0`，`CHANGELOG.md` 已由 Release Please
+维护。不要在文档中手写“当前版本”后长期依赖它；需要确认时以 manifest 和
+GitHub Release 为准。
 
 仅在重建发布链路、迁移仓库或重置首发版本时，才需要重新执行 bootstrap 检查：
 
@@ -63,10 +66,11 @@
 
    发布步骤为 **build amd64 (load) → Trivy 扫描 → build & push 多架 → attest**。
    当扫描到 HIGH/CRITICAL 漏洞时，整个 workflow 会在 push 之前失败，不会污染
-   Docker Hub 的 `latest` 标签。Trivy 当前钉版到 `aquasecurity/trivy-action@v0.36.0`
-   防止浮动 ref 供应链攻击；该 tag 已通过 `gh release list -R aquasecurity/trivy-action`
-   在 2026-05-04 核验为 latest stable。维护者按需 bump（建议查看
-   <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag 或 SHA pin）。
+   Docker Hub 的 `latest` 标签。Trivy 当前固定到 v0.36.0 的解引用 commit
+   `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
+   通过 `git ls-remote` 核验。维护者按需 bump（建议查看
+   <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag，并写入其
+   解引用 commit 或可审计的 SHA pin）。
 6. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
 ## Docker Hub 仓库介绍同步

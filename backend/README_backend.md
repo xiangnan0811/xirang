@@ -334,7 +334,7 @@ go run ./cmd/server
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000030_task_run_progress`。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000057_service_uptime`。
 
 核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
 

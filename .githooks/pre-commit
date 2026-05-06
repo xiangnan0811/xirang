@@ -21,35 +21,29 @@ is_gitignored() {
 
 check() {
   local trigger="$1"
-  local doc="$2"
+  local doc_re="$2"
   local msg="$3"
-  # Skip checks whose target doc is gitignored (e.g. local-only CLAUDE.md):
-  # the author's intent is to remind about doc sync, but an ignored file can
-  # never be staged so the rule would be impossible to satisfy.
-  if is_gitignored "$doc"; then
-    return
-  fi
   if echo "$STAGED" | grep -q "$trigger"; then
-    if ! echo "$STAGED" | grep -q "$doc"; then
+    if ! echo "$STAGED" | grep -qE "$doc_re"; then
       MSGS+=("$msg")
       WARN=$((WARN + 1))
     fi
   fi
 }
 
-check "backend/internal/model/models.go" "CLAUDE.md" \
-  "models.go 已修改，请同步更新 CLAUDE.md 核心领域模型"
+check "backend/internal/model/models.go" "^(backend/README_backend\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
+  "models.go 已修改，请同步更新 backend 模型/数据库文档"
 
-check "backend/internal/api/router.go" "backend/README_backend.md" \
+check "backend/internal/api/router.go" "^backend/README_backend\.md$" \
   "router.go 已修改，请同步更新 backend/README_backend.md 接口列表"
 
-check "web/src/router.tsx" "CLAUDE.md" \
-  "router.tsx 已修改，请同步更新 CLAUDE.md 前端结构"
+check "web/src/router.tsx" "^(README\.md|docs/|\.trellis/spec/frontend/directory-structure\.md)$" \
+  "router.tsx 已修改，请同步更新公开入口文档或 frontend structure spec"
 
-check "backend/internal/database/migrations/" "CLAUDE.md" \
-  "数据库迁移文件有变更，请同步更新 CLAUDE.md 迁移版本"
+check "backend/internal/database/migrations/" "^(backend/README_backend\.md|docs/migration-utc-cutover\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
+  "数据库迁移文件有变更，请同步更新 backend 迁移文档或数据库规范"
 
-check "backend/internal/config/config.go" "docs/env-vars.md" \
+check "backend/internal/config/config.go" "^docs/env-vars\.md$" \
   "config.go 已修改，请同步更新 docs/env-vars.md"
 
 # 规则 6：发布/镜像/部署/版本检查变更 → 发布相关文档

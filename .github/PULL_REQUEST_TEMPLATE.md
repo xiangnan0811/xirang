@@ -16,6 +16,8 @@
 - [ ] PR 标题符合 Conventional Commits（例如 `feat(web): ...`）
 - [ ] 后端：`cd backend && go test ./...` 通过
 - [ ] 前端：`cd web && npm run check` 通过
+- [ ] 文档/流程：`bash scripts/check-doc-freshness.sh` 通过或提醒已处理
+- [ ] 迁移安全：涉及 migration 时 `bash scripts/check-migration-utc-safety.sh` 通过
 - [ ] 已在本地验证功能正常
 - [ ] 无安全风险（无硬编码密钥、无 SQL 注入等）
 - [ ] 涉及接口/模型/页面/配置变更时已同步更新文档

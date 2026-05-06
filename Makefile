@@ -89,22 +89,29 @@ DOCKER_REGISTRY ?= docker.io
 DOCKER_NAMESPACE ?= xirang
 DOCKER_IMAGE ?= xirang
 DOCKER_TAG ?= $(VERSION)
+TAG_LATEST ?= 0
 DOCKER_FULL_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(DOCKER_IMAGE)
+DOCKER_TAG_ARGS = -t $(DOCKER_FULL_IMAGE):$(DOCKER_TAG)
+ifeq ($(TAG_LATEST),1)
+DOCKER_TAG_ARGS += -t $(DOCKER_FULL_IMAGE):latest
+endif
 
 docker-build:
 	docker build -f deploy/allinone/Dockerfile \
-		-t $(DOCKER_FULL_IMAGE):$(DOCKER_TAG) \
-		-t $(DOCKER_FULL_IMAGE):latest .
+		$(DOCKER_TAG_ARGS) .
 
 docker-push:
 	docker push $(DOCKER_FULL_IMAGE):$(DOCKER_TAG)
-	docker push $(DOCKER_FULL_IMAGE):latest
+	@if [ "$(TAG_LATEST)" = "1" ]; then \
+		docker push $(DOCKER_FULL_IMAGE):latest; \
+	else \
+		echo "Skipping latest push. Set TAG_LATEST=1 only for intentional stable release recovery."; \
+	fi
 
 docker-buildx:
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-f deploy/allinone/Dockerfile \
-		-t $(DOCKER_FULL_IMAGE):$(DOCKER_TAG) \
-		-t $(DOCKER_FULL_IMAGE):latest --push .
+		$(DOCKER_TAG_ARGS) --push .
 
 # ── 部署初始化 ──
 deploy-init:

@@ -28,7 +28,11 @@
 cd backend && go test ./... && go build ./...
 
 # 前端
-cd web && npm run check   # typecheck + test + build
+cd web && npm run check   # typecheck + lint + test + build
+
+# 仓库脚本/文档
+bash scripts/check-doc-freshness.sh
+bash scripts/check-migration-utc-safety.sh
 ```
 
 4. 提交代码并推送：
@@ -84,11 +88,12 @@ git push origin feat/your-feature
 
 PR 涉及以下变更时，请同步更新对应文档：
 
-- 新增/修改数据库模型 → 更新 `CLAUDE.md` 核心领域模型
+- 新增/修改数据库模型 → 更新 `backend/README_backend.md` 的核心模型说明，必要时同步 `.trellis/spec/backend/database-guidelines.md`
 - 新增/修改 API 路由 → 更新 `backend/README_backend.md` 接口列表
-- 新增/修改前端页面 → 更新 `CLAUDE.md` 前端结构
-- 新增/修改环境变量 → 更新 `docs/env-vars.md` 和 `.env.example`
-- 新增数据库迁移 → 更新 `CLAUDE.md` 迁移版本号
+- 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `.trellis/spec/frontend/directory-structure.md`
+- 新增/修改环境变量 → 更新 `docs/env-vars.md`、相关 `.env*.example` 或 `.env.deploy`
+- 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `.trellis/spec/backend/database-guidelines.md`
+- 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/release-maintainers.md` 和 PR 模板/流程说明
 
 CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
 
