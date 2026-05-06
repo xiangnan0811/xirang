@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/xiangnan0811/xirang/compare/v0.28.0...v0.28.1) (2026-05-06)
+
+
+### 🐛 Bug Fixes
+
+* comprehensive project audit and workflow hardening ([2505919](https://github.com/xiangnan0811/xirang/commit/2505919f9f6785219358dd974d28921e7d949e9b))
+
 ## [0.28.0](https://github.com/xiangnan0811/xirang/compare/v0.27.0...v0.28.0) (2026-05-06)
 
 
