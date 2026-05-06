@@ -908,6 +908,8 @@ const en = {
     resticExcludeRules: "Exclude rules (optional, one per line)",
     rcloneBandwidthLimit: "Bandwidth limit (optional)",
     rcloneConcurrentTransfers: "Concurrent transfers (optional)",
+    appendOnly: "Append-Only Backup",
+    appendOnlyDesc: "When enabled, the restic repository becomes append-only, preventing deletion or modification of historical snapshots. New repositories will use repository version 2. Existing repositories continue to work but without append-only protection.",
     errorNodeRequired: "Save failed: please select a target node.",
     errorNameRequired: "Save failed: please enter a task name.",
     autoTargetPath: "Backup Target Path",

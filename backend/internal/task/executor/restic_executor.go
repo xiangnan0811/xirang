@@ -18,6 +18,7 @@ import (
 type ResticConfig struct {
 	RepositoryPassword string   `json:"repository_password,omitempty"`
 	ExcludePatterns    []string `json:"exclude_patterns,omitempty"`
+	AppendOnly         bool     `json:"append_only,omitempty"`
 }
 
 // ResticExecutor 通过 SSH 在远程节点上执行 restic 备份/恢复操作。
@@ -72,12 +73,33 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		strings.Contains(checkOut, "repository does not exist") ||
 		strings.Contains(checkOut, "no such file or directory") {
 		logf("info", fmt.Sprintf("初始化 restic 仓库: %s", repo))
-		initCmd := fmt.Sprintf("%s init -r %s 2>&1", cmdPrefix, repoArg)
+		initFlags := ""
+		if cfg.AppendOnly {
+			initFlags = " --repository-version 2"
+		}
+		initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, repoArg)
 		initOut, initErr := RunSSHCommandOutput(ctx, client, initCmd)
 		if initErr != nil {
 			return -1, fmt.Errorf("初始化 restic 仓库失败: %s", initOut)
 		}
 		logf("info", "restic 仓库初始化成功")
+	}
+
+	// 若配置了 append_only，检查仓库版本是否符合要求
+	if cfg.AppendOnly {
+		catCmd := fmt.Sprintf("%s cat config -r %s 2>&1", cmdPrefix, repoArg)
+		catOut, catErr := RunSSHCommandOutput(ctx, client, catCmd)
+		if catErr == nil {
+			var repoConfig struct {
+				Version uint `json:"version"`
+			}
+			if err := json.Unmarshal([]byte(catOut), &repoConfig); err == nil && repoConfig.Version < 2 {
+				logf("warn", fmt.Sprintf(
+					"append_only=true 但仓库版本为 %d（需要版本 2），备份继续但不受 append-only 保护。请重建仓库以启用不可变保护。",
+					repoConfig.Version,
+				))
+			}
+		}
 	}
 
 	// 构造 backup 命令
@@ -199,10 +221,10 @@ func (e *ResticExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 
 // resticStatusMsg 表示 restic --json 输出中的 status 类型消息。
 type resticStatusMsg struct {
-	MessageType  string  `json:"message_type"`
-	PercentDone  float64 `json:"percent_done"`
-	TotalBytes   int64   `json:"total_bytes"`
-	BytesDone    int64   `json:"bytes_done"`
+	MessageType  string   `json:"message_type"`
+	PercentDone  float64  `json:"percent_done"`
+	TotalBytes   int64    `json:"total_bytes"`
+	BytesDone    int64    `json:"bytes_done"`
 	CurrentFiles []string `json:"current_files"`
 }
 
@@ -399,4 +421,3 @@ func buildResticExcludeArgs(patterns []string) string {
 	}
 	return strings.Join(parts, " ")
 }
-

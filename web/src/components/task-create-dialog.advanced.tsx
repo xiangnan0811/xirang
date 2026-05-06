@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import type { NodeRecord } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
 
@@ -169,6 +170,19 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing }: TaskAdvanced
               value={draft.resticExcludePatterns}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, resticExcludePatterns: event.target.value }))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+            <div className="space-y-0.5">
+              <span className="text-sm font-medium">{t("taskCreate.appendOnly")}</span>
+              <p className="text-xs text-muted-foreground">{t("taskCreate.appendOnlyDesc")}</p>
+            </div>
+            <Switch
+              id="task-editor-restic-append-only"
+              checked={draft.resticAppendOnly}
+              onCheckedChange={(checked) =>
+                setDraft((prev) => ({ ...prev, resticAppendOnly: checked }))
               }
             />
           </div>

@@ -908,6 +908,8 @@ const zh = {
     resticExcludeRules: "排除规则（可选，每行一条）",
     rcloneBandwidthLimit: "带宽限制（可选）",
     rcloneConcurrentTransfers: "并发传输数（可选）",
+    appendOnly: "不可变备份 (Append-Only)",
+    appendOnlyDesc: "启用后备份仓库仅追加不可删除，防止恶意篡改删除历史快照。新建仓库自动启用仓库版本 2，已有旧仓库将继续工作但不受 append-only 保护。",
     errorNodeRequired: "保存失败：请选择目标节点。",
     errorNameRequired: "保存失败：请输入任务名称。",
     autoTargetPath: "备份目标路径",

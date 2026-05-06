@@ -26,6 +26,7 @@ export type TaskDraft = {
   command: string;
   resticPassword: string;
   resticExcludePatterns: string;
+  resticAppendOnly: boolean;
   rcloneBandwidthLimit: string;
   rcloneTransfers: string;
 };
@@ -42,20 +43,22 @@ const defaultDraft: TaskDraft = {
   command: "",
   resticPassword: "",
   resticExcludePatterns: "",
+  resticAppendOnly: false,
   rcloneBandwidthLimit: "",
   rcloneTransfers: "",
 };
 
-function parseResticConfig(cfg: string): { password: string; excludePatterns: string } {
-  if (!cfg) return { password: "", excludePatterns: "" };
+function parseResticConfig(cfg: string): { password: string; excludePatterns: string; appendOnly: boolean } {
+  if (!cfg) return { password: "", excludePatterns: "", appendOnly: false };
   try {
-    const parsed = JSON.parse(cfg) as { repository_password?: string; exclude_patterns?: string[] };
+    const parsed = JSON.parse(cfg) as { repository_password?: string; exclude_patterns?: string[]; append_only?: boolean };
     return {
       password: parsed.repository_password ?? "",
       excludePatterns: (parsed.exclude_patterns ?? []).join("\n"),
+      appendOnly: parsed.append_only ?? false,
     };
   } catch {
-    return { password: "", excludePatterns: "" };
+    return { password: "", excludePatterns: "", appendOnly: false };
   }
 }
 
@@ -87,6 +90,7 @@ function taskRecordToDraft(task: TaskRecord): TaskDraft {
     command: task.command ?? "",
     resticPassword: restic.password,
     resticExcludePatterns: restic.excludePatterns,
+    resticAppendOnly: restic.appendOnly,
     rcloneBandwidthLimit: rclone.bandwidthLimit,
     rcloneTransfers: rclone.transfers,
   };
@@ -154,6 +158,7 @@ export function TaskEditorDialog({
       executorConfig = JSON.stringify({
         repository_password: draft.resticPassword.trim(),
         exclude_patterns: excludePatterns,
+        append_only: draft.resticAppendOnly || undefined,
       });
     } else if (draft.executorType === "rclone") {
       const transfers = toNumberOrNull(draft.rcloneTransfers);
