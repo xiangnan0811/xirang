@@ -30,14 +30,6 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func seedMonitor(t *testing.T, db *gorm.DB, m model.ServiceMonitor) model.ServiceMonitor {
-	t.Helper()
-	if err := db.Create(&m).Error; err != nil {
-		t.Fatalf("创建测试 monitor 失败: %v", err)
-	}
-	return m
-}
-
 func TestProbeHTTP_Up(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
