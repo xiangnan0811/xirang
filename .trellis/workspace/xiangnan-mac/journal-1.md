@@ -538,3 +538,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: HTTP/TCP Uptime 探测 + Status Page 完整实现
+
+**Date**: 2026-05-06
+**Task**: HTTP/TCP Uptime 探测 + Status Page 完整实现
+**Branch**: `feat/uptime-probe-status-page`
+
+### Summary
+
+实现 uptime monitoring：ServiceMonitor+Sample 模型+迁移 000057；HTTP/TCP Prober(独立 goroutine)；24h uptime 滚动计算；状态 up↔down 自动告警+恢复；公开 Status Page API+前端页；管理页 CRUD；14 prober+8 handler 单测。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f6f134` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
