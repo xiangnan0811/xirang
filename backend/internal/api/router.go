@@ -195,6 +195,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
+	automationRuleHandler := handlers.NewAutomationRuleHandler(dep.DB)
+	secured.GET("/automation-rules", middleware.RBAC("automation:read"), automationRuleHandler.List)
+	secured.POST("/automation-rules", middleware.RBAC("automation:write"), automationRuleHandler.Create)
+	secured.GET("/automation-rules/:id", middleware.RBAC("automation:read"), automationRuleHandler.Get)
+	secured.PUT("/automation-rules/:id", middleware.RBAC("automation:write"), automationRuleHandler.Update)
+	secured.DELETE("/automation-rules/:id", middleware.RBAC("automation:write"), automationRuleHandler.Delete)
+
 	anomalyHandler := handlers.NewAnomalyHandler(dep.DB)
 	secured.GET("/anomaly-events", middleware.RBAC("nodes:read"), anomalyHandler.List)
 	secured.GET("/nodes/:id/anomaly-events", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), anomalyHandler.ListForNode)

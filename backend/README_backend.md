@@ -163,6 +163,16 @@ go run ./cmd/server
 | PUT | /app-credentials/:id | 🔒 更新凭据 |
 | DELETE | /app-credentials/:id | 🔒 删除凭据（有引用时阻止） |
 
+### 自动化规则
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /automation-rules | 🔒 规则列表 |
+| GET | /automation-rules/:id | 🔒 规则详情 |
+| POST | /automation-rules | 🔒 创建规则 |
+| PUT | /automation-rules/:id | 🔒 更新规则 |
+| DELETE | /automation-rules/:id | 🔒 删除规则 |
+
 ### 告警
 
 | 方法 | 路径 | 说明 |

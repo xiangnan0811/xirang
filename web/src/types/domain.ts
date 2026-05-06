@@ -734,3 +734,26 @@ export type AnomalyListResult = {
   total: number;
   has_more: boolean;
 };
+
+export interface AutomationRule {
+  id: number;
+  name: string;
+  description: string;
+  event_type: string;
+  event_filter: Record<string, string>;
+  action_type: string;
+  action_config: Record<string, string>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationRuleInput {
+  name: string;
+  description?: string;
+  event_type: string;
+  event_filter?: Record<string, string>;
+  action_type: string;
+  action_config?: Record<string, string>;
+  enabled?: boolean;
+}

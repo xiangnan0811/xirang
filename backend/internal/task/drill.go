@@ -196,6 +196,7 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		// 触发沙箱不可达告警
 		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,
 			"drill_sandbox_unreachable", errorMsg)
+		m.dispatchDrillFailure(policy.ID, drillRunID)
 		return
 	}
 	m.emitLog(task.ID, runIDPtr, "info", "沙箱节点连通性检查通过", "")
@@ -223,6 +224,7 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		// 触发恢复失败告警
 		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,
 			"drill_restore_failed", errorMsg)
+		m.dispatchDrillFailure(policy.ID, drillRunID)
 		return
 	}
 	m.emitLog(task.ID, runIDPtr, "info", "备份恢复至沙箱完成", "")
@@ -307,6 +309,10 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		"last_error":  finalError,
 	})
 	drillCompleted = true
+
+	if finalStatus == "failed" {
+		m.dispatchDrillFailure(policy.ID, drillRunID)
+	}
 
 	rtoSeconds := float64(duration) / 1000.0
 	m.emitLog(task.ID, runIDPtr, "info", fmt.Sprintf(

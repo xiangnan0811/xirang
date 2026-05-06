@@ -27,6 +27,7 @@ import { createEscalationApi } from "./escalation";
 import { createNodeLogsApi } from "./node-logs";
 import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
+import { createAutomationRulesApi } from "./automation-rules";
 
 export { ApiError } from "./core";
 
@@ -60,4 +61,5 @@ export const apiClient = {
   ...createNodeLogsApi(),
   ...createAlertDeliveriesApi(),
   ...createAppCredentialsApi(),
+  ...createAutomationRulesApi(),
 };

@@ -11,6 +11,7 @@ import {
   Server,
   Settings,
   Shield,
+  Zap,
   type LucideIcon
 } from "lucide-react";
 
@@ -82,6 +83,13 @@ export const navItems: NavItem[] = [
     icon: ClipboardList,
     group: "automate",
     mobileTab: true
+  },
+  {
+    titleKey: "nav.automationRules",
+    path: "/app/automation-rules",
+    icon: Zap,
+    group: "automate",
+    mobileTab: false
   },
   {
     titleKey: "nav.logs",
