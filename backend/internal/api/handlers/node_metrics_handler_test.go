@@ -61,20 +61,26 @@ func TestNodeMetricsHandler_Status(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-	var resp struct {
-		Online  bool `json:"online"`
-		Current struct {
-			CPUPct float64 `json:"cpu_pct"`
-		} `json:"current"`
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Online  bool `json:"online"`
+			Current struct {
+				CPUPct float64 `json:"cpu_pct"`
+			} `json:"current"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.Online {
+	if envelope.Code != 0 {
+		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	}
+	if !envelope.Data.Online {
 		t.Fatalf("expected online")
 	}
-	if resp.Current.CPUPct < 10 {
-		t.Fatalf("current cpu_pct too low: %f", resp.Current.CPUPct)
+	if envelope.Data.Current.CPUPct < 10 {
+		t.Fatalf("current cpu_pct too low: %f", envelope.Data.Current.CPUPct)
 	}
 }
 
@@ -127,25 +133,31 @@ func TestNodeMetricsHandler_Metrics_AutoPicksHourlyFor7d(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 
-	var resp struct {
-		Granularity   string `json:"granularity"`
-		BucketSeconds int    `json:"bucket_seconds"`
-		Series        []struct {
-			Metric string `json:"metric"`
-			Unit   string `json:"unit"`
-		} `json:"series"`
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Granularity   string `json:"granularity"`
+			BucketSeconds int    `json:"bucket_seconds"`
+			Series        []struct {
+				Metric string `json:"metric"`
+				Unit   string `json:"unit"`
+			} `json:"series"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Granularity != "hourly" {
-		t.Fatalf("expected hourly, got %s", resp.Granularity)
+	if envelope.Code != 0 {
+		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
 	}
-	if resp.BucketSeconds != 3600 {
-		t.Fatalf("expected bucket_seconds=3600, got %d", resp.BucketSeconds)
+	if envelope.Data.Granularity != "hourly" {
+		t.Fatalf("expected hourly, got %s", envelope.Data.Granularity)
 	}
-	if len(resp.Series) != 1 || resp.Series[0].Metric != "cpu_pct" {
-		t.Fatalf("expected one cpu_pct series, got %+v", resp.Series)
+	if envelope.Data.BucketSeconds != 3600 {
+		t.Fatalf("expected bucket_seconds=3600, got %d", envelope.Data.BucketSeconds)
+	}
+	if len(envelope.Data.Series) != 1 || envelope.Data.Series[0].Metric != "cpu_pct" {
+		t.Fatalf("expected one cpu_pct series, got %+v", envelope.Data.Series)
 	}
 }
 
@@ -164,6 +176,13 @@ func TestNodeMetricsHandler_Metrics_BadTimeRange(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var envelope Response
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if envelope.Code != http.StatusBadRequest || envelope.Message != "invalid from/to" {
+		t.Fatalf("unexpected error envelope: %+v", envelope)
 	}
 }
 
@@ -204,24 +223,30 @@ func TestNodeMetricsHandler_DiskForecast_HighConfidence(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-	var resp struct {
-		Forecast struct {
-			Confidence string   `json:"confidence"`
-			DaysToFull *float64 `json:"days_to_full"`
-		} `json:"forecast"`
-		DailyGrowthGB *float64 `json:"daily_growth_gb"`
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Forecast struct {
+				Confidence string   `json:"confidence"`
+				DaysToFull *float64 `json:"days_to_full"`
+			} `json:"forecast"`
+			DailyGrowthGB *float64 `json:"daily_growth_gb"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Forecast.Confidence != "high" {
-		t.Fatalf("expected confidence=high, got %s", resp.Forecast.Confidence)
+	if envelope.Code != 0 {
+		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
 	}
-	if resp.DailyGrowthGB == nil || *resp.DailyGrowthGB < 1.5 || *resp.DailyGrowthGB > 2.5 {
-		t.Fatalf("expected daily_growth_gb ≈ 2, got %v", resp.DailyGrowthGB)
+	if envelope.Data.Forecast.Confidence != "high" {
+		t.Fatalf("expected confidence=high, got %s", envelope.Data.Forecast.Confidence)
 	}
-	if resp.Forecast.DaysToFull == nil || *resp.Forecast.DaysToFull <= 0 {
-		t.Fatalf("expected positive days_to_full, got %v", resp.Forecast.DaysToFull)
+	if envelope.Data.DailyGrowthGB == nil || *envelope.Data.DailyGrowthGB < 1.5 || *envelope.Data.DailyGrowthGB > 2.5 {
+		t.Fatalf("expected daily_growth_gb ≈ 2, got %v", envelope.Data.DailyGrowthGB)
+	}
+	if envelope.Data.Forecast.DaysToFull == nil || *envelope.Data.Forecast.DaysToFull <= 0 {
+		t.Fatalf("expected positive days_to_full, got %v", envelope.Data.Forecast.DaysToFull)
 	}
 }
 
@@ -244,16 +269,22 @@ func TestNodeMetricsHandler_DiskForecast_Insufficient(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var resp struct {
-		Forecast struct {
-			Confidence string `json:"confidence"`
-		} `json:"forecast"`
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Forecast struct {
+				Confidence string `json:"confidence"`
+			} `json:"forecast"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Forecast.Confidence != "insufficient" {
-		t.Fatalf("expected insufficient, got %s", resp.Forecast.Confidence)
+	if envelope.Code != 0 {
+		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	}
+	if envelope.Data.Forecast.Confidence != "insufficient" {
+		t.Fatalf("expected insufficient, got %s", envelope.Data.Forecast.Confidence)
 	}
 }
 

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +39,7 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		respondBadRequest(c, "invalid id")
 		return
 	}
 	resp := nodeStatusResponse{
@@ -92,7 +91,7 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		log.Warn().Err(err).Msg("running tasks count failed")
 	}
 
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, resp)
 }
 
 // Response payload shape ------------------------------------------------------
@@ -134,13 +133,13 @@ const rawMaxPointsPerSeries = 1500
 func (h *NodeMetricsHandler) Metrics(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		respondBadRequest(c, "invalid id")
 		return
 	}
 	from, errFrom := time.Parse(time.RFC3339, c.Query("from"))
 	to, errTo := time.Parse(time.RFC3339, c.Query("to"))
 	if errFrom != nil || errTo != nil || !to.After(from) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from/to"})
+		respondBadRequest(c, "invalid from/to")
 		return
 	}
 	fields := resolveFields(c.Query("fields"))
@@ -157,7 +156,7 @@ func (h *NodeMetricsHandler) Metrics(c *gin.Context) {
 	case "daily":
 		chosen = metrics.GranularityDaily
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid granularity"})
+		respondBadRequest(c, "invalid granularity")
 		return
 	}
 
@@ -173,7 +172,7 @@ func (h *NodeMetricsHandler) Metrics(c *gin.Context) {
 		resp.BucketSeconds = 86400
 		resp.Series = h.dailySeries(uint(id), from, to, fields)
 	}
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, resp)
 }
 
 func resolveFields(raw string) []metrics.Field {
@@ -376,7 +375,7 @@ type diskForecastResponse struct {
 func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		respondBadRequest(c, "invalid id")
 		return
 	}
 
@@ -388,7 +387,7 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 	resp := diskForecastResponse{}
 	if len(rows) == 0 {
 		resp.Forecast.Confidence = string(metrics.ConfidenceInsufficient)
-		c.JSON(http.StatusOK, resp)
+		respondOK(c, resp)
 		return
 	}
 
@@ -414,7 +413,7 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 		when := time.Now().UTC().Add(time.Duration(*f.DaysToFull*24) * time.Hour).Format("2006-01-02")
 		resp.Forecast.DateFull = &when
 	}
-	c.JSON(http.StatusOK, resp)
+	respondOK(c, resp)
 }
 
 // fillTrend aggregates hourly buckets in [from, to) into a flat map of

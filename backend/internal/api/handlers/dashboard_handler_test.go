@@ -135,6 +135,13 @@ func TestDashboardHandler_DuplicateName_409(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", w.Code)
 	}
+	var envelope Response
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != http.StatusConflict || envelope.Message != "看板名称已存在" {
+		t.Fatalf("expected conflict envelope, got %+v", envelope)
+	}
 }
 
 func TestDashboardHandler_PanelCRUD(t *testing.T) {
@@ -173,7 +180,9 @@ func TestDashboardHandler_PanelInvalidMetric_400(t *testing.T) {
 	db := openDashboardTestDB(t)
 	r := newDashboardRouter(t, db, 1, "operator")
 	w := doDashboard(r, "POST", "/api/v1/dashboards", `{"name":"a","time_range":"1h","auto_refresh_seconds":30}`)
-	var resp struct{ Data struct{ ID uint } `json:"data"` }
+	var resp struct {
+		Data struct{ ID uint } `json:"data"`
+	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	w = doDashboard(r, "POST", fmt.Sprintf("/api/v1/dashboards/%d/panels", resp.Data.ID),
 		`{"title":"x","chart_type":"line","metric":"bogus","aggregation":"avg","layout_w":6,"layout_h":4}`)

@@ -76,7 +76,10 @@ func (h *AnomalyHandler) List(c *gin.Context) {
 		pageSize = 500
 	}
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var rows []model.AnomalyEvent
 	if err := q.Order("fired_at DESC").
 		Limit(pageSize).Offset((page - 1) * pageSize).

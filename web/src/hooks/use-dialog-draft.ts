@@ -14,7 +14,7 @@ export function useDialogDraft<T, E = unknown>(
       setDraft(emptyDraft);
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setDraft(editingEntity && toDraftFn ? toDraftFn(editingEntity) : emptyDraft);
   }, [editingEntity, emptyDraft, open, toDraftFn]);
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { MoreVertical, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
+import { formatTime } from "@/lib/date-utils";
 
 // ─── 删除确认对话框 ───────────────────────────────────────────────
 
@@ -117,6 +118,7 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
   const [autoRefresh, setAutoRefresh] = useState("30");
   const [nameError, setNameError] = useState("");
   const [loading, setLoading] = useState(false);
+  const nameErrorId = "dashboard-name-error";
 
   function reset() {
     setName("");
@@ -176,42 +178,52 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
         <form onSubmit={handleSubmit} className="px-6 pb-0 pt-3 space-y-4">
           {/* 名称 */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">
+            <label htmlFor="dashboard-name" className="text-sm font-medium">
               {t("dashboards.fields.name")}
               <span className="ml-0.5 text-destructive">*</span>
             </label>
             <Input
+              id="dashboard-name"
+              name="dashboard-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={100}
               disabled={loading}
               placeholder={t("dashboards.fields.name")}
+              autoComplete="off"
+              aria-invalid={Boolean(nameError)}
+              aria-describedby={nameError ? nameErrorId : undefined}
             />
             {nameError && (
-              <p className="text-xs text-destructive">{nameError}</p>
+              <p id={nameErrorId} role="alert" className="text-xs text-destructive">{nameError}</p>
             )}
           </div>
 
           {/* 描述 */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">
+            <label htmlFor="dashboard-description" className="text-sm font-medium">
               {t("dashboards.fields.description")}
             </label>
             <Textarea
+              id="dashboard-description"
+              name="dashboard-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
               disabled={loading}
               placeholder={t("dashboards.fields.description")}
+              autoComplete="off"
             />
           </div>
 
           {/* 时间范围 */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">
+            <label htmlFor="dashboard-time-range" className="text-sm font-medium">
               {t("dashboards.fields.timeRange")}
             </label>
             <Select
+              id="dashboard-time-range"
+              name="dashboard-time-range"
               value={timeRange}
               onChange={(e) => setTimeRange(e.target.value as DashboardTimeRange)}
               disabled={loading}
@@ -226,10 +238,12 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
 
           {/* 自动刷新 */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">
+            <label htmlFor="dashboard-auto-refresh" className="text-sm font-medium">
               {t("dashboards.fields.autoRefresh")}
             </label>
             <Select
+              id="dashboard-auto-refresh"
+              name="dashboard-auto-refresh"
               value={autoRefresh}
               onChange={(e) => setAutoRefresh(e.target.value)}
               disabled={loading}
@@ -353,14 +367,9 @@ export function DashboardsPage() {
           {dashboards.map((d) => (
             <Card
               key={d.id}
-              className="relative cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => navigate(`/app/dashboards/${d.id}`)}
+              className="relative transition-shadow hover:shadow-md"
             >
-              {/* 下拉操作菜单 — 阻止冒泡避免触发卡片点击 */}
-              <div
-                className="absolute right-3 top-3"
-                onClick={(e) => e.stopPropagation()}
-              >
+              <div className="absolute right-3 top-3">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -369,7 +378,7 @@ export function DashboardsPage() {
                       className="size-7"
                       aria-label={t("common.more")}
                     >
-                      <MoreVertical className="size-4" />
+                      <MoreVertical className="size-4" aria-hidden="true" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -377,7 +386,7 @@ export function DashboardsPage() {
                       className="text-destructive focus:text-destructive"
                       onClick={() => setDeleteTarget(d)}
                     >
-                      <Trash2 className="mr-2 size-4" />
+                      <Trash2 className="mr-2 size-4" aria-hidden="true" />
                       {t("common.delete")}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -385,7 +394,12 @@ export function DashboardsPage() {
               </div>
 
               <CardHeader className="pr-10">
-                <p className="font-medium leading-tight">{d.name}</p>
+                <Link
+                  to={`/app/dashboards/${d.id}`}
+                  className="font-medium leading-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {d.name}
+                </Link>
                 <p className="text-xs text-muted-foreground">
                   {t(`dashboards.timeRange.${d.time_range}`)}
                 </p>
@@ -397,7 +411,7 @@ export function DashboardsPage() {
                   </p>
                 )}
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {new Date(d.updated_at).toLocaleString()}
+                  {formatTime(d.updated_at)}
                 </p>
               </CardContent>
             </Card>

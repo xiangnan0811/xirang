@@ -34,6 +34,7 @@ GEMINI.md
 
 # temp
 tmp/
+.tmp/
 
 # temp docs
 docs/plans/
@@ -41,6 +42,9 @@ docs/plans/
 # deploy
 deploy/certs/
 deploy-kit/
+/certs/
+/data/
+/backups/
 
 # local build artifacts
 backend/.env.production

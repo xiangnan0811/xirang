@@ -115,7 +115,10 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	if middleware.CurrentRole(c) == "operator" {
 		userID := middleware.CurrentUserID(c)
 		var count int64
-		h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count)
+		if err := h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 		if count == 0 {
 			respondForbidden(c, "无权操作该目标节点")
 			return
@@ -124,9 +127,12 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	// 收集受影响的策略
 	var policies []model.Policy
-	h.db.Joins("JOIN policy_nodes ON policy_nodes.policy_id = policies.id").
+	if err := h.db.Joins("JOIN policy_nodes ON policy_nodes.policy_id = policies.id").
 		Where("policy_nodes.node_id = ?", sourceID).
-		Find(&policies)
+		Find(&policies).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	// 收集受影响的任务（用于工具检测和计数）
 	var policyIDs []uint
@@ -136,7 +142,10 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	var tasks []model.Task
 	if len(policyIDs) > 0 {
-		h.db.Where("node_id = ? AND source = ? AND policy_id IN ?", sourceID, "policy", policyIDs).Find(&tasks)
+		if err := h.db.Where("node_id = ? AND source = ? AND policy_id IN ?", sourceID, "policy", policyIDs).Find(&tasks).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	// 去重收集 executor_type

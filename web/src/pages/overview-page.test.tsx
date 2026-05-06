@@ -61,7 +61,7 @@ const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
-function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) { // eslint-disable-line @typescript-eslint/no-unused-vars
+function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
   const nodes = createNodes(nodeCount);
   sharedRef.current = {
     overview: {
@@ -364,7 +364,7 @@ describe("OverviewPage", () => {
     expect(screen.getByText("成功")).toBeInTheDocument();
     expect(screen.getAllByText("失败").length).toBeGreaterThan(0);
 
-    // Transfer Data text (testing the Math calculation `80 Mbps / 8 = 10.0 MB/s`) 
+    // Transfer Data text (testing the Math calculation `80 Mbps / 8 = 10.0 MB/s`)
     // and testing placeholder `-` for 0 Mbps.
     expect(screen.getByText("≈ 10.0 MB/s")).toBeInTheDocument();
     // Use getAllByText for "-", since there's one for Transfer Data and one for UpdatedAt (though updated at has value here, `-` might exist elsewhere in the DOM)

@@ -33,6 +33,10 @@ func respondCreated(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusCreated, Response{Code: 0, Message: "ok", Data: data})
 }
 
+func respondAccepted(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusAccepted, Response{Code: 0, Message: "ok", Data: data})
+}
+
 func respondMessage(c *gin.Context, msg string) {
 	c.JSON(http.StatusOK, Response{Code: 0, Message: msg, Data: nil})
 }
@@ -70,6 +74,14 @@ func respondConflict(c *gin.Context, msg string) {
 
 func respondBadGateway(c *gin.Context, msg string) {
 	c.JSON(http.StatusBadGateway, Response{Code: http.StatusBadGateway, Message: msg, Data: nil})
+}
+
+func respondServiceUnavailable(c *gin.Context, msg string) {
+	c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: msg, Data: nil})
+}
+
+func respondNotImplemented(c *gin.Context, msg string) {
+	c.JSON(http.StatusNotImplemented, Response{Code: http.StatusNotImplemented, Message: msg, Data: nil})
 }
 
 func respondInternalError(c *gin.Context, err error) {

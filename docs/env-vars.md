@@ -25,8 +25,9 @@
 | `DB_TYPE` | string | `sqlite` | 否 | 数据库类型：`sqlite` / `postgres` |
 | `SQLITE_PATH` | string | `./xirang.db` | 否 | SQLite 文件路径 |
 | `DB_DSN` | string | — | PG 时必填 | PostgreSQL 连接串，生产建议 `sslmode=require` |
+| `ALLOW_DIRTY_STARTUP` | bool | `false` | 否 | 仅 dirty migration 救援时临时设为 `true`；正常部署不要开启 |
 
-**读取位置**：`backend/internal/config/config.go` 的 `Load`；系统自助备份接口也会读取 `DB_TYPE` / `SQLITE_PATH`。
+**读取位置**：`backend/internal/config/config.go` 的 `Load`；系统自助备份接口也会读取 `DB_TYPE` / `SQLITE_PATH`；dirty migration 救援由 `backend/internal/database/migrator.go` 读取 `ALLOW_DIRTY_STARTUP`。
 
 ## 3. 认证与安全
 
@@ -42,8 +43,9 @@
 | `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
 | `ADMIN_INITIAL_PASSWORD` | string | — | 首次启动 | 初始 admin 账号密码，仅 bootstrap 阶段使用 |
 | `DATA_ENCRYPTION_KEY` | string | 内置开发密钥 | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 SHA-256 派生） |
+| `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 数据；确认轮替完成后清理 |
 
-**读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go` 和 `backend/internal/config/config.go`。
+**读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go` 和 `backend/internal/config/config.go`；`DATA_ENCRYPTION_LEGACY_KEY` → `backend/internal/secure/crypto.go`。
 
 ## 4. 跨域与 WebSocket
 
@@ -77,8 +79,9 @@
 | `RESTIC_BINARY` | string | `restic` | 否 | restic 可执行文件路径 |
 | `BATCH_COMMAND_BLACKLIST` | string | 空（使用内置规则） | 否 | 批量命令黑名单（逗号分隔正则） |
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
+| `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`。
 
 ## 7. 节点探测
 
@@ -240,11 +243,11 @@ scrape_configs:
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `TZ` | string | 镜像默认（UTC） | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换 |
+| `TZ` | string | All-in-One 镜像默认 `Asia/Shanghai` | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`、`UTC`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换 |
 | `LOG_FILE` | string | — | 否 | 设置后应用日志同时写入该文件（保留 stdout 输出供 docker logs/journald 收集）。留空时仅 stdout |
 | `TASK_MAX_EXECUTION_SECONDS` | int | `86400` | 否 | 单次任务执行的全局最大秒数兜底，防 executor 卡死导致 goroutine 泄漏。Policy 级 `max_execution_seconds` >0 时优先于本变量。超时后任务被强制中止并 status=failed，last_error 含"超时"字样 |
 
-**读取位置**：`TZ` → 容器初始化时被 glibc/musl 解析，应用层 `time.Now()` 自动遵循；`LOG_FILE` → `backend/internal/util/logger.go`（PR-C 引入）。
+**读取位置**：`TZ` → 容器初始化时被 musl 解析，应用层 `time.Now()` 自动遵循；`LOG_FILE` → `backend/internal/logger/logger.go`；`TASK_MAX_EXECUTION_SECONDS` → `backend/internal/task/runner.go`。
 
 ---
 

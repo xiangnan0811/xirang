@@ -7,6 +7,10 @@ import { createServiceMonitorsApi } from "@/lib/api/service-monitors";
 import { formatTime } from "@/lib/date-utils";
 import type { StatusPageItem } from "@/types/domain";
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 function StatusDot({ status }: { status: string }) {
   const base = "size-2.5 rounded-full shrink-0";
   if (status === "up") return <span className={`${base} bg-emerald-500`} aria-label="Up" />;
@@ -15,9 +19,9 @@ function StatusDot({ status }: { status: string }) {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "up") return <CheckCircle2 className="size-5 text-emerald-500" />;
-  if (status === "down") return <AlertTriangle className="size-5 text-red-500" />;
-  return <HelpCircle className="size-5 text-muted-foreground/50" />;
+  if (status === "up") return <CheckCircle2 className="size-5 text-emerald-500" aria-hidden="true" />;
+  if (status === "down") return <AlertTriangle className="size-5 text-red-500" aria-hidden="true" />;
+  return <HelpCircle className="size-5 text-muted-foreground/50" aria-hidden="true" />;
 }
 
 export function StatusPage() {
@@ -29,24 +33,27 @@ export function StatusPage() {
   const fetchStatus = useCallback(async (signal?: AbortSignal) => {
     try {
       const data = await createServiceMonitorsApi().getStatusPage(signal);
+      if (signal?.aborted) return;
       setItems(data);
       setError(null);
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (isAbortError(err) || signal?.aborted) return;
       setError(t("serviceMonitor.statusPageLoadFailed"));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [t]);
 
   useEffect(() => {
     setLoading(true);
     const controller = new AbortController();
-    fetchStatus(controller.signal);
+    void fetchStatus(controller.signal);
 
     // Auto-refresh every 30s
     const interval = setInterval(() => {
-      fetchStatus();
+      void fetchStatus();
     }, 30_000);
 
     return () => {
@@ -69,7 +76,7 @@ export function StatusPage() {
         {/* Header */}
         <div className="mb-8 text-center">
           <div className="mb-3 inline-flex items-center gap-2.5">
-            <Globe className="size-7 text-primary" />
+            <Globe className="size-7 text-primary" aria-hidden="true" />
             <h1 className="text-2xl font-semibold tracking-tight">
               {t("serviceMonitor.statusPageTitle")}
             </h1>
@@ -100,7 +107,7 @@ export function StatusPage() {
                     : t("serviceMonitor.noMonitorsConfigured")}
               </p>
               <p className="text-xs text-muted-foreground">
-                {t("serviceMonitor.lastChecked")}: {loading ? "..." : t("common.justNow")}
+                {t("serviceMonitor.lastChecked")}: {loading ? t("serviceMonitor.checkingNow") : t("common.justNow")}
               </p>
             </div>
           </div>
@@ -117,7 +124,7 @@ export function StatusPage() {
         {!loading && error && (
           <Card className="border-destructive/30 bg-destructive/5">
             <CardContent className="flex items-center gap-3 py-6">
-              <AlertTriangle className="size-5 text-destructive" />
+              <AlertTriangle className="size-5 text-destructive" aria-hidden="true" />
               <p className="text-sm text-destructive">{error}</p>
             </CardContent>
           </Card>
@@ -127,7 +134,7 @@ export function StatusPage() {
         {!loading && !error && items.length === 0 && (
           <Card>
             <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-              <Activity className="size-10 text-muted-foreground/30" />
+              <Activity className="size-10 text-muted-foreground/30" aria-hidden="true" />
               <p className="text-sm text-muted-foreground">
                 {t("serviceMonitor.noMonitors")}
               </p>

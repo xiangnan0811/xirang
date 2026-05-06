@@ -66,6 +66,12 @@ Do not edit, stage, or commit project files on `main`.
 3. Push the branch and open a PR targeting `main`.
 4. Monitor CI and fix failures on the same work branch.
 5. Merge only after required checks pass.
-6. After merge, sync local `main` to `origin/main` before starting new work.
+6. After merge, monitor post-merge automation before declaring the task done:
+   `Release Please`, any auto release, `Publish Docker Images`, and release-doc
+   workflows such as `Sync Docker Hub Description` when relevant. If the merge
+   is not expected to create a formal GitHub Release or Docker Hub publish,
+   record that explicitly in the task/PR handoff.
+7. After post-merge automation is understood, sync local `main` to
+   `origin/main` before starting new work.
 
 The repository normally uses squash merge, so local topic branches may not share ancestry with the final `main` commit after merge. Start the next task from the updated `main`, not from the old topic branch.

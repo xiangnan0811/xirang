@@ -162,7 +162,7 @@ IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ### All-in-One 单镜像构建
 
 ```bash
-docker build -f deploy/allinone/Dockerfile -t xirang/xirang:latest .
+docker build -f deploy/allinone/Dockerfile -t docker.io/xirang/xirang:vX.Y.Z-local .
 ```
 
 ### 多架构构建
@@ -173,7 +173,7 @@ docker buildx create --use
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f deploy/allinone/Dockerfile \
-  -t xirang/xirang:latest \
+  -t docker.io/xirang/xirang:vX.Y.Z-local \
   --push .
 ```
 
@@ -182,6 +182,8 @@ docker buildx build \
 - SQLite 默认要求 `CGO_ENABLED=1`
 - 本仓库的官方镜像发布由 GitHub Actions 完成
 - 用户默认路径应始终优先使用预构建镜像，而不是手工 build
+- 本地/手动构建默认不要推送或覆盖 `latest`；`latest` 只应由正式
+  GitHub Release 触发的发布 workflow 更新
 
 ## 数据与备份
 
@@ -295,6 +297,7 @@ docker exec -it xirang sh -lc \
   - 前端 `npm audit --audit-level=moderate`、`npm run check`
   - bundle budget
   - 文档新鲜度提醒
+  - migration UTC 安全检查与脚本自测
 
 ### Release Please
 

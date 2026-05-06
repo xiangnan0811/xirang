@@ -2,24 +2,11 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { navItems } from "@/components/layout/navigation";
 import { useCommandPalette } from "@/context/command-palette-context";
 import { useNodesContextOptional } from "@/context/nodes-context";
 import { useTasksContextOptional } from "@/context/tasks-context";
-
-const routes = [
-  { key: "nav.overview", path: "/app/overview" },
-  { key: "nav.nodes", path: "/app/nodes" },
-  { key: "nav.tasks", path: "/app/tasks" },
-  { key: "nav.logs", path: "/app/logs" },
-  { key: "nav.backups", path: "/app/backups" },
-  { key: "nav.policies", path: "/app/policies" },
-  { key: "nav.sshKeys", path: "/app/ssh-keys" },
-  { key: "nav.alertCenter", path: "/app/notifications" },
-  { key: "nav.audit", path: "/app/audit" },
-  { key: "nav.reports", path: "/app/reports" },
-  { key: "nav.settings", path: "/app/settings" },
-] as const;
 
 export function CommandPalette() {
   const { t } = useTranslation();
@@ -50,6 +37,7 @@ export function CommandPalette() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent size="md" className="p-0 overflow-hidden">
         <DialogTitle className="sr-only">{t("search.title")}</DialogTitle>
+        <DialogDescription className="sr-only">{t("search.description")}</DialogDescription>
         <Command
           label={t("search.placeholder")}
           className="[&_[cmdk-group-heading]]:text-micro [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.06em] [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-item]]:flex [&_[cmdk-item]]:items-center [&_[cmdk-item]]:gap-2 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-3 [&_[cmdk-item]]:py-2 [&_[cmdk-item]]:text-sm [&_[cmdk-item]]:cursor-pointer [&_[cmdk-item]:hover]:bg-accent [&_[cmdk-item][data-selected=true]]:bg-accent [&_[cmdk-empty]]:py-6 [&_[cmdk-empty]]:text-center [&_[cmdk-empty]]:text-sm [&_[cmdk-empty]]:text-muted-foreground"
@@ -105,13 +93,13 @@ export function CommandPalette() {
             )}
 
             <Command.Group heading={t("search.navigation")}>
-              {routes.map((route) => (
+              {navItems.map((route) => (
                 <Command.Item
                   key={route.path}
-                  value={`nav-${route.key}-${t(route.key)}`}
+                  value={`nav-${route.titleKey}-${t(route.titleKey)}`}
                   onSelect={() => goTo(route.path)}
                 >
-                  {t(route.key)}
+                  {t(route.titleKey)}
                 </Command.Item>
               ))}
             </Command.Group>

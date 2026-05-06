@@ -117,7 +117,10 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 	}
 
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var rows []model.NodeLog
 	if err := q.Order("timestamp DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&rows).Error; err != nil {
 		respondInternalError(c, err)

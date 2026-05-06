@@ -105,6 +105,26 @@ func TestAnomalyHandler_ListFilterBySeverity(t *testing.T) {
 	}
 }
 
+func TestAnomalyHandler_ListReturnsInternalErrorWhenCountFails(t *testing.T) {
+	db := openAnomalyTestDB(t)
+	if err := db.Migrator().DropTable(&model.AnomalyEvent{}); err != nil {
+		t.Fatalf("删除异常事件表失败: %v", err)
+	}
+
+	r := newAnomalyRouter(t, db, "viewer")
+	w := doAnomaly(r, "GET", "/api/v1/anomaly-events")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("异常计数失败期望 500，实际: %d，响应: %s", w.Code, w.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError {
+		t.Fatalf("期望标准错误信封，实际: %+v", envelope)
+	}
+}
+
 func TestAnomalyHandler_ListInvalidSeverity_400(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	r := newAnomalyRouter(t, db, "viewer")

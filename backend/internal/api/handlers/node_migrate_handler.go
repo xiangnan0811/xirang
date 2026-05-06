@@ -92,7 +92,10 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	if middleware.CurrentRole(c) == "operator" {
 		userID := middleware.CurrentUserID(c)
 		var count int64
-		h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count)
+		if err := h.db.Model(&model.NodeOwner{}).Where("node_id = ? AND user_id = ?", req.TargetNodeID, userID).Count(&count).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 		if count == 0 {
 			respondForbidden(c, "无权迁移到该目标节点")
 			return
@@ -101,7 +104,10 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 	// 收集受影响的 policyIDs
 	var policyIDs []uint
-	h.db.Model(&model.PolicyNode{}).Where("node_id = ?", sourceID).Pluck("policy_id", &policyIDs)
+	if err := h.db.Model(&model.PolicyNode{}).Where("node_id = ?", sourceID).Pluck("policy_id", &policyIDs).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	if len(policyIDs) == 0 {
 		respondOK(c, gin.H{"migratedPolicies": 0, "migratedTasks": 0, "archivedSource": false, "dataMigration": nil})
 		return
@@ -109,16 +115,18 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 	// 收集受影响的策略和任务
 	var policies []model.Policy
-	h.db.Where("id IN ?", policyIDs).Find(&policies)
-	policyMap := make(map[uint]model.Policy, len(policies))
-	for _, p := range policies {
-		policyMap[p.ID] = p
+	if err := h.db.Where("id IN ?", policyIDs).Find(&policies).Error; err != nil {
+		respondInternalError(c, err)
+		return
 	}
 
 	var allTasks []model.Task
-	h.db.Preload("Policy").
+	if err := h.db.Preload("Policy").
 		Where("node_id = ? AND source = ? AND policy_id IN ?", sourceID, "policy", policyIDs).
-		Find(&allTasks)
+		Find(&allTasks).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	// 取消运行中的任务（操作内存调度器，事务前执行）
 	if h.trigger != nil {
@@ -143,7 +151,9 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 		// a. 迁移 PolicyNode 关联
 		for _, pid := range policyIDs {
 			var exists int64
-			tx.Model(&model.PolicyNode{}).Where("policy_id = ? AND node_id = ?", pid, req.TargetNodeID).Count(&exists)
+			if err := tx.Model(&model.PolicyNode{}).Where("policy_id = ? AND node_id = ?", pid, req.TargetNodeID).Count(&exists).Error; err != nil {
+				return err
+			}
 			if exists == 0 {
 				if err := tx.Create(&model.PolicyNode{PolicyID: pid, NodeID: req.TargetNodeID}).Error; err != nil {
 					return err

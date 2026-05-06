@@ -1,0 +1,19 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend guideline index for review"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend structure compliance review"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database and migration compliance review"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error handling review"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality review"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Backend logging review"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend guideline index for review"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Frontend structure compliance review"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Component compliance review"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Hook/data-fetching compliance review"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "State management compliance review"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality review"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Frontend type-safety review"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Accessibility review"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-cutting review guide index"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Branch workflow review"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse review"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer review"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Documentation truth review"}

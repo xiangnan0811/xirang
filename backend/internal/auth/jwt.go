@@ -8,10 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Claims struct {
@@ -52,7 +54,10 @@ func (m *JWTManager) loadRevokedFromDB() {
 		return
 	}
 	var revocations []model.TokenRevocation
-	m.db.Where("expires_at > ?", time.Now()).Find(&revocations)
+	if err := m.db.Where("expires_at > ?", time.Now()).Find(&revocations).Error; err != nil {
+		logger.Module("auth").Warn().Err(err).Msg("加载 JWT 撤销记录失败")
+		return
+	}
 	m.mu.Lock()
 	for _, r := range revocations {
 		m.revoked[r.TokenHash] = r.ExpiresAt
@@ -129,11 +134,13 @@ func (m *JWTManager) RevokeToken(tokenString string) error {
 
 	// 持久化到数据库
 	if m.db != nil {
-		m.db.Create(&model.TokenRevocation{
+		if err := m.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.TokenRevocation{
 			TokenHash: key,
 			UserID:    claims.UserID,
 			ExpiresAt: expireAt,
-		})
+		}).Error; err != nil {
+			return fmt.Errorf("持久化 token 撤销记录失败: %w", err)
+		}
 	}
 	return nil
 }

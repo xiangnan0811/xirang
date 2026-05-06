@@ -263,7 +263,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	if err := h.jwtManager.RevokeToken(token); err != nil {
-		respondBadRequest(c, "注销失败")
+		respondInternalError(c, fmt.Errorf("注销 token 失败: %w", err))
 		return
 	}
 
@@ -474,9 +474,16 @@ func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 			respondUnauthorized(c, "验证码错误")
 			return
 		}
-		newJSON, _ := json.Marshal(remaining)
+		newJSON, err := json.Marshal(remaining)
+		if err != nil {
+			respondInternalError(c, fmt.Errorf("序列化恢复码失败: %w", err))
+			return
+		}
 		user.RecoveryCodes = string(newJSON)
-		h.db.Save(&user)
+		if err := h.db.Save(&user).Error; err != nil {
+			respondInternalError(c, fmt.Errorf("保存恢复码失败: %w", err))
+			return
+		}
 	}
 	token, err := h.jwtManager.GenerateToken(user)
 	if err != nil {

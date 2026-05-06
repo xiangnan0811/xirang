@@ -2,9 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 // TestTerminalHandler_ReserveSlotID_RespectsLimit 验证 Wave 2 (PR-C C3) 修复：
@@ -112,5 +117,34 @@ func TestTerminalHandler_PromoteSlot(t *testing.T) {
 	storedCancel()
 	if !cancelCalled {
 		t.Fatal("storedCancel 未被调用")
+	}
+}
+
+func TestTerminalHandlerServeTerminalReturnsEnvelopeWhenFull(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &TerminalHandler{
+		sessions: make(map[string]context.CancelFunc),
+	}
+	for i := 0; i < maxTerminalSessions; i++ {
+		if id := h.reserveSlotID(); id == "" {
+			t.Fatalf("第 %d 次 reserveSlotID 应成功", i)
+		}
+	}
+
+	r := gin.New()
+	r.GET("/api/v1/ws/terminal", h.ServeTerminal)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ws/terminal", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("期望状态码 503，实际: %d，响应: %s", w.Code, w.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应信封失败: %v", err)
+	}
+	if envelope.Code != http.StatusServiceUnavailable || envelope.Message != "终端会话数已达上限" {
+		t.Fatalf("期望终端限流响应信封，实际: %+v", envelope)
 	}
 }

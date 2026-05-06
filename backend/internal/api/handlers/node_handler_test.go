@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -58,8 +59,16 @@ func TestNodeExecDisabled(t *testing.T) {
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("期望状态码 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "XR-SEC-EXEC-DISABLED") {
-		t.Fatalf("期望返回禁用错误码，实际: %s", resp.Body.String())
+	var envelope Response
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应信封失败: %v", err)
+	}
+	if envelope.Code != http.StatusForbidden || envelope.Message != "节点远程执行能力已禁用" {
+		t.Fatalf("期望标准禁用响应信封，实际: %+v", envelope)
+	}
+	data, ok := envelope.Data.(map[string]interface{})
+	if !ok || data["error_code"] != nodeExecDisabledCode {
+		t.Fatalf("期望返回禁用错误码，实际: %+v", envelope.Data)
 	}
 }
 
@@ -165,6 +174,84 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 	}
 	if alertCount != 0 {
 		t.Fatalf("期望关联告警被删除，剩余: %d", alertCount)
+	}
+}
+
+func TestNodeMigrateReturnsInternalErrorWhenPolicyLookupFails(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}); err != nil {
+		t.Fatalf("初始化节点表失败: %v", err)
+	}
+
+	source := model.Node{Name: "source-node", Host: "10.0.0.21", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY", BackupDir: "/backup/source"}
+	target := model.Node{Name: "target-node", Host: "10.0.0.22", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY", BackupDir: "/backup/target"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("创建源节点失败: %v", err)
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("创建目标节点失败: %v", err)
+	}
+
+	r := gin.New()
+	handler := NewNodeHandler(db, nil)
+	r.POST("/nodes/:id/migrate", func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Next()
+	}, handler.Migrate)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/migrate", source.ID), strings.NewReader(fmt.Sprintf(`{"targetNodeId":%d}`, target.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("期望策略查询失败返回 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var envelope Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError {
+		t.Fatalf("期望标准错误信封，实际: %+v", envelope)
+	}
+}
+
+func TestNodeMigratePreflightReturnsInternalErrorWhenPolicyLookupFails(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}); err != nil {
+		t.Fatalf("初始化节点表失败: %v", err)
+	}
+
+	source := model.Node{Name: "source-node", Host: "10.0.0.21", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY", BackupDir: "/backup/source"}
+	target := model.Node{Name: "target-node", Host: "10.0.0.22", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY", BackupDir: "/backup/target"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("创建源节点失败: %v", err)
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("创建目标节点失败: %v", err)
+	}
+
+	r := gin.New()
+	handler := NewNodeHandler(db, nil)
+	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Next()
+	}, handler.MigratePreflight)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/migrate-preflight", source.ID), strings.NewReader(fmt.Sprintf(`{"targetNodeId":%d}`, target.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("预检策略查询失败期望返回 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var envelope Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError {
+		t.Fatalf("期望标准错误信封，实际: %+v", envelope)
 	}
 }
 

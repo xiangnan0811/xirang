@@ -338,6 +338,9 @@ function CronPauseOptions({
 }) {
   const { t } = useTranslation();
   const isRunning = task.status === "running" || task.status === "retrying";
+  const optionSkipNextId = `task-${task.id}-pause-skip-next`;
+  const optionPauseAllId = `task-${task.id}-pause-all`;
+  const optionPauseCancelId = `task-${task.id}-pause-cancel`;
   const [selected, setSelected] = useState<"skip-next" | "pause-all" | "pause-cancel">(
     task.skipNext ? "pause-all" : "skip-next"
   );
@@ -352,26 +355,29 @@ function CronPauseOptions({
     <div className="space-y-4">
       <div className="space-y-3" role="radiogroup" aria-label={t("tasks.pauseCronTitle")}>
         {!task.skipNext && (
-          <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
-            <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "skip-next"} onChange={() => setSelected("skip-next")} />
+          <label htmlFor={optionSkipNextId} className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+            <input id={optionSkipNextId} type="radio" name="cron-pause" className="mt-0.5" checked={selected === "skip-next"} onChange={() => setSelected("skip-next")} />
+            <span className="sr-only">{t("tasks.pauseOptionSkipNext")}</span>
             <div>
-              <span className="text-sm font-medium">{t("tasks.pauseOptionSkipNext")}</span>
+              <span aria-hidden="true" className="text-sm font-medium">{t("tasks.pauseOptionSkipNext")}</span>
               <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionSkipNextDesc")}</p>
             </div>
           </label>
         )}
-        <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
-          <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-all"} onChange={() => setSelected("pause-all")} />
+        <label htmlFor={optionPauseAllId} className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+          <input id={optionPauseAllId} type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-all"} onChange={() => setSelected("pause-all")} />
+          <span className="sr-only">{t("tasks.pauseOptionPauseAll")}</span>
           <div>
-            <span className="text-sm font-medium">{t("tasks.pauseOptionPauseAll")}</span>
+            <span aria-hidden="true" className="text-sm font-medium">{t("tasks.pauseOptionPauseAll")}</span>
             <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionPauseAllDesc")}</p>
           </div>
         </label>
         {isRunning && (
-          <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
-            <input type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-cancel"} onChange={() => setSelected("pause-cancel")} />
+          <label htmlFor={optionPauseCancelId} className="flex items-start gap-2.5 cursor-pointer rounded-md border border-border/60 p-3 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/50 has-[:checked]:bg-primary/5">
+            <input id={optionPauseCancelId} type="radio" name="cron-pause" className="mt-0.5" checked={selected === "pause-cancel"} onChange={() => setSelected("pause-cancel")} />
+            <span className="sr-only">{t("tasks.pauseOptionPauseCancel")}</span>
             <div>
-              <span className="text-sm font-medium">{t("tasks.pauseOptionPauseCancel")}</span>
+              <span aria-hidden="true" className="text-sm font-medium">{t("tasks.pauseOptionPauseCancel")}</span>
               <p className="text-xs text-muted-foreground mt-0.5">{t("tasks.pauseOptionPauseCancelDesc")}</p>
             </div>
           </label>

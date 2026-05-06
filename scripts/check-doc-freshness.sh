@@ -7,8 +7,10 @@ set -euo pipefail
 
 WARN=0
 
-# 获取本次变更的文件列表
-if [ -n "${GITHUB_BASE_REF:-}" ]; then
+# 获取本次变更的文件列表。DOC_FRESHNESS_CHANGED_FILES 仅供脚本自测注入 fixture。
+if [ -n "${DOC_FRESHNESS_CHANGED_FILES:-}" ]; then
+  CHANGED="${DOC_FRESHNESS_CHANGED_FILES}"
+elif [ -n "${GITHUB_BASE_REF:-}" ]; then
   # PR：对比 base branch
   CHANGED=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null || true)
 elif git rev-parse HEAD~1 >/dev/null 2>&1; then
@@ -29,10 +31,18 @@ warn() {
   WARN=$((WARN + 1))
 }
 
-# 规则 1：模型变更 → CLAUDE.md
+has_changed() {
+  echo "$CHANGED" | grep -qE "$1"
+}
+
+has_doc() {
+  echo "$CHANGED" | grep -qE "$1"
+}
+
+# 规则 1：模型变更 → backend/README_backend.md 或 backend 数据库规范
 if echo "$CHANGED" | grep -q "backend/internal/model/models.go"; then
-  if ! echo "$CHANGED" | grep -q "CLAUDE.md"; then
-    warn "backend/internal/model/models.go 已修改，但 CLAUDE.md 未同步更新"
+  if ! has_doc '^(backend/README_backend\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
+    warn "backend/internal/model/models.go 已修改，但 backend 模型/数据库文档未同步更新"
   fi
 fi
 
@@ -43,22 +53,22 @@ if echo "$CHANGED" | grep -q "backend/internal/api/router.go"; then
   fi
 fi
 
-# 规则 3：前端路由变更 → CLAUDE.md
+# 规则 3：前端路由变更 → README / docs / frontend structure spec
 if echo "$CHANGED" | grep -q "web/src/router.tsx"; then
-  if ! echo "$CHANGED" | grep -q "CLAUDE.md"; then
-    warn "web/src/router.tsx 已修改，但 CLAUDE.md 未同步更新"
+  if ! has_doc '^(README\.md|docs/|\.trellis/spec/frontend/directory-structure\.md)$'; then
+    warn "web/src/router.tsx 已修改，但公开入口文档或 frontend structure spec 未同步更新"
   fi
 fi
 
-# 规则 4：新增迁移文件 → CLAUDE.md
+# 规则 4：新增迁移文件 → backend README / migration docs / database spec
 if echo "$CHANGED" | grep -q "backend/internal/database/migrations/"; then
-  if ! echo "$CHANGED" | grep -q "CLAUDE.md"; then
-    warn "数据库迁移文件有变更，但 CLAUDE.md 未同步更新迁移版本"
+  if ! has_doc '^(backend/README_backend\.md|docs/migration-utc-cutover\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
+    warn "数据库迁移文件有变更，但 backend 迁移文档或数据库规范未同步更新"
   fi
 fi
 
 # 规则 5：配置变更 → docs/env-vars.md
-if echo "$CHANGED" | grep -q "backend/internal/config/config.go"; then
+if has_changed "backend/internal/config/config.go"; then
   if ! echo "$CHANGED" | grep -q "docs/env-vars.md"; then
     warn "backend/internal/config/config.go 已修改，但 docs/env-vars.md 未同步更新"
   fi

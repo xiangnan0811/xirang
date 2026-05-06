@@ -244,31 +244,11 @@ export const NodesGrid = React.memo(function NodesGrid({
           return (
             <div
               key={node.id}
-              tabIndex={0}
               aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
               className={cn(
-                "rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-3 outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-transparent",
+                "rounded-lg border border-border bg-card shadow-sm transition-shadow p-3",
                 isSelected && "border-primary/45 ring-1 ring-primary/40"
               )}
-              onClick={(e) => {
-                if (
-                  e.target instanceof HTMLElement &&
-                  e.target.closest("button, input, a, label, select, textarea")
-                ) {
-                  return;
-                }
-                setSelectedNodeId(node.id);
-              }}
-              onKeyDown={(e) => {
-                if (e.target !== e.currentTarget) {
-                  return;
-                }
-                if (e.key !== "Enter" && e.key !== " ") {
-                  return;
-                }
-                e.preventDefault();
-                setSelectedNodeId(node.id);
-              }}
             >
               <div className="flex items-start justify-between gap-2">
                 <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -293,7 +273,8 @@ export const NodesGrid = React.memo(function NodesGrid({
                 <Link
                   to={`/app/nodes/${node.id}`}
                   data-testid={`nodes-list-link-${node.id}`}
-                  className="font-medium hover:underline"
+                  className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onFocus={() => setSelectedNodeId(node.id)}
                 >
                   {node.name}
                 </Link>

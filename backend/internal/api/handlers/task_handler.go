@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -460,7 +459,7 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"message": "triggered", "run_id": runID})
+	respondAccepted(c, gin.H{"message": "triggered", "run_id": runID})
 }
 
 // Cancel godoc

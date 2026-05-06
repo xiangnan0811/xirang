@@ -12,7 +12,10 @@
 
 ## Release Please 状态与基线
 
-当前仓库已启用 Release Please，manifest 基线见 `.release-please-manifest.json`；当前仓库内基线为 `0.19.0`，`CHANGELOG.md` 已由 Release Please 维护。
+当前仓库已启用 Release Please，当前版本基线见 `.release-please-manifest.json`；
+截至本次审查仓库内 manifest 为 `0.28.0`，`CHANGELOG.md` 已由 Release Please
+维护。不要在文档中手写“当前版本”后长期依赖它；需要确认时以 manifest 和
+GitHub Release 为准。
 
 仅在重建发布链路、迁移仓库或重置首发版本时，才需要重新执行 bootstrap 检查：
 
@@ -53,21 +56,34 @@
 ## 标准发布流程
 
 1. 功能 PR 标题使用 Conventional Commits，合并到 `main` 时保持语义不变。
-2. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 自动更新或创建 Release PR，确保 release 分支会触发 CI。
-3. 审阅并合并 Release PR。
-4. GitHub 创建对应 `vX.Y.Z` Release。
-5. `publish-images.yml` 监听 `release.published`，向 Docker Hub 发布：
+2. 创建 PR 后，负责人必须监控 required CI jobs；失败时在同一工作分支修复、推送并重新监控。required checks 失败、pending 或缺失时不得合并。
+3. PR 合并到 `main` 后，继续监控 `Release Please` workflow，确认它成功并按配置和提交语义创建或更新 Release PR。若 Release Please 只更新现有 Release PR 或未产生正式 release，需在交付记录中说明；不要把 post-merge 状态留空。
+4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。
+5. 审阅 Release PR，监控其 required checks，通过后合并。
+6. GitHub 创建对应 `vX.Y.Z` Release。
+7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 发布：
    - `vX.Y.Z`
    - `X.Y.Z`
    - `latest`
 
    发布步骤为 **build amd64 (load) → Trivy 扫描 → build & push 多架 → attest**。
    当扫描到 HIGH/CRITICAL 漏洞时，整个 workflow 会在 push 之前失败，不会污染
-   Docker Hub 的 `latest` 标签。Trivy 当前钉版到 `aquasecurity/trivy-action@v0.36.0`
-   防止浮动 ref 供应链攻击；该 tag 已通过 `gh release list -R aquasecurity/trivy-action`
-   在 2026-05-04 核验为 latest stable。维护者按需 bump（建议查看
-   <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag 或 SHA pin）。
-6. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
+   Docker Hub 的 `latest` 标签。Trivy 当前固定到 v0.36.0 的解引用 commit
+   `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
+   通过 `git ls-remote` 核验。维护者按需 bump（建议查看
+   <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag，并写入其
+   解引用 commit 或可审计的 SHA pin）。
+8. 监控 `Publish Docker Images` 直到成功；失败时优先修复自动链路，只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
+9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
+
+## PR 后监控要求
+
+- PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。
+- CI 失败时，负责人应修复失败原因、推送到同一工作分支并重新监控；只有确认是真实外部阻塞时，才可把阻塞原因和下一步记录到 PR 或任务交付说明。
+- 合并只能发生在 required checks 全部通过之后；不要在 checks 失败、pending 或缺失时合并。
+- 普通 PR 合并后，负责人或 maintainer 必须检查 `Release Please` workflow 是否成功，并确认它是否创建或更新 Release PR。若本次合并不应触发正式 release，应明确记录“未触发正式 release”，并确认没有失败的 release automation 需要处理。
+- Release PR 合并后，必须检查 GitHub Release 是否创建成功，并继续监控 `Publish Docker Images`。Docker Hub 仍是唯一官方公开镜像源；不要用其他 registry 或非稳定 tag 替代失败的正式发布链路。
+- 公开 release tag 必须保持稳定 semver `vX.Y.Z`。不要发布 prerelease/nightly，不要手动创建绕过 GitHub Release 权威源的 Docker Hub tag。
 
 ## Docker Hub 仓库介绍同步
 

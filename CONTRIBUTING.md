@@ -10,7 +10,7 @@
 
 ### 报告问题
 
-- 使用 [GitHub Issues](../../issues) 提交 Bug 或功能建议
+- 使用 [GitHub Issues](https://github.com/xiangnan0811/xirang/issues) 提交 Bug 或功能建议
 - 提交前请先搜索是否已有相同的 Issue
 - Bug 报告请尽量包含：复现步骤、期望行为、实际行为、环境信息
 
@@ -28,7 +28,11 @@
 cd backend && go test ./... && go build ./...
 
 # 前端
-cd web && npm run check   # typecheck + test + build
+cd web && npm run check   # typecheck + lint + test + build
+
+# 仓库脚本/文档
+bash scripts/check-doc-freshness.sh
+bash scripts/check-migration-utc-safety.sh
 ```
 
 4. 提交代码并推送：
@@ -39,12 +43,15 @@ git commit -m "feat(web): 添加XX功能"
 git push origin feat/your-feature
 ```
 
-5. 在 GitHub 上发起 Pull Request
+5. 在 GitHub 上发起 Pull Request，并由 PR 负责人持续监控 required CI jobs。CI 失败时，应在同一工作分支修复、推送并重新监控；不要把失败或未完成的 required checks 留给维护者猜测。
 
 ### Pull Request 标题与合并方式
 
 - Pull Request 标题必须遵循 Conventional Commits；CI 会校验标题格式。
+- PR 创建后，负责人必须监控 required checks，失败则修复并继续监控，直到全部 required checks 通过或明确记录真实外部阻塞。
 - Maintainer 合并到 `main` 时应优先使用 `Squash and merge`，并保留符合规范的 PR 标题，让最终进入发布分支的提交语义稳定可预测。
+- Maintainer 只能在 required checks 全部通过后合并；checks 失败、pending 或缺失时不要合并。
+- PR 合并后，负责人或 maintainer 必须继续检查 post-merge automation：`Release Please` workflow 是否成功并按规则创建或更新 Release PR、正式 GitHub Release、`Publish Docker Images`，以及 README/release 文档相关的 `Sync Docker Hub Description` workflow。若本次合并没有触发正式 release，也必须在交付记录中明确说明没有预期生成 GitHub Release 或 Docker Hub 镜像发布。
 - Maintainer 也不要绕过 PR 直接在 `main` 提交功能或修复；如需维护仓库流程规范，也应走独立分支和 PR。
 - 不要直接向 `main` 推送发布相关改动；正式版本通过 Release Please 生成的 Release PR 落地。
 
@@ -78,17 +85,20 @@ git push origin feat/your-feature
 - Docker Hub 是唯一官方公开镜像源；`latest` 仅代表最新稳定版。
 - 本仓库当前只支持稳定版 `vX.Y.Z` 发布，不支持 prerelease/nightly 通道。
 - 公开发布流程不自动部署私有环境；`.github/workflows/deploy.yml` 仅用于维护者手动部署。
+- 合并普通 PR 后必须检查 `Release Please` workflow 是否成功，并确认它是否按规则创建或更新 Release PR；合并 Release PR 后必须检查 GitHub Release 与 Docker Hub 镜像发布 workflow，失败时修复或记录外部阻塞。
+- 若某次合并只是 docs/ci/infra/process 变更且没有触发正式 release，应在 PR 或交付记录中明确写明“未触发正式 release”，避免把 auto release 状态留空。
 - 如修改 release/image/deploy/version-check 路径，必须同步更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md` 以及维护者发布文档。
 
 ## 文档同步
 
 PR 涉及以下变更时，请同步更新对应文档：
 
-- 新增/修改数据库模型 → 更新 `CLAUDE.md` 核心领域模型
+- 新增/修改数据库模型 → 更新 `backend/README_backend.md` 的核心模型说明，必要时同步 `.trellis/spec/backend/database-guidelines.md`
 - 新增/修改 API 路由 → 更新 `backend/README_backend.md` 接口列表
-- 新增/修改前端页面 → 更新 `CLAUDE.md` 前端结构
-- 新增/修改环境变量 → 更新 `docs/env-vars.md` 和 `.env.example`
-- 新增数据库迁移 → 更新 `CLAUDE.md` 迁移版本号
+- 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `.trellis/spec/frontend/directory-structure.md`
+- 新增/修改环境变量 → 更新 `docs/env-vars.md`、相关 `.env*.example` 或 `.env.deploy`
+- 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `.trellis/spec/backend/database-guidelines.md`
+- 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/release-maintainers.md` 和 PR 模板/流程说明
 
 CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
 
@@ -106,6 +116,6 @@ make setup-hooks
 
 ## 发布流程
 
-本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 `CHANGELOG.md`。合并到 `main` 的 PR 会自动更新或创建 Release PR；合并该 Release PR 后会创建 GitHub Release，并触发 Docker Hub 镜像发布。
+本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 `CHANGELOG.md`。合并到 `main` 的 PR 会触发 `Release Please` workflow，并由 Release Please 按配置和提交语义创建或更新 Release PR；合并该 Release PR 后会创建 GitHub Release，并触发 Docker Hub 镜像发布。维护者合并后必须检查这些 workflow 的结果；如果没有正式 release 被触发，应明确记录这一点。
 
 维护者发布与仓库设置说明见 [docs/release-maintainers.md](docs/release-maintainers.md)。

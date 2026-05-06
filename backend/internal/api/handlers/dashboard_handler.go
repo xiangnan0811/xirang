@@ -213,7 +213,7 @@ func mapServiceErr(c *gin.Context, err error) {
 	case errors.Is(err, dashboards.ErrNotFound):
 		respondNotFound(c, "看板不存在")
 	case errors.Is(err, dashboards.ErrConflict):
-		c.JSON(409, gin.H{"code": 409, "message": "看板名称已存在", "data": nil})
+		respondConflict(c, "看板名称已存在")
 	case errors.Is(err, dashboards.ErrInvalidMetric),
 		errors.Is(err, dashboards.ErrInvalidAggregation),
 		errors.Is(err, dashboards.ErrInvalidFilters),

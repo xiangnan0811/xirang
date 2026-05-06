@@ -40,9 +40,13 @@ export function RotationPreview({
         {rotatableKeys.map((key) => {
           const nodes = keyUsageMap.get(key.id) ?? [];
           const isSelected = selectedKey?.id === key.id;
+          const optionId = `rotation-key-${key.id}`;
+          const optionLabelId = `rotation-key-${key.id}-label`;
           return (
             <label
               key={key.id}
+              htmlFor={optionId}
+              aria-label={key.name}
               className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${
                 isSelected
                   ? "border-primary/50 bg-primary/5"
@@ -50,20 +54,23 @@ export function RotationPreview({
               }`}
             >
               <input
+                id={optionId}
                 type="radio"
                 name="rotation-key"
                 className="accent-primary"
                 checked={isSelected}
                 onChange={() => onSelectKey(key)}
+                aria-labelledby={optionLabelId}
               />
+              <span className="sr-only">{key.name}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{key.name}</span>
+                  <span id={optionLabelId} className="font-medium text-sm">{key.name}</span>
                   <span className="text-xs text-muted-foreground">
                     {key.username}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div aria-hidden="true" className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{String(key.keyType).toUpperCase()}</span>
                   <span>&middot;</span>
                   <span>

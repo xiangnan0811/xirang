@@ -272,10 +272,18 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 	// 事务删除关联记录及任务本身
 	var deleted int64
 	err = h.db.Transaction(func(tx *gorm.DB) error {
-		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{})
-		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{})
-		tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{})
-		tx.Where("task_id IN ?", taskIDs).Delete(&model.Alert{})
+		if err := tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskRun{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskTrafficSample{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id IN ?", taskIDs).Delete(&model.Alert{}).Error; err != nil {
+			return err
+		}
 
 		result := tx.Where("batch_id = ?", batchID).Delete(&model.Task{})
 		deleted = result.RowsAffected

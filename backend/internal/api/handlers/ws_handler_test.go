@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,6 +28,7 @@ func TestWSHandlerServeWSNilHub(t *testing.T) {
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("期望状态码 %d，实际 %d", http.StatusServiceUnavailable, recorder.Code)
 	}
+	assertServiceUnavailableEnvelope(t, recorder.Body.Bytes())
 }
 
 func TestWSHandlerServeWSNilJWTManager(t *testing.T) {
@@ -37,5 +39,17 @@ func TestWSHandlerServeWSNilJWTManager(t *testing.T) {
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("期望状态码 %d，实际 %d", http.StatusServiceUnavailable, recorder.Code)
+	}
+	assertServiceUnavailableEnvelope(t, recorder.Body.Bytes())
+}
+
+func assertServiceUnavailableEnvelope(t *testing.T, body []byte) {
+	t.Helper()
+	var envelope Response
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("解析响应信封失败: %v", err)
+	}
+	if envelope.Code != http.StatusServiceUnavailable || envelope.Message != "websocket 服务不可用" {
+		t.Fatalf("期望 websocket 服务不可用信封，实际: %+v", envelope)
 	}
 }

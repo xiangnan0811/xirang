@@ -244,7 +244,7 @@ describe("NodesPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("桌面节点卡片支持键盘选中当前节点", async () => {
+  it("桌面节点卡片聚焦详情链接时标记当前节点", async () => {
     const user = userEvent.setup();
 
     const view = render(
@@ -262,11 +262,12 @@ describe("NodesPage", () => {
       throw new Error("未找到第二张节点卡片");
     }
 
-    secondCard.focus();
-    await user.keyboard("{Enter}");
+    await user.tab();
+    const secondLink = screen.getAllByRole("link", { name: "node-dr-2" })[1];
+    secondLink.focus();
 
     expect(secondCard).toHaveClass("border-primary/45");
-    expect(secondCard).toHaveFocus();
+    expect(secondLink).toHaveFocus();
   });
 
   it("持久化列表视图时移动端仍展示卡片视图", () => {

@@ -38,6 +38,10 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   `respondPaginated`, or the error helpers.
 - Keep sensitive data encrypted via model hooks and strip secrets from response
   structs. Example: `model.Node.Sanitized()`.
+- Keep encryption-key rotation docs and implementation in lockstep:
+  `DATA_ENCRYPTION_KEY` is the primary v2 write key, and
+  `DATA_ENCRYPTION_LEGACY_KEY` must be honored by
+  `backend/internal/secure/crypto.go` when documented for v1 decrypt/migration.
 - Validate IDs with shared helpers such as `parseID` and validate user input
   before writes. Keep validation close to the owning handler/service.
 - For cross-resource or multi-row writes, use GORM transactions.

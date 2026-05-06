@@ -117,11 +117,11 @@ jobs:
           cache-to: type=gha,scope=xirang,mode=max
 
       # Step 2: Trivy 扫描本地镜像；HIGH/CRITICAL 漏洞会让任务失败，阻断后续 push。
-      # 注：trivy-action 钉到稳定 tag 而非 @master，避免供应链攻击窗口。
-      # tag v0.36.0 已通过 `gh release list -R aquasecurity/trivy-action` 在 2026-05-04 核验为 latest stable。
+      # 注：trivy-action 钉到 v0.36.0 tag 的解引用 commit，避免浮动 ref 供应链攻击窗口。
+      # v0.36.0 已通过 `git ls-remote` 在 2026-05-06 核验为 ed142fd...。
       # 升级时维护者请重新核对最新 release 并参考 https://github.com/aquasecurity/trivy-action/releases
       - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: localhost/xirang-scan:${{ steps.version.outputs.version }}
           format: 'table'

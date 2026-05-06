@@ -60,6 +60,11 @@ message from `respondInternalError`.
 - Duplicate/conflict: `respondConflict(c, "message")`.
 - Upstream/backend dependency failure that is safe to expose: use a specific
   helper such as `respondBadGateway`.
+- Accepted async work: `respondAccepted(c, data)`.
+- Temporarily unavailable server resources: `respondServiceUnavailable(c,
+  "message")`.
+- Feature not implemented for the active runtime/backend: `respondNotImplemented(c,
+  "message")`.
 - Unexpected server error: `respondInternalError(c, err)`. This logs the error
   with module `api` and the route path, then returns a generic 500 envelope.
 
@@ -73,6 +78,8 @@ Simplified Chinese strings.
 
 - Do not add new raw `c.JSON(http.Status..., gin.H{"error": ...})` responses in
   handlers; use `response.go` helpers.
+- When a response needs a new HTTP status, add a named helper in `response.go`
+  first, then update handler tests to assert the standard envelope.
 - Do not swallow database errors. If a query can fail, check `.Error` or
   `RowsAffected` as appropriate.
 - Do not return raw `err.Error()` for internal server errors. Wrap/log it and
