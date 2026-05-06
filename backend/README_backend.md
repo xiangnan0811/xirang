@@ -251,6 +251,7 @@ go run ./cmd/server
 | GET | /tasks/:id/snapshots/:sid/files | 🔒 快照文件 |
 | POST | /tasks/:id/snapshots/:sid/restore | 🔒 从快照恢复 |
 | GET | /tasks/:id/snapshots/diff | 🔒 快照对比 |
+| GET | /tasks/:id/snapshots/search | 🔒 搜索快照文件 |
 
 ### 系统设置与配置
 

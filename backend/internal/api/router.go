@@ -105,6 +105,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
+	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB)
 	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService)
 	appCredentialHandler := handlers.NewAppCredentialHandler(dep.DB)
 	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService)
@@ -282,6 +283,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
 	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), snapshotHandler.Restore)
 	secured.GET("/tasks/:id/snapshots/diff", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotDiffHandler.Diff)
+	secured.GET("/tasks/:id/snapshots/search", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotSearchHandler.Search)
 
 	secured.GET("/settings", middleware.RequireRole("admin"), settingsHandler.GetAll)
 	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)

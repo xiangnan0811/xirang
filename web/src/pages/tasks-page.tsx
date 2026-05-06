@@ -100,6 +100,7 @@ export function TasksPage() {
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchDefaultNodeIds, setBatchDefaultNodeIds] = useState<number[] | undefined>(undefined);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
@@ -534,6 +535,8 @@ export function TasksPage() {
         setShowSnapshots={setShowSnapshots}
         showDiff={showDiff}
         setShowDiff={setShowDiff}
+        showSearch={showSearch}
+        setShowSearch={setShowSearch}
         batchDialogOpen={batchDialogOpen}
         setBatchDialogOpen={setBatchDialogOpen}
         batchDefaultNodeIds={batchDefaultNodeIds}

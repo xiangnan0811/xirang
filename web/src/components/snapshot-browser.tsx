@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, File, Folder, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -12,9 +12,13 @@ import { toast } from "sonner";
 interface SnapshotBrowserProps {
   taskId: number;
   token: string;
+  /** 初始要浏览的快照 ID，用于从搜索结果跳转 */
+  initialSnapshotId?: string;
+  /** 初始文件路径，配合 initialSnapshotId 使用 */
+  initialPath?: string;
 }
 
-export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
+export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath }: SnapshotBrowserProps) {
   const { t } = useTranslation();
   const [snapshots, setSnapshots] = useState<ResticSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,6 +30,7 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [restoring, setRestoring] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState("/tmp/xirang-restore");
+  const autoNavigated = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -33,7 +38,19 @@ export function SnapshotBrowser({ taskId, token }: SnapshotBrowserProps) {
     setError(null);
     apiClient
       .listSnapshots(token, taskId)
-      .then((data) => { if (!controller.signal.aborted) setSnapshots(data); })
+      .then((data) => {
+        if (!controller.signal.aborted) {
+          setSnapshots(data);
+          // 自动导航到初始快照（仅首次）
+          if (initialSnapshotId && !autoNavigated.current) {
+            autoNavigated.current = true;
+            const target = data.find((s) => s.id === initialSnapshotId || s.short_id === initialSnapshotId);
+            if (target) {
+              browseSnapshot(target, initialPath ?? "/");
+            }
+          }
+        }
+      })
       .catch((err) => { if (!controller.signal.aborted) setError(getErrorMessage(err, t('snapshots.loadFailed'))); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();

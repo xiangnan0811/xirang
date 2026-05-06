@@ -17,6 +17,18 @@ export interface ResticEntry {
   mtime: string;
 }
 
+export interface SearchResult {
+  snapshot_id: string;
+  path: string;
+  size: number;
+  mtime: string;
+}
+
+export interface SearchIndexingStatus {
+  status: string;
+  message: string;
+}
+
 export function createSnapshotsApi() {
   return {
     async listSnapshots(token: string, taskId: number): Promise<ResticSnapshot[]> {
@@ -34,6 +46,20 @@ export function createSnapshotsApi() {
         token,
         body: { includes, targetPath },
       });
+    },
+
+    async searchFiles(
+      token: string,
+      taskId: number,
+      q: string,
+      signal?: AbortSignal
+    ): Promise<SearchResult[] | SearchIndexingStatus> {
+      const query = new URLSearchParams({ q: q.trim() });
+      const result = await request<SearchResult[] | SearchIndexingStatus>(
+        `/tasks/${taskId}/snapshots/search?${query}`,
+        { token, signal }
+      );
+      return result ?? [];
     },
   };
 }

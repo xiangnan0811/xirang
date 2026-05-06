@@ -715,6 +715,7 @@ const zh = {
     fetchLogsFailed: "获取任务日志失败",
     browseSnapshots: "浏览快照",
     compareSnapshots: "快照对比",
+    searchSnapshots: "搜索文件",
     batchExecute: "批量执行",
     batchTrigger: "批量触发",
     viewToggleGroup: "任务视图切换",
@@ -1664,6 +1665,16 @@ const zh = {
     snapshotLabel: "快照 {{id}}",
     restoreCount: "恢复 {{count}} 项",
     restoreSuccess: "恢复成功",
+  },
+
+  // ── snapshot search ──
+  snapshotSearch: {
+    placeholder: "搜索备份文件...",
+    indexing: "索引构建中，请稍后重试...",
+    searching: "搜索中...",
+    noResults: "未找到匹配文件",
+    resultCount: "找到 {{count}} 个文件",
+    searchHint: "输入文件名关键词搜索历史快照",
   },
 
   // ── backups page ──
