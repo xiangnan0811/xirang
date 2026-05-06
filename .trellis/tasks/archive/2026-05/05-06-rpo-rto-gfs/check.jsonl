@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "RPO/RTO 计算/retention mode/GFS cmd/向后兼容全部单测"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000055 up/down 双向；Policy 新字段 default 值正确"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + Policy 编辑/report 页组件测试"}
+{"file": ".trellis/tasks/05-06-rpo-rto-gfs/prd.md", "reason": "逐项 AC：GFS forget/RPO达标计算/simple兼容/全量GREEN"}
