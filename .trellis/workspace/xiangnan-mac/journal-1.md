@@ -439,3 +439,36 @@ a11y 作为 4 wave 累积下来唯一未做的质量维度，本 wave 把它纳�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 跨快照内容搜索 (Snapshot File Search) 完整实现
+
+**Date**: 2026-05-06
+**Task**: 跨快照内容搜索 (Snapshot File Search) 完整实现
+**Branch**: `feat/snapshot-search`
+
+### Summary
+
+实现 snapshot file search：SnapshotFileIndex 模型+迁移 000054；lazy 索引构建+增量更新；GET /tasks/:id/snapshots/search 搜索端点；前端搜索框+结果列表+跳转快照浏览；23 单测。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `90d26cb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "索引构建/去重/搜索/注入防护全部单测覆盖"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000054 up/down 双向完整；联合唯一索引防重复"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "各类错误路径：SSH失败/SQL注入/空关键词/非restic/索引构建中"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + 搜索组件 vitest 覆盖"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "搜索框 keyboard/aria + jsx-a11y lint"}
+{"file": ".trellis/tasks/05-06-snapshot-file-search/prd.md", "reason": "逐项 AC：首次建索引/增量更新/搜索nginx.conf/空关键词400/非restic400/全量GREEN"}

@@ -1,11 +1,12 @@
 import React, { Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RotateCcw, FolderSearch, GitCompareArrows } from "lucide-react";
+import { RotateCcw, FolderSearch, GitCompareArrows, SearchCode } from "lucide-react";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
+import { SnapshotSearch } from "@/components/snapshot-search";
 
 const TaskEditorDialog = React.lazy(() =>
   import("@/components/task-create-dialog").then(m => ({ default: m.TaskEditorDialog }))
@@ -46,6 +47,8 @@ export interface TasksPageDialogsProps {
   setShowSnapshots: (show: boolean | ((prev: boolean) => boolean)) => void;
   showDiff: boolean;
   setShowDiff: (show: boolean | ((prev: boolean) => boolean)) => void;
+  showSearch: boolean;
+  setShowSearch: (show: boolean | ((prev: boolean) => boolean)) => void;
   batchDialogOpen: boolean;
   setBatchDialogOpen: (open: boolean) => void;
   batchDefaultNodeIds: number[] | undefined;
@@ -84,6 +87,8 @@ export function TasksPageDialogs({
   setShowSnapshots,
   showDiff,
   setShowDiff,
+  showSearch,
+  setShowSearch,
   batchDialogOpen,
   setBatchDialogOpen,
   batchDefaultNodeIds,
@@ -107,6 +112,15 @@ export function TasksPageDialogs({
   onSkipNext,
 }: TasksPageDialogsProps) {
   const { t } = useTranslation();
+  const [navigateToSnapshotId, setNavigateToSnapshotId] = useState<string | undefined>(undefined);
+  const [navigateToPath, setNavigateToPath] = useState<string | undefined>(undefined);
+
+  const handleNavigateToFile = (snapshotId: string, path: string) => {
+    setNavigateToSnapshotId(snapshotId);
+    setNavigateToPath(path);
+    setShowSearch(false);
+    setShowSnapshots(true);
+  };
 
   return (
     <>
@@ -143,6 +157,9 @@ export function TasksPageDialogs({
             setHistoryTask(null);
             setSelectedRun(null);
             setShowSnapshots(false);
+            setShowSearch(false);
+            setNavigateToSnapshotId(undefined);
+            setNavigateToPath(undefined);
           }
         }}
       >
@@ -160,7 +177,7 @@ export function TasksPageDialogs({
                   <Button
                     size="sm"
                     variant={showSnapshots ? "default" : "outline"}
-                    onClick={() => { setShowSnapshots((v: boolean) => !v); setShowDiff(false); }}
+                    onClick={() => { setShowSnapshots((v: boolean) => !v); setShowDiff(false); setShowSearch(false); }}
                   >
                     <FolderSearch className="mr-1 size-3.5" />
                     {t("tasks.browseSnapshots")}
@@ -168,10 +185,18 @@ export function TasksPageDialogs({
                   <Button
                     size="sm"
                     variant={showDiff ? "default" : "outline"}
-                    onClick={() => { setShowDiff((v: boolean) => !v); setShowSnapshots(false); }}
+                    onClick={() => { setShowDiff((v: boolean) => !v); setShowSnapshots(false); setShowSearch(false); }}
                   >
                     <GitCompareArrows className="mr-1 size-3.5" />
                     {t("tasks.compareSnapshots")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={showSearch ? "default" : "outline"}
+                    onClick={() => { setShowSearch((v: boolean) => !v); setShowSnapshots(false); setShowDiff(false); }}
+                  >
+                    <SearchCode className="mr-1 size-3.5" />
+                    {t("tasks.searchSnapshots")}
                   </Button>
                 </>
               )}
@@ -190,9 +215,20 @@ export function TasksPageDialogs({
           </DialogHeader>
           <DialogBody>
             {historyTask && authToken && showSnapshots ? (
-              <SnapshotBrowser taskId={historyTask.id} token={authToken} />
+              <SnapshotBrowser
+                taskId={historyTask.id}
+                token={authToken}
+                initialSnapshotId={navigateToSnapshotId}
+                initialPath={navigateToPath}
+              />
             ) : historyTask && authToken && showDiff ? (
               <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
+            ) : historyTask && authToken && showSearch ? (
+              <SnapshotSearch
+                taskId={historyTask.id}
+                token={authToken}
+                onNavigateToFile={handleNavigateToFile}
+              />
             ) : historyTask && authToken && (
               selectedRun ? (
                 <TaskRunDetail

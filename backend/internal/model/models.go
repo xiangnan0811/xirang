@@ -869,6 +869,18 @@ type SnapshotDiffHistory struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
+// SnapshotFileIndex 快照文件索引表，支持跨快照按文件名/路径搜索。
+// 联合唯一索引 (task_id, snapshot_id, path) 防止重复索引。
+type SnapshotFileIndex struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	TaskID     uint      `gorm:"not null;uniqueIndex:idx_sfi_task_snap_path" json:"task_id"`
+	SnapshotID string    `gorm:"size:64;not null;uniqueIndex:idx_sfi_task_snap_path" json:"snapshot_id"`
+	Path       string    `gorm:"type:text;not null;uniqueIndex:idx_sfi_task_snap_path;index:idx_sfi_path" json:"path"`
+	Size       int64     `gorm:"not null;default:0" json:"size"`
+	Mtime      string    `gorm:"size:64;not null;default:''" json:"mtime"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // DecodedDetails returns the parsed details map; empty on invalid JSON.
 func (e *AnomalyEvent) DecodedDetails() map[string]any {
 	out := map[string]any{}

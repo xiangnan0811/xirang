@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000054 SQLite+Postgres 双轨；snapshot_file_index 表+联合唯一索引设计"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "索引构建 SSH 超时/SQL 注入防护/非restic跳过/空关键词的错误处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "索引构建/去重/搜索/注入防护的单测要求"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "索引构建进度+搜索查询的结构化日志"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "搜索框+结果列表组件规范"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "搜索框键盘操作+aria属性"}
+{"file": ".trellis/tasks/05-06-snapshot-file-search/prd.md", "reason": "完整 PRD：需求/范围/架构决策/PR拆分/AC"}

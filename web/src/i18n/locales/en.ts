@@ -715,6 +715,7 @@ const en = {
     fetchLogsFailed: "Failed to fetch task logs",
     browseSnapshots: "Browse Snapshots",
     compareSnapshots: "Compare Snapshots",
+    searchSnapshots: "Search Files",
     batchExecute: "Batch Execute",
     batchTrigger: "Batch Trigger",
     viewToggleGroup: "Task view toggle",
@@ -1664,6 +1665,16 @@ const en = {
     snapshotLabel: "Snapshot {{id}}",
     restoreCount: "Restore {{count}} items",
     restoreSuccess: "Restore successful",
+  },
+
+  // ── snapshot search ──
+  snapshotSearch: {
+    placeholder: "Search backup files...",
+    indexing: "Building index, please retry...",
+    searching: "Searching...",
+    noResults: "No matching files",
+    resultCount: "Found {{count}} files",
+    searchHint: "Enter filename to search across snapshots",
   },
 
   // ── backups page ──
