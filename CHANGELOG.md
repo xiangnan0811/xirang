@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/xiangnan0811/xirang/compare/v0.23.0...v0.24.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** 不可变备份 (Immutable Backup) ([#130](https://github.com/xiangnan0811/xirang/issues/130)) ([59d0994](https://github.com/xiangnan0811/xirang/commit/59d099402fb0b76e63bb2c99f6acf03800482ef7))
+
 ## [0.23.0](https://github.com/xiangnan0811/xirang/compare/v0.22.1...v0.23.0) (2026-05-06)
 
 
