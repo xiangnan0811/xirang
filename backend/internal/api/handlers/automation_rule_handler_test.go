@@ -80,7 +80,7 @@ func TestAutomationRuleCRUD(t *testing.T) {
 	var created struct {
 		Data model.AutomationRule `json:"data"`
 	}
-	json.Unmarshal(resp.Body.Bytes(), &created)
+	_ = json.Unmarshal(resp.Body.Bytes(), &created)
 	if created.Data.ID == 0 {
 		t.Fatal("创建后 ID 不应为 0")
 	}
@@ -107,7 +107,7 @@ func TestAutomationRuleCRUD(t *testing.T) {
 	var updated struct {
 		Data model.AutomationRule `json:"data"`
 	}
-	json.Unmarshal(resp.Body.Bytes(), &updated)
+	_ = json.Unmarshal(resp.Body.Bytes(), &updated)
 	if updated.Data.Name != "FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY" {
 		t.Errorf("名称应为 'FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY'，实际 %q", updated.Data.Name)
 	}

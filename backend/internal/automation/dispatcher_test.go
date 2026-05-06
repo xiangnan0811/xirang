@@ -377,7 +377,7 @@ func TestDispatch_SendNotification(t *testing.T) {
 	}
 
 	var details map[string]interface{}
-	json.Unmarshal([]byte(logs[0].Details), &details)
+	_ = json.Unmarshal([]byte(logs[0].Details), &details)
 	msg, _ := details["message"].(string)
 	if msg != "Backup failed for policy 7 on node 3" {
 		t.Errorf("unexpected message: %s", msg)
