@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/xiangnan0811/xirang/compare/v0.22.0...v0.22.1) (2026-05-06)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** ALLOW_DIRTY_STARTUP 对 golang-migrate 内部 dirty 检查无效 ([#126](https://github.com/xiangnan0811/xirang/issues/126)) ([e7d6fe8](https://github.com/xiangnan0811/xirang/commit/e7d6fe8b36a9abedc8cd3575bdefccec12d53923))
+
 ## [0.22.0](https://github.com/xiangnan0811/xirang/compare/v0.21.0...v0.22.0) (2026-05-05)
 
 
