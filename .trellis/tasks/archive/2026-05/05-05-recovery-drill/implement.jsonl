@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000052 SQLite+Postgres 双轨；Policy drill 字段建模"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "drill 调度器、沙箱校验、verify 执行的错误处理规范"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "drill scheduler 逻辑放在 scheduler/scheduler.go 的位置约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "drill 调度器 + RTO 计算 + 告警集成的单测要求"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "drill 调度器的定期扫描 + 成功/失败的结构化日志记录"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Policy 编辑页 drill 配置区的组件规范"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "drill 配置区开关/下拉/文本域的可访问性审核"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Policy drill 字段的 TypeScript 类型定义"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "手动触发按钮的数据请求 pattern"}
+{"file": ".trellis/tasks/05-05-recovery-drill/prd.md", "reason": "完整 PRD：需求 / 范围 / 架构决策 / PR 拆分 / AC"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "drill 调度器 / 沙箱校验 / RTO / auto_cleanup / 告警全部单测覆盖"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000052 up/down 双向脚本完整性"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "drill 各阶段 error：沙箱离线 / restore 失败 / verify exit≠0 / cleanup 失败"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "drill 调度 + 执行 + 告警的审计日志完整性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + vitest 覆盖 drill 配置区组件"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "drill 配置区键盘操作 + aria + jsx-a11y lint"}
+{"file": ".trellis/tasks/05-05-recovery-drill/prd.md", "reason": "逐项对照 AC：cron 触发 / 校验失败告警 / 沙箱离线告警 / auto_cleanup / 源节点拒绝 / 手动触发 / 向后兼容"}
