@@ -14,6 +14,7 @@ export type VersionCheck = {
 };
 
 export type BackupResult = {
+  filename: string;
   path: string;
   size: number;
   sha256: string;
@@ -37,7 +38,7 @@ export function createSystemApi() {
     },
 
     async backupDB(token: string): Promise<BackupResult> {
-      return (await request<BackupResult>("/system/backup-db", { token, method: "POST" })) ?? { path: "", size: 0, sha256: "" };
+      return (await request<BackupResult>("/system/backup-db", { token, method: "POST" })) ?? { filename: "", path: "", size: 0, sha256: "" };
     },
 
     async listBackups(token: string, options?: { signal?: AbortSignal }): Promise<BackupEntry[]> {

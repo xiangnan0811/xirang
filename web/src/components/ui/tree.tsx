@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode, type KeyboardEvent } from "react";
+import { useState, useCallback, useMemo, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronRight, Folder, FolderOpen, File } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -146,8 +146,9 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
 
   const isControlled = selected !== undefined || expanded !== undefined;
 
+  const fallbackExpanded = useMemo(() => new Set<string>(), []);
   const currentSelected = isControlled ? selected : internalSelected;
-  const currentExpanded = isControlled ? (expanded ?? new Set()) : internalExpanded;
+  const currentExpanded = isControlled ? (expanded ?? fallbackExpanded) : internalExpanded;
 
   const handleSelect = useCallback(
     (item: TreeItemData) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { BackupHealthPanel } from "@/components/backup-health-panel";
 import { StorageUsagePanel } from "@/components/storage-usage-panel";
@@ -51,8 +52,8 @@ export function BackupsPage() {
         title={t("backups.pageTitle")}
         subtitle={subtitle}
         actions={
-          <Button shape="pill" onClick={() => {}}>
-            + {t("backups.newBackup")}
+          <Button shape="pill" asChild>
+            <Link to="/app/tasks">{t("backups.newBackup")}</Link>
           </Button>
         }
       />

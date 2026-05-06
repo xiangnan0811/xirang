@@ -36,9 +36,8 @@ export function usePanelData(
     const controller = new AbortController();
     controllerRef.current = controller;
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setError(null);
 
     apiClient.queryPanel(
@@ -54,18 +53,18 @@ export function usePanelData(
     )
       .then((result) => {
         if (controller.signal.aborted) return;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setData(result);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         const msg = err instanceof Error ? err.message : "查询失败";
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setError(msg);
       })
       .finally(() => {
         if (controller.signal.aborted) return;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setLoading(false);
       });
 

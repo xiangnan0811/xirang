@@ -49,7 +49,7 @@ export function SelfBackupPanel() {
     setBacking(true);
     try {
       const result = await apiClient.backupDB(token);
-      toast.success(t('selfBackup.backupSuccess', { path: result.path, size: formatBytes(result.size) }));
+      toast.success(t('selfBackup.backupSuccess', { filename: result.filename, size: formatBytes(result.size) }));
       void fetchBackups();
     } catch (err) {
       toast.error(getErrorMessage(err, t('selfBackup.backupFailed')));

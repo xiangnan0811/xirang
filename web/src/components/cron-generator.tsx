@@ -56,7 +56,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
       if (min.startsWith("*/") && hr === "*" && dom === "*" && mon === "*" && dow === "*") {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setScheduleType("minutes");
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setMinutesInterval(min.replace("*/", ""));
       } else if (hr.startsWith("*/") && dom === "*" && mon === "*" && dow === "*") {
         setScheduleType("hours");

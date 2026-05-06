@@ -85,7 +85,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
         auto_refresh_seconds: seconds,
       } as DashboardInput)
         .then((updated) => {
-          // eslint-disable-next-line react-hooks/set-state-in-effect
+
           setDashboard(updated);
         })
         .catch(() => {
@@ -108,21 +108,21 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
     const controller = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setError(null);
 
     apiClient.getDashboard(token, Number(id), { signal: controller.signal })
       .then((d) => {
         if (controller.signal.aborted) return;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setDashboard(d);
         // 同步 time_range
         if (!initializedRef.current) {
           initializedRef.current = true;
-          // eslint-disable-next-line react-hooks/set-state-in-effect
+
           setTimeRangeState(d.time_range);
           if (d.time_range === "custom" && d.custom_start && d.custom_end) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
+
             setCustomRange({ start: d.custom_start, end: d.custom_end });
           }
         }
@@ -131,12 +131,12 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
         if (controller.signal.aborted) return;
         const normalized =
           err instanceof Error ? err : new Error(String(err ?? "unknown error"));
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setError(normalized);
       })
       .finally(() => {
         if (controller.signal.aborted) return;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+
         setLoading(false);
       });
 
