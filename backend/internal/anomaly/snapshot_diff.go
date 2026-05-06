@@ -329,7 +329,7 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	// 获取最近 2 个快照 ID
 	snapCmd := fmt.Sprintf("%s restic snapshots --json -r %s --latest 2 2>&1", envPrefix, repoArg)
