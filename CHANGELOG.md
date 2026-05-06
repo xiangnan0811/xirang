@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/xiangnan0811/xirang/compare/v0.26.0...v0.27.0) (2026-05-06)
+
+
+### ✨ Features
+
+* **backup:** 事件触发-动作编排 (Event-Trigger Automation) ([#136](https://github.com/xiangnan0811/xirang/issues/136)) ([129dce0](https://github.com/xiangnan0811/xirang/commit/129dce0aa9f74c891348018ec9dcdd995a72c8d3))
+
 ## [0.26.0](https://github.com/xiangnan0811/xirang/compare/v0.25.0...v0.26.0) (2026-05-06)
 
 
