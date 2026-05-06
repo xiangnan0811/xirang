@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ResticConfig 扩展 / init cmd 构建 / 版本解析的单测要求"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Task 编辑页 append-only 开关组件规范"}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "新开关的键盘可操作 + aria 属性"}
+{"file": ".trellis/tasks/05-06-immutable-backup/prd.md", "reason": "完整 PRD：需求 / 范围 / 架构决策 / AC"}

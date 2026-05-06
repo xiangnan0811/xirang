@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "init cmd 构建 / 版本解析 / 版本不匹配 warn 全部单测覆盖"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "npm run check + Task 编辑页开关回归"}
+{"file": ".trellis/tasks/05-06-immutable-backup/prd.md", "reason": "逐项对照 AC：init --version-2/旧仓库 warn/非restic隐藏/回归GREEN"}
