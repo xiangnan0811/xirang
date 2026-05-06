@@ -144,7 +144,7 @@ func TestProbeTCP_Up(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 TCP listener 失败: %v", err)
 	}
-	defer ln.Close()
+	defer ln.Close() //nolint:errcheck
 
 	// Accept connections in background so the listener isn't blocked.
 	var wg sync.WaitGroup
@@ -153,7 +153,7 @@ func TestProbeTCP_Up(t *testing.T) {
 		defer wg.Done()
 		conn, _ := ln.Accept()
 		if conn != nil {
-			conn.Close()
+			conn.Close() //nolint:errcheck
 		}
 	}()
 
@@ -186,7 +186,7 @@ func TestProbeTCP_Down(t *testing.T) {
 		t.Fatalf("创建临时 listener 失败: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close() // Close immediately so the port is free but nothing is listening.
+	ln.Close() //nolint:errcheck // Close immediately so the port is free but nothing is listening.
 
 	p := &Prober{}
 	monitor := model.ServiceMonitor{

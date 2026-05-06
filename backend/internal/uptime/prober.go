@@ -206,7 +206,7 @@ func (p *Prober) probeHTTP(monitor model.ServiceMonitor) (ok bool, latencyMs int
 	if doErr != nil {
 		return false, latencyMs, doErr
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	expectedStatus := monitor.HTTPExpectedStatus
 	if expectedStatus <= 0 {
@@ -232,7 +232,7 @@ func (p *Prober) probeTCP(monitor model.ServiceMonitor) (ok bool, latencyMs int6
 	if dialErr != nil {
 		return false, latencyMs, dialErr
 	}
-	conn.Close()
+	conn.Close() //nolint:errcheck
 	return true, latencyMs, nil
 }
 
