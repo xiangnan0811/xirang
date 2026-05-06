@@ -855,6 +855,20 @@ type AnomalyEvent struct {
 	FiredAt       time.Time `gorm:"not null;index:idx_anomaly_events_node_fired,priority:2,sort:desc;index:idx_anomaly_events_detector_fired,priority:2,sort:desc" json:"fired_at"`
 }
 
+// SnapshotDiffHistory 记录每次备份的快照差异统计，作为异常检测基线数据。
+type SnapshotDiffHistory struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	PolicyID         uint      `gorm:"not null;index:idx_sdh_policy" json:"policy_id"`
+	TaskID           uint      `gorm:"not null;index" json:"task_id"`
+	TaskRunID        uint      `gorm:"not null;index" json:"task_run_id"`
+	AddedCount       int       `gorm:"not null;default:0" json:"added_count"`
+	RemovedCount     int       `gorm:"not null;default:0" json:"removed_count"`
+	ChangedCount     int       `gorm:"not null;default:0" json:"changed_count"`
+	TotalSizeBytes   int64     `gorm:"not null;default:0" json:"total_size_bytes"`
+	RansomSuffixHits int       `gorm:"not null;default:0" json:"ransom_suffix_hits"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 // DecodedDetails returns the parsed details map; empty on invalid JSON.
 func (e *AnomalyEvent) DecodedDetails() map[string]any {
 	out := map[string]any{}

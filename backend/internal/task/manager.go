@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
@@ -116,6 +117,8 @@ type Manager struct {
 
 	settingsSvc *settings.Service
 
+	anomalySink anomaly.AlertSink // optional; set via SetAnomalySink
+
 	shuttingDown atomic.Bool
 }
 
@@ -144,6 +147,12 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	m.startLogWorker()
 	m.startSampleWorker()
 	return m
+}
+
+// SetAnomalySink 注入 anomaly.AlertSink，用于快照差异异常检测后的告警提升。
+// 若未调用，runTask 中的快照差异检测将静默跳过。
+func (m *Manager) SetAnomalySink(sink anomaly.AlertSink) {
+	m.anomalySink = sink
 }
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {
