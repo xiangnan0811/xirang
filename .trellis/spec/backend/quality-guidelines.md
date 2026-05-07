@@ -69,6 +69,79 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   broader changes also run `cd backend && go build ./...` and `make lint-backend`
   when `golangci-lint` is available.
 
+### Scenario: RBAC route permission keys
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing any `middleware.RBAC("<permission>")` route under
+  `/api/v1`, or making a frontend navigation item depend on that route.
+- Applies to backend route registration, `rolePermissions`, and frontend
+  surfaces that link to the protected feature.
+
+#### 2. Signatures
+
+- Route signature: `secured.<METHOD>("<path>", middleware.RBAC("<permission>"), handler)`.
+- Permission matrix signature:
+  `rolePermissions["<role>"]["<permission>"] = true`.
+- Test signature: use a router that includes `AuthMiddleware` and `RBAC`, not a
+  handler-only Gin route, when the behavior being changed is authorization.
+
+#### 3. Contracts
+
+- Every permission string used by a route must be granted to at least one
+  intended role in `backend/internal/middleware/rbac.go`.
+- Sensitive management surfaces such as saved credentials, system settings,
+  recovery, and secret-bearing config should fail closed. Do not grant
+  operator/viewer access unless the product contract explicitly says so.
+- Frontend navigation must not expose a normal path to roles that the backend
+  will always reject for that feature.
+
+#### 4. Validation & Error Matrix
+
+- Missing/expired token -> 401 from auth middleware.
+- Known role without the route permission -> 403 `权限不足`.
+- Unknown or missing role -> 403 `权限不足`.
+- Intended role with the route permission -> handler status code.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a new `app_credentials:read` route is paired with admin permission,
+  full-router admin/non-admin tests, and admin-only frontend navigation.
+- Base: a new route reuses an existing permission whose role coverage already
+  matches the feature.
+- Bad: a route references a new permission key that is absent from
+  `rolePermissions`, causing every authenticated role to receive 403.
+
+#### 6. Tests Required
+
+- Assert at least one intended role receives the handler response through the
+  full router.
+- Assert roles that should not access the feature receive 403 through the same
+  middleware stack.
+- For sensitive data routes, include a denial case for saved records or
+  mutations, not just the public/schema endpoint.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+secured.GET("/app-credentials/profiles", middleware.RBAC("app_credentials:read"), h.ListProfiles)
+// rolePermissions has no app_credentials:read entry, so all roles fail.
+```
+
+Correct:
+
+```go
+secured.GET("/app-credentials/profiles", middleware.RBAC("app_credentials:read"), h.ListProfiles)
+
+var rolePermissions = map[string]map[string]bool{
+	"admin": {
+		"app_credentials:read": true,
+	},
+}
+```
+
 ### Test fixture credential naming
 
 Test fixtures that simulate secrets/credentials (passwords, tokens, keys,
