@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend routing and RBAC conventions for app credential API changes"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend forbidden/error response conventions for RBAC-covered routes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend test and security-sensitive RBAC quality checklist"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend structure and API wrapper conventions if navigation visibility changes"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Frontend admin console component and navigation conventions"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality checks for UI visibility changes"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Frontend role and type-safety guidance"}

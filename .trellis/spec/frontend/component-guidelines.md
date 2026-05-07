@@ -33,6 +33,34 @@ switches, badges, skeletons, pagination, or empty states.
 - Use `lucide-react` icons for recognizable actions instead of hand-written SVG
   icons.
 
+### Convention: Permission-aware navigation registry
+
+**What**: Use `getVisibleNavItems(role)` as the canonical source for
+role-filtered application navigation. Components that render navigation-like
+entry points, including sidebars, mobile drawers, and command palettes, should
+consume this helper instead of iterating over `navItems` directly.
+
+**Why**: The backend rejects protected feature routes through RBAC. If one
+frontend entry point bypasses the canonical filter, non-admin users can still
+navigate into a page that immediately fails API calls with 403.
+
+**Example**:
+
+```tsx
+const { role } = useAuth();
+const visibleNavItems = useMemo(() => getVisibleNavItems(role), [role]);
+
+return visibleNavItems.map((item) => (
+  <NavLink key={item.path} to={item.path}>
+    {t(item.titleKey)}
+  </NavLink>
+));
+```
+
+**Tests**: When a navigation item becomes role-restricted, update the registry
+test and at least one alternate navigation surface test, such as the command
+palette, to assert the item is hidden for non-authorized roles.
+
 ---
 
 ## Props Conventions

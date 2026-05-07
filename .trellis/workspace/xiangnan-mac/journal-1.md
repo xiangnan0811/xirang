@@ -641,3 +641,38 @@ Documented and executed durable PR CI monitoring and post-merge release monitori
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Fix app credential profile permission 403
+
+**Date**: 2026-05-07
+**Task**: Fix app credential profile permission 403
+**Branch**: `fix/app-credential-profiles-permission`
+
+### Summary
+
+Fixed app credential RBAC so admins can load profile schemas and manage credentials, aligned frontend navigation and command palette visibility with admin-only credential access, added router-level RBAC regression coverage, and recorded RBAC/navigation guardrails in Trellis specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ceac71` | (see git log) |
+| `2b7498f` | (see git log) |
+| `7896be8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

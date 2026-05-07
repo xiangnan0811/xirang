@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-05-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~643 | Active |
+| `journal-1.md` | ~678 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-05-07 | Fix app credential profile permission 403 | `0ceac71`, `2b7498f`, `7896be8` | `fix/app-credential-profiles-permission` |
 | 19 | 2026-05-07 | PR CI release monitoring workflow | `e87a36a`, `5434e90` | `chore/pr-monitoring-workflow-wrapup` |
 | 18 | 2026-05-06 | Comprehensive project audit | `68762b7`, `5002633`, `bcad0b5`, `4844a0e` | `audit/comprehensive-project-review` |
 | 17 | 2026-05-06 | HTTP/TCP Uptime 探测 + Status Page 完整实现 | `9f6f134` | `feat/uptime-probe-status-page` |
