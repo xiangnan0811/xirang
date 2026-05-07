@@ -36,6 +36,8 @@ var rolePermissions = map[string]map[string]bool{
 		"dashboards:write":      true,
 		"escalation:read":       true,
 		"escalation:write":      true,
+		"automation:read":       true,
+		"automation:write":      true,
 	},
 	"operator": {
 		"nodes:read":        true,

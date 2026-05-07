@@ -86,7 +86,7 @@ These are replaced with actual IDs when the rule is triggered, so one rule can a
 
 ### Web UI
 
-Navigate to **Automation Rules** (自动化规则) in the sidebar under the "Automate" group. From there you can:
+Administrators can navigate to **Automation Rules** (自动化规则) in the sidebar under the "Automate" group. From there you can:
 
 - **Create**: Click "New Rule" and fill in the form (event type, optional filters, action type, action parameters, enabled toggle)
 - **Edit**: Click the pencil icon on any row
@@ -95,7 +95,7 @@ Navigate to **Automation Rules** (自动化规则) in the sidebar under the "Aut
 
 ### API
 
-Rules are managed via the `/api/v1/automation-rules` endpoints:
+Rules are managed via the admin-only `/api/v1/automation-rules` endpoints:
 
 | Method   | Path                            | Description          |
 |----------|---------------------------------|----------------------|

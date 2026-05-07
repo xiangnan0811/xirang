@@ -3,8 +3,8 @@ import { request } from "./core";
 
 export function createAutomationRulesApi() {
   return {
-    async list(token: string, signal?: AbortSignal): Promise<AutomationRule[]> {
-      return (await request<AutomationRule[]>("/automation-rules", { token, signal })) ?? [];
+    async list(token: string, options?: { signal?: AbortSignal }): Promise<AutomationRule[]> {
+      return (await request<AutomationRule[]>("/automation-rules", { token, signal: options?.signal })) ?? [];
     },
 
     async create(token: string, input: AutomationRuleInput): Promise<AutomationRule> {
