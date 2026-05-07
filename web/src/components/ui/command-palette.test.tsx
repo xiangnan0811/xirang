@@ -4,6 +4,16 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { CommandPalette } from "./command-palette";
 
+const { useAuthMock } = vi.hoisted(() => ({
+  useAuthMock: vi.fn<
+    () => { role: "admin" | "operator" | "viewer" | null }
+  >(() => ({ role: "admin" })),
+}));
+
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => useAuthMock(),
+}));
+
 vi.mock("@/context/command-palette-context", () => ({
   useCommandPalette: () => ({
     open: true,
@@ -44,6 +54,7 @@ vi.mock("react-i18next", () => ({
 describe("CommandPalette", () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
+    useAuthMock.mockReturnValue({ role: "admin" });
   });
 
   it("renders navigation from the canonical nav registry", () => {
@@ -57,5 +68,18 @@ describe("CommandPalette", () => {
     expect(screen.getByText("Credentials")).toBeInTheDocument();
     expect(screen.getByText("Automation Rules")).toBeInTheDocument();
     expect(screen.getByText("Service Monitors")).toBeInTheDocument();
+  });
+
+  it("hides admin-only navigation for non-admin roles", () => {
+    useAuthMock.mockReturnValue({ role: "operator" });
+
+    render(
+      <MemoryRouter>
+        <CommandPalette />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByText("Credentials")).not.toBeInTheDocument();
+    expect(screen.getByText("Automation Rules")).toBeInTheDocument();
   });
 });

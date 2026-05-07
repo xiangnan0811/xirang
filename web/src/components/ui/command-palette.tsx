@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { navItems } from "@/components/layout/navigation";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 import { useCommandPalette } from "@/context/command-palette-context";
 import { useNodesContextOptional } from "@/context/nodes-context";
 import { useTasksContextOptional } from "@/context/tasks-context";
+import { useAuth } from "@/context/auth-context";
 
 export function CommandPalette() {
   const { t } = useTranslation();
@@ -17,6 +18,8 @@ export function CommandPalette() {
   const tasksCtx = useTasksContextOptional();
   const nodes = nodesCtx?.nodes ?? [];
   const tasks = tasksCtx?.tasks ?? [];
+  const { role } = useAuth();
+  const visibleNavItems = React.useMemo(() => getVisibleNavItems(role), [role]);
 
   // Reset query when closed
   React.useEffect(() => {
@@ -93,7 +96,7 @@ export function CommandPalette() {
             )}
 
             <Command.Group heading={t("search.navigation")}>
-              {navItems.map((route) => (
+              {visibleNavItems.map((route) => (
                 <Command.Item
                   key={route.path}
                   value={`nav-${route.titleKey}-${t(route.titleKey)}`}
