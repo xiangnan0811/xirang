@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.3](https://github.com/xiangnan0811/xirang/compare/v0.28.2...v0.28.3) (2026-05-07)
+
+
+### 🐛 Bug Fixes
+
+* repair backups page rendering and automation RBAC ([82891cd](https://github.com/xiangnan0811/xirang/commit/82891cd0a5df0656002ad657a1385aeeee445f3d))
+
 ## [0.28.2](https://github.com/xiangnan0811/xirang/compare/v0.28.1...v0.28.2) (2026-05-07)
 
 
