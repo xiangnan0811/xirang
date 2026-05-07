@@ -33,6 +33,50 @@ switches, badges, skeletons, pagination, or empty states.
 - Use `lucide-react` icons for recognizable actions instead of hand-written SVG
   icons.
 
+### Convention: Radix `asChild` Single-Child Composition
+
+**What**: Components backed by Radix `Slot` or Radix primitives with `asChild`
+must pass exactly one React element child to the slot. Shared primitives such
+as `Button` should branch the slotted path so conditional loader/icons are not
+rendered as sibling children beside the consumer's element.
+
+**Why**: Radix validates slot composition with `React.Children.only`. Passing
+multiple children, including `null` from a conditional expression plus the real
+child, crashes the page with `React.Children.only expected to receive a single
+React element child`.
+
+**Wrong**:
+
+```tsx
+const Comp = asChild ? Slot : "button";
+
+return (
+  <Comp>
+    {loading ? <Loader2 /> : null}
+    {children}
+  </Comp>
+);
+```
+
+**Correct**:
+
+```tsx
+if (asChild) {
+  return <Slot>{children}</Slot>;
+}
+
+return (
+  <button disabled={loading}>
+    {loading ? <Loader2 aria-hidden /> : null}
+    {children}
+  </button>
+);
+```
+
+**Tests**: When changing a primitive that supports `asChild`, add a render test
+using a link-like child so a `React.Children.only` regression fails in unit
+tests.
+
 ### Convention: Permission-aware navigation registry
 
 **What**: Use `getVisibleNavItems(role)` as the canonical source for

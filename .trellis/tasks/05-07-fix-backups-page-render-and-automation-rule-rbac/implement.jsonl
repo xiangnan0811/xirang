@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "RBAC permission-key contract and full-router authorization tests"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Forbidden response behavior and fail-closed auth handling"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "React component composition and permission-aware navigation conventions"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend test and quality gate expectations"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Frontend TypeScript boundary expectations"}
