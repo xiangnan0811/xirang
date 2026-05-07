@@ -80,6 +80,6 @@ describe("CommandPalette", () => {
     );
 
     expect(screen.queryByText("Credentials")).not.toBeInTheDocument();
-    expect(screen.getByText("Automation Rules")).toBeInTheDocument();
+    expect(screen.queryByText("Automation Rules")).not.toBeInTheDocument();
   });
 });

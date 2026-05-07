@@ -22,4 +22,14 @@ describe("Button", () => {
     render(<Button variant="destructive">Delete</Button>);
     expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
   });
+
+  it("renders asChild with a single slotted child", () => {
+    render(
+      <Button asChild shape="pill">
+        <a href="/tasks">Configure backup task</a>
+      </Button>
+    );
+
+    expect(screen.getByRole("link", { name: "Configure backup task" })).toHaveAttribute("href", "/tasks");
+  });
 });

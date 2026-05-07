@@ -90,7 +90,8 @@ export const navItems: NavItem[] = [
     path: "/app/automation-rules",
     icon: Zap,
     group: "automate",
-    mobileTab: false
+    mobileTab: false,
+    adminOnly: true
   },
   {
     titleKey: "nav.logs",
