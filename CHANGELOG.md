@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.2](https://github.com/xiangnan0811/xirang/compare/v0.28.1...v0.28.2) (2026-05-07)
+
+
+### 🐛 Bug Fixes
+
+* allow admin app credential management ([a74e26d](https://github.com/xiangnan0811/xirang/commit/a74e26de64ffaca3782cbd30d713b6bfa0a76072))
+
 ## [0.28.1](https://github.com/xiangnan0811/xirang/compare/v0.28.0...v0.28.1) (2026-05-06)
 
 
