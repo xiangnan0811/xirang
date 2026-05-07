@@ -676,3 +676,37 @@ Fixed app credential RBAC so admins can load profile schemas and manage credenti
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Fix backups page render and automation RBAC
+
+**Date**: 2026-05-07
+**Task**: Fix backups page render and automation RBAC
+**Branch**: `fix/backups-page-render-rbac`
+
+### Summary
+
+Fixed the backups page React.Children.only crash by making Button asChild pass a single slotted child, restored admin automation-rule RBAC with full-router denial tests for non-admin roles, hid automation rules from non-admin navigation, synchronized automation docs, and captured the Radix asChild convention in frontend specs. Verified focused backend/frontend tests plus full Go test/build, frontend typecheck/lint/test/build, and doc freshness checks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `43a7d55` | (see git log) |
+| `4be24df` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
