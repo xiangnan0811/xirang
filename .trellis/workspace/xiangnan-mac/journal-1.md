@@ -776,3 +776,36 @@ Stabilized the asynchronous drill trigger test, captured the backend async TaskR
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Add local CI guard hooks
+
+**Date**: 2026-05-10
+**Task**: Add local CI guard hooks
+**Branch**: `chore/local-ci-guards-20260510`
+
+### Summary
+
+Added fast pre-commit staged checks and a strict pre-push CI-parity gate matching local equivalents of GitHub CI.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a9937f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
