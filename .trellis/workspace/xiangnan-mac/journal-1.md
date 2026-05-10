@@ -743,3 +743,36 @@ Updated the project Trellis files and global CLI to 0.5.12, preserved local work
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: Fix PR 147 backend CI
+
+**Date**: 2026-05-10
+**Task**: Fix PR 147 backend CI
+**Branch**: `chore/trellis-update-20260510`
+
+### Summary
+
+Stabilized the asynchronous drill trigger test, captured the backend async TaskRun state assertion guideline, and updated Go dependency/toolchain metadata so govulncheck passes.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `12c1a27` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
