@@ -11,6 +11,16 @@ if [ -z "$STAGED" ]; then
   exit 0
 fi
 
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FAST_CHECK="${REPO_ROOT}/scripts/check-pre-commit-fast.sh"
+
+if [ ! -x "$FAST_CHECK" ]; then
+  echo "[FAIL] pre-commit 快检脚本不存在或不可执行: $FAST_CHECK" >&2
+  exit 2
+fi
+
+bash "$FAST_CHECK"
+
 WARN=0
 MSGS=()
 

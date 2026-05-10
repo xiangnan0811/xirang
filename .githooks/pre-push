@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# pre-push hook — local CI parity gate.
+# 跳过：git push --no-verify
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+SCRIPT="${ROOT_DIR}/scripts/local-ci-parity.sh"
+
+if [[ ! -x "$SCRIPT" ]]; then
+  echo "[FAIL] local CI parity 脚本不存在或不可执行: $SCRIPT" >&2
+  exit 2
+fi
+
+bash "$SCRIPT"
