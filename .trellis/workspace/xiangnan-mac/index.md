@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
-- **Last Active**: 2026-05-07
+- **Total Sessions**: 22
+- **Last Active**: 2026-05-10
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~712 | Active |
+| `journal-1.md` | ~745 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-05-10 | Update Trellis to 0.5.12 | `f89e3bf` | `chore/trellis-update-20260510` |
 | 21 | 2026-05-07 | Fix backups page render and automation RBAC | `43a7d55`, `4be24df` | `fix/backups-page-render-rbac` |
 | 20 | 2026-05-07 | Fix app credential profile permission 403 | `0ceac71`, `2b7498f`, `7896be8` | `fix/app-credential-profiles-permission` |
 | 19 | 2026-05-07 | PR CI release monitoring workflow | `e87a36a`, `5434e90` | `chore/pr-monitoring-workflow-wrapup` |

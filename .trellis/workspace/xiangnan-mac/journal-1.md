@@ -710,3 +710,36 @@ Fixed the backups page React.Children.only crash by making Button asChild pass a
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Update Trellis to 0.5.12
+
+**Date**: 2026-05-10
+**Task**: Update Trellis to 0.5.12
+**Branch**: `chore/trellis-update-20260510`
+
+### Summary
+
+Updated the project Trellis files and global CLI to 0.5.12, preserved local workflow safeguards, verified Trellis update dry-run, task validation, Python script compilation, and diff formatting.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f89e3bf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
