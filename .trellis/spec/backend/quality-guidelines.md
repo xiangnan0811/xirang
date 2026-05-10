@@ -69,6 +69,81 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   broader changes also run `cd backend && go build ./...` and `make lint-backend`
   when `golangci-lint` is available.
 
+### Scenario: Asynchronous task-run state assertions
+
+#### 1. Scope / Trigger
+
+- Trigger: testing code that creates a `TaskRun` and starts a goroutine, worker,
+  scheduler, or executor that can update the run immediately after creation.
+- Applies to task manager tests under `backend/internal/task/` and any backend
+  package where state transitions can race with the test's first read.
+
+#### 2. Signatures
+
+- Creation signature: `runID, err := manager.Trigger*(...)` or equivalent method
+  that persists a row and starts asynchronous execution.
+- Read signature: `db.First(&run, runID)` after the trigger returns.
+- Stable fields: `run.ID`, `run.TaskID`, `run.TriggerType`, `run.ChainRunID`, and
+  other identifiers written before the goroutine starts.
+- Volatile field: `run.Status` when the worker may transition it immediately.
+
+#### 3. Contracts
+
+- Tests may assert stable identifiers and trigger metadata exactly.
+- Tests must not require a transient initial status such as `pending` if the
+  implementation starts asynchronous execution before the test reads the row.
+- For asynchronous paths, assert either a final state after explicit
+  synchronization or a set of legal observable states.
+
+#### 4. Validation & Error Matrix
+
+- Row not created for returned `runID` -> test failure.
+- Stable metadata mismatch -> test failure.
+- Status outside the legal state machine -> test failure.
+- Legal status observed earlier than expected because the goroutine ran quickly ->
+  not a failure unless the test explicitly synchronized before reading.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: after `TriggerDrill`, assert `TriggerType == "drill"`, matching `TaskID`,
+  and `Status` in `{pending,running,success,failed}`.
+- Base: if the worker is blocked by a test-controlled channel, assert the exact
+  pre-release status.
+- Bad: call a trigger that launches a goroutine, then immediately require
+  `Status == "pending"` without controlling scheduler timing.
+
+#### 6. Tests Required
+
+- Assert the returned `runID` loads a persisted `TaskRun`.
+- Assert stable metadata exactly.
+- Assert volatile status with either synchronization or a legal state set.
+- Run async-state tests with `-count` when fixing timing-sensitive failures.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+runID, _ := manager.TriggerDrill(policyID)
+var run model.TaskRun
+_ = db.First(&run, runID).Error
+if run.Status != "pending" {
+	t.Fatalf("expected pending, got %s", run.Status)
+}
+```
+
+Correct:
+
+```go
+runID, _ := manager.TriggerDrill(policyID)
+var run model.TaskRun
+_ = db.First(&run, runID).Error
+validStatus := map[string]bool{"pending": true, "running": true, "success": true, "failed": true}
+if !validStatus[run.Status] {
+	t.Fatalf("invalid status: %s", run.Status)
+}
+```
+
 ### Scenario: RBAC route permission keys
 
 #### 1. Scope / Trigger
