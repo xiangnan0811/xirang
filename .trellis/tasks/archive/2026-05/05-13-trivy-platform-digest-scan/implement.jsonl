@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared guide index for branch, docs, and release workflow constraints"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Required PR, CI, and post-merge automation flow"}
+{"file": ".trellis/tasks/05-13-trivy-platform-digest-scan/research/trivy-platform-digest-scan.md", "reason": "Root cause and selected Trivy platform scan approach"}

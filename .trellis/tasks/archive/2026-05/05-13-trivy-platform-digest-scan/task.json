@@ -1,0 +1,30 @@
+{
+  "id": "trivy-platform-digest-scan",
+  "name": "trivy-platform-digest-scan",
+  "title": "Fix Trivy platform digest scanning",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xiangnan-mac",
+  "assignee": "xiangnan-mac",
+  "createdAt": "2026-05-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}notes": "",
+  "meta": {}
+} "notes": "",
+  "meta": {}
+}
