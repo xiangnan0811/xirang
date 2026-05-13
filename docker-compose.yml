@@ -1,6 +1,6 @@
 services:
   xirang-backend:
-    image: golang:1.26.2
+    image: golang:1.26.3
     container_name: xirang-backend
     working_dir: /workspace/backend
     volumes:
