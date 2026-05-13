@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/xiangnan0811/xirang/compare/v0.30.0...v0.31.0) (2026-05-13)
+
+
+### ✨ Features
+
+* **web:** refine remaining workbench pages ([18e0557](https://github.com/xiangnan0811/xirang/commit/18e055787ce5e51984cb98d2c6307652c4a9e269))
+
 ## [0.30.0](https://github.com/xiangnan0811/xirang/compare/v0.29.4...v0.30.0) (2026-05-13)
 
 
