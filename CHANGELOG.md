@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.2](https://github.com/xiangnan0811/xirang/compare/v0.29.1...v0.29.2) (2026-05-13)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** split Docker publish by platform ([24d8ab3](https://github.com/xiangnan0811/xirang/commit/24d8ab374065911ed1d6d13ea8556ee1d4e2f9e2))
+
 ## [0.29.1](https://github.com/xiangnan0811/xirang/compare/v0.29.0...v0.29.1) (2026-05-13)
 
 
