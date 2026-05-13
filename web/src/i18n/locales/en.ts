@@ -2091,11 +2091,8 @@ const en = {
   // ── settings ──
   settings: {
     title: "Settings",
-    pageDesc: "Manage preferences, account security, notification channels, and system maintenance entry points.",
+    pageDesc: "Preferences and security.",
     tabListLabel: "Settings views",
-    adminScope: "Admin view",
-    userScope: "Personal view",
-    visibleTabsMeta: "{{count}} visible sections",
     tabs: {
       personal: "Preferences",
       account: "Account Security",
@@ -2511,21 +2508,15 @@ const en = {
   // ── credentials ──
   credentials: {
     pageTitle: "App Credentials",
-    pageDesc: "Manage database and Docker connection credentials for backup policies.",
-    surfaceTitle: "Credential inventory",
-    surfaceDesc: "Review credential type, password status, policy references, and maintenance actions.",
-    loadingMeta: "Loading credentials",
-    totalMeta: "{{count}} credentials",
-    passwordMeta: "{{count}} with password",
-    referencedMeta: "{{count}} referenced",
-    unusedMeta: "{{count}} unused",
+    pageDesc: "Reusable credentials.",
+    surfaceTitle: "Inventory",
     createBtn: "New Credential",
     createTitle: "Create Credential",
     createDesc: "Select a credential type and fill in connection details.",
     editTitle: "Edit Credential",
     editDesc: "Modify credential name, description, or connection details.",
     empty: "No credentials",
-    emptyDesc: "Create database, Docker, or Restic repository credentials to reuse in backup policies.",
+    emptyDesc: "Create one to reuse.",
     password: "Password",
     references: "Refs",
     configured: "Configured",

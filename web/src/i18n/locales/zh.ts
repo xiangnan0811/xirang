@@ -2091,11 +2091,8 @@ const zh = {
   // ── settings ──
   settings: {
     title: "设置",
-    pageDesc: "集中管理个人偏好、账户安全、通知渠道和系统维护入口。",
+    pageDesc: "管理偏好和安全。",
     tabListLabel: "设置视图",
-    adminScope: "管理员视图",
-    userScope: "个人视图",
-    visibleTabsMeta: "可见 {{count}} 个配置区",
     tabs: {
       personal: "个人偏好",
       account: "账户安全",
@@ -2520,21 +2517,15 @@ const zh = {
   // ── credentials ──
   credentials: {
     pageTitle: "应用凭据",
-    pageDesc: "管理数据库、Docker 等应用连接凭据，供备份策略引用。",
-    surfaceTitle: "凭据清单",
-    surfaceDesc: "查看凭据类型、密码配置状态、策略引用和维护操作。",
-    loadingMeta: "正在加载凭据",
-    totalMeta: "共 {{count}} 个凭据",
-    passwordMeta: "{{count}} 个已配置密码",
-    referencedMeta: "{{count}} 个被引用",
-    unusedMeta: "{{count}} 个未引用",
+    pageDesc: "管理可复用凭据。",
+    surfaceTitle: "清单",
     createBtn: "新建凭据",
     createTitle: "新建应用凭据",
     createDesc: "选择凭据类型并填写连接信息。",
     editTitle: "编辑应用凭据",
     editDesc: "修改凭据名称、描述或连接信息。",
     empty: "暂无凭据",
-    emptyDesc: "创建数据库、Docker 或 Restic 仓库凭据后，可在备份策略中复用。",
+    emptyDesc: "创建后可复用。",
     password: "密码",
     references: "引用",
     configured: "已配置",

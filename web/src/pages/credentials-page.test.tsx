@@ -110,8 +110,8 @@ describe("CredentialsPage", () => {
     render(<CredentialsPage />);
 
     expect(screen.getByRole("heading", { name: "credentials.pageTitle" })).toBeInTheDocument();
-    expect(screen.getByText("credentials.pageDesc")).toBeInTheDocument();
-    expect(screen.getByText("credentials.loadingMeta")).toBeInTheDocument();
+    expect(screen.getAllByText("credentials.pageDesc").length).toBe(2);
+    expect(screen.getByText("common.loading")).toBeInTheDocument();
     expect(screen.getByText("credentials.surfaceTitle")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "common.loading" })).toBeInTheDocument();
   });
@@ -124,8 +124,8 @@ describe("CredentialsPage", () => {
 
     expect(await screen.findByText("credentials.empty")).toBeInTheDocument();
     expect(screen.getByText("credentials.emptyDesc")).toBeInTheDocument();
-    expect(screen.getByText("credentials.totalMeta:0")).toBeInTheDocument();
-    expect(screen.getByText("credentials.passwordMeta:0")).toBeInTheDocument();
+    expect(screen.getByText("common.all 0")).toBeInTheDocument();
+    expect(screen.getByText("common.password 0")).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "credentials.createBtn" })[0]);
 
@@ -140,10 +140,10 @@ describe("CredentialsPage", () => {
 
     expect(await screen.findByText("Prod MySQL")).toBeInTheDocument();
     expect(screen.getByText("Docker Socket")).toBeInTheDocument();
-    expect(screen.getByText("credentials.totalMeta:2")).toBeInTheDocument();
-    expect(screen.getByText("credentials.passwordMeta:1")).toBeInTheDocument();
-    expect(screen.getByText("credentials.referencedMeta:1")).toBeInTheDocument();
-    expect(screen.getByText("credentials.unusedMeta:1")).toBeInTheDocument();
+    expect(screen.getByText("common.all 2")).toBeInTheDocument();
+    expect(screen.getByText("common.password 1")).toBeInTheDocument();
+    expect(screen.getByText("credentials.references 1")).toBeInTheDocument();
+    expect(screen.getByText("common.neverUsed 1")).toBeInTheDocument();
     expect(screen.getByText("MySQL")).toBeInTheDocument();
     expect(screen.getByText("Docker")).toBeInTheDocument();
 

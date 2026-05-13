@@ -106,6 +106,10 @@ export function CredentialsPage() {
     (cred) => cred.reference_count > 0,
   ).length;
   const unusedCredentials = totalCredentials - referencedCredentials;
+  const totalMeta = `${t("common.all")} ${totalCredentials}`;
+  const passwordMeta = `${t("common.password")} ${passwordConfigured}`;
+  const referencedMeta = `${t("credentials.references")} ${referencedCredentials}`;
+  const unusedMeta = `${t("common.neverUsed")} ${unusedCredentials}`;
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -114,20 +118,18 @@ export function CredentialsPage() {
         subtitle={t("credentials.pageDesc")}
         meta={
           loading ? (
-            <Badge tone="neutral">{t("credentials.loadingMeta")}</Badge>
+            <Badge tone="neutral">{t("common.loading")}</Badge>
           ) : (
             <>
-              <Badge tone="info">
-                {t("credentials.totalMeta", { count: totalCredentials })}
-              </Badge>
+              <Badge tone="info">{totalMeta}</Badge>
               <Badge tone={passwordConfigured > 0 ? "success" : "neutral"}>
-                {t("credentials.passwordMeta", { count: passwordConfigured })}
+                {passwordMeta}
               </Badge>
               <Badge tone={referencedCredentials > 0 ? "info" : "neutral"}>
-                {t("credentials.referencedMeta", { count: referencedCredentials })}
+                {referencedMeta}
               </Badge>
               <Badge tone={unusedCredentials > 0 ? "warning" : "neutral"}>
-                {t("credentials.unusedMeta", { count: unusedCredentials })}
+                {unusedMeta}
               </Badge>
             </>
           )
@@ -143,7 +145,7 @@ export function CredentialsPage() {
       <DataSurface>
         <DataSurfaceHeader
           title={t("credentials.surfaceTitle")}
-          description={t("credentials.surfaceDesc")}
+          description={t("credentials.pageDesc")}
         />
         <DataSurfaceContent className="p-0">
           {loading ? (

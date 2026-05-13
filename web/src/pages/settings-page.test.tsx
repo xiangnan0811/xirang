@@ -102,8 +102,8 @@ describe("SettingsPage", () => {
 
     expect(screen.getByRole("heading", { name: "settings.title" })).toBeInTheDocument();
     expect(screen.getByText("settings.pageDesc")).toBeInTheDocument();
-    expect(screen.getByText("settings.adminScope")).toBeInTheDocument();
-    expect(screen.getByText("settings.visibleTabsMeta:8")).toBeInTheDocument();
+    expect(screen.getByText("users.roles.admin")).toBeInTheDocument();
+    expect(screen.getByText("8 · settings.tabListLabel")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "settings.tabListLabel" })).toBeInTheDocument();
   });
 
@@ -192,8 +192,8 @@ describe("SettingsPage", () => {
 
     renderSettingsPage(["/app/settings?tab=system"]);
 
-    expect(screen.getByText("settings.userScope")).toBeInTheDocument();
-    expect(screen.getByText("settings.visibleTabsMeta:2")).toBeInTheDocument();
+    expect(screen.getAllByText("settings.tabs.personal").length).toBeGreaterThan(0);
+    expect(screen.getByText("2 · settings.tabListLabel")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("tab", { name: "settings.tabs.users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "settings.tabs.system" })).not.toBeInTheDocument();

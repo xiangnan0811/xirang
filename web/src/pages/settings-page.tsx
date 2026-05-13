@@ -77,6 +77,8 @@ export function SettingsPage() {
     system: t("settings.tabs.system"),
     maintenance: t("settings.tabs.maintenance"),
   };
+  const scopeLabel = isAdmin ? t("users.roles.admin") : t("settings.tabs.personal");
+  const visibleTabsLabel = `${visibleTabs.length} · ${t("settings.tabListLabel")}`;
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -86,11 +88,9 @@ export function SettingsPage() {
         meta={
           <>
             <Badge tone={isAdmin ? "success" : "neutral"}>
-              {isAdmin ? t("settings.adminScope") : t("settings.userScope")}
+              {scopeLabel}
             </Badge>
-            <Badge tone="info">
-              {t("settings.visibleTabsMeta", { count: visibleTabs.length })}
-            </Badge>
+            <Badge tone="info">{visibleTabsLabel}</Badge>
           </>
         }
       />
