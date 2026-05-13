@@ -25,11 +25,23 @@ permissions:
   id-token: write
 
 jobs:
-  build-and-push:
-    name: Build & Push (xirang)
-    runs-on: ubuntu-latest
+  build:
+    name: Build & Scan (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_key: linux-amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            platform_key: linux-arm64
+            runner: ubuntu-24.04-arm
     env:
       IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+      REGISTRY_IMAGE: docker.io/${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/xirang
 
     steps:
       - name: Reject prerelease releases
@@ -47,9 +59,6 @@ jobs:
         id: source
         shell: bash
         run: echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
-
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -91,7 +100,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
-          images: docker.io/${{ env.IMAGE_NAMESPACE }}/xirang
+          images: ${{ env.REGISTRY_IMAGE }}
           tags: |
             type=raw,value=v${{ steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.version }}
@@ -101,53 +110,189 @@ jobs:
             org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
-      # Step 1: 先构建 amd64 单架到本地 docker daemon（不 push），用于 Trivy 扫描。
-      # 失败时立即终止，避免发布带 HIGH/CRITICAL 漏洞的镜像。
-      - name: Build amd64 image (load for scan)
+      # 每个平台在原生 runner 上分别构建并只按 digest 推送，避免在 x64 runner
+      # 上用 QEMU 跑 arm64 的 Node/CGO 构建。扫描通过前不会创建正式 tag。
+      - name: Build image by digest
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: deploy/allinone/Dockerfile
-          push: false
-          load: true
-          platforms: linux/amd64
-          tags: localhost/xirang-scan:${{ steps.version.outputs.version }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=xirang
-          cache-to: type=gha,scope=xirang,mode=max
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=xirang-${{ matrix.platform_key }}
+          cache-to: type=gha,scope=xirang-${{ matrix.platform_key }},mode=max
 
-      # Step 2: Trivy 扫描本地镜像；HIGH/CRITICAL 漏洞会让任务失败，阻断后续 push。
+      # Trivy 扫描平台 digest；HIGH/CRITICAL 漏洞会阻断 manifest/tag 发布。
       # 注：trivy-action 钉到 v0.36.0 tag 的解引用 commit，避免浮动 ref 供应链攻击窗口。
       # v0.36.0 已通过 `git ls-remote` 在 2026-05-06 核验为 ed142fd...。
       # 升级时维护者请重新核对最新 release 并参考 https://github.com/aquasecurity/trivy-action/releases
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: localhost/xirang-scan:${{ steps.version.outputs.version }}
+          image-ref: ${{ env.REGISTRY_IMAGE }}@${{ steps.build.outputs.digest }}
           format: 'table'
           exit-code: '1'
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
 
-      # Step 3: 扫描通过后再 build & push 多架镜像；cache-from 复用 Step 1 的层。
-      - name: Build and push multi-arch image
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - name: Export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          context: .
-          file: deploy/allinone/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=xirang
-          cache-to: type=gha,scope=xirang,mode=max
+          name: digests-${{ matrix.platform_key }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs:
+      - build
+    env:
+      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+      REGISTRY_IMAGE: docker.io/${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/xirang
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}
+
+      - name: Resolve source commit
+        id: source
+        shell: bash
+        run: echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            raw_tag="${{ github.event.release.tag_name }}"
+          else
+            raw_tag="${{ github.event.inputs.version }}"
+          fi
+
+          clean_tag="${raw_tag#refs/tags/}"
+          clean_version="${clean_tag#v}"
+
+          if [[ -z "${clean_version}" ]]; then
+            echo "version is empty" >&2
+            exit 1
+          fi
+
+          if ! echo "${clean_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "invalid semver: ${clean_version}" >&2
+            exit 1
+          fi
+
+          echo "version=${clean_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: DockerHub login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=v${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Create and push manifest
+        id: manifest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_args=()
+          first_tag=""
+          while IFS= read -r tag; do
+            if [[ -z "${tag}" ]]; then
+              continue
+            fi
+            tag_args+=(--tag "${tag}")
+            if [[ -z "${first_tag}" ]]; then
+              first_tag="${tag}"
+            fi
+          done <<< "${TAGS}"
+
+          if [[ "${#tag_args[@]}" -eq 0 ]]; then
+            echo "no image tags resolved" >&2
+            exit 1
+          fi
+
+          sources=()
+          while IFS= read -r digest_file; do
+            digest="$(basename "${digest_file}")"
+            sources+=("${REGISTRY_IMAGE}@sha256:${digest}")
+          done < <(find "${RUNNER_TEMP}/digests" -maxdepth 1 -type f | sort)
+
+          if [[ "${#sources[@]}" -eq 0 ]]; then
+            echo "no platform digests downloaded" >&2
+            exit 1
+          fi
+
+          if [[ "${#sources[@]}" -lt 2 ]]; then
+            echo "expected at least 2 platform digests, got ${#sources[@]}" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "${first_tag}" --format '{{.Manifest.Digest}}')"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "platform_sources<<EOF"
+            printf '%s\n' "${sources[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "platform_sources_summary<<EOF"
+            printf -- '- %s\n' "${sources[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-name: docker.io/${{ env.IMAGE_NAMESPACE }}/xirang
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
       - name: Build summary
@@ -158,8 +303,10 @@ jobs:
             echo "- Version: ${{ steps.version.outputs.version }}"
             echo "- Source ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}"
             echo "- Source commit: ${{ steps.source.outputs.commit }}"
-            echo "- Digest: ${{ steps.build.outputs.digest }}"
+            echo "- Digest: ${{ steps.manifest.outputs.digest }}"
             echo "- Latest updated: ${{ github.event_name == 'release' && 'yes' || 'no (manual rebuild)' }}"
             echo "- Tags:"
             echo "\`${{ steps.meta.outputs.tags }}\`"
+            echo "- Platform digests:"
+            echo "${{ steps.manifest.outputs.platform_sources_summary }}"
           } >> "${GITHUB_STEP_SUMMARY}"
