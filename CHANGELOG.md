@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/xiangnan0811/xirang/compare/v0.29.0...v0.29.1) (2026-05-13)
+
+
+### 🐛 Bug Fixes
+
+* **docker:** align Go builder image version ([171bc21](https://github.com/xiangnan0811/xirang/commit/171bc2147168915775a0899071f2e82a3881230f))
+
 ## [0.29.0](https://github.com/xiangnan0811/xirang/compare/v0.28.3...v0.29.0) (2026-05-13)
 
 
