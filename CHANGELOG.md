@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.3](https://github.com/xiangnan0811/xirang/compare/v0.29.2...v0.29.3) (2026-05-13)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** scan Docker digests by platform ([755b1d9](https://github.com/xiangnan0811/xirang/commit/755b1d951269b75f05a63378e43fd20d61be6430))
+
 ## [0.29.2](https://github.com/xiangnan0811/xirang/compare/v0.29.1...v0.29.2) (2026-05-13)
 
 
