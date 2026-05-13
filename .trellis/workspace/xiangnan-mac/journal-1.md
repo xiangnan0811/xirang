@@ -875,3 +875,36 @@ Aligned all-in-one Docker and development Compose Go images with backend/go.mod 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Split Docker publish by native platform
+
+**Date**: 2026-05-13
+**Task**: Split Docker publish by native platform
+**Branch**: `fix/publish-images-native-platforms`
+
+### Summary
+
+Cancelled the stalled v0.29.1 Docker publish run after it exceeded recent successful multi-arch duration and logs showed the arm64 QEMU path stuck in npm ci. Reworked publish-images.yml to build amd64 and arm64 by digest on native runners, scan each digest, merge tags with imagetools, and updated release maintainer docs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d91031` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
