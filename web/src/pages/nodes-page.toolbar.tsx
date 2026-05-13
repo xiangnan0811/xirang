@@ -5,7 +5,6 @@ import {
   FileUp,
   Layers,
   MoreHorizontal,
-  ServerCog,
   Terminal,
   Trash2,
 } from "lucide-react";
@@ -32,7 +31,6 @@ export type NodesPageToolbarProps = Pick<
   | "setSelectedNodeIds"
   | "allVisibleSelected"
   | "csvInputRef"
-  | "openCreateDialog"
   | "toggleSelectAllVisible"
   | "handleBulkDelete"
   | "handleImportCSV"
@@ -51,7 +49,6 @@ export function NodesPageToolbar({
   setSelectedNodeIds,
   allVisibleSelected,
   csvInputRef,
-  openCreateDialog,
   toggleSelectAllVisible,
   handleBulkDelete,
   handleImportCSV,
@@ -64,10 +61,6 @@ export function NodesPageToolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
-        <ServerCog className="mr-1 size-3.5" />
-        {t("nodes.addNode")}
-      </Button>
       {/* 移动端：收纳导入/模板/导出到下拉菜单 */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

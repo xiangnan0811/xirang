@@ -1,16 +1,15 @@
 import { useTranslation } from "react-i18next";
-import { Layers } from "lucide-react";
+import { Layers, ServerCog } from "lucide-react";
 import { NodesGrid } from "@/pages/nodes-page.grid";
 import { NodesTable } from "@/pages/nodes-page.table";
 import { useNodesPageState } from "@/pages/nodes-page.state";
 import { NodesPageDialogs } from "@/pages/nodes-page.dialogs";
 import { NodesPageToolbar } from "@/pages/nodes-page.toolbar";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { DataSurface, DataSurfaceContent, DataSurfaceToolbar } from "@/components/ui/data-surface";
 import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -121,7 +120,26 @@ export function NodesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={t("nav.nodes")}
+        subtitle={t("nodes.totalNodesDesc")}
+        meta={
+          <>
+            <span>{t("nodes.onlineNodes")}: {nodeStats.online}</span>
+            <span>{t("nodes.warningOffline")}: {nodeStats.warning + nodeStats.offline}</span>
+            <span>{t("nodes.selectedCount", { count: selectedNodeIds.length })}</span>
+          </>
+        }
+        actions={
+          <Button size="sm" onClick={openCreateDialog}>
+            <ServerCog className="size-4" aria-hidden />
+            {t("nodes.addNode")}
+          </Button>
+        }
+      />
+
       <StatCardsSection
+        compact
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
@@ -153,8 +171,8 @@ export function NodesPage() {
         ]}
       />
 
-      <Card className="overflow-hidden rounded-lg border border-border bg-card">
-        <CardContent className="space-y-4 pt-6">
+      <DataSurface>
+        <DataSurfaceToolbar className="space-y-3">
           {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
           <NodesPageToolbar
             viewMode={state.viewMode}
@@ -165,7 +183,6 @@ export function NodesPage() {
             setSelectedNodeIds={state.setSelectedNodeIds}
             allVisibleSelected={groupView ? state.allVisibleSelected : pagedAllVisibleSelected}
             csvInputRef={state.csvInputRef}
-            openCreateDialog={state.openCreateDialog}
             toggleSelectAllVisible={groupView ? state.toggleSelectAllVisible : pagedToggleSelectAllVisible}
             handleBulkDelete={state.handleBulkDelete}
             handleImportCSV={state.handleImportCSV}
@@ -175,7 +192,7 @@ export function NodesPage() {
             resetFilters={state.resetFilters}
           />
 
-          <FilterPanel sticky={false} className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-[2fr_1fr_1fr_1fr] items-center">
+          <FilterPanel sticky={false} className="grid grid-cols-2 items-center gap-3 border-0 bg-transparent p-0 md:grid-cols-3 xl:grid-cols-[2fr_1fr_1fr_1fr]">
             <SearchInput
               containerClassName="w-full col-span-2 md:col-span-3 xl:col-span-1"
               value={keyword}
@@ -225,7 +242,9 @@ export function NodesPage() {
           </FilterPanel>
 
           <FilterSummary filtered={sortedNodes.length} total={nodes.length} unit={t("nodes.nodeUnit")} />
+        </DataSurfaceToolbar>
 
+        <DataSurfaceContent className="space-y-4">
           {/* 分组视图 */}
           {groupView && groupedNodes ? (
             <div className="space-y-4">
@@ -263,8 +282,8 @@ export function NodesPage() {
           />
           </>
           )}
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       <NodesPageDialogs
         token={state.token}

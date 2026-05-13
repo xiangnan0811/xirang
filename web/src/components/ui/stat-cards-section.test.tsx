@@ -35,7 +35,8 @@ describe("StatCardsSection", () => {
 
     const layout = container.querySelector("section");
     expect(layout).not.toBeNull();
-    expect(layout).toHaveStyle({
+    expect(layout).toHaveClass("grid-cols-1", "sm:grid-cols-2", "xl:grid-cols-4");
+    expect(layout).not.toHaveStyle({
       gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     });
 
@@ -91,4 +92,40 @@ describe("StatCardsSection", () => {
     const card = screen.getByText("当前吞吐").closest("[data-tone]");
     expect(card).toHaveAttribute("data-tone", "primary");
   });
+
+  it("为 5 个指标提供桌面五列布局但保留小屏断点", () => {
+    const { container } = render(
+      <StatCardsSection
+        items={[
+          { title: "A", value: 1 },
+          { title: "B", value: 2 },
+          { title: "C", value: 3 },
+          { title: "D", value: 4 },
+          { title: "E", value: 5 },
+        ]}
+      />
+    );
+
+    const layout = container.querySelector("section");
+    expect(layout).toHaveClass("grid-cols-1", "sm:grid-cols-2", "xl:grid-cols-4", "2xl:grid-cols-5");
+    expect(layout).not.toHaveAttribute("style");
+  });
+
+  it("紧凑模式在移动端使用双列以减少首屏滚动", () => {
+    const { container } = render(
+      <StatCardsSection
+        compact
+        items={[
+          { title: "待执行", value: 1 },
+          { title: "成功", value: 2 },
+          { title: "运行中", value: 3 },
+          { title: "失败", value: 4 },
+        ]}
+      />
+    );
+
+    const layout = container.querySelector("section");
+    expect(layout).toHaveClass("grid-cols-2", "sm:grid-cols-2", "xl:grid-cols-4");
+  });
+
 });

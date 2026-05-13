@@ -5,21 +5,42 @@ export interface PageHeroProps {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   actions?: React.ReactNode;
+  meta?: React.ReactNode;
   className?: string;
 }
 
-export function PageHero({ title, subtitle, actions, className }: PageHeroProps) {
+export function PageHero({
+  title,
+  subtitle,
+  actions,
+  meta,
+  className,
+}: PageHeroProps) {
   return (
-    <header className={cn("flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4", className)}>
+    <header
+      className={cn(
+        "flex flex-col gap-3 border-b border-border/80 pb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4",
+        className,
+      )}
+    >
       <div className="min-w-0">
-        <h1 className="text-stat font-semibold leading-tight tracking-[-0.025em] text-foreground">
+        <h1 className="text-xl font-semibold leading-tight text-foreground md:text-2xl">
           {title}
         </h1>
         {subtitle ? (
-          <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>
+          <div className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">{subtitle}</div>
+        ) : null}
+        {meta ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {meta}
+          </div>
         ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+          {actions}
+        </div>
+      ) : null}
     </header>
   );
 }

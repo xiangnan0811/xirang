@@ -5,8 +5,7 @@ export function TableShell({ className, ...p }: React.HTMLAttributes<HTMLDivElem
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg bg-card shadow-sm",
-        "dark:border dark:border-border",
+        "overflow-hidden rounded-lg border border-border bg-card shadow-sm",
         className,
       )}
       {...p}

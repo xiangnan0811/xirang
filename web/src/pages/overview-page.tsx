@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
-import { Maximize2, TrendingUp } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AlertTriangle, Maximize2, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,6 @@ function parseDateValue(value?: string) {
 
 export function OverviewPage() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const { token } = useAuth();
   const { overview, loading, refreshVersion, fetchOverviewTraffic } = useSharedContext();
   const { nodes, refreshNodes } = useNodesContext();
@@ -63,6 +62,10 @@ export function OverviewPage() {
   const trafficRequestRef = useRef(0);
   const previewNodes = useMemo(() => nodes.slice(0, MATRIX_PREVIEW_LIMIT), [nodes]);
   const hiddenNodeCount = Math.max(0, nodes.length - previewNodes.length);
+  const abnormalNodeCount = useMemo(
+    () => nodes.filter((node) => node.status !== "online").length,
+    [nodes]
+  );
   useEffect(() => {
     const controller = new AbortController();
     const requestId = trafficRequestRef.current + 1;
@@ -151,8 +154,18 @@ export function OverviewPage() {
     <div className="animate-fade-in space-y-5">
       <OverviewHero />
       <StatCardsSection
-        className="grid-cols-4 animate-slide-up [animation-delay:150ms]"
+        compact
+        className="animate-slide-up [animation-delay:150ms]"
         items={[
+          {
+            title: t("overview.abnormalNodes"),
+            value: abnormalNodeCount,
+            icon: abnormalNodeCount > 0 ? (
+              <AlertTriangle className="hidden size-4 text-destructive sm:block" aria-hidden />
+            ) : undefined,
+            description: t("overview.abnormalNodesDesc", { count: overview.failedTasks24h }),
+            tone: abnormalNodeCount > 0 || overview.failedTasks24h > 0 ? "destructive" : "success",
+          },
           {
             title: t("overview.healthRateTitle"),
             value: healthRate,
@@ -231,12 +244,11 @@ export function OverviewPage() {
                       if (node.status === "online") dotColor = "bg-success";
                       if (node.status === "warning") dotColor = "bg-warning";
                       return (
-                        <button
+                        <Link
                           key={node.id}
-                          type="button"
+                          to={`/app/nodes/${node.id}`}
                           data-testid={`overview-node-link-${node.id}`}
                           className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
-                          onClick={() => navigate(`/app/nodes/${node.id}`)}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                         >
                           {/* Tooltip on hover */}
@@ -244,7 +256,7 @@ export function OverviewPage() {
                             <span className="font-medium">{node.name}</span>
                             <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
                           </span>
-                        </button>
+                        </Link>
                       );
                     })}
                   </div>
@@ -314,15 +326,12 @@ export function OverviewPage() {
                 if (node.status === "online") dotColor = "bg-success";
                 if (node.status === "warning") dotColor = "bg-warning";
                 return (
-                  <button
+                  <Link
                     key={node.id}
-                    type="button"
+                    to={`/app/nodes/${node.id}`}
                     data-testid={`overview-node-link-full-${node.id}`}
                     className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
-                    onClick={() => {
-                      setMatrixFullscreen(false);
-                      navigate(`/app/nodes/${node.id}`);
-                    }}
+                    onClick={() => setMatrixFullscreen(false)}
                     aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
                   >
                     <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
@@ -330,7 +339,7 @@ export function OverviewPage() {
                       <span className="ml-2 text-muted-foreground">{node.ip}</span>
                       <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
                     </span>
-                  </button>
+                  </Link>
                 );
               })}
             </div>

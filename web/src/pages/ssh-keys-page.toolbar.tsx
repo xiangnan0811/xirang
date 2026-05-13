@@ -3,7 +3,6 @@ import {
   Download,
   LayoutGrid,
   List,
-  Plus,
   RefreshCw,
   Trash2,
   Upload,
@@ -24,7 +23,6 @@ export type SSHKeysToolbarProps = Pick<
   | "allVisibleSelected"
   | "toggleSelectAllVisible"
   | "clearSelection"
-  | "openCreateDialog"
   | "setBatchImportOpen"
   | "setExportOpen"
   | "openRotationWizard"
@@ -43,7 +41,6 @@ export function SSHKeysToolbar({
   viewMode,
   setViewMode,
   selectedIds,
-  openCreateDialog,
   setBatchImportOpen,
   setExportOpen,
   openRotationWizard,
@@ -56,10 +53,6 @@ export function SSHKeysToolbar({
     <div className="flex flex-wrap items-center justify-between gap-2">
       {/* ---------- 左侧操作按钮 ---------- */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" className="shrink-0" onClick={openCreateDialog}>
-          <Plus className="mr-1 size-3.5" />
-          {t("sshKeys.addKey")}
-        </Button>
         <Button
           variant="outline"
           size="sm"

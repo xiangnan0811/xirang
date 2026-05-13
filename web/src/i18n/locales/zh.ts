@@ -252,6 +252,8 @@ const zh = {
     currentThroughputDesc: "执行中任务 {{count}} 个",
     policyCoverage: "策略覆盖",
     policyCoverageDesc: "已启用策略（共 {{count}} 任务）",
+    abnormalNodes: "异常优先",
+    abnormalNodesDesc: "24h 失败任务 {{count}} 个",
     matrixTitle: "主机状态矩阵",
     fullscreenAriaLabel: "全屏查看状态矩阵",
     fullscreenTitle: "全屏查看",

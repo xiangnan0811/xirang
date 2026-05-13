@@ -10,14 +10,12 @@ import type { UserRecord } from "@/types/domain";
 type DesktopSidebarProps = {
   role: UserRecord["role"] | null;
   isCollapsed: boolean;
-  hasWarning?: boolean;
   onToggleCollapse: () => void;
 };
 
 export function DesktopSidebar({
   role,
   isCollapsed,
-  hasWarning = false,
   onToggleCollapse,
 }: DesktopSidebarProps) {
   const { t } = useTranslation();
@@ -47,8 +45,7 @@ export function DesktopSidebar({
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border bg-card md:flex pb-4 transition-[width] duration-200",
-        hasWarning ? "pt-[88px]" : "pt-14",
+        "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border bg-card pb-4 pt-14 transition-[width] duration-200 md:flex",
         isCollapsed ? "w-16 px-2" : "w-60 px-3",
       )}
     >
