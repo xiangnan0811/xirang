@@ -6,7 +6,7 @@ import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { EndpointHintWarning } from "@/lib/api/integrations-api";

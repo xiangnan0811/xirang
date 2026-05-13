@@ -24,8 +24,8 @@ import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
-import { toast } from "@/components/ui/toast";
-import { useAuth } from "@/context/auth-context";
+import { toast } from "@/components/ui/toast-sonner";
+import { useAuth } from "@/context/auth-context.hooks";
 import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
 import { getErrorMessage } from "@/lib/utils";
 

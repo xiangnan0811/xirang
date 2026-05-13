@@ -1,6 +1,6 @@
 import { Leaf, Minus, Plus, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useTheme } from "@/context/theme-context";
+import { useTheme } from "@/context/theme-context.hooks";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 

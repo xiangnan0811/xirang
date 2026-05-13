@@ -7,8 +7,9 @@
 ## Overview
 
 The frontend is a Vite + React + TypeScript app under `web/`. Source code
-lives in `web/src/`, with application routing in `web/src/router.tsx` and the
-React entry point in `web/src/main.tsx`.
+lives in `web/src/`, with application route object creation in
+`web/src/router.tsx`, lazy route component declarations in
+`web/src/router-pages.tsx`, and the React entry point in `web/src/main.tsx`.
 
 Use the existing split between reusable UI, app-level components, pages,
 contexts, hooks, API clients, and domain types before creating new folders.
@@ -32,6 +33,8 @@ web/src/
 │   ├── api/             # typed API wrappers and response mappers
 │   └── ws/              # WebSocket client helpers
 ├── pages/               # route-level pages and page fragments
+├── router.tsx           # browser router object and route tree
+├── router-pages.tsx     # lazy route component exports for Fast Refresh
 ├── types/               # shared domain types
 └── data/                # local/demo/mock data
 ```
@@ -43,6 +46,10 @@ web/src/
 - Put route-level screens in `web/src/pages/` and wire routes in
   `web/src/router.tsx`. Examples: `overview-page.tsx`, `tasks-page.tsx`, and
   `settings-page.tsx`.
+- Keep `web/src/router.tsx` responsible for route object construction only.
+  Put lazy page component exports and the shared lazy page fallback in
+  `web/src/router-pages.tsx` so the router module does not mix component exports
+  with the non-component `AppRouter` export.
 - Split large pages into sibling fragments instead of deeply nesting one-off
   folders. Examples: `nodes-page.table.tsx`, `tasks-page.dialogs.tsx`, and
   `overview-page.traffic.tsx`.
@@ -81,5 +88,5 @@ web/src/
   a complex detail page.
 - `web/src/lib/api/core.ts` shows the central request/envelope handling used by
   every API wrapper.
-- `web/src/context/auth-context.tsx` shows provider-based app state with safe
-  browser storage access.
+- `web/src/context/auth-context.tsx` re-exports the provider while the provider,
+  consumer hook, and shared context value type live in sibling context modules.

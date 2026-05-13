@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
 import { cn } from "@/lib/utils";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";

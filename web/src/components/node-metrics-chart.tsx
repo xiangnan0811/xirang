@@ -11,18 +11,7 @@ import {
 } from "recharts";
 import { Maximize2 } from "lucide-react";
 import type { NodeRecord } from "@/types/domain";
-
-// 节点配色方案 — 高对比度、色盲友好
-export const NODE_PALETTE = [
-  { stroke: "#3b82f6", fill: "#3b82f6" }, // blue
-  { stroke: "#10b981", fill: "#10b981" }, // emerald
-  { stroke: "#f59e0b", fill: "#f59e0b" }, // amber
-  { stroke: "#ef4444", fill: "#ef4444" }, // red
-  { stroke: "#8b5cf6", fill: "#8b5cf6" }, // violet
-  { stroke: "#06b6d4", fill: "#06b6d4" }, // cyan
-  { stroke: "#ec4899", fill: "#ec4899" }, // pink
-  { stroke: "#84cc16", fill: "#84cc16" }, // lime
-];
+import type { NodePaletteEntry } from "@/components/node-metrics-theme";
 
 export type MetricKey = "cpu" | "mem" | "disk";
 
@@ -37,7 +26,7 @@ export type MetricChartProps = {
   data: ChartPoint[];
   nodes: NodeRecord[];
   enabledNodes: Set<number>;
-  nodeColorMap: Map<number, typeof NODE_PALETTE[0]>;
+  nodeColorMap: Map<number, NodePaletteEntry>;
   nodeNameMap: Map<number, string>;
   height?: number;
   onExpand?: () => void;

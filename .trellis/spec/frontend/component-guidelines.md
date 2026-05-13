@@ -105,6 +105,31 @@ return visibleNavItems.map((item) => (
 test and at least one alternate navigation surface test, such as the command
 palette, to assert the item is hidden for non-authorized roles.
 
+### Convention: Fast Refresh export boundaries
+
+**What**: `.tsx` files that export React components should not also export
+plain constants, variant helpers, third-party APIs, or consumer hooks. Put
+those shared values in sibling `.ts` modules and import them from component
+files and call sites.
+
+**Why**: Vite Fast Refresh can only preserve component state reliably when a
+module's public exports are component-shaped. Mixed exports trigger
+`react-refresh/only-export-components` warnings and make future lint output
+harder to trust.
+
+**Examples**:
+
+- Keep `Button` in `button.tsx`; put `buttonVariants` in
+  `button.variants.ts`.
+- Keep `Toaster` in `toast.tsx`; put the `toast` API re-export in
+  `toast-sonner.ts`.
+- Keep route object creation in `router.tsx`; put lazy page component exports
+  in a component-only router page module.
+
+**Tests**: After splitting a shared export, update imports and mocks to the new
+module path, then run `cd web && npm run lint` to confirm the Fast Refresh
+warning is gone rather than hidden.
+
 ---
 
 ## Props Conventions

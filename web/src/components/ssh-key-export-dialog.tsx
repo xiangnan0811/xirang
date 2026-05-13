@@ -12,7 +12,7 @@ import {
   DialogCloseButton,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
 import { getErrorMessage } from "@/lib/utils";
 import type { SSHKeyRecord } from "@/types/domain";

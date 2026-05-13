@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { normalizeRedirectTarget } from "@/lib/api/core";
 
@@ -33,6 +33,7 @@ export function LoginPage() {
   const [requires2FA, setRequires2FA] = useState(false);
   const [loginToken, setLoginToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const totpInputRef = useRef<HTMLInputElement | null>(null);
 
   const errorId = "login-form-error";
 
@@ -52,6 +53,14 @@ export function LoginPage() {
   useEffect(() => {
     void fetchCaptcha();
   }, []);
+
+  useEffect(() => {
+    if (!requires2FA) return;
+    const frame = requestAnimationFrame(() => {
+      totpInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [requires2FA]);
 
   const queryRedirect = new URLSearchParams(location.search).get("redirect");
   const redirectTo = normalizeRedirectTarget((location.state as LocationState | null)?.from ?? queryRedirect);
@@ -206,6 +215,7 @@ export function LoginPage() {
                     {t("login.totpLabel")}
                   </label>
                   <Input
+                    ref={totpInputRef}
                     id="totp-code"
                     value={totpCode}
                     onChange={(event) => setTotpCode(event.target.value)}
@@ -213,7 +223,6 @@ export function LoginPage() {
                     placeholder={t("login.totpPlaceholder")}
                     aria-invalid={Boolean(error)}
                     aria-describedby={error ? errorId : undefined}
-                    autoFocus
                     required
                   />
                 </div>

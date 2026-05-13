@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { useSharedContext } from "@/context/shared-context";
-import { useTasksContext } from "@/context/tasks-context";
-import { useAlertsContext } from "@/context/alerts-context";
-import { useIntegrationsContext } from "@/context/integrations-context";
+import { useSharedContext } from "@/context/shared-context.hooks";
+import { useTasksContext } from "@/context/tasks-context.hooks";
+import { useAlertsContext } from "@/context/alerts-context.hooks";
+import { useIntegrationsContext } from "@/context/integrations-context.hooks";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications/alert-center";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 
 export function NotificationsPage() {

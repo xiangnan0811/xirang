@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { getVisibleNavItems } from "@/components/layout/navigation";
 import { PageHero } from "@/components/ui/page-hero";
 

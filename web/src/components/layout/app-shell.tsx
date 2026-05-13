@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { SharedContextProvider } from "@/context/shared-context";
 import { NodesContextProvider } from "@/context/nodes-context";
 import { TasksContextProvider } from "@/context/tasks-context";
@@ -30,7 +30,8 @@ import { IntegrationsContextProvider } from "@/context/integrations-context";
 import { SSHKeysContextProvider } from "@/context/ssh-keys-context";
 import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
-import { CommandPaletteProvider, useCommandPalette } from "@/context/command-palette-context";
+import { CommandPaletteProvider } from "@/context/command-palette-context";
+import { useCommandPalette } from "@/context/command-palette-context.hooks";
 import { CommandPalette } from "@/components/ui/command-palette";
 
 function AnimatedOutlet() {

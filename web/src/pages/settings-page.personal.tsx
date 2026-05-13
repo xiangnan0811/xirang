@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useTheme } from "@/context/theme-context";
+import { useTheme } from "@/context/theme-context.hooks";
 import { useRefreshInterval, useDefaultPageSize, useDatetimeFormat } from "@/hooks/use-user-preferences";
 
 export function PersonalTab() {

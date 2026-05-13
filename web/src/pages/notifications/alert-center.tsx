@@ -4,7 +4,7 @@ import { BellRing, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Pagination } from "@/components/ui/pagination";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { apiClient } from "@/lib/api/client";

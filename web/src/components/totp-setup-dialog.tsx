@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
 import { Copy, Check } from "lucide-react";
@@ -35,6 +35,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const verifyCodeInputRef = useRef<HTMLInputElement | null>(null);
 
   // 对话框打开时获取 TOTP 密钥（useEffect 保证受控模式下也能触发）
   useEffect(() => {
@@ -66,6 +67,14 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
 
     return () => { cancelled = true; };
   }, [open, step, secret, token, t]);
+
+  useEffect(() => {
+    if (!open || step !== "verify") return;
+    const frame = requestAnimationFrame(() => {
+      verifyCodeInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, step]);
 
   const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
@@ -159,6 +168,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                   {t("totp.verificationCode")}
                 </label>
                 <Input
+                  ref={verifyCodeInputRef}
                   id="totp-verify-code"
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value)}
@@ -166,7 +176,6 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
                   pattern="[0-9]*"
                   autoComplete="one-time-code"
                   placeholder={t("totp.codePlaceholder")}
-                  autoFocus
                   required
                 />
               </div>

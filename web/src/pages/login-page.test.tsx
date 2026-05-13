@@ -43,7 +43,7 @@ vi.mock("@/lib/api/client", () => ({
   },
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     isAuthenticated: false,
     login: loginMock,

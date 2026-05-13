@@ -82,11 +82,11 @@ vi.mock("@/lib/api/client", async () => {
   };
 });
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 

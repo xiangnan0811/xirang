@@ -40,7 +40,7 @@ vi.mock("@/lib/api/tasks-api", () => ({
   })),
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck, ShieldOff } from "lucide-react";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";

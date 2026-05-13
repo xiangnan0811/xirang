@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { X, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 
 const DISMISSED_VERSION_KEY = "xirang.dismissed-version";

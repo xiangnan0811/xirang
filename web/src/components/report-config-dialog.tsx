@@ -15,7 +15,7 @@ import { Select } from "@/components/ui/select";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { CronGenerator } from "@/components/cron-generator";
 
 const reportsApi = createReportsApi();

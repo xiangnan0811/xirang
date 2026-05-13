@@ -31,7 +31,7 @@ const { getBackupHealthMock, getStorageUsageMock, verifyMountMock } = vi.hoisted
   verifyMountMock: vi.fn(),
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     token: "test-token",
     role: "admin",

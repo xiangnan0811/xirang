@@ -1,82 +1,29 @@
-import { lazy, Suspense } from "react";
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { AppShell } from "@/components/layout/app-shell";
 import { ProtectedRoute } from "@/components/protected-route";
 import { LoginPage } from "@/pages/login-page";
-
-const OverviewPage = lazy(() =>
-  import("@/pages/overview-page").then((m) => ({ default: m.OverviewPage }))
-);
-const NodesPage = lazy(() =>
-  import("@/pages/nodes-page").then((m) => ({ default: m.NodesPage }))
-);
-const SSHKeysPage = lazy(() =>
-  import("@/pages/ssh-keys-page").then((m) => ({ default: m.SSHKeysPage }))
-);
-const BackupsPage = lazy(() =>
-  import("@/pages/backups-page").then((m) => ({ default: m.BackupsPage }))
-);
-const PoliciesPage = lazy(() =>
-  import("@/pages/policies-page").then((m) => ({ default: m.PoliciesPage }))
-);
-const LogsPage = lazy(() =>
-  import("@/pages/logs/logs-page").then((m) => ({ default: m.LogsPage }))
-);
-const NotificationsPage = lazy(() =>
-  import("@/pages/notifications-page").then((m) => ({
-    default: m.NotificationsPage,
-  }))
-);
-const TasksPage = lazy(() =>
-  import("@/pages/tasks-page").then((m) => ({ default: m.TasksPage }))
-);
-const AuditPage = lazy(() =>
-  import("@/pages/audit-page").then((m) => ({ default: m.AuditPage }))
-);
-const ReportsPage = lazy(() =>
-  import("@/pages/reports-page").then((m) => ({ default: m.ReportsPage }))
-);
-const SettingsPage = lazy(() =>
-  import("@/pages/settings-page").then((m) => ({ default: m.SettingsPage }))
-);
-const CredentialsPage = lazy(() =>
-  import("@/pages/credentials-page").then((m) => ({
-    default: m.CredentialsPage,
-  }))
-);
-const MorePage = lazy(() =>
-  import("@/pages/more-page").then((m) => ({ default: m.MorePage }))
-);
-const NodesDetailPage = lazy(() =>
-  import("@/pages/nodes-detail-page").then((m) => ({ default: m.NodesDetailPage }))
-);
-const DashboardsPage = lazy(() =>
-  import("@/pages/dashboards/dashboards-page").then((m) => ({ default: m.DashboardsPage }))
-);
-const DashboardDetailPage = lazy(() =>
-  import("@/pages/dashboards/dashboard-detail-page").then((m) => ({ default: m.DashboardDetailPage }))
-);
-const AutomationRulesPage = lazy(() =>
-  import("@/pages/automation-rules-page").then((m) => ({ default: m.AutomationRulesPage }))
-);
-const ServiceMonitorsPage = lazy(() =>
-  import("@/pages/service-monitors-page").then((m) => ({ default: m.ServiceMonitorsPage }))
-);
-const StatusPage = lazy(() =>
-  import("@/pages/status-page").then((m) => ({ default: m.StatusPage }))
-);
-
-function PageLoader() {
-  return (
-    <div className="flex items-center justify-center py-16">
-      <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
-    </div>
-  );
-}
-
-function LazyPage({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
-}
+import {
+  AuditPage,
+  AutomationRulesPage,
+  BackupsPage,
+  CredentialsPage,
+  DashboardDetailPage,
+  DashboardsPage,
+  LazyPage,
+  LogsPage,
+  MorePage,
+  NodesDetailPage,
+  NodesPage,
+  NotificationsPage,
+  OverviewPage,
+  PoliciesPage,
+  ReportsPage,
+  ServiceMonitorsPage,
+  SettingsPage,
+  SSHKeysPage,
+  StatusPage,
+  TasksPage,
+} from "@/router-pages";
 
 export const AppRouter = createBrowserRouter([
   {

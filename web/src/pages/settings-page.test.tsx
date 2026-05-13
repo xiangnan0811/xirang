@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { SettingsPage } from "./settings-page";
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token", username: "admin", role: "admin" }),
 }));
 
@@ -16,7 +16,7 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
 }));
 
-vi.mock("@/context/theme-context", () => ({
+vi.mock("@/context/theme-context.hooks", () => ({
   useTheme: () => ({
     theme: "system",
     setTheme: vi.fn(),

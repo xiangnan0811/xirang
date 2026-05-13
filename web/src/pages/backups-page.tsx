@@ -7,7 +7,7 @@ import { StorageGuideCard } from "@/components/storage-guide-card";
 import { PageHero } from "@/components/ui/page-hero";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { BackupHealthData } from "@/types/domain";
 

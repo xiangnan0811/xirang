@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,15 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
   const [totpCode, setTotpCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      passwordInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
   const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
@@ -75,13 +84,13 @@ export function TOTPDisableDialog({ open, onOpenChange, token, onSuccess }: TOTP
                 {t("totp.accountPassword")}
               </label>
               <Input
+                ref={passwordInputRef}
                 id="totp-disable-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
                 placeholder={t("totp.accountPasswordPlaceholder")}
-                autoFocus
                 required
               />
             </div>

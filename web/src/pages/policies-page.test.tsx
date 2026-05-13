@@ -32,13 +32,13 @@ vi.mock("react-router-dom", async () => {
   return { ...actual };
 });
 
-vi.mock("@/context/shared-context", () => ({
+vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
 }));
-vi.mock("@/context/policies-context", () => ({
+vi.mock("@/context/policies-context.hooks", () => ({
   usePoliciesContext: () => policiesRef.current,
 }));
 
@@ -53,14 +53,14 @@ vi.mock("@/hooks/use-confirm", () => ({
   }),
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
   },
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

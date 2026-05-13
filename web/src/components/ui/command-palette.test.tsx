@@ -10,22 +10,22 @@ const { useAuthMock } = vi.hoisted(() => ({
   >(() => ({ role: "admin" })),
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => useAuthMock(),
 }));
 
-vi.mock("@/context/command-palette-context", () => ({
+vi.mock("@/context/command-palette-context.hooks", () => ({
   useCommandPalette: () => ({
     open: true,
     setOpen: vi.fn(),
   }),
 }));
 
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContextOptional: () => null,
 }));
 
-vi.mock("@/context/tasks-context", () => ({
+vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContextOptional: () => null,
 }));
 

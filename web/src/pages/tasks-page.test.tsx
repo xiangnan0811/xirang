@@ -37,16 +37,16 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/context/shared-context", () => ({
+vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
 }));
-vi.mock("@/context/tasks-context", () => ({
+vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
-vi.mock("@/context/policies-context", () => ({
+vi.mock("@/context/policies-context.hooks", () => ({
   usePoliciesContext: () => policiesRef.current,
 }));
 
@@ -115,14 +115,14 @@ vi.mock("@/components/restore-confirm-dialog", () => ({
   },
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
   },
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     token: "test-token",
     username: "admin",
@@ -558,7 +558,7 @@ describe("TasksPage", () => {
   });
 
   it("updateTask 失败时不关闭弹窗且显示错误 toast", async () => {
-    const { toast } = await import("@/components/ui/toast");
+    const { toast } = await import("@/components/ui/toast-sonner");
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
     const updateTaskMock = vi.fn().mockRejectedValue(new Error("更新任务失败"));

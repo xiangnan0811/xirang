@@ -72,7 +72,7 @@ const liveLogsRef: {
   },
 };
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
@@ -90,10 +90,10 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
 }));
-vi.mock("@/context/tasks-context", () => ({
+vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
 

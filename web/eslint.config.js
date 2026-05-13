@@ -45,8 +45,6 @@ export default tseslint.config(
       // 后续 wave 计划：
       //   - label-has-associated-control: tasks-page.dialogs.tsx 3 处 + rotation-preview 1 处
       //     需重构 label/input 关联（非纯 attribute 增补）。
-      //   - no-autofocus: 4 处（login / totp setup/disable / command-palette）
-      //     UX 上有意保留焦点跳转；改造前需评估对键盘用户的影响。
       //   - click-events-have-key-events / no-static-element-interactions:
       //     dashboards-page + nodes-page.grid.tsx，需替换为 button 或加键盘 handler。
       //   - no-noninteractive-tabindex: nodes-page.grid.tsx 1 处。
@@ -54,7 +52,7 @@ export default tseslint.config(
       "jsx-a11y/no-noninteractive-tabindex": "warn",
       "jsx-a11y/click-events-have-key-events": "warn",
       "jsx-a11y/no-static-element-interactions": "warn",
-      "jsx-a11y/no-autofocus": "warn",
+      "jsx-a11y/no-autofocus": "error",
     },
   },
   // CommonJS config files use module/require
