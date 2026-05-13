@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 27
+- **Total Sessions**: 28
 - **Last Active**: 2026-05-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~910 | Active |
+| `journal-1.md` | ~943 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-05-13 | Fix Trivy platform digest scanning | `20dfd9c` | `fix/trivy-platform-digest-scan` |
 | 27 | 2026-05-13 | Split Docker publish by native platform | `6d91031` | `fix/publish-images-native-platforms` |
 | 26 | 2026-05-13 | Fix Docker Go builder version drift | `5ba0d0a` | `fix/docker-go-1263` |
 | 25 | 2026-05-13 | Frontend workbench UX redesign | `b00c07d` | `feat/frontend-workbench-ux-redesign` |
