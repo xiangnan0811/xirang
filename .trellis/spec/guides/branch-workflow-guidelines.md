@@ -78,3 +78,12 @@ Do not edit, stage, or commit project files on `main`.
    `origin/main` before starting new work.
 
 The repository normally uses squash merge, so local topic branches may not share ancestry with the final `main` commit after merge. Start the next task from the updated `main`, not from the old topic branch.
+
+## Workflow Action Runtime Maintenance
+
+When editing `.github/workflows/*.yml` action pins:
+
+- Keep third-party and GitHub-owned actions pinned by full commit SHA, with a nearby release tag comment for auditability.
+- Resolve the target tag to the exact SHA with `git ls-remote` before editing the workflow.
+- For JavaScript actions, inspect the target tag's `action.yml` / `action.yaml` and confirm `runs.using` matches the currently supported GitHub Actions runtime. Do not treat runtime opt-out environment variables as a durable fix.
+- If the pinned action repository is archived or deprecated, migrate to the maintained upstream before bumping the old repository's latest tag.

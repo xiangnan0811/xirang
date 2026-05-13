@@ -13,9 +13,8 @@
 ## Release Please 状态与基线
 
 当前仓库已启用 Release Please，当前版本基线见 `.release-please-manifest.json`；
-截至本次审查仓库内 manifest 为 `0.28.0`，`CHANGELOG.md` 已由 Release Please
-维护。不要在文档中手写“当前版本”后长期依赖它；需要确认时以 manifest 和
-GitHub Release 为准。
+`CHANGELOG.md` 已由 Release Please 维护。不要在文档中手写“当前版本”后长期
+依赖它；需要确认时以 manifest 和 GitHub Release 为准。
 
 仅在重建发布链路、迁移仓库或重置首发版本时，才需要重新执行 bootstrap 检查：
 
@@ -58,7 +57,7 @@ GitHub Release 为准。
 1. 功能 PR 标题使用 Conventional Commits，合并到 `main` 时保持语义不变。
 2. 创建 PR 后，负责人必须监控 required CI jobs；失败时在同一工作分支修复、推送并重新监控。required checks 失败、pending 或缺失时不得合并。
 3. PR 合并到 `main` 后，继续监控 `Release Please` workflow，确认它成功并按配置和提交语义创建或更新 Release PR。若 Release Please 只更新现有 Release PR 或未产生正式 release，需在交付记录中说明；不要把 post-merge 状态留空。
-4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。
+4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。Release Please action 使用 `googleapis/release-please-action`，不要退回已归档的 `google-github-actions/release-please-action`。
 5. 审阅 Release PR，监控其 required checks，通过后合并。
 6. GitHub 创建对应 `vX.Y.Z` Release。
 7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 发布：
@@ -76,7 +75,10 @@ GitHub Release 为准。
    `TRIVY_PLATFORM`，避免 arm64 digest 被 Trivy 默认按 amd64 解析。
    维护者按需 bump（建议查看
    <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag，并写入其
-   解引用 commit 或可审计的 SHA pin）。
+   解引用 commit 或可审计的 SHA pin）。GitHub Actions JavaScript action
+   需要保持 Node 24 兼容；升级 release、publish、deploy 相关 action 时，
+   维护者应核对目标 tag 的 `action.yml` / `action.yaml` runtime，并同步更新
+   SHA pin 与旁注版本号，不要用临时 Node 20 opt-out 作为常态方案。
 8. 监控 `Publish Docker Images` 直到成功；失败时优先修复自动链路，只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
 9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
@@ -139,6 +141,7 @@ GitHub Release 为准。
 - `.github/workflows/release-please.yml`
 - `.github/workflows/publish-images.yml`
 - `.github/workflows/deploy.yml`
+- `.github/workflows/dockerhub-description.yml`
 - `docker-compose.prod.yml`
 - `.env.deploy`
 - `backend/.env.production.example`
