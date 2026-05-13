@@ -2091,6 +2091,8 @@ const en = {
   // ── settings ──
   settings: {
     title: "Settings",
+    pageDesc: "Preferences and security.",
+    tabListLabel: "Settings views",
     tabs: {
       personal: "Preferences",
       account: "Account Security",
@@ -2506,13 +2508,15 @@ const en = {
   // ── credentials ──
   credentials: {
     pageTitle: "App Credentials",
-    pageDesc: "Manage database and Docker connection credentials for backup policies.",
+    pageDesc: "Reusable credentials.",
+    surfaceTitle: "Inventory",
     createBtn: "New Credential",
     createTitle: "Create Credential",
     createDesc: "Select a credential type and fill in connection details.",
     editTitle: "Edit Credential",
     editDesc: "Modify credential name, description, or connection details.",
     empty: "No credentials",
+    emptyDesc: "Create one to reuse.",
     password: "Password",
     references: "Refs",
     configured: "Configured",

@@ -4,13 +4,22 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { SettingsPage } from "./settings-page";
 
+const authState = vi.hoisted(() => ({
+  current: {
+    token: "test-token",
+    username: "admin",
+    role: "admin",
+  },
+}));
+
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token", username: "admin", role: "admin" }),
+  useAuth: () => authState.current,
 }));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: Record<string, unknown>) =>
+      typeof options?.count === "number" ? `${key}:${options.count}` : key,
     i18n: { language: "zh", changeLanguage: vi.fn() },
   }),
   initReactI18next: { type: "3rdParty", init: vi.fn() },
@@ -81,6 +90,21 @@ function renderSettingsPage(initialEntries: string[] = ["/app/settings"]) {
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.current = {
+      token: "test-token",
+      username: "admin",
+      role: "admin",
+    };
+  });
+
+  it("renders the workbench header and admin metadata", () => {
+    renderSettingsPage();
+
+    expect(screen.getByRole("heading", { name: "settings.title" })).toBeInTheDocument();
+    expect(screen.getByText("settings.pageDesc")).toBeInTheDocument();
+    expect(screen.getByText("users.roles.admin")).toBeInTheDocument();
+    expect(screen.getByText("8 · settings.tabListLabel")).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "settings.tabListLabel" })).toBeInTheDocument();
   });
 
   it("renders 8 tabs for admin", () => {
@@ -148,5 +172,30 @@ describe("SettingsPage", () => {
     expect(accountTab).toHaveAttribute("aria-selected", "true");
     expect(accountTab).toHaveFocus();
     expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "settings-panel-account");
+  });
+
+  it("preserves unrelated query params when switching tabs", async () => {
+    const user = userEvent.setup();
+    const { router } = renderSettingsPage(["/app/settings?tab=personal&mode=compact"]);
+
+    await user.click(screen.getByRole("tab", { name: "settings.tabs.account" }));
+
+    expect(router.state.location.search).toBe("?tab=account&mode=compact");
+  });
+
+  it("limits non-admin users to personal settings and account security", () => {
+    authState.current = {
+      token: "test-token",
+      username: "viewer",
+      role: "viewer",
+    };
+
+    renderSettingsPage(["/app/settings?tab=system"]);
+
+    expect(screen.getAllByText("settings.tabs.personal").length).toBeGreaterThan(0);
+    expect(screen.getByText("2 · settings.tabListLabel")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "settings.tabs.users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "settings.tabs.system" })).not.toBeInTheDocument();
   });
 });

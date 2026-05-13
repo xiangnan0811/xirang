@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/auth-context.hooks";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { PageHero } from "@/components/ui/page-hero";
 
 import { PersonalTab } from "./settings-page.personal";
 import { AccountTab } from "./settings-page.account";
@@ -28,7 +30,9 @@ export function SettingsPage() {
   const activeTab: TabId = paramTab && visibleTabs.includes(paramTab as never) ? paramTab : "personal";
 
   const handleTabChange = (tab: TabId) => {
-    setSearchParams({ tab }, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tab);
+    setSearchParams(next, { replace: true });
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: TabId) => {
@@ -73,35 +77,55 @@ export function SettingsPage() {
     system: t("settings.tabs.system"),
     maintenance: t("settings.tabs.maintenance"),
   };
+  const scopeLabel = isAdmin ? t("users.roles.admin") : t("settings.tabs.personal");
+  const visibleTabsLabel = `${visibleTabs.length} · ${t("settings.tabListLabel")}`;
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">{t("settings.title")}</h1>
+    <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={t("settings.title")}
+        subtitle={t("settings.pageDesc")}
+        meta={
+          <>
+            <Badge tone={isAdmin ? "success" : "neutral"}>
+              {scopeLabel}
+            </Badge>
+            <Badge tone="info">{visibleTabsLabel}</Badge>
+          </>
+        }
+      />
 
-      <div role="tablist" aria-orientation="horizontal" className="flex gap-1 border-b border-border pb-px overflow-x-auto">
-        {visibleTabs.map((tab) => (
-          <button
-            key={tab}
-            ref={(node) => {
-              tabRefs.current[tab] = node;
-            }}
-            id={`settings-tab-${tab}`}
-            role="tab"
-            aria-selected={activeTab === tab}
-            aria-controls={`settings-panel-${tab}`}
-            tabIndex={activeTab === tab ? 0 : -1}
-            onClick={() => handleTabChange(tab)}
-            onKeyDown={(event) => handleTabKeyDown(event, tab)}
-            className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors rounded-t-md -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2",
-              activeTab === tab
-                ? "border-b-2 border-primary text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {tabLabels[tab]}
-          </button>
-        ))}
+      <div className="overflow-x-auto pb-1">
+        <div
+          role="tablist"
+          aria-label={t("settings.tabListLabel")}
+          aria-orientation="horizontal"
+          className="inline-flex min-w-max items-center gap-1 rounded-lg border border-border bg-background/70 p-1"
+        >
+          {visibleTabs.map((tab) => (
+            <button
+              key={tab}
+              ref={(node) => {
+                tabRefs.current[tab] = node;
+              }}
+              id={`settings-tab-${tab}`}
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-controls={`settings-panel-${tab}`}
+              tabIndex={activeTab === tab ? 0 : -1}
+              onClick={() => handleTabChange(tab)}
+              onKeyDown={(event) => handleTabKeyDown(event, tab)}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                activeTab === tab
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              {tabLabels[tab]}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div role="tabpanel" id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>

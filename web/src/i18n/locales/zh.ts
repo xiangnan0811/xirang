@@ -2091,6 +2091,8 @@ const zh = {
   // ── settings ──
   settings: {
     title: "设置",
+    pageDesc: "管理偏好和安全。",
+    tabListLabel: "设置视图",
     tabs: {
       personal: "个人偏好",
       account: "账户安全",
@@ -2515,13 +2517,15 @@ const zh = {
   // ── credentials ──
   credentials: {
     pageTitle: "应用凭据",
-    pageDesc: "管理数据库、Docker 等应用连接凭据，供备份策略引用。",
+    pageDesc: "管理可复用凭据。",
+    surfaceTitle: "清单",
     createBtn: "新建凭据",
     createTitle: "新建应用凭据",
     createDesc: "选择凭据类型并填写连接信息。",
     editTitle: "编辑应用凭据",
     editDesc: "修改凭据名称、描述或连接信息。",
     empty: "暂无凭据",
+    emptyDesc: "创建后可复用。",
     password: "密码",
     references: "引用",
     configured: "已配置",
