@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/xiangnan0811/xirang/compare/v0.29.4...v0.30.0) (2026-05-13)
+
+
+### ✨ Features
+
+* **web:** refine secondary workbench pages ([#160](https://github.com/xiangnan0811/xirang/issues/160)) ([d262d96](https://github.com/xiangnan0811/xirang/commit/d262d96effa223a1c36f03e7252788a5d0793673))
+
 ## [0.29.4](https://github.com/xiangnan0811/xirang/compare/v0.29.3...v0.29.4) (2026-05-13)
 
 
