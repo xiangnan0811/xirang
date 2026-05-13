@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/05-13-frontend-lint-warnings/research/lint-warning-baseline.md", "reason": "Current lint warning inventory and cleanup strategy"}
-{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend entrypoint for component, hook, state, quality, type-safety, and a11y guidelines"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Guide for extracting shared constants/hooks without duplication"}

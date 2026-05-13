@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gate expectations for npm run check"}
-{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "A11y lint and focus behavior expectations"}
-{"file": ".trellis/tasks/05-13-frontend-lint-warnings/research/lint-warning-baseline.md", "reason": "Warning baseline to verify is eliminated"}
