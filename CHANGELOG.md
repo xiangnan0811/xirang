@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/xiangnan0811/xirang/compare/v0.28.3...v0.29.0) (2026-05-13)
+
+
+### ✨ Features
+
+* **web:** refine console workbench UX ([6eac43b](https://github.com/xiangnan0811/xirang/commit/6eac43b990570d2d6af429c8613ebe3820e84e15))
+
 ## [0.28.3](https://github.com/xiangnan0811/xirang/compare/v0.28.2...v0.28.3) (2026-05-07)
 
 
