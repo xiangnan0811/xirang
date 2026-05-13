@@ -1042,3 +1042,39 @@ Refined second-wave frontend console pages with shared workbench surfaces, added
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: Frontend workbench UX wave 3
+
+**Date**: 2026-05-13
+**Task**: Frontend workbench UX wave 3
+**Branch**: `feat/frontend-workbench-ux-wave3`
+
+### Summary
+
+Refined Settings and Application Credentials into the shared workbench shell, added focused tests and browser verification evidence, and documented the page shell convention in frontend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `552242c` | (see git log) |
+| `f4def32` | (see git log) |
+| `2b833cf` | (see git log) |
+| `88a7829` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
