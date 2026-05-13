@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review shared UI primitive, Radix, navigation, and composition compliance."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review quality gate, tests, responsive route pages, and forbidden frontend patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Review icon labels, focus, keyboard behavior, and color/a11y requirements."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review branch, PR, CI, and post-merge workflow compliance."}
+{"file":".trellis/tasks/05-13-frontend-workbench-ux-redesign/prd.md","reason":"Check implementation against task acceptance criteria and out-of-scope boundaries."}
+{"file":".trellis/tasks/05-13-frontend-workbench-ux-redesign/research/ux-reference-patterns.md","reason":"Check final UI direction against the agreed operational workbench reference patterns."}
