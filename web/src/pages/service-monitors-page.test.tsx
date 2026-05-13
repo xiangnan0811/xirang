@@ -44,6 +44,12 @@ vi.mock("react-i18next", () => ({
     t: (key: string, opts?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
         "serviceMonitor.createBtn": "新建监控",
+        "serviceMonitor.totalMeta": `${String(opts?.count ?? "")} 个监控`,
+        "serviceMonitor.enabledMeta": `${String(opts?.count ?? "")} 个启用`,
+        "serviceMonitor.downMeta": `${String(opts?.count ?? "")} 个异常`,
+        "serviceMonitor.unknownMeta": `${String(opts?.count ?? "")} 个未知`,
+        "serviceMonitor.surfaceTitle": "监控清单",
+        "serviceMonitor.surfaceDesc": "查看端点类型、最近状态、可用率和启停操作。",
         "serviceMonitor.createTitle": "新建服务监控",
         "serviceMonitor.editTitle": "编辑服务监控",
         "serviceMonitor.fieldTarget": "探测目标",
@@ -97,6 +103,19 @@ describe("ServiceMonitorsPage", () => {
     apiMock.update.mockResolvedValue(monitor);
     apiMock.delete.mockResolvedValue(undefined);
     confirmMock.mockResolvedValue(true);
+  });
+
+  it("renders the service monitor workbench header and inventory surface", async () => {
+    render(<ServiceMonitorsPage />);
+
+    await waitFor(() => expect(screen.getByText("API")).toBeInTheDocument());
+
+    expect(
+      screen.getByRole("heading", { name: "serviceMonitor.pageTitle" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 个监控")).toBeInTheDocument();
+    expect(screen.getByText("1 个启用")).toBeInTheDocument();
+    expect(screen.getByText("监控清单")).toBeInTheDocument();
   });
 
   it("renders row actions with monitor-specific accessible names", async () => {
