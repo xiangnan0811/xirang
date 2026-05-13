@@ -71,6 +71,9 @@ Do not edit, stage, or commit project files on `main`.
    workflows such as `Sync Docker Hub Description` when relevant. If the merge
    is not expected to create a formal GitHub Release or Docker Hub publish,
    record that explicitly in the task/PR handoff.
+   When changing Docker publish workflows, verify each platform build and scan
+   path explicitly; do not assume a multi-arch manifest step proves the
+   per-platform scanner selected the intended platform.
 7. After post-merge automation is understood, sync local `main` to
    `origin/main` before starting new work.
 

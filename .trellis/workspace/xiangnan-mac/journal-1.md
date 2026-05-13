@@ -908,3 +908,36 @@ Cancelled the stalled v0.29.1 Docker publish run after it exceeded recent succes
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: Fix Trivy platform digest scanning
+
+**Date**: 2026-05-13
+**Task**: Fix Trivy platform digest scanning
+**Branch**: `fix/trivy-platform-digest-scan`
+
+### Summary
+
+Fixed Docker publish workflow so Trivy scans each platform digest with the matching matrix platform, documented the release-maintainer behavior, and recorded the platform-scan checklist in Trellis guidance after local CI parity passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `20dfd9c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
