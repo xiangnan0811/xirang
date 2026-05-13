@@ -78,18 +78,22 @@ function renderShell() {
 }
 
 describe("AppShell", () => {
-  it("存在 warning 时为头部和侧边栏补足额外偏移", () => {
+  it("存在 warning 时保持头部和侧边栏高度稳定", () => {
     mockConsoleData.warning = "节点同步接口超时";
 
     renderShell();
 
     const status = screen.getByRole("status");
-    const header = status.closest("header");
-    expect(header).toHaveClass("h-[88px]");
+    expect(status).toHaveTextContent("节点同步接口超时");
+    expect(status.closest("main")).toBeInTheDocument();
+    expect(status.closest("header")).toBeNull();
+
+    const header = document.querySelector("header");
+    expect(header).toHaveClass("h-14");
 
     const sidebar = screen
       .getByRole("button", { name: "收起侧边栏" })
       .closest("aside");
-    expect(sidebar).toHaveClass("pt-[88px]");
+    expect(sidebar).toHaveClass("pt-14");
   });
 });

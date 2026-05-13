@@ -252,6 +252,8 @@ const en = {
     currentThroughputDesc: "{{count}} tasks running",
     policyCoverage: "Policy Coverage",
     policyCoverageDesc: "Active policies ({{count}} tasks total)",
+    abnormalNodes: "Needs Attention",
+    abnormalNodesDesc: "{{count}} failed tasks in 24h",
     matrixTitle: "Host Status Matrix",
     fullscreenAriaLabel: "View status matrix fullscreen",
     fullscreenTitle: "Fullscreen",

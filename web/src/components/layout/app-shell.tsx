@@ -64,7 +64,6 @@ function AppShellInner() {
   const cmdPalette = useCommandPalette();
 
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>("xirang.sidebar.collapsed", false);
-  const hasWarning = Boolean(consoleData.warning);
 
   const handleLogout = async () => {
     if (token) {
@@ -90,10 +89,7 @@ function AppShellInner() {
 
       {/* 顶部固定导航栏 */}
       <header
-        className={cn(
-          "fixed top-0 left-0 right-0 z-50 border-b border-border bg-background",
-          hasWarning ? "h-[88px]" : "h-14"
-        )}
+        className="fixed left-0 right-0 top-0 z-50 h-14 border-b border-border bg-background"
       >
         <div className="flex h-14 items-center">
           <div className="flex items-center md:hidden px-4">
@@ -179,33 +175,32 @@ function AppShellInner() {
           </div>
         </div>
 
-        {consoleData.warning ? (
-          <div
-            role="status"
-            aria-live="polite"
-            className="border-t border-warning/30 bg-warning/10 px-4 py-1.5 text-mini text-warning md:px-6"
-          >
-            {consoleData.warning}
-          </div>
-        ) : null}
       </header>
 
       {/* 侧边栏与主区包裹层 */}
       <div className={cn(
         "relative flex w-full transition-[padding,margin] duration-200",
-        hasWarning ? "pt-[88px]" : "pt-14",
+        "pt-14",
         sidebarCollapsed ? "md:pl-16" : "md:pl-60"
       )}>
         <DesktopSidebar
           role={role}
           isCollapsed={sidebarCollapsed}
-          hasWarning={hasWarning}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
 
-        <div className={cn("flex-1 flex flex-col min-w-0", hasWarning ? "min-h-[calc(100vh-88px)]" : "min-h-[calc(100vh-56px)]")}>
+        <div className="flex min-h-[calc(100vh-56px)] min-w-0 flex-1 flex-col">
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
+            {consoleData.warning ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+              >
+                {consoleData.warning}
+              </div>
+            ) : null}
             <SharedContextProvider value={{
               loading: consoleData.loading,
               warning: consoleData.warning,

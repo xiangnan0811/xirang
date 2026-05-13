@@ -809,3 +809,36 @@ Added fast pre-commit staged checks and a strict pre-push CI-parity gate matchin
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: Frontend workbench UX redesign
+
+**Date**: 2026-05-13
+**Task**: Frontend workbench UX redesign
+**Branch**: `feat/frontend-workbench-ux-redesign`
+
+### Summary
+
+Refined the React console into a denser operations workbench: neutralized theme tokens, added compact page/data primitives, applied them to overview/nodes/tasks/SSH keys, converted route-changing actions to links, stabilized app-shell warning layout, and verified with focused tests, full web check, and desktop/mobile screenshots.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b00c07d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

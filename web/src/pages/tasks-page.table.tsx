@@ -15,7 +15,7 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
@@ -46,7 +46,6 @@ export const TasksTable = React.memo(function TasksTable({
   onToggleChain,
 }: TasksViewProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
 
   // Build chain parent map to know which tasks are parents
   const chainParentMap = buildChainParentMap(filteredTasks);
@@ -107,7 +106,7 @@ export const TasksTable = React.memo(function TasksTable({
                 <tr
                   key={task.id}
                   className={cn(
-                    "group border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40",
+                    "border-b border-border transition-colors duration-200 ease-out hover:bg-muted/40",
                     selectedTaskSet.has(task.id) && "bg-primary/5",
                     task.enabled === false && "opacity-50",
                     isChild && "bg-muted/20"
@@ -232,16 +231,10 @@ export const TasksTable = React.memo(function TasksTable({
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {/* Retry button: hidden until row is hovered (for failed rows) */}
                       <Button
                         variant="ghost"
                         size="icon"
-                        className={cn(
-                          "size-8 text-muted-foreground hover:bg-accent hover:text-foreground transition-opacity",
-                          task.status === "failed"
-                            ? "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                            : undefined
-                        )}
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label={t("tasks.retryAriaLabel")}
                         disabled={task.status !== "failed" || isPendingAny}
                         onClick={() => void handleRetry(task.id)}
@@ -257,9 +250,11 @@ export const TasksTable = React.memo(function TasksTable({
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label={t("tasks.viewLogsAriaLabel", { id: task.id })}
-                        onClick={() => navigate(`/app/logs?task=${task.id}`)}
+                        asChild
                       >
-                        <Terminal className="size-4" />
+                        <Link to={`/app/logs?task=${task.id}`}>
+                          <Terminal className="size-4" aria-hidden />
+                        </Link>
                       </Button>
                       <Button
                         variant="ghost"

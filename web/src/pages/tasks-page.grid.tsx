@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { History, Loader2, Pause, Pencil, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
@@ -29,7 +29,6 @@ export const TasksGrid = React.memo(function TasksGrid({
   toggleTaskSelection,
 }: TasksViewProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
 
   return (
     <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
@@ -46,7 +45,7 @@ export const TasksGrid = React.memo(function TasksGrid({
           <div
             key={task.id}
             className={cn(
-              "hover:bg-accent transition-colors flex h-full flex-col gap-2 p-4",
+              "flex h-full flex-col gap-2 rounded-lg border border-border bg-card p-4 shadow-sm transition-colors hover:bg-accent",
               task.status === "failed" && "border-destructive/35 bg-destructive/10",
               task.status === "running" && "border-info/30 bg-info/5",
               task.status === "warning" && "border-warning/35 bg-warning/10",
@@ -155,9 +154,11 @@ export const TasksGrid = React.memo(function TasksGrid({
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label={t('tasks.viewLogsAriaLabel', { id: task.id })}
-                  onClick={() => navigate(`/app/logs?task=${task.id}`)}
+                  asChild
                 >
-                  <Terminal className="size-4" />
+                  <Link to={`/app/logs?task=${task.id}`}>
+                    <Terminal className="size-4" aria-hidden />
+                  </Link>
                 </Button>
                 <Button
                   variant="ghost"

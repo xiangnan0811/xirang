@@ -4,7 +4,7 @@ import { useSharedContext } from "@/context/shared-context";
 import { useNodesContext } from "@/context/nodes-context";
 import { useTasksContext } from "@/context/tasks-context";
 import { usePoliciesContext } from "@/context/policies-context";
-import { Card, CardContent } from "@/components/ui/card";
+import { DataSurface, DataSurfaceContent, DataSurfaceToolbar } from "@/components/ui/data-surface";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -389,6 +389,7 @@ export function TasksPage() {
       />
 
       <StatCardsSection
+        compact
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
@@ -424,8 +425,8 @@ export function TasksPage() {
         ]}
       />
 
-      <Card className="rounded-lg border border-border bg-card">
-        <CardContent className="space-y-4 pt-6">
+      <DataSurface>
+        <DataSurfaceToolbar className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <ViewModeToggle
@@ -457,7 +458,9 @@ export function TasksPage() {
             totalCount={tasks.length}
             resetFilters={resetFilters}
           />
+        </DataSurfaceToolbar>
 
+        <DataSurfaceContent className="space-y-4">
           {loading ? (
             <LoadingState
               title={t("tasks.loadingTitle")}
@@ -517,8 +520,8 @@ export function TasksPage() {
             onPageChange={setPage}
             onPageSizeChange={(size) => { setPageSize(size); }}
           />
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       <TasksPageDialogs
         createDialogOpen={createDialogOpen}

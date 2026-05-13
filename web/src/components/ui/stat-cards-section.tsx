@@ -20,6 +20,7 @@ type StatCardsSectionProps = {
   items: StatCardItem[];
   className?: string;
   cardClassName?: string;
+  compact?: boolean;
 };
 
 function toneTextClass(tone: StatCardTone | undefined): string {
@@ -43,25 +44,29 @@ export function StatCardsSection({
   items,
   className,
   cardClassName,
+  compact = false,
 }: StatCardsSectionProps) {
-  const columnCount = Math.max(items.length, 1);
-
   return (
     <section
-      className={cn("grid gap-1.5 sm:gap-3", className)}
-      style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+      className={cn(
+        "grid gap-2 sm:grid-cols-2 xl:grid-cols-4",
+        compact ? "grid-cols-2" : "grid-cols-1",
+        items.length >= 5 && "2xl:grid-cols-5",
+        className
+      )}
     >
       {items.map((item) => (
         <div
           key={item.id ?? item.title}
           data-tone={item.tone ?? "info"}
           className={cn(
-            "rounded-lg bg-card p-5 shadow-sm dark:border dark:border-border",
+            "rounded-lg border border-border bg-card shadow-sm",
+            compact ? "p-3" : "p-4",
             cardClassName
           )}
         >
           <div className="flex items-center justify-between">
-            <div className="text-micro font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            <div className="text-mini font-medium text-muted-foreground">
               {item.title}
             </div>
             {item.icon ? (
@@ -70,7 +75,9 @@ export function StatCardsSection({
           </div>
           <div
             className={cn(
-              "mt-3 text-stat font-semibold tabular-nums leading-none tracking-[-0.025em] text-foreground",
+              compact
+                ? "mt-2 text-xl font-semibold tabular-nums leading-none text-foreground"
+                : "mt-3 text-2xl font-semibold tabular-nums leading-none text-foreground",
               item.valueClassName
             )}
           >

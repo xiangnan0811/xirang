@@ -1,16 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { default as userEvent } from "@testing-library/user-event";
 import { OverviewPage } from "./overview-page";
-
-const mockNavigate = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return {
     ...actual,
-    useNavigate: () => mockNavigate,
     Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>,
   };
 });
@@ -138,7 +135,6 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
 
 describe("OverviewPage", () => {
   beforeEach(() => {
-    mockNavigate.mockReset();
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
     fetchOverviewTrafficMock.mockReset();
@@ -154,7 +150,7 @@ describe("OverviewPage", () => {
     });
   });
 
-  it("状态矩阵默认仅渲染预览节点，全屏后可查看全部并跳转", async () => {
+  it("状态矩阵默认仅渲染预览节点，全屏后可查看全部并保留链接语义", async () => {
     const user = userEvent.setup();
     setContext(210, true);
 
@@ -162,23 +158,23 @@ describe("OverviewPage", () => {
 
     const preview = screen.getByRole("group", { name: /主机状态矩阵预览/ });
     const previewDots = within(preview)
-      .getAllByRole("button")
-      .filter((btn) => btn.getAttribute("aria-label")?.startsWith("Node-"));
+      .getAllByRole("link")
+      .filter((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
     expect(previewDots).toHaveLength(80);
+    expect(previewDots[0]).toHaveAttribute("href", "/app/nodes/1");
     expect(screen.getByText("当前仅展示 80 / 210 台节点，点击右上角可全屏查看全部。"))
       .toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "全屏查看状态矩阵" }));
 
-    const dialog = screen.getByRole("dialog", { name: /主机状态矩阵/ });
+    const dialog = await screen.findByRole("dialog", { name: /主机状态矩阵/ });
     const fullscreen = within(dialog).getByRole("group", { name: /主机状态矩阵全量/ });
     const fullscreenDots = within(fullscreen)
-      .getAllByRole("button")
-      .filter((btn) => btn.getAttribute("aria-label")?.startsWith("Node-"));
+      .getAllByRole("link")
+      .filter((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
     expect(fullscreenDots).toHaveLength(210);
-
-    await user.click(within(fullscreen).getByRole("button", { name: /Node-001，状态在线/ }));
-    expect(mockNavigate).toHaveBeenCalledWith("/app/nodes/1");
+    expect(within(fullscreen).getByRole("link", { name: /Node-001，状态在线/ }))
+      .toHaveAttribute("href", "/app/nodes/1");
   });
 
   it("无数据时显示空提示并输出图表可访问名称", async () => {

@@ -1,5 +1,6 @@
 import React, { Suspense } from "react";
 import { useTranslation } from "react-i18next";
+import { KeyRound } from "lucide-react";
 import { useSSHKeysPageState } from "@/pages/ssh-keys-page.state";
 import { SSHKeysToolbar } from "@/pages/ssh-keys-page.toolbar";
 import { SSHKeysTable } from "@/pages/ssh-keys-page.table";
@@ -15,9 +16,11 @@ const SSHKeyBatchImportDialog = React.lazy(() =>
 const SSHKeyRotationWizard = React.lazy(() =>
   import("@/components/ssh-key-rotation/ssh-key-rotation-wizard").then(m => ({ default: m.SSHKeyRotationWizard }))
 );
-import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { DataSurface, DataSurfaceContent, DataSurfaceToolbar } from "@/components/ui/data-surface";
 import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
+import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
@@ -162,8 +165,27 @@ export function SSHKeysPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={t("nav.sshKeys")}
+        subtitle={t("sshKeys.statsTotalDesc")}
+        meta={
+          <>
+            <span>{t("sshKeys.statsInUse")}: {stats.inUse}</span>
+            <span>{t("sshKeys.statsUnused")}: {stats.unused}</span>
+            <span>{t("sshKeys.selectedCount", { count: selectedIds.size })}</span>
+          </>
+        }
+        actions={
+          <Button size="sm" onClick={openCreateDialog}>
+            <KeyRound className="size-4" aria-hidden />
+            {t("sshKeys.addKey")}
+          </Button>
+        }
+      />
+
       {/* ── 统计卡片 ── */}
       <StatCardsSection
+        compact
         className="animate-slide-up [animation-delay:150ms]"
         items={[
           {
@@ -198,8 +220,8 @@ export function SSHKeysPage() {
       />
 
       {/* ── 主内容区 ── */}
-      <Card className="overflow-hidden rounded-lg border border-border bg-card">
-        <CardContent className="space-y-4 pt-6">
+      <DataSurface>
+        <DataSurfaceToolbar className="space-y-3">
           {/* 工具栏 */}
           <SSHKeysToolbar
             viewMode={state.viewMode}
@@ -208,7 +230,6 @@ export function SSHKeysPage() {
             allVisibleSelected={pagedAllVisibleSelected}
             toggleSelectAllVisible={pagedToggleSelectAllVisible}
             clearSelection={state.clearSelection}
-            openCreateDialog={state.openCreateDialog}
             setBatchImportOpen={state.setBatchImportOpen}
             setExportOpen={state.setExportOpen}
             openRotationWizard={state.openRotationWizard}
@@ -218,7 +239,7 @@ export function SSHKeysPage() {
           {/* 筛选面板 */}
           <FilterPanel
             sticky={false}
-            className="grid gap-3 grid-cols-2 md:grid-cols-4 items-center"
+            className="grid grid-cols-2 items-center gap-3 border-0 bg-transparent p-0 md:grid-cols-4"
           >
             <SearchInput
               containerClassName="w-full col-span-2 md:col-span-1"
@@ -266,7 +287,9 @@ export function SSHKeysPage() {
             total={sshKeys.length}
             unit={t("sshKeys.keyUnit")}
           />
+        </DataSurfaceToolbar>
 
+        <DataSurfaceContent className="space-y-4">
           {/* 卡片视图：移动端始终显示，桌面端按 viewMode 切换 */}
           <div className={viewMode === "table" ? "md:hidden" : undefined}>
             <SSHKeysGrid {...viewProps} />
@@ -283,8 +306,8 @@ export function SSHKeysPage() {
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
           />
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       {/* ── 对话框 ── */}
       <SSHKeyEditorDialog

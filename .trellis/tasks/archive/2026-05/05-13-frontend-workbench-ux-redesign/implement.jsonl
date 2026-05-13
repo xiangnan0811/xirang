@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Frontend component, composition, styling, navigation, and a11y conventions for shared UI primitives and page fragments."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Required local frontend quality gate, forbidden patterns, and test expectations."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Accessible icon, focus, dialog, color contrast, and axe/jsx-a11y baseline for UI changes."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Existing frontend module organization and page-fragment conventions."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Branch, PR, CI monitoring, merge, and post-merge automation workflow."}
+{"file":".trellis/tasks/05-13-frontend-workbench-ux-redesign/prd.md","reason":"Task goal, scope, requirements, implementation phases, and acceptance criteria."}
+{"file":".trellis/tasks/05-13-frontend-workbench-ux-redesign/research/ux-reference-patterns.md","reason":"Read-only audit synthesis and external workbench reference patterns for the redesign."}

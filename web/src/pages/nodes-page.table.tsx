@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,10 +32,9 @@ export const NodesTable = React.memo(function NodesTable({
   isAdmin,
 }: NodesViewProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
 
   return (
-    <div className="hidden rounded-lg border border-border bg-card overflow-x-auto md:block">
+    <div className="hidden overflow-x-auto rounded-lg border border-border bg-card md:block">
       <table className="min-w-[1280px] text-left text-sm">
         <thead>
           <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
@@ -184,11 +183,11 @@ export const NodesTable = React.memo(function NodesTable({
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
-                        onClick={() =>
-                          navigate(`/app/logs?node=${encodeURIComponent(node.name)}`)
-                        }
+                        asChild
                       >
-                        <Terminal className="size-4" />
+                        <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
+                          <Terminal className="size-4" aria-hidden />
+                        </Link>
                       </Button>
                       {isAdmin && (
                         <Button

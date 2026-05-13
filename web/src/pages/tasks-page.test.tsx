@@ -264,18 +264,15 @@ describe("TasksPage", () => {
     expect(screen.getByText("当前筛选 2 / 2 条任务")).toBeInTheDocument();
   });
 
-  it("点击日志按钮会跳转到对应任务日志页", async () => {
-    const user = userEvent.setup();
-
+  it("日志入口使用链接语义跳转到对应任务日志页", () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <TasksPage />
       </MemoryRouter>
     );
 
-    await user.click(screen.getByRole("button", { name: "查看任务 #101 日志" }));
-
-    expect(navigateMock).toHaveBeenCalledWith("/app/logs?task=101");
+    expect(screen.getByRole("link", { name: "查看任务 #101 日志" }))
+      .toHaveAttribute("href", "/app/logs?task=101");
   });
 
   it("重置筛选时会同时清空全局搜索并恢复任务列表", async () => {

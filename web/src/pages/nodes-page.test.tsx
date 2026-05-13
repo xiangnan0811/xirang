@@ -215,21 +215,17 @@ describe("NodesPage", () => {
     );
   });
 
-  it("点击日志按钮会跳转到对应节点日志页", async () => {
-    const user = userEvent.setup();
-
+  it("日志入口使用链接语义跳转到对应节点日志页", () => {
     render(
       <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
 
-    const logButtons = screen.getAllByRole("button", {
+    const logLinks = screen.getAllByRole("link", {
       name: /[Vv]iew logs.*node-prod-1|查看节点 node-prod-1 日志/,
     });
-    await user.click(logButtons[0]);
-
-    expect(navigateMock).toHaveBeenCalledWith("/app/logs?node=node-prod-1");
+    expect(logLinks[0]).toHaveAttribute("href", "/app/logs?node=node-prod-1");
   });
 
   it("桌面节点卡片不会再把整张卡片暴露为按钮语义", () => {

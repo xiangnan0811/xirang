@@ -18,6 +18,11 @@ describe("PageHero", () => {
     expect(screen.getByRole("button", { name: "Add task" })).toBeDefined();
   });
 
+  it("renders compact metadata when provided", () => {
+    render(<PageHero title="Tasks" meta={<span>5 failed</span>} />);
+    expect(screen.getByText("5 failed")).toBeDefined();
+  });
+
   it("omits subtitle element when not provided", () => {
     const { container } = render(<PageHero title="Overview" />);
     expect(container.querySelector("p")).toBeNull();
