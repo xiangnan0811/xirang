@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { LogEvent } from "@/types/domain";
 import { LogsViewer } from "./logs-viewer";
@@ -48,7 +48,15 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  act(() => {
+    vi.runOnlyPendingTimers();
+  });
   cleanup();
+  vi.useRealTimers();
+});
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
 
 function makeLogs(count: number): LogEvent[] {
