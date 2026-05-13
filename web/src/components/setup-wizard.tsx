@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { request } from "@/lib/api/core";
 import {
   CheckCircle2,

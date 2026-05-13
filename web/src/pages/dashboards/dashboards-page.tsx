@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { MoreVertical, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { DashboardInput } from "@/lib/api/dashboards";
 import type { Dashboard, DashboardTimeRange } from "@/types/domain";

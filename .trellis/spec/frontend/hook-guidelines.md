@@ -17,6 +17,9 @@ managed by explicit context providers and hook-level fetch/update functions.
 
 - Name every custom hook with `use*` and keep it in `web/src/hooks/`, a feature
   module, or a page-local `hooks/` directory.
+- Context consumer hooks under `web/src/context/` live in
+  `*-context.hooks.ts` files. Provider modules stay component-only, with shared
+  context objects and value types in `*-context.shared.ts`.
 - Keep pure helper functions separate from hooks when possible. Example:
   `use-console-data.utils.ts` contains testable non-React logic used by
   `use-console-data.ts`.

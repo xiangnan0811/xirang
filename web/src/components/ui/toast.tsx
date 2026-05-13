@@ -1,6 +1,6 @@
-import { Toaster as SonnerToaster, toast } from "sonner";
+import { Toaster as SonnerToaster } from "sonner";
 
-function Toaster() {
+export function Toaster() {
   return (
     <SonnerToaster
       position="bottom-right"
@@ -29,5 +29,3 @@ function Toaster() {
     />
   );
 }
-
-export { Toaster, toast };

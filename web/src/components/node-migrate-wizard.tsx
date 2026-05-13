@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { apiClient } from "@/lib/api/client";
 import type { PreflightCheckStatus, MigratePreflightResult, MigrateNodeResult } from "@/lib/api/nodes-api";
 import { getErrorMessage } from "@/lib/utils";

@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ProtectedRoute } from "./protected-route";
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     isAuthenticated: false,
   }),

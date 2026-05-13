@@ -1,7 +1,7 @@
 import { useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { cn } from "@/lib/utils";
 
 import { PersonalTab } from "./settings-page.personal";

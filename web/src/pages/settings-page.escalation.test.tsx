@@ -25,7 +25,7 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
@@ -50,7 +50,7 @@ vi.mock("@/components/escalation-policy-editor", () => ({
   EscalationPolicyEditor: () => null,
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 

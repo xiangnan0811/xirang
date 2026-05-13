@@ -3,7 +3,7 @@ import { DatabaseBackup, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { BackupEntry } from "@/lib/api/system-api";
 import { formatBytes, getErrorMessage } from "@/lib/utils";

@@ -15,10 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { NodeMetricsPanel } from "@/components/node-metrics-panel";
-import { useSharedContext } from "@/context/shared-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { useTasksContext } from "@/context/tasks-context";
-import { useAuth } from "@/context/auth-context";
+import { useSharedContext } from "@/context/shared-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
+import { useTasksContext } from "@/context/tasks-context.hooks";
+import { useAuth } from "@/context/auth-context.hooks";
 import { getErrorMessage } from "@/lib/utils";
 import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 import { OverviewTrafficChart } from "@/pages/overview-page.traffic";

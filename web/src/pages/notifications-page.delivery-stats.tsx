@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { cn, getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryStats } from "@/types/domain";
 

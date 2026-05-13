@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import type { NodeMetricSample } from "@/lib/api/node-metrics-api";
 import type { NodeRecord } from "@/types/domain";
-import { MetricChart, NODE_PALETTE, type MetricKey, type ChartPoint } from "@/components/node-metrics-chart";
+import { MetricChart, type MetricKey, type ChartPoint } from "@/components/node-metrics-chart";
+import { NODE_PALETTE } from "@/components/node-metrics-theme";
 
 const METRICS_KEYS: MetricKey[] = ["cpu", "mem", "disk"];
 const MAX_VISIBLE_NODES = 8;

@@ -12,7 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { MountVerifyResult } from "@/lib/api/storage-guide-api";
 import { getErrorMessage } from "@/lib/utils";

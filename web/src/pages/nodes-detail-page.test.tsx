@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { NodesDetailPage } from "./nodes-detail-page";
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

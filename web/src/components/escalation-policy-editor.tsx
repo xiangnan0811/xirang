@@ -15,13 +15,13 @@ import {
   DialogFooter,
   DialogCloseButton,
 } from "@/components/ui/dialog";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { EscalationLevelRow, type EscalationLevelRowErrors } from "./escalation-level-row";
 import { createIntegrationsApi } from "@/lib/api/integrations-api";
 import { apiClient } from "@/lib/api/client";
 import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import type { EscalationLevel, EscalationPolicy, IntegrationChannel } from "@/types/domain";
 
 const intApi = createIntegrationsApi();

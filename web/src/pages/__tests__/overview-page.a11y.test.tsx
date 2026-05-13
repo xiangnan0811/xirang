@@ -26,16 +26,16 @@ const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
 const tasksRef: { current: Record<string, unknown> } = { current: {} };
 
-vi.mock("@/context/shared-context", () => ({
+vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
 }));
-vi.mock("@/context/tasks-context", () => ({
+vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

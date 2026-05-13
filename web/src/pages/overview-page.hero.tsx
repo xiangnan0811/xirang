@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { getTimeOfDay } from "@/lib/date-utils";
 import { PageHero } from "@/components/ui/page-hero";
 import { Button } from "@/components/ui/button";

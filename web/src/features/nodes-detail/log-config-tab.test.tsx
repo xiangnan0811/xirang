@@ -25,7 +25,7 @@ const { mockToastSuccess, mockToastError } = vi.hoisted(() => ({
   mockToastError: vi.fn(),
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: { success: mockToastSuccess, error: mockToastError },
 }));
 

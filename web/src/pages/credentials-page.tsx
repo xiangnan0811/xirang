@@ -4,9 +4,9 @@ import { Pencil, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { CredentialEditorDialog } from "@/components/credential-editor-dialog";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
   createCredentialsApi,

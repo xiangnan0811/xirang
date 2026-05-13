@@ -44,13 +44,13 @@ const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
 const sshKeysRef: { current: Record<string, unknown> } = { current: {} };
 
-vi.mock("@/context/shared-context", () => ({
+vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
 }));
-vi.mock("@/context/ssh-keys-context", () => ({
+vi.mock("@/context/ssh-keys-context.hooks", () => ({
   useSSHKeysContext: () => sshKeysRef.current,
 }));
 
@@ -65,14 +65,14 @@ vi.mock("@/components/node-editor-dialog", () => ({
   NodeEditorDialog: () => null,
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,
   },
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     token: "test-token",
     username: "admin",

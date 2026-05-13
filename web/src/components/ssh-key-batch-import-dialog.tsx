@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle2, FileUp, Upload, XCircle } from "lucide-react";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context";
-import { useNodesContext } from "@/context/nodes-context";
+import { useAuth } from "@/context/auth-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { NodeLogQuery } from "@/lib/api/node-logs";
 import type { NodeLogEntry, NodeLogPriority, NodeLogQueryResult, NodeLogSource } from "@/types/domain";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 
 const PRIORITIES: NodeLogPriority[] = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];

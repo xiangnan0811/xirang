@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Plus, Trash2, Wrench } from "lucide-react";
-import { useSharedContext } from "@/context/shared-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { usePoliciesContext } from "@/context/policies-context";
+import { useSharedContext } from "@/context/shared-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
+import { usePoliciesContext } from "@/context/policies-context.hooks";
 import {
   PolicyEditorDialog,
   type PolicyDraft,
@@ -15,14 +15,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { PolicyCard } from "@/pages/policies-page.card";
 import { PoliciesFilters } from "@/pages/policies-page.filters";
 

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { useAuth } from "@/context/auth-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { useTasksContext } from "@/context/tasks-context";
+import { useAuth } from "@/context/auth-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
+import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
 import {

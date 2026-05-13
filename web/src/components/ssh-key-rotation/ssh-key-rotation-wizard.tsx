@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
 import { getErrorMessage } from "@/lib/utils";
 import { type NodeRecord, type SSHKeyRecord, type SSHKeyType } from "@/types/domain";

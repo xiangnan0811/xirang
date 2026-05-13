@@ -19,7 +19,7 @@ const mockConsoleData = {
   warning: null as string | null,
 };
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     username: "alice",
     role: "admin",

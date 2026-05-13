@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context";
-import { useNodesContext } from "@/context/nodes-context";
+import { useAuth } from "@/context/auth-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { AlertLogsResult, NodeLogEntry, NodeLogPriority } from "@/types/domain";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 
 const PRIORITY_COLORS: Record<NodeLogPriority, string> = {

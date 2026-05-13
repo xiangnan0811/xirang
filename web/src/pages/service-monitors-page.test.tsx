@@ -16,7 +16,7 @@ const { apiMock, confirmMock, toastErrorMock } = vi.hoisted(() => ({
   toastErrorMock: vi.fn(),
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
@@ -31,7 +31,7 @@ vi.mock("@/hooks/use-confirm", () => ({
   }),
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     error: toastErrorMock,
     success: vi.fn(),

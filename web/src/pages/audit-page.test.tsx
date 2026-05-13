@@ -44,7 +44,7 @@ function createMemoryStorage() {
   } satisfies Storage;
 }
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     token: "test-token",
   }),
@@ -60,7 +60,7 @@ vi.mock("@/lib/api/client", () => {
   };
 });
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,

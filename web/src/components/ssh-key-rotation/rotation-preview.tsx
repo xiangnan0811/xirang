@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import {
   parseSSHKeyType,
   type NodeRecord,

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";

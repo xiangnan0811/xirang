@@ -8,8 +8,8 @@ import { FormDialog } from "@/components/ui/form-dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { TagChips } from "@/components/ui/tag-chips"
-import { toast } from "@/components/ui/toast"
-import { useAuth } from "@/context/auth-context"
+import { toast } from "@/components/ui/toast-sonner"
+import { useAuth } from "@/context/auth-context.hooks"
 import { apiClient } from "@/lib/api/client"
 import {
   parseSilenceTags,

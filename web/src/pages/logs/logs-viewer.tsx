@@ -35,6 +35,9 @@ export function LogsViewer({
   // 默认 true：首次进入页面应吸附到最新日志
   const [stickToNewest, setStickToNewest] = useState(true);
 
+  // TanStack Virtual exposes mutable helper functions by design; React Compiler
+  // skips memoization here, and this component keeps the virtualizer local.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: filteredLogs.length,
     getScrollElement: () => parentRef.current,

@@ -20,8 +20,8 @@ import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
-import { useAuth } from "@/context/auth-context";
-import { toast } from "@/components/ui/toast";
+import { useAuth } from "@/context/auth-context.hooks";
+import { toast } from "@/components/ui/toast-sonner";
 import type { AppCredential, EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {

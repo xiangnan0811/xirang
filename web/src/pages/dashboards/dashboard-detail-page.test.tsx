@@ -9,7 +9,7 @@ import type { Dashboard, PanelQueryResult } from "@/types/domain";
 
 // ─── Mocks ───────────────────────────────────────────────────────
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

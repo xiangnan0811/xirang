@@ -1,22 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useSharedContext } from "@/context/shared-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { useSSHKeysContext } from "@/context/ssh-keys-context";
+import { useSharedContext } from "@/context/shared-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
+import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
 import {
   escapeCSVValue,
   nodeStatusPriority,
   parseCSVRows,
   parseDateTime,
 } from "@/pages/nodes-page.utils";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeRecord } from "@/types/domain";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
 

@@ -11,7 +11,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { SLOPanel } from "./reports-page.slo";
 import { formatDateOnly } from "@/lib/api/core";
 import {
@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 const ReportConfigDialog = React.lazy(() =>
   import("@/components/report-config-dialog").then(m => ({ default: m.ReportConfigDialog }))

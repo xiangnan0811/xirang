@@ -71,27 +71,27 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/context/shared-context", () => ({
+vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
-vi.mock("@/context/tasks-context", () => ({
+vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
-vi.mock("@/context/alerts-context", () => ({
+vi.mock("@/context/alerts-context.hooks", () => ({
   useAlertsContext: () => alertsRef.current,
 }));
-vi.mock("@/context/integrations-context", () => ({
+vi.mock("@/context/integrations-context.hooks", () => ({
   useIntegrationsContext: () => integrationsRef.current,
 }));
 
-vi.mock("@/components/ui/toast", () => ({
+vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,
   },
 }));
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 

@@ -14,7 +14,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { BackupHealthData } from "@/types/domain";

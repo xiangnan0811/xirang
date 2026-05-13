@@ -4,15 +4,16 @@ import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { getVisibleNavItems } from "@/components/layout/navigation";
-import { useCommandPalette } from "@/context/command-palette-context";
-import { useNodesContextOptional } from "@/context/nodes-context";
-import { useTasksContextOptional } from "@/context/tasks-context";
-import { useAuth } from "@/context/auth-context";
+import { useCommandPalette } from "@/context/command-palette-context.hooks";
+import { useNodesContextOptional } from "@/context/nodes-context.hooks";
+import { useTasksContextOptional } from "@/context/tasks-context.hooks";
+import { useAuth } from "@/context/auth-context.hooks";
 
 export function CommandPalette() {
   const { t } = useTranslation();
   const { open, setOpen } = useCommandPalette();
   const [query, setQuery] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const nodesCtx = useNodesContextOptional();
   const tasksCtx = useTasksContextOptional();
@@ -24,6 +25,14 @@ export function CommandPalette() {
   // Reset query when closed
   React.useEffect(() => {
     if (!open) setQuery("");
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      inputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open]);
 
   const close = React.useCallback(() => setOpen(false), [setOpen]);
@@ -47,7 +56,7 @@ export function CommandPalette() {
         >
           <div className="flex items-center gap-3 border-b border-border px-4 py-3">
             <Command.Input
-              autoFocus
+              ref={inputRef}
               value={query}
               onValueChange={setQuery}
               placeholder={t("search.placeholder")}

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSharedContext } from "@/context/shared-context";
-import { useNodesContext } from "@/context/nodes-context";
-import { useSSHKeysContext } from "@/context/ssh-keys-context";
-import { toast } from "@/components/ui/toast";
+import { useSharedContext } from "@/context/shared-context.hooks";
+import { useNodesContext } from "@/context/nodes-context.hooks";
+import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
+import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";

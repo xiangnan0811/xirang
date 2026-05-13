@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, RefreshCw, Search } from "lucide-react";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { AuditLogRecord } from "@/types/domain";
@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 
 const pageSize = 30;
 

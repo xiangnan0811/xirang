@@ -5,12 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import { EscalationPolicyEditor } from "@/components/escalation-policy-editor";
 import { apiClient } from "@/lib/api/client";
 import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
-import { useAuth } from "@/context/auth-context";
+import { useAuth } from "@/context/auth-context.hooks";
 import type { EscalationPolicy } from "@/types/domain";
 
 function formatDate(iso: string): string {

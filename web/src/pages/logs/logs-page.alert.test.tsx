@@ -13,7 +13,7 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/context/auth-context", () => ({
+vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
@@ -30,7 +30,7 @@ vi.mock("@/lib/api/client", async () => {
   };
 });
 
-vi.mock("@/context/nodes-context", () => ({
+vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => ({
     nodes: [
       {

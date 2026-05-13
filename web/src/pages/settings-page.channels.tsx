@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useIntegrationsContext } from "@/context/integrations-context";
+import { useIntegrationsContext } from "@/context/integrations-context.hooks";
 import type { IntegrationEditorDraft } from "@/components/integration-editor-dialog";
 
 const IntegrationCreateDialog = React.lazy(() =>
@@ -10,7 +10,7 @@ const IntegrationEditorDialog = React.lazy(() =>
   import("@/components/integration-editor-dialog").then(m => ({ default: m.IntegrationEditorDialog }))
 );
 import { IntegrationManager } from "@/pages/notifications-page.integration-manager";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast-sonner";
 import type { IntegrationChannel } from "@/types/domain";
 
 export function ChannelsTab() {
