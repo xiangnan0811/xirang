@@ -2,8 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+} from "@/components/ui/data-surface";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
 import { CredentialEditorDialog } from "@/components/credential-editor-dialog";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -95,35 +100,67 @@ export function CredentialsPage() {
     return "neutral" as const;
   };
 
+  const totalCredentials = credentials.length;
+  const passwordConfigured = credentials.filter((cred) => cred.has_password).length;
+  const referencedCredentials = credentials.filter(
+    (cred) => cred.reference_count > 0,
+  ).length;
+  const unusedCredentials = totalCredentials - referencedCredentials;
+
   return (
     <div className="animate-fade-in space-y-5">
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {t("credentials.pageTitle")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {t("credentials.pageDesc")}
-          </p>
-        </div>
-        <Button onClick={openCreateDialog}>
-          <Shield className="mr-1.5 size-4" />
-          {t("credentials.createBtn")}
-        </Button>
-      </div>
+      <PageHero
+        title={t("credentials.pageTitle")}
+        subtitle={t("credentials.pageDesc")}
+        meta={
+          loading ? (
+            <Badge tone="neutral">{t("credentials.loadingMeta")}</Badge>
+          ) : (
+            <>
+              <Badge tone="info">
+                {t("credentials.totalMeta", { count: totalCredentials })}
+              </Badge>
+              <Badge tone={passwordConfigured > 0 ? "success" : "neutral"}>
+                {t("credentials.passwordMeta", { count: passwordConfigured })}
+              </Badge>
+              <Badge tone={referencedCredentials > 0 ? "info" : "neutral"}>
+                {t("credentials.referencedMeta", { count: referencedCredentials })}
+              </Badge>
+              <Badge tone={unusedCredentials > 0 ? "warning" : "neutral"}>
+                {t("credentials.unusedMeta", { count: unusedCredentials })}
+              </Badge>
+            </>
+          )
+        }
+        actions={
+          <Button onClick={openCreateDialog}>
+            <Shield className="mr-1.5 size-4" aria-hidden="true" />
+            {t("credentials.createBtn")}
+          </Button>
+        }
+      />
 
-      {/* ── Table ── */}
-      <Card className="overflow-hidden rounded-lg border border-border bg-card">
-        <CardContent className="p-0">
+      <DataSurface>
+        <DataSurfaceHeader
+          title={t("credentials.surfaceTitle")}
+          description={t("credentials.surfaceDesc")}
+        />
+        <DataSurfaceContent className="p-0">
           {loading ? (
-            <div className="flex items-center justify-center py-16">
+            <div
+              className="flex items-center justify-center py-16"
+              role="status"
+              aria-label={t("common.loading")}
+            >
               <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             </div>
           ) : credentials.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <Shield className="mb-3 size-10 opacity-30" />
+              <Shield className="mb-3 size-10 opacity-30" aria-hidden="true" />
               <p className="text-sm">{t("credentials.empty")}</p>
+              <p className="mt-1 max-w-md text-center text-xs">
+                {t("credentials.emptyDesc")}
+              </p>
               <Button
                 variant="outline"
                 size="sm"
@@ -199,7 +236,7 @@ export function CredentialsPage() {
                             aria-label={t("common.edit")}
                             onClick={() => openEditDialog(cred)}
                           >
-                            <Pencil className="size-3.5" />
+                            <Pencil className="size-3.5" aria-hidden="true" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -207,7 +244,10 @@ export function CredentialsPage() {
                             aria-label={t("common.delete")}
                             onClick={() => handleDelete(cred)}
                           >
-                            <Trash2 className="size-3.5 text-destructive" />
+                            <Trash2
+                              className="size-3.5 text-destructive"
+                              aria-hidden="true"
+                            />
                           </Button>
                         </div>
                       </td>
@@ -217,8 +257,8 @@ export function CredentialsPage() {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       {/* ── Editor Dialog ── */}
       <CredentialEditorDialog
