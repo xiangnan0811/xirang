@@ -72,7 +72,9 @@ GitHub Release 为准。
    workflow 会在 manifest/tag 发布前失败，不会污染 Docker Hub 的 `latest`
    标签。Trivy 当前固定到 v0.36.0 的解引用 commit
    `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
-   通过 `git ls-remote` 核验。维护者按需 bump（建议查看
+   通过 `git ls-remote` 核验。扫描平台 digest 时 workflow 会显式传入
+   `TRIVY_PLATFORM`，避免 arm64 digest 被 Trivy 默认按 amd64 解析。
+   维护者按需 bump（建议查看
    <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag，并写入其
    解引用 commit 或可审计的 SHA pin）。
 8. 监控 `Publish Docker Images` 直到成功；失败时优先修复自动链路，只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
