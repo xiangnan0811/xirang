@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.4](https://github.com/xiangnan0811/xirang/compare/v0.29.3...v0.29.4) (2026-05-13)
+
+
+### 🐛 Bug Fixes
+
+* **web:** eliminate frontend lint warnings ([1261a8c](https://github.com/xiangnan0811/xirang/commit/1261a8c5e5bd3c75fb935b3a33551fb0982f4dda))
+
 ## [0.29.3](https://github.com/xiangnan0811/xirang/compare/v0.29.2...v0.29.3) (2026-05-13)
 
 
