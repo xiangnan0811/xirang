@@ -161,6 +161,60 @@ warning is gone rather than hidden.
 - Keep responsive layouts explicit with grid/flex constraints. Do not rely on
   text overflow or dynamic content to size fixed controls.
 
+### Convention: Workbench Page Shells
+
+**What**: Top-level console routes should use `PageHero` for the page title,
+description, compact metadata, and primary actions. Inventory or operational
+tool areas should use `DataSurface` plus `DataSurfaceHeader` /
+`DataSurfaceContent` instead of wrapping whole page sections in generic cards.
+Use cards for repeated items, dialogs, compact widgets, and genuinely framed
+content, not for a page-section shell around another card-like surface.
+
+**Why**: The console is an operations workbench. Consistent page shells make
+routes easier to scan, keep primary actions predictable, and avoid stacked
+card-in-card layouts that make internal tools feel busy and less polished.
+
+**Example**:
+
+```tsx
+return (
+  <div className="animate-fade-in space-y-5">
+    <PageHero
+      title={t("credentials.pageTitle")}
+      subtitle={t("credentials.pageDesc")}
+      meta={<Badge tone="info">{t("credentials.totalMeta", { count })}</Badge>}
+      actions={<Button onClick={openCreateDialog}>{t("credentials.createBtn")}</Button>}
+    />
+
+    <DataSurface>
+      <DataSurfaceHeader
+        title={t("credentials.surfaceTitle")}
+        description={t("credentials.surfaceDesc")}
+      />
+      <DataSurfaceContent className="p-0">
+        <CredentialTable rows={credentials} />
+      </DataSurfaceContent>
+    </DataSurface>
+  </div>
+);
+```
+
+**URL-backed controls**: When a page stores tabs, filters, or view state in the
+URL, clone the existing `URLSearchParams` and update only the target key so
+unrelated query parameters survive user interaction.
+
+```tsx
+const next = new URLSearchParams(searchParams);
+next.set("tab", tab);
+setSearchParams(next, { replace: true });
+```
+
+**Tests**: Page-shell changes should assert the routed heading, primary action,
+metadata that affects scanability, `DataSurface` title where present, and URL
+state preservation for tabs or filters. Manual tab controls must also preserve
+`role="tablist"`, `role="tab"`, `aria-selected`, `aria-controls`, and keyboard
+navigation tests.
+
 ---
 
 ## Accessibility
