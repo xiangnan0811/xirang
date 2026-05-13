@@ -1,4 +1,11 @@
-import React, { Suspense, useCallback, useEffect, useState } from "react";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -23,8 +30,14 @@ import { getErrorMessage } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+} from "@/components/ui/data-surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
 const ReportConfigDialog = React.lazy(() =>
@@ -32,6 +45,8 @@ const ReportConfigDialog = React.lazy(() =>
 );
 
 const reportsApi = createReportsApi();
+const REPORT_TABS = ["sla", "slo"] as const;
+type ReportTab = (typeof REPORT_TABS)[number];
 
 function formatDate(iso: string) {
   return formatDateOnly(iso);
@@ -67,9 +82,9 @@ function ReportRow({ report }: { report: Report }) {
         aria-expanded={open}
       >
         {open ? (
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         ) : (
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         )}
         <span className="flex-1 text-sm">
           {formatDate(report.period_start)} — {formatDate(report.period_end)}
@@ -217,9 +232,9 @@ function ConfigCard({
                 onClick={() => void handleGenerate()}
               >
                 {generating ? (
-                  <RefreshCw className="size-4 animate-spin" />
+                  <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
                 ) : (
-                  <Zap className="size-4" />
+                  <Zap className="size-4" aria-hidden="true" />
                 )}
               </Button>
               <Button
@@ -230,7 +245,7 @@ function ConfigCard({
                 aria-label={t("common.edit")}
                 onClick={() => onEdit(cfg)}
               >
-                <Pencil className="size-4" />
+                <Pencil className="size-4" aria-hidden="true" />
               </Button>
               <Button
                 variant="ghost"
@@ -240,7 +255,7 @@ function ConfigCard({
                 aria-label={t("reports.deleteConfig")}
                 onClick={() => onDelete(cfg.id)}
               >
-                <Trash2 className="size-4" />
+                <Trash2 className="size-4" aria-hidden="true" />
               </Button>
             </>
           )}
@@ -255,9 +270,9 @@ function ConfigCard({
           aria-expanded={expanded}
         >
           {expanded ? (
-            <ChevronDown className="size-3.5" />
+            <ChevronDown className="size-3.5" aria-hidden="true" />
           ) : (
-            <ChevronRight className="size-3.5" />
+            <ChevronRight className="size-3.5" aria-hidden="true" />
           )}
           {t("reports.historyReports")}
         </button>
@@ -336,61 +351,63 @@ function SLAContent() {
   return (
     <>
       {confirmDialog}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{t("reports.pageTitle")}</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {t("reports.pageDesc")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void loadConfigs()}
-            disabled={loading}
-          >
-            <RefreshCw
-              className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`}
-            />
-            {t("common.refresh")}
-          </Button>
-          {isAdmin && (
-            <Button size="sm" onClick={() => { setEditingConfig(null); setDialogOpen(true); }}>
-              <Plus className="mr-1.5 size-4" />
-              {t("reports.addConfig")}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {loading ? (
-        <LoadingState title={t("reports.loading")} rows={3} />
-      ) : configs.length === 0 ? (
-        <EmptyState
-          icon={BarChart3}
-          title={t("reports.emptyTitle")}
-          description={
-            isAdmin
-              ? t("reports.emptyDescAdmin")
-              : t("reports.emptyDescViewer")
+      <DataSurface>
+        <DataSurfaceHeader
+          title={t("reports.slaSurfaceTitle")}
+          description={t("reports.slaSurfaceDesc", { total: configs.length })}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadConfigs()}
+                disabled={loading}
+              >
+                <RefreshCw
+                  className={`mr-1.5 size-4 ${loading ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {t("common.refresh")}
+              </Button>
+              {isAdmin && (
+                <Button size="sm" onClick={() => { setEditingConfig(null); setDialogOpen(true); }}>
+                  <Plus className="mr-1.5 size-4" aria-hidden="true" />
+                  {t("reports.addConfig")}
+                </Button>
+              )}
+            </div>
           }
         />
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {configs.map((cfg) => (
-            <ConfigCard
-              key={cfg.id}
-              cfg={cfg}
-              isAdmin={isAdmin}
-              token={token ?? ""}
-              onEdit={(c) => { setEditingConfig(c); setDialogOpen(true); }}
-              onDelete={(id) => void handleDelete(id)}
-              onGenerate={handleGenerate}
+        <DataSurfaceContent className="space-y-4">
+          {loading ? (
+            <LoadingState title={t("reports.loading")} rows={3} />
+          ) : configs.length === 0 ? (
+            <EmptyState
+              icon={BarChart3}
+              title={t("reports.emptyTitle")}
+              description={
+                isAdmin
+                  ? t("reports.emptyDescAdmin")
+                  : t("reports.emptyDescViewer")
+              }
             />
-          ))}
-        </div>
-      )}
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {configs.map((cfg) => (
+                <ConfigCard
+                  key={cfg.id}
+                  cfg={cfg}
+                  isAdmin={isAdmin}
+                  token={token ?? ""}
+                  onEdit={(c) => { setEditingConfig(c); setDialogOpen(true); }}
+                  onDelete={(id) => void handleDelete(id)}
+                  onGenerate={handleGenerate}
+                />
+              ))}
+            </div>
+          )}
+        </DataSurfaceContent>
+      </DataSurface>
 
       {isAdmin && (
         <Suspense fallback={null}>
@@ -416,28 +433,120 @@ function SLAContent() {
 export function ReportsPage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const tabRefs = useRef<Partial<Record<ReportTab, HTMLButtonElement | null>>>({});
   const tab = params.get("tab") === "slo" ? "slo" : "sla";
-  const setTab = (next: "sla" | "slo") => setParams({ tab: next });
+  const setTab = useCallback(
+    (next: ReportTab) => {
+      const nextParams = new URLSearchParams(params);
+      nextParams.set("tab", next);
+      setParams(nextParams, { replace: true });
+    },
+    [params, setParams],
+  );
+  const handleTabKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      const currentIndex = REPORT_TABS.indexOf(tab);
+      let nextIndex: number | null = null;
+
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = (currentIndex + 1) % REPORT_TABS.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex =
+          (currentIndex - 1 + REPORT_TABS.length) % REPORT_TABS.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = REPORT_TABS.length - 1;
+      }
+
+      if (nextIndex === null) {
+        return;
+      }
+
+      event.preventDefault();
+      const nextTab = REPORT_TABS[nextIndex];
+      setTab(nextTab);
+      tabRefs.current[nextTab]?.focus();
+    },
+    [setTab, tab],
+  );
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex gap-2">
-        <Button
-          variant={tab === "sla" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setTab("sla")}
+      <PageHero
+        title={t("reports.workbenchTitle")}
+        subtitle={t("reports.workbenchDesc")}
+        meta={
+          <>
+            <Badge tone={tab === "sla" ? "info" : "neutral"}>
+              {t("slo.tabSLA")}
+            </Badge>
+            <Badge tone={tab === "slo" ? "info" : "neutral"}>
+              {t("slo.tabSLO")}
+            </Badge>
+          </>
+        }
+        actions={
+          <div
+            className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background/70 p-1"
+            role="tablist"
+            aria-label={t("reports.tabListLabel")}
+            tabIndex={-1}
+            onKeyDown={handleTabKeyDown}
+          >
+            <Button
+              ref={(node) => {
+                tabRefs.current.sla = node;
+              }}
+              type="button"
+              id="reports-tab-sla"
+              role="tab"
+              aria-controls="reports-panel-sla"
+              aria-selected={tab === "sla"}
+              tabIndex={tab === "sla" ? 0 : -1}
+              variant={tab === "sla" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setTab("sla")}
+            >
+              {t("slo.tabSLA")}
+            </Button>
+            <Button
+              ref={(node) => {
+                tabRefs.current.slo = node;
+              }}
+              type="button"
+              id="reports-tab-slo"
+              role="tab"
+              aria-controls="reports-panel-slo"
+              aria-selected={tab === "slo"}
+              tabIndex={tab === "slo" ? 0 : -1}
+              variant={tab === "slo" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setTab("slo")}
+            >
+              {t("slo.tabSLO")}
+            </Button>
+          </div>
+        }
+      />
+
+      {tab === "sla" ? (
+        <section
+          id="reports-panel-sla"
+          role="tabpanel"
+          aria-labelledby="reports-tab-sla"
         >
-          {t("slo.tabSLA")}
-        </Button>
-        <Button
-          variant={tab === "slo" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setTab("slo")}
+          <SLAContent />
+        </section>
+      ) : (
+        <section
+          id="reports-panel-slo"
+          role="tabpanel"
+          aria-labelledby="reports-tab-slo"
         >
-          {t("slo.tabSLO")}
-        </Button>
-      </div>
-      {tab === "sla" ? <SLAContent /> : <SLOPanel />}
+          <SLOPanel />
+        </section>
+      )}
     </div>
   );
 }

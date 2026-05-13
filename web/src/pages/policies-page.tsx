@@ -10,10 +10,16 @@ import {
 } from "@/components/policy-editor-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+  DataSurfaceToolbar,
+} from "@/components/ui/data-surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
+import { PageHero } from "@/components/ui/page-hero";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -183,14 +189,38 @@ export function PoliciesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      <Card className="rounded-lg border border-border bg-card">
-        <CardContent className="space-y-4 pt-6">
+      <PageHero
+        title={t("policies.pageTitle")}
+        subtitle={t("policies.pageDesc")}
+        meta={
+          <>
+            <Badge tone={activeCount > 0 ? "success" : "neutral"}>
+              {t("policies.enabledCount", { count: activeCount })}
+            </Badge>
+            <Badge tone={disabledCount > 0 ? "warning" : "neutral"}>
+              {t("policies.disabledCount", { count: disabledCount })}
+            </Badge>
+            <Badge tone="neutral">
+              {t("policies.filteredCount", { count: filteredPolicies.length })}
+            </Badge>
+          </>
+        }
+        actions={
+          <Button size="sm" onClick={openCreateDialog}>
+            <Plus className="mr-1 size-4" aria-hidden="true" />
+            {t('policies.addPolicy')}
+          </Button>
+        }
+      />
+
+      <DataSurface>
+        <DataSurfaceHeader
+          title={t("policies.surfaceTitle")}
+          description={t("policies.surfaceDesc", { total: policies.length })}
+        />
+        <DataSurfaceToolbar className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <Button size="sm" onClick={openCreateDialog}>
-                <Plus className="mr-1 size-3.5" />
-                {t('policies.addPolicy')}
-              </Button>
               {selectedPolicyIds.length > 0 && (
                 <>
                   <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
@@ -206,9 +236,7 @@ export function PoliciesPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="success">{t('policies.enabledCount', { count: activeCount })}</Badge>
-              <Badge tone="neutral">{t('policies.disabledCount', { count: disabledCount })}</Badge>
-              <Badge tone="neutral" className="hidden lg:inline-flex">{t('policies.filteredCount', { count: filteredPolicies.length })}</Badge>
+              <Badge tone="neutral">{t('policies.selectedCount', { count: selectedPolicyIds.length })}</Badge>
             </div>
           </div>
           <PoliciesFilters
@@ -218,7 +246,9 @@ export function PoliciesPage() {
             totalCount={policies.length}
             resetFilters={resetFilters}
           />
+        </DataSurfaceToolbar>
 
+        <DataSurfaceContent className="space-y-4">
           {loading ? (
             <LoadingState
               title={t('policies.loadingTitle')}
@@ -254,7 +284,7 @@ export function PoliciesPage() {
                       {t('policies.clearFilter')}
                     </Button>
                     <Button size="sm" onClick={openCreateDialog}>
-                      <Plus className="mr-1 size-4" />
+                      <Plus className="mr-1 size-4" aria-hidden="true" />
                       {t('policies.addPolicy')}
                     </Button>
                   </div>
@@ -271,7 +301,7 @@ export function PoliciesPage() {
             />
           </div>
 
-          <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
+          <div className="hidden overflow-x-auto rounded-md border border-border md:block">
             <table className="min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
@@ -346,7 +376,7 @@ export function PoliciesPage() {
                               onClick={() => void onCloneFromTemplate(policy)}
                               aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
                             >
-                              <Copy className="size-4" />
+                              <Copy className="size-4" aria-hidden="true" />
                             </Button>
                           )}
                           <Button
@@ -356,7 +386,7 @@ export function PoliciesPage() {
                             onClick={() => openEditDialog(policy)}
                             aria-label={t('policies.editAriaLabel')}
                           >
-                            <Wrench className="size-4" />
+                            <Wrench className="size-4" aria-hidden="true" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -365,7 +395,7 @@ export function PoliciesPage() {
                             aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
                             onClick={() => onDelete(policy)}
                           >
-                            <Trash2 className="size-4" />
+                            <Trash2 className="size-4" aria-hidden="true" />
                           </Button>
                         </div>
                       </td>
@@ -384,7 +414,7 @@ export function PoliciesPage() {
                               {t('policies.clearFilter')}
                             </Button>
                             <Button size="sm" onClick={openCreateDialog}>
-                              <Plus className="mr-1 size-4" />
+                              <Plus className="mr-1 size-4" aria-hidden="true" />
                               {t('policies.addPolicy')}
                             </Button>
                           </div>
@@ -404,8 +434,8 @@ export function PoliciesPage() {
               onPageSizeChange={setPageSize}
             />
           </div>
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       <PolicyEditorDialog
         open={editorOpen}

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BellRing, Loader2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+  DataSurfaceToolbar,
+  DataSurfaceFooter,
+} from "@/components/ui/data-surface";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast-sonner";
@@ -290,8 +296,12 @@ export function AlertCenter({
   }, [alerts, highlightedAlert]);
 
   return (
-    <Card className="rounded-lg border border-border bg-card">
-      <CardContent className="space-y-4 pt-6">
+    <DataSurface>
+      <DataSurfaceHeader
+        title={t("notifications.alertCenterTitle")}
+        description={t("notifications.alertCenterDesc", { total })}
+      />
+      <DataSurfaceToolbar className="space-y-4">
         <AlertFilters
           keyword={keyword}
           onKeywordChange={setKeyword}
@@ -304,11 +314,12 @@ export function AlertCenter({
           total={total}
           onReset={() => { resetFilters(); setPage(1); }}
         />
+      </DataSurfaceToolbar>
 
-        {/* 列表内容 */}
+      <DataSurfaceContent className="space-y-4">
         {loading && !alerts.length ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">
-            <Loader2 className="mr-2 size-5 animate-spin" />
+            <Loader2 className="mr-2 size-5 animate-spin" aria-hidden="true" />
             {t("common.loading")}
           </div>
         ) : displayAlerts.length ? (
@@ -343,8 +354,9 @@ export function AlertCenter({
             onReset={() => { resetFilters(); setPage(1); }}
           />
         )}
+      </DataSurfaceContent>
 
-        {/* 分页控件 */}
+      <DataSurfaceFooter>
         <Pagination
           page={page}
           pageSize={pageSize}
@@ -353,7 +365,7 @@ export function AlertCenter({
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
         />
-      </CardContent>
-    </Card>
+      </DataSurfaceFooter>
+    </DataSurface>
   );
 }

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -6,7 +13,14 @@ import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+  DataSurfaceToolbar,
+} from "@/components/ui/data-surface";
+import { PageHero } from "@/components/ui/page-hero";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
@@ -31,6 +45,7 @@ import { AlertLogsPanel } from "./logs-page.alert";
 const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
 
 type LogTab = "task" | "node" | "alert";
+const LOG_TABS: LogTab[] = ["task", "node", "alert"];
 
 export function LogsPage() {
   const { t } = useTranslation();
@@ -44,14 +59,43 @@ export function LogsPage() {
   }, [refreshNodes, refreshTasks]);
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const tabRefs = useRef<Partial<Record<LogTab, HTMLButtonElement | null>>>({});
 
-  const activeTab = (searchParams.get("tab") as LogTab | null) ?? "task";
+  const rawTab = searchParams.get("tab") as LogTab | null;
+  const activeTab = rawTab && LOG_TABS.includes(rawTab) ? rawTab : "task";
 
-  const setTab = (tab: LogTab) => {
+  const setTab = useCallback((tab: LogTab) => {
     const next = new URLSearchParams(searchParams);
     next.set("tab", tab);
     setSearchParams(next, { replace: true });
-  };
+  }, [searchParams, setSearchParams]);
+
+  const handleTabKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      const currentIndex = LOG_TABS.indexOf(activeTab);
+      let nextIndex: number | null = null;
+
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = (currentIndex + 1) % LOG_TABS.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex = (currentIndex - 1 + LOG_TABS.length) % LOG_TABS.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = LOG_TABS.length - 1;
+      }
+
+      if (nextIndex === null) {
+        return;
+      }
+
+      event.preventDefault();
+      const nextTab = LOG_TABS[nextIndex];
+      setTab(nextTab);
+      tabRefs.current[nextTab]?.focus();
+    },
+    [activeTab, setTab],
+  );
 
   const initialTask = searchParams.get("task") ?? "all";
   const initialNode = searchParams.get("node") ?? "all";
@@ -385,6 +429,7 @@ export function LogsPage() {
   const runningTasks = tasks.filter(
     (task) => task.status === "running" || task.status === "retrying",
   );
+  const failedTasks = tasks.filter((task) => task.status === "failed").length;
   const focusedWsProgress = focusedTask ? wsProgress[focusedTask.id] : undefined;
   const progressValue = focusedTask
     ? (focusedWsProgress ?? focusedTask.progress)
@@ -481,28 +526,69 @@ export function LogsPage() {
     }
   };
 
+  const tabList = (
+    <div
+      className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background/70 p-1"
+      role="tablist"
+      aria-label={t("logs.tabListLabel")}
+      tabIndex={-1}
+      onKeyDown={handleTabKeyDown}
+    >
+      {LOG_TABS.map((tab) => (
+        <Button
+          key={tab}
+          ref={(node) => {
+            tabRefs.current[tab] = node;
+          }}
+          type="button"
+          id={`logs-tab-${tab}`}
+          role="tab"
+          aria-controls={`logs-panel-${tab}`}
+          aria-selected={activeTab === tab}
+          tabIndex={activeTab === tab ? 0 : -1}
+          variant={activeTab === tab ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setTab(tab)}
+        >
+          {t(`nodeLogs.tab.${tab}`)}
+        </Button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="animate-fade-in space-y-5">
-      {/* Tab bar */}
-      <div className="flex gap-2" role="tablist" aria-label={t("nodeLogs.tab.task")}>
-        {(["task", "node", "alert"] as LogTab[]).map((tab) => (
-          <Button
-            key={tab}
-            role="tab"
-            aria-selected={activeTab === tab}
-            variant={activeTab === tab ? "default" : "outline"}
-            size="sm"
-            onClick={() => setTab(tab)}
-          >
-            {t(`nodeLogs.tab.${tab}`)}
-          </Button>
-        ))}
-      </div>
+      <PageHero
+        title={t("logs.pageTitle")}
+        subtitle={t("logs.pageDesc")}
+        meta={
+          <>
+            <Badge tone={connected ? "success" : "neutral"}>
+              {connected ? t("logs.connected") : t("logs.disconnected")}
+            </Badge>
+            <Badge tone={runningTasks.length > 0 ? "info" : "neutral"}>
+              {t("logs.runningTasksMeta", { count: runningTasks.length })}
+            </Badge>
+            <Badge tone={failedTasks > 0 ? "destructive" : "neutral"}>
+              {t("logs.failedTasksMeta", { count: failedTasks })}
+            </Badge>
+          </>
+        }
+        actions={tabList}
+      />
 
       {activeTab === "task" && (
-        <>
-          <Card className="rounded-lg border border-border bg-card">
-            <CardContent className="space-y-4 pt-6">
+        <section
+          id="logs-panel-task"
+          role="tabpanel"
+          aria-labelledby="logs-tab-task"
+        >
+          <DataSurface>
+            <DataSurfaceHeader
+              title={t("logs.taskSurfaceTitle")}
+              description={t("logs.taskSurfaceDesc")}
+            />
+            <DataSurfaceToolbar className="space-y-4">
               <LogsFilterBar
                 nodes={nodes}
                 tasks={tasks}
@@ -533,7 +619,9 @@ export function LogsPage() {
                 onExport={exportAsText}
                 onFullscreen={() => setFullScreen(true)}
               />
+            </DataSurfaceToolbar>
 
+            <DataSurfaceContent className="space-y-3">
               <div className="space-y-3">
                 <LogsViewer
                   filteredLogs={filteredLogs}
@@ -550,20 +638,36 @@ export function LogsPage() {
                   />
                 ) : null}
               </div>
-            </CardContent>
-          </Card>
+            </DataSurfaceContent>
+          </DataSurface>
 
           <LogsFullscreenDialog
             open={fullScreen}
             onOpenChange={setFullScreen}
             filteredLogs={filteredLogs}
           />
-        </>
+        </section>
       )}
 
-      {activeTab === "node" && <NodeLogsPanel />}
+      {activeTab === "node" && (
+        <section
+          id="logs-panel-node"
+          role="tabpanel"
+          aria-labelledby="logs-tab-node"
+        >
+          <NodeLogsPanel />
+        </section>
+      )}
 
-      {activeTab === "alert" && <AlertLogsPanel />}
+      {activeTab === "alert" && (
+        <section
+          id="logs-panel-alert"
+          role="tabpanel"
+          aria-labelledby="logs-tab-alert"
+        >
+          <AlertLogsPanel />
+        </section>
+      )}
     </div>
   );
 }

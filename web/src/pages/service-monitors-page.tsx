@@ -2,12 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+} from "@/components/ui/data-surface";
 import { Switch } from "@/components/ui/switch";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -251,30 +256,54 @@ export function ServiceMonitorsPage() {
     return t("serviceMonitor.statusUnknown");
   };
 
+  const enabledCount = monitors.filter((monitor) => monitor.enabled).length;
+  const downCount = monitors.filter((monitor) => monitor.last_status === "down").length;
+  const unknownCount = monitors.filter(
+    (monitor) => !monitor.last_status || monitor.last_status === "unknown",
+  ).length;
+
   return (
     <div className="animate-fade-in space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {t("serviceMonitor.pageTitle")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {t("serviceMonitor.pageDesc")}
-          </p>
-        </div>
-        <Button onClick={openCreateDialog}>
-          <Plus className="mr-1.5 size-4" aria-hidden="true" />
-          {t("serviceMonitor.createBtn")}
-        </Button>
-      </div>
+      <PageHero
+        title={t("serviceMonitor.pageTitle")}
+        subtitle={t("serviceMonitor.pageDesc")}
+        meta={
+          <>
+            <Badge tone="neutral">
+              {t("serviceMonitor.totalMeta", { count: monitors.length })}
+            </Badge>
+            <Badge tone={enabledCount > 0 ? "success" : "warning"}>
+              {t("serviceMonitor.enabledMeta", { count: enabledCount })}
+            </Badge>
+            <Badge tone={downCount > 0 ? "destructive" : "neutral"}>
+              {t("serviceMonitor.downMeta", { count: downCount })}
+            </Badge>
+            <Badge tone={unknownCount > 0 ? "warning" : "neutral"}>
+              {t("serviceMonitor.unknownMeta", { count: unknownCount })}
+            </Badge>
+          </>
+        }
+        actions={
+          <Button onClick={openCreateDialog}>
+            <Plus className="mr-1.5 size-4" aria-hidden="true" />
+            {t("serviceMonitor.createBtn")}
+          </Button>
+        }
+      />
 
-      {/* Table */}
-      <Card className="overflow-hidden rounded-lg border border-border bg-card">
-        <CardContent className="p-0">
+      <DataSurface>
+        <DataSurfaceHeader
+          title={t("serviceMonitor.surfaceTitle")}
+          description={t("serviceMonitor.surfaceDesc")}
+        />
+        <DataSurfaceContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+              <div
+                className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent"
+                aria-label={t("common.loading")}
+                role="status"
+              />
             </div>
           ) : monitors.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
@@ -286,6 +315,7 @@ export function ServiceMonitorsPage() {
                 className="mt-3"
                 onClick={openCreateDialog}
               >
+                <Plus className="mr-1.5 size-3.5" aria-hidden="true" />
                 {t("serviceMonitor.createBtn")}
               </Button>
             </div>
@@ -387,15 +417,15 @@ export function ServiceMonitorsPage() {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
 
       {/* Editor Dialog */}
       <FormDialog
         open={editorOpen}
         onOpenChange={setEditorOpen}
         size="md"
-        icon={<Activity className="size-5 text-primary" />}
+        icon={<Activity className="size-5 text-primary" aria-hidden="true" />}
         title={isEditing ? t("serviceMonitor.editTitle") : t("serviceMonitor.createTitle")}
         description={
           isEditing ? t("serviceMonitor.editDesc") : t("serviceMonitor.createDesc")
