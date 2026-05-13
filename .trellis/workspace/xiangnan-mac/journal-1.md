@@ -974,3 +974,36 @@ Upgraded CI, release, Docker publish, Docker Hub description, and deploy workflo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: Clean up frontend lint warnings
+
+**Date**: 2026-05-13
+**Task**: Clean up frontend lint warnings
+**Branch**: `fix/frontend-lint-warnings`
+
+### Summary
+
+Eliminated frontend lint warnings by splitting Fast Refresh-safe module boundaries, replacing autofocus props with explicit focus effects, documenting the TanStack Virtual suppression, and updating frontend conventions.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `06ab958` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
