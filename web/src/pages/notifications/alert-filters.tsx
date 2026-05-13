@@ -35,11 +35,8 @@ export function AlertFilters({
 
   return (
     <>
-      {/* 标题栏 */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2 font-medium">
-          {t("notifications.alertCenterTitle")}
-        </div>
+        <p className="text-xs text-muted-foreground">{t("common.totalItems", { total })}</p>
         <div className="flex items-center gap-2">
           <ViewModeToggle
             value={viewMode}
@@ -48,13 +45,12 @@ export function AlertFilters({
             className="hidden md:inline-flex"
           />
           <Button size="sm" variant="outline" onClick={onReset}>
-            <RefreshCw className="mr-1 size-3.5" />
+            <RefreshCw className="mr-1 size-3.5" aria-hidden="true" />
             {t("common.resetFilter")}
           </Button>
         </div>
       </div>
 
-      {/* 筛选栏 */}
       <FilterPanel sticky={false} className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] items-center">
         <SearchInput
           containerClassName="w-full"
@@ -87,9 +83,6 @@ export function AlertFilters({
           <option value="resolved">{t("notifications.statusResolved")}</option>
         </Select>
       </FilterPanel>
-
-      {/* 筛选摘要 */}
-      <p className="text-xs text-muted-foreground">{t("common.totalItems", { total })}</p>
     </>
   );
 }

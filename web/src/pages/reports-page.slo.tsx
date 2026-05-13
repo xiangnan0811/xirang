@@ -83,7 +83,7 @@ export function SLOPanel() {
         </div>
         {isAdmin && (
           <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-1.5 size-4" />
+            <Plus className="mr-1.5 size-4" aria-hidden="true" />
             {t("slo.new")}
           </Button>
         )}
@@ -140,7 +140,7 @@ export function SLOPanel() {
                               aria-label={t("common.edit")}
                               onClick={() => setEditing(row)}
                             >
-                              <Pencil className="size-4" />
+                              <Pencil className="size-4" aria-hidden="true" />
                             </Button>
                             <Button
                               variant="ghost"
@@ -150,7 +150,7 @@ export function SLOPanel() {
                               aria-label={t("slo.delete")}
                               onClick={() => void handleDelete(row)}
                             >
-                              <Trash2 className="size-4" />
+                              <Trash2 className="size-4" aria-hidden="true" />
                             </Button>
                           </div>
                         </td>

@@ -138,6 +138,21 @@ describe("PoliciesPage", () => {
     createContext();
   });
 
+  it("渲染策略工作台标题、摘要和数据面", () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <PoliciesPage />
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "备份策略" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("启用 1")).toBeInTheDocument();
+    expect(screen.getByText("停用 1")).toBeInTheDocument();
+    expect(screen.getByText("策略清单")).toBeInTheDocument();
+  });
+
   it("重置筛选时会同时清空全局搜索并恢复策略列表", async () => {
     const user = userEvent.setup();
     const setGlobalSearchMock = vi.fn((value: string) => {

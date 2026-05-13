@@ -155,7 +155,7 @@ export function LogsFilterBar({
             className="w-[80px]"
             onClick={onExport}
           >
-            <Download className="mr-1 size-3.5" />
+            <Download className="mr-1 size-3.5" aria-hidden="true" />
             {t("common.export")}
           </Button>
 
@@ -167,7 +167,7 @@ export function LogsFilterBar({
             title={t("logs.fullscreenShort")}
             onClick={onFullscreen}
           >
-            <Maximize2 className="size-3.5" />
+            <Maximize2 className="size-3.5" aria-hidden="true" />
           </Button>
         </div>
       </FilterPanel>

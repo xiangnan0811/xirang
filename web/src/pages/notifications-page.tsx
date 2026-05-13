@@ -7,6 +7,8 @@ import { useAlertsContext } from "@/context/alerts-context.hooks";
 import { useIntegrationsContext } from "@/context/integrations-context.hooks";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications/alert-center";
+import { PageHero } from "@/components/ui/page-hero";
+import { Badge } from "@/components/ui/badge";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
@@ -57,8 +59,32 @@ export function NotificationsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+      <PageHero
+        title={t("notifications.pageTitle")}
+        subtitle={t("notifications.pageDesc")}
+        meta={
+          <>
+            <Badge tone={alertStats.total > 0 ? "destructive" : "success"}>
+              {t("notifications.pendingAlertsMeta", { count: alertStats.total })}
+            </Badge>
+            <Badge tone={activeIntegrations > 0 ? "success" : "warning"}>
+              {t("notifications.channelsMeta", {
+                active: activeIntegrations,
+                total: integrations.length || 0,
+              })}
+            </Badge>
+            <Badge tone={deliveryFailedCount > 0 ? "warning" : "neutral"}>
+              {t("notifications.deliveryFailedMeta", {
+                count: deliveryFailedCount,
+              })}
+            </Badge>
+          </>
+        }
+      />
+
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"
+        compact
         items={[
           {
             title: t("notifications.statOpenAlerts"),
@@ -85,9 +111,9 @@ export function NotificationsPage() {
             tone: "info",
           },
           {
-            title: "投递失败（24h）",
+            title: t("notifications.statDeliveryFailed24h"),
             value: deliveryFailedCount,
-            description: "近 24 小时内失败的通知投递数",
+            description: t("notifications.statDeliveryFailed24hDesc"),
             tone: deliveryFailedCount > 0 ? ("warning" as const) : ("success" as const),
           },
         ]}

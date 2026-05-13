@@ -318,6 +318,17 @@ describe("NotificationsPage", () => {
     createContext();
   });
 
+  it("渲染通知工作台标题和告警数据面", async () => {
+    render(<NotificationsPage />);
+
+    expect(
+      await screen.findByRole("heading", { name: "通知与告警" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 条待处理")).toBeInTheDocument();
+    expect(screen.getByText("1/1 通道启用")).toBeInTheDocument();
+    expect(screen.getByText("告警中心")).toBeInTheDocument();
+  });
+
   it("\u652F\u6301\u591A\u7EF4\u7B5B\u9009\u4E0E\u91CD\u7F6E", async () => {
     const user = userEvent.setup();
     render(<NotificationsPage />);
@@ -501,10 +512,10 @@ describe("NotificationsPage", () => {
     render(<NotificationsPage />);
     // fetchAlertDeliveryStats mock returns totalFailed: 1
     await waitFor(() => {
-      expect(screen.getByText("投递失败（24h）")).toBeInTheDocument();
+      expect(screen.getByText("24h 投递失败")).toBeInTheDocument();
     });
     // value "1" appears in the stat card
-    const statCard = screen.getByText("投递失败（24h）").closest("div");
+    const statCard = screen.getByText("24h 投递失败").closest("div");
     expect(statCard).toBeTruthy();
   });
 
