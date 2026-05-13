@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
+- **Total Sessions**: 26
 - **Last Active**: 2026-05-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~844 | Active |
+| `journal-1.md` | ~877 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-05-13 | Fix Docker Go builder version drift | `5ba0d0a` | `fix/docker-go-1263` |
 | 25 | 2026-05-13 | Frontend workbench UX redesign | `b00c07d` | `feat/frontend-workbench-ux-redesign` |
 | 24 | 2026-05-10 | Add local CI guard hooks | `5a9937f` | `chore/local-ci-guards-20260510` |
 | 23 | 2026-05-10 | Fix PR 147 backend CI | `12c1a27` | `chore/trellis-update-20260510` |

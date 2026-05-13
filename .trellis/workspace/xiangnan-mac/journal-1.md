@@ -842,3 +842,36 @@ Refined the React console into a denser operations workbench: neutralized theme 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Fix Docker Go builder version drift
+
+**Date**: 2026-05-13
+**Task**: Fix Docker Go builder version drift
+**Branch**: `fix/docker-go-1263`
+
+### Summary
+
+Aligned all-in-one Docker and development Compose Go images with backend/go.mod Go 1.26.3, updated README source-run requirements, verified official Docker tags, and recorded the v0.29.0 Docker publish failure follow-up.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ba0d0a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

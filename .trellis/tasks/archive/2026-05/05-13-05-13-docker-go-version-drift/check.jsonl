@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check PR, CI, merge, and post-merge release/Docker workflow completion."}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Check docs freshness and current version/image claims."}
