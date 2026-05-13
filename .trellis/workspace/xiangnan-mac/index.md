@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-05-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~943 | Active |
+| `journal-1.md` | ~976 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-05-13 | Upgrade GitHub Actions for Node 24 | `beb64b8` | `fix/actions-node24-compat` |
 | 28 | 2026-05-13 | Fix Trivy platform digest scanning | `20dfd9c` | `fix/trivy-platform-digest-scan` |
 | 27 | 2026-05-13 | Split Docker publish by native platform | `6d91031` | `fix/publish-images-native-platforms` |
 | 26 | 2026-05-13 | Fix Docker Go builder version drift | `5ba0d0a` | `fix/docker-go-1263` |

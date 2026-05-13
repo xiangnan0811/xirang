@@ -941,3 +941,36 @@ Fixed Docker publish workflow so Trivy scans each platform digest with the match
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: Upgrade GitHub Actions for Node 24
+
+**Date**: 2026-05-13
+**Task**: Upgrade GitHub Actions for Node 24
+**Branch**: `fix/actions-node24-compat`
+
+### Summary
+
+Upgraded CI, release, Docker publish, Docker Hub description, and deploy workflow action pins to Node 24-compatible releases while preserving SHA pins; migrated Release Please to googleapis/release-please-action; updated maintainer docs and Trellis guidance; local CI parity passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `beb64b8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Verify branch, PR, CI, and post-merge workflow contract"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Verify workflow and release maintainer docs are aligned"}
+{"file": ".trellis/tasks/05-13-actions-node24-compat/research/actions-node24-compat.md", "reason": "Verify chosen action versions and pins match research"}
