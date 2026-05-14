@@ -1078,3 +1078,39 @@ Refined Settings and Application Credentials into the shared workbench shell, ad
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: Frontend bundle budget governance
+
+**Date**: 2026-05-14
+**Task**: Frontend bundle budget governance
+**Branch**: `chore/frontend-bundle-budget-governance`
+
+### Summary
+
+Lazy-load frontend locale resources, tighten the bundle budget, document the i18n bundle guard, and record the Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af7f6b2` | (see git log) |
+| `fcbbfde` | (see git log) |
+| `dbe5703` | (see git log) |
+| `fb23f1e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

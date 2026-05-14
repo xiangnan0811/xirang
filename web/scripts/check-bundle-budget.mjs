@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 // 主 JS 预算调涨原因（reference: .trellis/tasks/05-04-wave-1-wave-0-out-of-scope-b-2-b-8-f-3/prd.md F-3）：
 // PR-A 引入 @tanstack/react-virtual v3（gzipped 5.4 KiB，含 virtual-core）用于 logs-viewer
 // 列表虚拟化，预算从 540 → 546 KiB，留 ~6 KiB 缓冲覆盖该依赖与未来微调。
-const DEFAULT_MAIN_JS_BUDGET_KIB = 558; // +6 KiB：uptime status-page + service-monitors 页
+// 05-14 frontend-bundle-budget-governance: locale resources are lazy-loaded,
+// so the startup bundle now has real headroom instead of passing by bytes.
+const DEFAULT_MAIN_JS_BUDGET_KIB = 500;
 const DEFAULT_MAIN_CSS_BUDGET_KIB = 70;
 
 function formatKiB(bytes) {

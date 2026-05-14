@@ -115,30 +115,21 @@ screen-reader user, the icon is decorative — hide it.
 ### i18n + `<html lang>` sync
 
 Whenever the user changes UI language, `document.documentElement.lang` must
-follow. The current implementation lives in `web/src/i18n/index.ts` and looks
-like:
+follow. The current implementation lives in `web/src/i18n/index.ts`. The
+startup path awaits `i18nReady` before React renders, and explicit language
+changes must call `setLanguage()` so locale resource loading, persistence, and
+`<html lang>` synchronization stay together:
 
 ```ts
-import i18n from "i18next";
+import { setLanguage } from "@/i18n";
 
-// Map i18next internal codes to BCP 47 values for the `<html lang>` attribute.
-function mapLangToHtml(lng: string): string {
-  if (lng?.startsWith("zh")) return "zh-CN";
-  return "en";
-}
-
-function syncDocumentLang(lng: string) {
-  if (typeof document === "undefined") return;
-  document.documentElement.lang = mapLangToHtml(lng);
-}
-
-// Sync once on init, then every time the user switches language.
-syncDocumentLang(i18n.language);
-i18n.on("languageChanged", syncDocumentLang);
+await setLanguage("en");
 ```
 
-Mirror this pattern in any new locale entry-point. Without it, screen readers
-keep announcing the page in the wrong language and WCAG 3.1.1 / 3.1.2 fail.
+Do not call `i18n.changeLanguage()` directly from components. That bypasses the
+project wrapper that keeps language preference storage and lazy-loaded locale
+resources in sync. Without the wrapper, screen readers can keep announcing the
+page in the wrong language and WCAG 3.1.1 / 3.1.2 fail.
 
 ---
 
@@ -165,9 +156,9 @@ Document the reason if you add a new exemption.
   feasible — but prefer the native element).
 - Mounting Radix `Dialog` without `DialogTitle`. Even a sr-only title
   satisfies the requirement.
-- Hard-coding `<html lang="zh-CN">` and forgetting to update it on language
-  change. The i18n bootstrap and the `languageChanged` listener must both
-  sync `document.documentElement.lang`.
+- Hard-coding `<html lang="zh-CN">` or calling `i18n.changeLanguage()`
+  directly. Use `setLanguage()` so the i18n bootstrap, lazy locale loader, and
+  `languageChanged` listener all keep `document.documentElement.lang` current.
 - Adding muted text (`text-muted-foreground`, `text-foreground/60`, etc.)
   without checking contrast. Run a quick axe scan locally if uncertain.
 
