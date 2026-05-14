@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BellRing, Loader2 } from "lucide-react";
+import { useConfirm } from "@/hooks/use-confirm";
 import {
   DataSurface,
   DataSurfaceContent,
@@ -9,6 +10,7 @@ import {
   DataSurfaceFooter,
 } from "@/components/ui/data-surface";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
+import { Button } from "@/components/ui/button";
 import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast-sonner";
 import { usePageFilters } from "@/hooks/use-page-filters";
@@ -44,6 +46,7 @@ export function AlertCenter({
   refreshVersion,
 }: AlertCenterProps) {
   const { t } = useTranslation();
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // --- 筛选状态 ---
   const {
@@ -69,6 +72,8 @@ export function AlertCenter({
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
+  const [bulkResolving, setBulkResolving] = useState(false);
 
   // --- 投递记录状态 ---
   const [deliveryOpenAlertId, setDeliveryOpenAlertId] = useState<string | null>(null);
@@ -125,6 +130,10 @@ export function AlertCenter({
       if (!controller.signal.aborted) {
         setAlerts(result.items);
         setTotal(result.total);
+        setSelectedAlertIds((current) => {
+          const unresolvedIds = new Set(result.items.filter((alert) => alert.status !== "resolved").map((alert) => alert.id));
+          return current.filter((alertId) => unresolvedIds.has(alertId));
+        });
       }
     } catch (err) {
       if (!controller.signal.aborted && !(err instanceof DOMException && err.name === "AbortError")) {
@@ -236,6 +245,66 @@ export function AlertCenter({
     try {
       await apiClient.resolveAlert(token, alert.id);
       toast.success(t("notifications.resolveSuccess", { code: alert.errorCode }));
+      setSelectedAlertIds((current) => current.filter((alertId) => alertId !== alert.id));
+      void fetchAlerts(page);
+      onAlertMutated?.();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleSelectionChange = (alertId: string, selected: boolean) => {
+    setSelectedAlertIds((current) => {
+      if (selected) {
+        return current.includes(alertId) ? current : [...current, alertId];
+      }
+      return current.filter((id) => id !== alertId);
+    });
+  };
+
+  const handleSelectAllVisible = (selected: boolean) => {
+    const visibleUnresolvedIds = displayAlerts.filter((alert) => alert.status !== "resolved").map((alert) => alert.id);
+    setSelectedAlertIds((current) => {
+      if (!selected) {
+        const visibleSet = new Set(visibleUnresolvedIds);
+        return current.filter((alertId) => !visibleSet.has(alertId));
+      }
+      const merged = new Set([...current, ...visibleUnresolvedIds]);
+      return Array.from(merged);
+    });
+  };
+
+  const handleBulkResolveSelected = async () => {
+    if (!selectedAlertIds.length || bulkResolving) return;
+    setBulkResolving(true);
+    try {
+      const result = await apiClient.resolveAlertsBulk(token, { alertIds: selectedAlertIds });
+      toast.success(t("notifications.bulkResolveSuccess", { count: result.resolvedCount }));
+      setSelectedAlertIds([]);
+      void fetchAlerts(page);
+      onAlertMutated?.();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setBulkResolving(false);
+    }
+  };
+
+  const handleResolveNodeAlerts = async (alert: AlertRecord) => {
+    const ok = await confirm({
+      title: t("notifications.resolveNodeConfirmTitle"),
+      description: t("notifications.resolveNodeConfirmDesc", { node: alert.nodeName }),
+      confirmText: t("notifications.resolveNodeConfirmAction"),
+    });
+    if (!ok) return;
+
+    try {
+      const result = await apiClient.resolveAlertsBulk(token, { nodeId: alert.nodeId });
+      toast.success(t("notifications.resolveNodeSuccess", { node: alert.nodeName, count: result.resolvedCount }));
+      setSelectedAlertIds((current) => current.filter((alertId) => {
+        const row = displayAlerts.find((item) => item.id === alertId);
+        return row ? row.nodeId !== alert.nodeId : true;
+      }));
       void fetchAlerts(page);
       onAlertMutated?.();
     } catch (err) {
@@ -312,8 +381,34 @@ export function AlertCenter({
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           total={total}
-          onReset={() => { resetFilters(); setPage(1); }}
+          onReset={() => { resetFilters(); setPage(1); setSelectedAlertIds([]); }}
         />
+        {selectedAlertIds.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2">
+            <span className="text-sm text-muted-foreground">
+              {t("notifications.selectedAlerts", { count: selectedAlertIds.length })}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedAlertIds([])}
+              >
+                {t("notifications.clearSelection")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={bulkResolving}
+                onClick={() => void handleBulkResolveSelected()}
+              >
+                {bulkResolving && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden="true" />}
+                {t("notifications.resolveSelectedAlerts")}
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </DataSurfaceToolbar>
 
       <DataSurfaceContent className="space-y-4">
@@ -339,9 +434,14 @@ export function AlertCenter({
             retryingDeliveryKey={retryingDeliveryKey}
             retryingAllAlertId={retryingAllAlertId}
             integrationNameMap={integrationNameMap}
+            selectedAlertIds={selectedAlertIds}
+            bulkResolving={bulkResolving}
+            onSelectionChange={handleSelectionChange}
+            onSelectAllVisible={handleSelectAllVisible}
             onRetry={(alert) => void handleRetry(alert)}
             onAck={(alert) => void handleAck(alert)}
             onResolve={(alert) => void handleResolve(alert)}
+            onResolveNodeAlerts={(alert) => void handleResolveNodeAlerts(alert)}
             onToggleDeliveries={toggleDeliveries}
             onRetryDelivery={(alertId, deliveryId) => void handleRetryDelivery(alertId, deliveryId)}
             onRetryAllFailed={(alertId) => void handleRetryAllFailed(alertId)}
@@ -357,6 +457,7 @@ export function AlertCenter({
       </DataSurfaceContent>
 
       <DataSurfaceFooter>
+        {confirmDialog}
         <Pagination
           page={page}
           pageSize={pageSize}
