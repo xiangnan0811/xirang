@@ -1,0 +1,2 @@
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Check branch and commit boundaries for Trellis-managed configuration changes."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check that retained local workflow documentation remains authoritative after template update."}

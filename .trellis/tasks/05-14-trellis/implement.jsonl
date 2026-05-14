@@ -1,0 +1,2 @@
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Ensure Trellis update and commit workflow stay on a dedicated branch and avoid direct main commits."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Ensure generated/update process documentation remains aligned with the authoritative local Trellis workflow."}
