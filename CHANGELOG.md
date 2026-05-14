@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.2](https://github.com/xiangnan0811/xirang/compare/v0.31.1...v0.31.2) (2026-05-14)
+
+
+### 📚 Documentation
+
+* align Docker Hub namespace truth ([20bcfd8](https://github.com/xiangnan0811/xirang/commit/20bcfd83e09ba3e728ee27ee98669c654fd400e1))
+
 ## [0.31.1](https://github.com/xiangnan0811/xirang/compare/v0.31.0...v0.31.1) (2026-05-14)
 
 
