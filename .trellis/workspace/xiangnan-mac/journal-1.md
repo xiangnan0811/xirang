@@ -1148,3 +1148,36 @@ Aligned public docs, deployment defaults, and Makefile Docker targets with the o
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: 修复服务监控 RBAC 权限
+
+**Date**: 2026-05-14
+**Task**: 修复服务监控 RBAC 权限
+**Branch**: `fix/service-monitor-admin-permission`
+
+### Summary
+
+补齐服务监控 service_monitors:* RBAC 权限，admin/operator 可读写、viewer 只读；新增 full-router 回归测试并通过后端测试与构建。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dcd396b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
