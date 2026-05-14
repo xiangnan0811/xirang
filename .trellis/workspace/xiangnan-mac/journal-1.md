@@ -1181,3 +1181,36 @@ Aligned public docs, deployment defaults, and Makefile Docker targets with the o
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: Update Trellis to 0.5.15
+
+**Date**: 2026-05-14
+**Task**: Update Trellis to 0.5.15
+**Branch**: `chore/trellis-update-20260514`
+
+### Summary
+
+Updated the local Trellis runtime from 0.5.12 to 0.5.15, preserved project-specific workflow constraints, verified the update, committed the runtime/task changes, and archived the Trellis update task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0578b8d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
