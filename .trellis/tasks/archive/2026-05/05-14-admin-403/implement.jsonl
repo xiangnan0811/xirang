@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/index.md","reason":"backend task entry point and links to current Go conventions"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"quality expectations for backend changes and tests"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"middleware/API error response conventions"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"ensure implementation stays on a dedicated branch"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"RBAC permission changes require searching for related constants/usages"}
