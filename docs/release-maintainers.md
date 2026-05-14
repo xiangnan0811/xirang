@@ -42,7 +42,7 @@
 - `RELEASE_PLEASE_TOKEN`（PAT，至少需要 `repo` 和 `workflow`；用于让 release-please 创建的分支正常触发 CI）
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
-- `DOCKERHUB_NAMESPACE`（可用 variable；不设时回退到用户名）
+- `DOCKERHUB_NAMESPACE`（可用 variable；当前官方命名空间为 `linnea7171`；不设时回退到用户名）
 
 ### Deploy Environment 级
 
@@ -60,7 +60,7 @@
 4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。Release Please action 使用 `googleapis/release-please-action`，不要退回已归档的 `google-github-actions/release-please-action`。
 5. 审阅 Release PR，监控其 required checks，通过后合并。
 6. GitHub 创建对应 `vX.Y.Z` Release。
-7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 发布：
+7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 官方仓库 `docker.io/linnea7171/xirang` 发布：
    - `vX.Y.Z`
    - `X.Y.Z`
    - `latest`

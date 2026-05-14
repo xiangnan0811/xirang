@@ -1,6 +1,6 @@
 services:
   xirang:
-    image: ${IMAGE_REGISTRY:-docker.io}/${IMAGE_NAMESPACE:-xirang}/xirang:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-docker.io}/${IMAGE_NAMESPACE:-linnea7171}/xirang:${IMAGE_TAG:-latest}
     container_name: xirang
     env_file:
       - .env

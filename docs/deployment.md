@@ -5,7 +5,7 @@
 ## 官方交付标准
 
 - GitHub Release 是唯一权威公开版本源和变更说明源。
-- Docker Hub 是唯一官方镜像源，默认镜像地址为 `docker.io/xirang/xirang`。
+- Docker Hub 是唯一官方镜像源，默认镜像地址为 `docker.io/linnea7171/xirang`。
 - 当前仅支持稳定版 semver：`vX.Y.Z`。
 - `latest` 仅代表最新稳定版；生产环境建议固定到显式版本标签。
 - 公开 release 不自动触发私有部署；维护者部署使用手动 workflow。
@@ -71,7 +71,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 默认情况下：
 
-- 镜像地址：`docker.io/xirang/xirang`
+- 镜像地址：`docker.io/linnea7171/xirang`
 - 数据目录：`./data`
 - 备份目录：`./backups`
 - HTTP 端口：`80 -> 8080`
@@ -98,7 +98,7 @@ docker run -d \
   -v xirang-backup:/backup \
   -v "$(pwd)/certs:/etc/nginx/certs:ro" \
   --env-file .env \
-  docker.io/xirang/xirang:vX.Y.Z
+  docker.io/linnea7171/xirang:vX.Y.Z
 ```
 
 ### 环境变量要点
@@ -162,7 +162,7 @@ IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ### All-in-One 单镜像构建
 
 ```bash
-docker build -f deploy/allinone/Dockerfile -t docker.io/xirang/xirang:vX.Y.Z-local .
+docker build -f deploy/allinone/Dockerfile -t docker.io/linnea7171/xirang:vX.Y.Z-local .
 ```
 
 ### 多架构构建
@@ -173,7 +173,7 @@ docker buildx create --use
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f deploy/allinone/Dockerfile \
-  -t docker.io/xirang/xirang:vX.Y.Z-local \
+  -t docker.io/linnea7171/xirang:vX.Y.Z-local \
   --push .
 ```
 

@@ -66,7 +66,7 @@ SLA 报告按配置自动生成并推送，配置导入导出方便环境迁移�
 ### 官方发布标准
 
 - GitHub Release 是唯一权威公开版本源和变更说明源。
-- Docker Hub 是唯一官方镜像源：`docker.io/xirang/xirang`
+- Docker Hub 是唯一官方镜像源：`docker.io/linnea7171/xirang`
 - `latest` 仅代表最新稳定版；生产环境建议显式固定到 `vX.Y.Z`
 
 升级提示：
@@ -122,7 +122,7 @@ docker run -d \
   -v xirang-backup:/backup \
   -v "$(pwd)/certs:/etc/nginx/certs:ro" \
   --env-file .env \
-  docker.io/xirang/xirang:vX.Y.Z
+  docker.io/linnea7171/xirang:vX.Y.Z
 ```
 
 ### 从源码运行

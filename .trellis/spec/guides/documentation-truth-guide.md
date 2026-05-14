@@ -28,6 +28,13 @@ Use current repository evidence before changing claims:
 
 Do not invent roadmap, release, Docker Hub, or GitHub state. If an external fact is high-drift, either verify it during the task or word the doc so it does not pretend permanence.
 
+### Docker Hub Namespace Claims
+
+Do not infer the official Docker Hub namespace from the project name. For Xirang,
+the current official namespace is `linnea7171`, so public install docs and local
+Docker defaults should point at `docker.io/linnea7171/xirang` unless the
+maintainer explicitly changes the repository variable and release docs.
+
 ---
 
 ## Historical Specs Convention
