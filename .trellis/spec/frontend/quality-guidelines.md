@@ -36,9 +36,16 @@ and predictable repeated workflows matter more than decorative UI.
 - Add or update tests for behavior changes in pages, hooks, API mappers, and UI
   primitives. The repo uses Vitest and Testing Library.
 - Use existing i18n helpers for user-facing strings when editing localized UI.
+- Route explicit language changes through `setLanguage()` from `web/src/i18n`
+  instead of calling `i18n.changeLanguage()` directly. The helper preserves
+  localStorage, lazy locale loading, and `<html lang>` synchronization.
 - Keep route pages, dialogs, and tables responsive across desktop and mobile.
 - Use shared status, date, chart, and theme utilities instead of duplicating
   formatting logic.
+- Keep locale resources out of the startup bundle. `web/src/i18n/index.ts`
+  loads the detected language before first render and lazy-loads the alternate
+  language on demand; do not reintroduce static imports of
+  `web/src/i18n/locales/*` into startup modules.
 
 ---
 
