@@ -1,0 +1,6 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify request/response semantics line up from backend through UI refresh."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check API status codes and error responses for invalid targets and ownership failures."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review backend tests and implementation quality."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review frontend tests, lint/typecheck expectations, and page behavior."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check new selection and confirmation UI against accessibility rules."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check API mapping and UI state types are strict and consistent."}

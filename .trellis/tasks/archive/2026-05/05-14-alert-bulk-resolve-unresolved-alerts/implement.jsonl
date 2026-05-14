@@ -1,0 +1,10 @@
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Confirm work stays on a dedicated branch before file-changing implementation."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Feature spans backend API, frontend API client, UI state, and tests."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Add alert handler route changes in the existing backend layout."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Bulk update alerts safely through existing GORM patterns without migrations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Match existing API error and response conventions for partial/invalid bulk requests."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Keep backend implementation minimal, tested, and idiomatic."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Add selection controls and row menu actions consistently with current React component patterns."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Manage page-local selection and refresh behavior without unnecessary global state."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Extend alert API types with typed bulk resolve request/response shapes."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Bulk selection checkboxes, row actions, and confirmation controls must remain keyboard/screen-reader accessible."}
