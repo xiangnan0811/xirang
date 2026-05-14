@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.3](https://github.com/xiangnan0811/xirang/compare/v0.31.2...v0.31.3) (2026-05-14)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** grant service monitor permissions ([de1a76e](https://github.com/xiangnan0811/xirang/commit/de1a76e757a66367af2132f908e3a65ef843f4dc))
+
 ## [0.31.2](https://github.com/xiangnan0811/xirang/compare/v0.31.1...v0.31.2) (2026-05-14)
 
 
