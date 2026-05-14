@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-05-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1116 | Active |
+| `journal-1.md` | ~1150 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-05-14 | Fix Docker Hub namespace truth | `6643eca`, `86cfc16` | `docs/dockerhub-namespace-truth` |
 | 33 | 2026-05-14 | Frontend bundle budget governance | `af7f6b2`, `fcbbfde`, `dbe5703`, `fb23f1e` | `chore/frontend-bundle-budget-governance` |
 | 32 | 2026-05-13 | Frontend workbench UX wave 3 | `552242c`, `f4def32`, `2b833cf`, `88a7829` | `feat/frontend-workbench-ux-wave3` |
 | 31 | 2026-05-13 | Frontend workbench UX wave 2 | `582eec8`, `d203b8b`, `13ab4ae` | `feat/frontend-workbench-ux-wave2` |

@@ -170,7 +170,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `IMAGE_REGISTRY` | `docker.io` | 镜像仓库地址 |
-| `IMAGE_NAMESPACE` | `xirang` | 镜像命名空间；官方公开镜像默认使用 `docker.io/xirang/xirang` |
+| `IMAGE_NAMESPACE` | `linnea7171` | 镜像命名空间；官方公开镜像默认使用 `docker.io/linnea7171/xirang` |
 | `IMAGE_TAG` | `latest` | 镜像标签；`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
 | `HTTP_PORT` | `80` | 宿主机 HTTP 端口映射到容器 `8080` |
 | `HTTPS_PORT` | `443` | 宿主机 HTTPS 端口映射到容器 `8443` |

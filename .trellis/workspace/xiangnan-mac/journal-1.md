@@ -1114,3 +1114,37 @@ Lazy-load frontend locale resources, tighten the bundle budget, document the i18
 ### Next Steps
 
 - None - task complete
+
+
+## Session 34: Fix Docker Hub namespace truth
+
+**Date**: 2026-05-14
+**Task**: Fix Docker Hub namespace truth
+**Branch**: `docs/dockerhub-namespace-truth`
+
+### Summary
+
+Aligned public docs, deployment defaults, and Makefile Docker targets with the official Docker Hub namespace linnea7171; recorded the Trellis task and documentation truth guidance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6643eca` | (see git log) |
+| `86cfc16` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

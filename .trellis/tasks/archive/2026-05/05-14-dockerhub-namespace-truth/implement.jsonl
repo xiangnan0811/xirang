@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Docs truth and branch workflow indexes for current-public documentation fixes"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Current public docs must be aligned with live Docker Hub namespace truth"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Documentation changes must go through branch PR workflow"}

@@ -86,7 +86,7 @@ swag-init: ## Regenerate OpenAPI docs from handler annotations
 
 # ── Docker 镜像 ──
 DOCKER_REGISTRY ?= docker.io
-DOCKER_NAMESPACE ?= xirang
+DOCKER_NAMESPACE ?= linnea7171
 DOCKER_IMAGE ?= xirang
 DOCKER_TAG ?= $(VERSION)
 TAG_LATEST ?= 0
