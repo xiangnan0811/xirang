@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/context/theme-context.hooks";
 import { useRefreshInterval, useDefaultPageSize, useDatetimeFormat } from "@/hooks/use-user-preferences";
+import { setLanguage, type SupportedLanguage } from "@/i18n";
 
 export function PersonalTab() {
   const { t, i18n } = useTranslation();
@@ -61,7 +62,7 @@ export function PersonalTab() {
             <p className="text-sm font-medium">{t("settings.personal.language")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.personal.languageDesc")}</p>
           </div>
-          <select className={selectClass} value={i18n.language} onChange={(e) => i18n.changeLanguage(e.target.value)} aria-label={t("settings.personal.language")}>
+          <select className={selectClass} value={i18n.language} onChange={(e) => void setLanguage(e.target.value as SupportedLanguage)} aria-label={t("settings.personal.language")}>
             <option value="zh">中文</option>
             <option value="en">English</option>
           </select>

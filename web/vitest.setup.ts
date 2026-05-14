@@ -70,6 +70,9 @@ if (typeof window !== "undefined") {
   window.localStorage.setItem("xirang.language", "zh");
 }
 
+const { i18nReady } = await import("@/i18n");
+await i18nReady;
+
 // jsdom 缺少 ResizeObserver；recharts、@tanstack/react-virtual 等库会用到，
 // 这里提供一个 no-op stub 避免每个测试文件重复定义。
 if (typeof globalThis !== "undefined" && !("ResizeObserver" in globalThis)) {
