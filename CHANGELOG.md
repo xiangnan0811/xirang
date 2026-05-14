@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/xiangnan0811/xirang/compare/v0.31.0...v0.31.1) (2026-05-14)
+
+
+### ⚡ Performance
+
+* **web:** lazy-load locale resources ([#164](https://github.com/xiangnan0811/xirang/issues/164)) ([7ee2646](https://github.com/xiangnan0811/xirang/commit/7ee2646bcc739e19df9592f3b7df69d8669123ab))
+
 ## [0.31.0](https://github.com/xiangnan0811/xirang/compare/v0.30.0...v0.31.0) (2026-05-13)
 
 
