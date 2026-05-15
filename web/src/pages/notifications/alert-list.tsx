@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { alertStatusMeta } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { getSeverityMeta } from "@/lib/status";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
@@ -31,9 +32,14 @@ export type AlertListProps = {
   retryingDeliveryKey: string | null;
   retryingAllAlertId: string | null;
   integrationNameMap: Map<string, string>;
+  selectedAlertIds: string[];
+  bulkResolving: boolean;
+  onSelectionChange: (alertId: string, selected: boolean) => void;
+  onSelectAllVisible: (selected: boolean) => void;
   onRetry: (alert: AlertRecord) => void;
   onAck: (alert: AlertRecord) => void;
   onResolve: (alert: AlertRecord) => void;
+  onResolveNodeAlerts: (alert: AlertRecord) => void;
   onToggleDeliveries: (alertId: string) => void;
   onRetryDelivery: (alertId: string, deliveryId: string) => void;
   onRetryAllFailed: (alertId: string) => void;
@@ -55,9 +61,14 @@ export function AlertList({
   retryingDeliveryKey,
   retryingAllAlertId,
   integrationNameMap,
+  selectedAlertIds,
+  bulkResolving,
+  onSelectionChange,
+  onSelectAllVisible,
   onRetry,
   onAck,
   onResolve,
+  onResolveNodeAlerts,
   onToggleDeliveries,
   onRetryDelivery,
   onRetryAllFailed,
@@ -65,11 +76,16 @@ export function AlertList({
   const { t } = useTranslation();
   const navigate = useNavigate();
 
+  const selectedSet = new Set(selectedAlertIds);
+  const visibleUnresolvedAlerts = alerts.filter((alert) => alert.status !== "resolved");
+  const allVisibleSelected = visibleUnresolvedAlerts.length > 0 && visibleUnresolvedAlerts.every((alert) => selectedSet.has(alert.id));
+  const someVisibleSelected = visibleUnresolvedAlerts.some((alert) => selectedSet.has(alert.id));
+
   const sortIndicator = (field: SortField) => {
     if (sortBy !== field) return null;
     return sortOrder === "asc"
-      ? <ChevronUp className="inline size-3.5" />
-      : <ChevronDown className="inline size-3.5" />;
+      ? <ChevronUp className="inline size-3.5" aria-hidden="true" />
+      : <ChevronDown className="inline size-3.5" aria-hidden="true" />;
   };
 
   const sortableThProps = (field: SortField) => ({
@@ -109,7 +125,7 @@ export function AlertList({
                 disabled={retryingAllAlertId === alert.id}
                 onClick={() => onRetryAllFailed(alert.id)}
               >
-                {retryingAllAlertId === alert.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                {retryingAllAlertId === alert.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden="true" />}
                 {t("notifications.resendAllFailed")}
               </Button>
             ) : null}
@@ -150,7 +166,7 @@ export function AlertList({
                     disabled={retryingDeliveryKey === delivery.id}
                     onClick={() => onRetryDelivery(alert.id, delivery.id)}
                   >
-                    {retryingDeliveryKey === delivery.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                    {retryingDeliveryKey === delivery.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden="true" />}
                     {t("notifications.resendNotification")}
                   </Button>
                 ) : null}
@@ -184,6 +200,12 @@ export function AlertList({
             <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={selectedSet.has(alert.id)}
+                    disabled={alert.status === "resolved" || bulkResolving}
+                    aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
+                    onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
+                  />
                   <span className="font-medium text-foreground/90 truncate">
                     {displayNode}
                   </span>
@@ -243,6 +265,7 @@ export function AlertList({
                   onRetry={onRetry}
                   onAck={onAck}
                   onResolve={onResolve}
+                  onResolveNodeAlerts={onResolveNodeAlerts}
                   onToggleDeliveries={onToggleDeliveries}
                 />
               </div>
@@ -260,6 +283,14 @@ export function AlertList({
       <table className="min-w-[960px] text-left text-sm w-full">
         <thead>
           <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
+            <th scope="col" className="px-3 py-2.5 w-[44px]">
+              <Checkbox
+                checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
+                disabled={!visibleUnresolvedAlerts.length || bulkResolving}
+                aria-label={t("notifications.selectAllVisibleAlerts")}
+                onCheckedChange={(checked) => onSelectAllVisible(checked === true)}
+              />
+            </th>
             <th scope="col" {...sortableThProps("severity")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
               {t("notifications.colSeverity")} {sortIndicator("severity")}
             </th>
@@ -290,6 +321,14 @@ export function AlertList({
                 ref={alert.id === highlightedAlertId ? (el) => highlightRef(alert.id, el) : undefined}
                 className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group"
               >
+                <td className="px-3 py-2.5">
+                  <Checkbox
+                    checked={selectedSet.has(alert.id)}
+                    disabled={alert.status === "resolved" || bulkResolving}
+                    aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
+                    onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
+                  />
+                </td>
                 <td className="px-3 py-2.5">
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                 </td>
@@ -325,6 +364,7 @@ export function AlertList({
                     onRetry={onRetry}
                     onAck={onAck}
                     onResolve={onResolve}
+                    onResolveNodeAlerts={onResolveNodeAlerts}
                     onToggleDeliveries={onToggleDeliveries}
                   />
                 </td>

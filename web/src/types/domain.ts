@@ -305,6 +305,11 @@ export interface AlertBulkRetryResult {
   newDeliveries: AlertDeliveryRecord[];
 }
 
+export interface AlertBulkResolveResult {
+  resolvedCount: number;
+  skippedCount: number;
+}
+
 export interface AlertDeliveryIntegrationStat {
   integrationId: string;
   name: string;

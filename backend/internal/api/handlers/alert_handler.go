@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -37,6 +38,16 @@ type retryFailedDeliveriesResponse struct {
 	SuccessCount  int                   `json:"success_count"`
 	FailedCount   int                   `json:"failed_count"`
 	NewDeliveries []model.AlertDelivery `json:"new_deliveries"`
+}
+
+type bulkResolveAlertsRequest struct {
+	AlertIDs []uint `json:"alert_ids"`
+	NodeID   *uint  `json:"node_id"`
+}
+
+type bulkResolveAlertsResponse struct {
+	ResolvedCount int64 `json:"resolved_count"`
+	SkippedCount  int64 `json:"skipped_count"`
 }
 
 type deliveryStatsByIntegration struct {
@@ -301,6 +312,155 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 		return
 	}
 	respondOK(c, alert)
+}
+
+// BulkResolve godoc
+// @Summary      批量解决告警
+// @Description  按告警 ID 或节点 ID 批量将未解决告警标记为已解决
+// @Tags         alerts
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      bulkResolveAlertsRequest  true  "批量解决请求"
+// @Success      200   {object}  handlers.Response{data=bulkResolveAlertsResponse}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Router       /alerts/bulk-resolve [post]
+func (h *AlertHandler) BulkResolve(c *gin.Context) {
+	var req bulkResolveAlertsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数格式错误")
+		return
+	}
+
+	if len(req.AlertIDs) == 0 && req.NodeID == nil {
+		respondBadRequest(c, "请选择要处理的告警或节点")
+		return
+	}
+	if len(req.AlertIDs) > 0 && req.NodeID != nil {
+		respondBadRequest(c, "告警列表和节点不能同时指定")
+		return
+	}
+
+	var response bulkResolveAlertsResponse
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		query := tx.Model(&model.Alert{}).Where("status != ?", "resolved")
+		var totalTarget int64
+		if req.NodeID != nil {
+			if *req.NodeID == 0 {
+				return bulkResolveBadRequestError{message: "节点 ID 无效"}
+			}
+			if allowed, err := authorizeNodeOwnership(c, tx, *req.NodeID); err != nil {
+				return err
+			} else if !allowed {
+				return bulkResolveForbiddenError{message: "无权操作该节点告警"}
+			}
+			query = query.Where("node_id = ?", *req.NodeID)
+			if err := tx.Model(&model.Alert{}).Where("node_id = ? AND status != ?", *req.NodeID, "resolved").Count(&totalTarget).Error; err != nil {
+				return err
+			}
+		} else {
+			ids := uniqueUintIDs(req.AlertIDs)
+			if len(ids) == 0 {
+				return bulkResolveBadRequestError{message: "告警 ID 无效"}
+			}
+			var alerts []model.Alert
+			if err := tx.Select("id", "node_id", "status").Where("id IN ?", ids).Find(&alerts).Error; err != nil {
+				return err
+			}
+			if len(alerts) != len(ids) {
+				return bulkResolveNotFoundError{message: "部分告警不存在"}
+			}
+			nodeIDs := make([]uint, 0, len(alerts))
+			for _, alert := range alerts {
+				nodeIDs = append(nodeIDs, alert.NodeID)
+			}
+			allowedNodes, err := authorizeNodeOwnershipSet(c, tx, nodeIDs)
+			if err != nil {
+				return err
+			}
+			for _, alert := range alerts {
+				if _, ok := allowedNodes[alert.NodeID]; !ok {
+					return bulkResolveForbiddenError{message: "无权操作部分告警"}
+				}
+			}
+			totalTarget = int64(len(alerts))
+			query = query.Where("id IN ?", ids)
+		}
+
+		result := query.Updates(map[string]interface{}{
+			"status":     "resolved",
+			"retryable":  false,
+			"updated_at": time.Now(),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+
+		response = bulkResolveAlertsResponse{
+			ResolvedCount: result.RowsAffected,
+			SkippedCount:  totalTarget - result.RowsAffected,
+		}
+		return nil
+	}); err != nil {
+		var badRequest bulkResolveBadRequestError
+		var forbidden bulkResolveForbiddenError
+		var notFound bulkResolveNotFoundError
+		switch {
+		case errors.As(err, &badRequest):
+			respondBadRequest(c, badRequest.message)
+		case errors.As(err, &forbidden):
+			respondForbidden(c, forbidden.message)
+		case errors.As(err, &notFound):
+			respondNotFound(c, notFound.message)
+		default:
+			respondInternalError(c, err)
+		}
+		return
+	}
+
+	respondOK(c, response)
+}
+
+type bulkResolveBadRequestError struct {
+	message string
+}
+
+func (e bulkResolveBadRequestError) Error() string {
+	return e.message
+}
+
+type bulkResolveForbiddenError struct {
+	message string
+}
+
+func (e bulkResolveForbiddenError) Error() string {
+	return e.message
+}
+
+type bulkResolveNotFoundError struct {
+	message string
+}
+
+func (e bulkResolveNotFoundError) Error() string {
+	return e.message
+}
+
+func uniqueUintIDs(ids []uint) []uint {
+	seen := make(map[uint]struct{}, len(ids))
+	result := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }
 
 // Deliveries godoc

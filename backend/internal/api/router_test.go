@@ -1,11 +1,19 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"xirang/backend/internal/auth"
+	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestResolveAllowedOrigin(t *testing.T) {
@@ -76,11 +84,80 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/alerts/:id/retry-failed-deliveries") {
 		t.Fatalf("未注册失败投递批量重发接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/alerts/bulk-resolve") {
+		t.Fatalf("未注册告警批量解决接口")
+	}
 	if hasRoute(routes, http.MethodPost, "/api/v1/nodes/:id/exec") {
 		t.Fatalf("不应注册节点远程执行接口")
 	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/nodes/batch-delete") {
 		t.Fatalf("未注册节点批量删除接口")
+	}
+}
+
+func TestAlertBulkResolveRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Alert{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_ALERT_BULK_RESOLVE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username:     "alert-bulk-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+	}
+
+	alert := model.Alert{
+		NodeID:      1,
+		NodeName:    "node-a",
+		Severity:    "critical",
+		Status:      "open",
+		ErrorCode:   "XR-RBAC",
+		Message:     "rbac",
+		Retryable:   true,
+		TriggeredAt: time.Now(),
+	}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	body := fmt.Sprintf(`{"alert_ids":[%d]}`, alert.ID)
+
+	viewerReq := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/bulk-resolve", strings.NewReader(body))
+	viewerReq.Header.Set("Content-Type", "application/json")
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 应被 RBAC 拒绝，实际状态码: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	adminReq := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/bulk-resolve", strings.NewReader(body))
+	adminReq.Header.Set("Content-Type", "application/json")
+	adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminResp := httptest.NewRecorder()
+	router.ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusOK {
+		t.Fatalf("admin 应能访问批量解决接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
 	}
 }
 

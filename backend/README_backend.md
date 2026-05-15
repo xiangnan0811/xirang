@@ -194,6 +194,7 @@ go run ./cmd/server
 | GET | /alerts/:id/group-info | 🔒 内存分组计数（alerts:read） |
 | GET | /alerts/delivery-stats | 🔒 投递统计 |
 | GET | /alerts/:id/deliveries | 🔒 投递记录 |
+| POST | /alerts/bulk-resolve | 🔒 批量解决未处理告警 |
 | POST | /alerts/:id/ack | 🔒 确认告警 |
 | POST | /alerts/:id/resolve | 🔒 解决告警 |
 | POST | /alerts/:id/retry-delivery | 🔒 重试投递 |

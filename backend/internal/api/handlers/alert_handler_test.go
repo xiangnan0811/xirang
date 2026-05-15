@@ -10,12 +10,193 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestAlertBulkResolveByIDs(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	now := time.Now()
+	openAlert := model.Alert{NodeID: 1, NodeName: "node-a", Severity: "critical", Status: "open", ErrorCode: "XR-OPEN", Message: "open", Retryable: true, TriggeredAt: now}
+	ackedAlert := model.Alert{NodeID: 1, NodeName: "node-a", Severity: "warning", Status: "acked", ErrorCode: "XR-ACK", Message: "acked", Retryable: true, TriggeredAt: now}
+	resolvedAlert := model.Alert{NodeID: 1, NodeName: "node-a", Severity: "warning", Status: "resolved", ErrorCode: "XR-RES", Message: "resolved", Retryable: false, TriggeredAt: now}
+	if err := db.Create(&[]model.Alert{openAlert, ackedAlert, resolvedAlert}).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/bulk-resolve", handler.BulkResolve)
+
+	body := strings.NewReader(`{"alert_ids":[1,2,3,2]}`)
+	req := httptest.NewRequest(http.MethodPost, "/alerts/bulk-resolve", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data bulkResolveAlertsResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.ResolvedCount != 2 || result.Data.SkippedCount != 1 {
+		t.Fatalf("批量处理统计错误: %+v", result.Data)
+	}
+
+	var rows []model.Alert
+	if err := db.Order("id asc").Find(&rows).Error; err != nil {
+		t.Fatalf("查询告警失败: %v", err)
+	}
+	for _, row := range rows {
+		if row.Status != "resolved" {
+			t.Fatalf("告警 %d 应为 resolved，实际: %s", row.ID, row.Status)
+		}
+		if row.ID != 3 && row.Retryable {
+			t.Fatalf("告警 %d retryable 应为 false", row.ID)
+		}
+	}
+}
+
+func TestAlertBulkResolveByNode(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	now := time.Now()
+	alerts := []model.Alert{
+		{NodeID: 7, NodeName: "node-a", Severity: "critical", Status: "open", ErrorCode: "XR-1", Message: "open", Retryable: true, TriggeredAt: now},
+		{NodeID: 7, NodeName: "node-a", Severity: "warning", Status: "acked", ErrorCode: "XR-2", Message: "acked", Retryable: true, TriggeredAt: now},
+		{NodeID: 7, NodeName: "node-a", Severity: "warning", Status: "resolved", ErrorCode: "XR-3", Message: "resolved", Retryable: false, TriggeredAt: now},
+		{NodeID: 8, NodeName: "node-b", Severity: "warning", Status: "open", ErrorCode: "XR-4", Message: "other", Retryable: true, TriggeredAt: now},
+	}
+	if err := db.Create(&alerts).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/bulk-resolve", handler.BulkResolve)
+
+	req := httptest.NewRequest(http.MethodPost, "/alerts/bulk-resolve", strings.NewReader(`{"node_id":7}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data bulkResolveAlertsResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.ResolvedCount != 2 || result.Data.SkippedCount != 0 {
+		t.Fatalf("节点批量处理统计错误: %+v", result.Data)
+	}
+
+	var other model.Alert
+	if err := db.First(&other, alerts[3].ID).Error; err != nil {
+		t.Fatalf("查询其他节点告警失败: %v", err)
+	}
+	if other.Status != "open" || !other.Retryable {
+		t.Fatalf("其他节点告警不应被修改: %+v", other)
+	}
+}
+
+func TestAlertBulkResolveRejectsUnauthorizedAlertIDs(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	alert := model.Alert{NodeID: 9, NodeName: "node-denied", Severity: "critical", Status: "open", ErrorCode: "XR-DENY", Message: "denied", Retryable: true, TriggeredAt: time.Now()}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/bulk-resolve", handler.BulkResolve)
+
+	body := strings.NewReader(fmt.Sprintf(`{"alert_ids":[%d]}`, alert.ID))
+	req := httptest.NewRequest(http.MethodPost, "/alerts/bulk-resolve", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("期望状态码 403，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var row model.Alert
+	if err := db.First(&row, alert.ID).Error; err != nil {
+		t.Fatalf("查询告警失败: %v", err)
+	}
+	if row.Status != "open" || !row.Retryable {
+		t.Fatalf("无权告警不应被修改: %+v", row)
+	}
+}
+
+func TestAlertBulkResolveRejectsUnauthorizedNode(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	alert := model.Alert{NodeID: 10, NodeName: "node-denied", Severity: "critical", Status: "open", ErrorCode: "XR-DENY", Message: "denied", Retryable: true, TriggeredAt: time.Now()}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/bulk-resolve", handler.BulkResolve)
+
+	req := httptest.NewRequest(http.MethodPost, "/alerts/bulk-resolve", strings.NewReader(`{"node_id":10}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("期望状态码 403，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var row model.Alert
+	if err := db.First(&row, alert.ID).Error; err != nil {
+		t.Fatalf("查询告警失败: %v", err)
+	}
+	if row.Status != "open" || !row.Retryable {
+		t.Fatalf("无权节点告警不应被修改: %+v", row)
+	}
+}
 
 func TestAlertDeliveries(t *testing.T) {
 	db := openAlertHandlerTestDB(t)

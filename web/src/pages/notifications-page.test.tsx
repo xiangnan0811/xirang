@@ -20,6 +20,7 @@ const {
   mockGetAlertsPaginated,
   mockAckAlert,
   mockResolveAlert,
+  mockResolveAlertsBulk,
   mockGetAlertDeliveries,
   mockRetryDelivery,
   mockGetAlertUnreadCount,
@@ -31,6 +32,7 @@ const {
   mockGetAlertsPaginated: vi.fn(),
   mockAckAlert: vi.fn(),
   mockResolveAlert: vi.fn(),
+  mockResolveAlertsBulk: vi.fn(),
   mockGetAlertDeliveries: vi.fn(),
   mockRetryDelivery: vi.fn(),
   mockGetAlertUnreadCount: vi.fn(),
@@ -100,6 +102,7 @@ vi.mock("@/lib/api/client", () => ({
     getAlertsPaginated: mockGetAlertsPaginated,
     ackAlert: mockAckAlert,
     resolveAlert: mockResolveAlert,
+    resolveAlertsBulk: mockResolveAlertsBulk,
     getAlertDeliveries: mockGetAlertDeliveries,
     getAlertUnreadCount: mockGetAlertUnreadCount,
     triggerTask: mockTriggerTask,
@@ -172,6 +175,10 @@ function setupDefaultMocks() {
   mockResolveAlert.mockResolvedValue({
     id: "alert-open",
     status: "resolved",
+  });
+  mockResolveAlertsBulk.mockResolvedValue({
+    resolvedCount: 2,
+    skippedCount: 0,
   });
   mockGetAlertDeliveries.mockResolvedValue([
     {
@@ -309,6 +316,7 @@ describe("NotificationsPage", () => {
     mockGetAlertsPaginated.mockReset();
     mockAckAlert.mockReset();
     mockResolveAlert.mockReset();
+    mockResolveAlertsBulk.mockReset();
     mockGetAlertDeliveries.mockReset();
     mockRetryDelivery.mockReset();
     mockGetAlertUnreadCount.mockReset();
@@ -368,6 +376,48 @@ describe("NotificationsPage", () => {
     });
     await user.click(screen.getAllByRole("button", { name: "\u91CD\u7F6E\u7B5B\u9009" })[0]);
     expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
+  });
+
+  it("\u652F\u6301\u591A\u9009\u6279\u91CF\u6062\u590D\u672A\u6062\u590D\u544A\u8B66", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    render(<NotificationsPage />);
+    expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("checkbox", { name: "\u9009\u62E9\u8282\u70B9 node-1 \u7684\u544A\u8B66 E_CONN" })[0]);
+    await user.click(screen.getAllByRole("checkbox", { name: "\u9009\u62E9\u8282\u70B9 node-2 \u7684\u544A\u8B66 E_WARN" })[0]);
+
+    expect(screen.getByText("\u5DF2\u9009\u62E9 2 \u6761\u672A\u6062\u590D\u544A\u8B66")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "\u6279\u91CF\u6062\u590D\u6240\u9009\u544A\u8B66" }));
+
+    await waitFor(() => {
+      expect(mockResolveAlertsBulk).toHaveBeenCalledWith("test-token", { alertIds: ["alert-open", "alert-acked"] });
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("\u5DF2\u6062\u590D 2 \u6761\u544A\u8B66");
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(2);
+  });
+
+  it("\u652F\u6301\u4ECE\u884C\u83DC\u5355\u786E\u8BA4\u540E\u6062\u590D\u67D0\u8282\u70B9\u672A\u5904\u7406\u544A\u8B66", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    render(<NotificationsPage />);
+    expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
+
+    const moreButtons = screen.getAllByRole("button", { name: "\u66F4\u591A\u64CD\u4F5C" });
+    await user.click(moreButtons[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "\u89E3\u51B3\u6B64\u8282\u70B9\u672A\u5904\u7406\u544A\u8B66" }));
+
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByText("\u786E\u8BA4\u5C06\u8282\u70B9\u300Cnode-1\u300D\u7684\u6240\u6709\u672A\u5904\u7406\u544A\u8B66\u6807\u8BB0\u4E3A\u5DF2\u6062\u590D\uFF1F")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "\u6062\u590D\u8282\u70B9\u544A\u8B66" }));
+
+    await waitFor(() => {
+      expect(mockResolveAlertsBulk).toHaveBeenCalledWith("test-token", { nodeId: 1 });
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("\u8282\u70B9\u300Cnode-1\u300D\u5DF2\u6062\u590D 2 \u6761\u544A\u8B66");
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(2);
   });
 
   it("\u6295\u9012\u8BB0\u5F55\u901A\u8FC7\u66F4\u591A\u83DC\u5355\u5C55\u5F00\u4E14\u6309\u9700\u52A0\u8F7D", async () => {

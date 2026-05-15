@@ -1,4 +1,5 @@
 import type {
+  AlertBulkResolveResult,
   AlertBulkRetryResult,
   AlertDeliveryRecord,
   AlertDeliveryRetryResult,
@@ -48,6 +49,11 @@ type RetryFailedDeliveriesResponse = {
   success_count: number;
   failed_count: number;
   new_deliveries: AlertDeliveryResponse[];
+};
+
+type BulkResolveAlertsResponse = {
+  resolved_count: number;
+  skipped_count: number;
 };
 
 type DeliveryStatsIntegrationResponse = {
@@ -231,6 +237,24 @@ export function createAlertsApi() {
         token
       });
       return mapAlert(row);
+    },
+
+    async resolveAlertsBulk(
+      token: string,
+      target: { alertIds: string[] } | { nodeId: number },
+    ): Promise<AlertBulkResolveResult> {
+      const body = "alertIds" in target
+        ? { alert_ids: target.alertIds.map((alertId) => parseNumericId(alertId, "alert")) }
+        : { node_id: target.nodeId };
+      const data = await request<BulkResolveAlertsResponse>("/alerts/bulk-resolve", {
+        method: "POST",
+        token,
+        body,
+      });
+      return {
+        resolvedCount: Number(data?.resolved_count ?? 0),
+        skippedCount: Number(data?.skipped_count ?? 0),
+      };
     },
 
     async retryAlertDelivery(token: string, alertId: string, integrationId: string): Promise<AlertDeliveryRetryResult> {

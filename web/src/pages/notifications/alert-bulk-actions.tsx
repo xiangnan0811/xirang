@@ -15,6 +15,7 @@ export type AlertBulkActionsProps = {
   onRetry: (alert: AlertRecord) => void;
   onAck: (alert: AlertRecord) => void;
   onResolve: (alert: AlertRecord) => void;
+  onResolveNodeAlerts: (alert: AlertRecord) => void;
   onToggleDeliveries: (alertId: string) => void;
 };
 
@@ -24,6 +25,7 @@ export function AlertBulkActions({
   onRetry,
   onAck,
   onResolve,
+  onResolveNodeAlerts,
   onToggleDeliveries,
 }: AlertBulkActionsProps) {
   const { t } = useTranslation();
@@ -40,7 +42,7 @@ export function AlertBulkActions({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" aria-label={t("common.more")}>
-            <MoreHorizontal className="size-4" />
+            <MoreHorizontal className="size-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
@@ -55,6 +57,12 @@ export function AlertBulkActions({
             onClick={() => onResolve(alert)}
           >
             {t("notifications.markResolved")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={alert.status === "resolved" || alert.nodeId === 0}
+            onClick={() => onResolveNodeAlerts(alert)}
+          >
+            {t("notifications.resolveNodeAlerts")}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => onToggleDeliveries(alert.id)}>
             {deliveryOpen ? t("notifications.collapseDelivery") : t("notifications.deliveryRecords")}

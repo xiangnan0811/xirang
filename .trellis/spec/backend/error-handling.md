@@ -74,6 +74,84 @@ Simplified Chinese strings.
 
 ---
 
+## Scenario: Bulk Alert Resolution API
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing an API that mutates multiple alert rows or exposes a cross-layer request/response contract.
+- Applies to endpoints that accept either an explicit alert set or a scoped resource target and then update all matching unresolved alerts.
+
+### 2. Signatures
+
+- Route: `POST /api/v1/alerts/bulk-resolve` under `/api/v1`.
+- Middleware: authenticated route plus `middleware.RBAC("alerts:write")`.
+- Handler signature: `func (h *AlertHandler) BulkResolve(c *gin.Context)`.
+- Backend request shape:
+
+```go
+type bulkResolveAlertsRequest struct {
+    AlertIDs []uint `json:"alert_ids"`
+    NodeID   *uint  `json:"node_id"`
+}
+```
+
+- Backend response shape:
+
+```go
+type bulkResolveAlertsResponse struct {
+    ResolvedCount int64 `json:"resolved_count"`
+    SkippedCount  int64 `json:"skipped_count"`
+}
+```
+
+### 3. Contracts
+
+- Exactly one target mode must be supplied:
+  - `alert_ids`: explicit alert IDs; deduplicate IDs and ignore zero before mutation.
+  - `node_id`: node ID target; update unresolved alerts for that node only.
+- Mutation contract: only rows where `status != "resolved"` may be updated.
+- Resolved rows must be skipped, not deleted or reprocessed.
+- Update fields: `status = "resolved"`, `retryable = false`, and `updated_at = now`.
+- Response counts:
+  - `resolved_count`: number of rows actually updated.
+  - `skipped_count`: authorized target count minus updated row count.
+
+### 4. Validation & Error Matrix
+
+- Missing both `alert_ids` and `node_id` -> `respondBadRequest`.
+- Providing both `alert_ids` and `node_id` -> `respondBadRequest`.
+- `node_id == 0` -> `respondBadRequest`.
+- `alert_ids` becomes empty after zero filtering -> `respondBadRequest`.
+- Any explicit alert ID does not exist -> `respondNotFound` before mutation.
+- Authenticated user lacks ownership for any target node -> `respondForbidden` before mutation.
+- Database read/update failure -> `respondInternalError` with generic client message.
+
+### 5. Good/Base/Bad Cases
+
+- Good: admin posts `{ "alert_ids": [1, 2, 2, 3] }`; duplicate IDs are collapsed, unresolved alerts are resolved, already resolved alerts contribute to `skipped_count`.
+- Base: operator posts `{ "node_id": 7 }`; ownership is checked once for node 7, then only unresolved alerts on node 7 are updated.
+- Bad: operator posts an alert ID from a node they do not own; return 403 and leave all requested alerts unchanged.
+
+### 6. Tests Required
+
+- Handler test for explicit IDs: assert dedupe, unresolved-only update, `retryable=false`, and skipped count for already resolved rows.
+- Handler test for node target: assert only the target node's unresolved alerts change.
+- Authorization tests for explicit alert IDs and node target: assert 403 and no mutation.
+- Router test: assert `/api/v1/alerts/bulk-resolve` is registered before dynamic alert routes and is protected by `alerts:write`.
+- Frontend/API test: assert camelCase `alertIds` maps to `alert_ids` and `resolved_count` maps to `resolvedCount`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Loop over selected alerts in the frontend and call `POST /alerts/:id/resolve` repeatedly. This causes partial UI-visible mutations, duplicates ownership checks in many requests, and cannot report skipped rows consistently.
+
+#### Correct
+
+Expose one bulk endpoint, validate the whole target set first, perform the unresolved-only update inside one backend transaction, and return aggregate counts through the standard response envelope.
+
+---
+
 ## Common Mistakes
 
 - Do not add new raw `c.JSON(http.Status..., gin.H{"error": ...})` responses in
