@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/xiangnan0811/xirang/compare/v0.32.0...v0.33.0) (2026-05-15)
+
+
+### ✨ Features
+
+* **web:** add CPU peak clipping view ([cb31013](https://github.com/xiangnan0811/xirang/commit/cb31013950d2e5ebd7fffb31b59b6ec8b821ad79))
+
 ## [0.32.0](https://github.com/xiangnan0811/xirang/compare/v0.31.3...v0.32.0) (2026-05-15)
 
 
