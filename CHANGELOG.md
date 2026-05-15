@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/xiangnan0811/xirang/compare/v0.31.3...v0.32.0) (2026-05-15)
+
+
+### ✨ Features
+
+* **alerts:** add bulk alert resolution ([#171](https://github.com/xiangnan0811/xirang/issues/171)) ([6734bb6](https://github.com/xiangnan0811/xirang/commit/6734bb6eb253a4b505b3336e5fbfd398654b8cc9))
+
 ## [0.31.3](https://github.com/xiangnan0811/xirang/compare/v0.31.2...v0.31.3) (2026-05-14)
 
 
