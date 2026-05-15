@@ -12,11 +12,15 @@ import {
 } from "@/components/ui/dialog";
 import type { NodeMetricSample } from "@/lib/api/node-metrics-api";
 import type { NodeRecord } from "@/types/domain";
+import { Button } from "@/components/ui/button";
 import { MetricChart, type MetricKey, type ChartPoint } from "@/components/node-metrics-chart";
 import { NODE_PALETTE } from "@/components/node-metrics-theme";
 
 const METRICS_KEYS: MetricKey[] = ["cpu", "mem", "disk"];
 const MAX_VISIBLE_NODES = 8;
+const CPU_CLIP_PERCENTILE = 0.95;
+
+type CpuDisplayMode = "raw" | "clipped";
 
 type Props = {
   nodes: NodeRecord[];
@@ -33,6 +37,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
   const [metricsMap, setMetricsMap] = useState<Record<number, NodeMetricSample[]>>({});
   const [loading, setLoading] = useState(true);
   const [enabledNodes, setEnabledNodes] = useState<Set<number>>(() => new Set());
+  const [cpuDisplayMode, setCpuDisplayMode] = useState<CpuDisplayMode>("raw");
   const initRef = useRef(false);
 
   // 初始化：默认全部开启
@@ -164,32 +169,50 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* 共享节点图例 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        {onlineNodes.map((node) => {
-          const color = nodeColorMap.get(node.id);
-          const active = enabledNodes.has(node.id);
-          return (
-            <button
-              key={node.id}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* 共享节点图例 */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {onlineNodes.map((node) => {
+            const color = nodeColorMap.get(node.id);
+            const active = enabledNodes.has(node.id);
+            return (
+              <button
+                key={node.id}
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-[color,opacity] hover:bg-muted/60"
+                style={{ opacity: active ? 1 : 0.35 }}
+                onClick={() => toggleNode(node.id)}
+                aria-pressed={active}
+                title={t("nodes.metricToggleTitle", { action: active ? t("nodes.metricHide") : t("nodes.metricShow"), name: node.name })}
+              >
+                <span
+                  className="size-2.5 rounded-full shrink-0 transition-transform"
+                  style={{
+                    backgroundColor: color?.stroke,
+                    transform: active ? "scale(1)" : "scale(0.7)",
+                  }}
+                />
+                <span className="max-w-[8rem] truncate">{node.name}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-2" role="group" aria-label={t("nodes.cpuDisplayModeAriaLabel")}>
+          <span className="text-xs text-muted-foreground">{t("nodes.cpuDisplayModeLabel")}</span>
+          {(["raw", "clipped"] as CpuDisplayMode[]).map((mode) => (
+            <Button
+              key={mode}
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-[color,opacity] hover:bg-muted/60"
-              style={{ opacity: active ? 1 : 0.35 }}
-              onClick={() => toggleNode(node.id)}
-              aria-pressed={active}
-              title={t("nodes.metricToggleTitle", { action: active ? t("nodes.metricHide") : t("nodes.metricShow"), name: node.name })}
+              size="sm"
+              variant={cpuDisplayMode === mode ? "default" : "outline"}
+              aria-pressed={cpuDisplayMode === mode}
+              onClick={() => setCpuDisplayMode(mode)}
             >
-              <span
-                className="size-2.5 rounded-full shrink-0 transition-transform"
-                style={{
-                  backgroundColor: color?.stroke,
-                  transform: active ? "scale(1)" : "scale(0.7)",
-                }}
-              />
-              <span className="max-w-[8rem] truncate">{node.name}</span>
-            </button>
-          );
-        })}
+              {t(`nodes.cpuDisplayMode_${mode}`)}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {/* 三张指标小图 */}
@@ -205,6 +228,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
             nodeColorMap={nodeColorMap}
             nodeNameMap={nodeNameMap}
             onExpand={() => setExpandedMetric(key)}
+            clipPercentile={key === "cpu" && cpuDisplayMode === "clipped" ? CPU_CLIP_PERCENTILE : undefined}
           />
         ))}
       </div>
@@ -259,6 +283,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
                 height={400}
                 idPrefix="exp-"
                 showLabel={false}
+                clipPercentile={expandedMetric === "cpu" && cpuDisplayMode === "clipped" ? CPU_CLIP_PERCENTILE : undefined}
               />
             )}
           </div>
