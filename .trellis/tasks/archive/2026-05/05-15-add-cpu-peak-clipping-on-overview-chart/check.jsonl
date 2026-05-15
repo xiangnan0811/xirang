@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend check criteria for chart behavior, tests, and accessibility"}
+{"file":".trellis/spec/guides/index.md","reason":"Branch workflow and cross-layer reminder for pre-implementation checks"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Control and chart composition patterns to verify the implementation"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Required npm run check and test coverage expectations"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Type-safe chart data and prop flow verification"}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Accessible control and dialog validation for the chart UI"}

@@ -9,12 +9,14 @@ import type { NodeRecord } from "@/types/domain";
 // YAxis 将 domain 序列化到 data-domain，供语义测试断言
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }: { children: React.ReactNode }) => <svg data-testid="area-chart">{children}</svg>,
+  AreaChart: ({ children, data }: { children: React.ReactNode; data?: unknown }) => <svg data-testid="area-chart" data-chart={JSON.stringify(data)}>{children}</svg>,
   Area: () => null,
   XAxis: () => null,
   YAxis: ({ domain }: { domain?: unknown }) => <text data-testid="y-axis" data-domain={JSON.stringify(domain)} />,
   CartesianGrid: () => null,
-  Tooltip: () => null,
+  Tooltip: ({ formatter }: { formatter?: (value: unknown, name: unknown, item: { payload?: Record<string, unknown> }) => unknown }) => (
+    <text data-testid="tooltip" data-tooltip={JSON.stringify(formatter?.(45, "n1", { payload: { n1: 40, __raw_n1: 100 } }))} />
+  ),
 }));
 
 const mockGetNodeMetrics = vi.fn();
@@ -50,6 +52,19 @@ function makeSamples(nodeId: number) {
     items: [
       { id: 1, node_id: nodeId, cpu_pct: 45, mem_pct: 60, disk_pct: 30, load_1m: 1.2, sampled_at: "2026-03-27T10:00:00Z" },
       { id: 2, node_id: nodeId, cpu_pct: 50, mem_pct: 65, disk_pct: 31, load_1m: 1.5, sampled_at: "2026-03-27T10:05:00Z" },
+    ],
+  };
+}
+
+function makeSpikySamples(nodeId: number) {
+  return {
+    items: [
+      { id: 1, node_id: nodeId, cpu_pct: 20, mem_pct: 60, disk_pct: 30, load_1m: 1.2, sampled_at: "2026-03-27T10:00:00Z" },
+      { id: 2, node_id: nodeId, cpu_pct: 22, mem_pct: 61, disk_pct: 31, load_1m: 1.3, sampled_at: "2026-03-27T10:05:00Z" },
+      { id: 3, node_id: nodeId, cpu_pct: 24, mem_pct: 62, disk_pct: 32, load_1m: 1.4, sampled_at: "2026-03-27T10:10:00Z" },
+      { id: 4, node_id: nodeId, cpu_pct: 26, mem_pct: 63, disk_pct: 33, load_1m: 1.5, sampled_at: "2026-03-27T10:15:00Z" },
+      { id: 5, node_id: nodeId, cpu_pct: 28, mem_pct: 64, disk_pct: 34, load_1m: 1.6, sampled_at: "2026-03-27T10:20:00Z" },
+      { id: 6, node_id: nodeId, cpu_pct: 100, mem_pct: 65, disk_pct: 35, load_1m: 1.7, sampled_at: "2026-03-27T10:25:00Z" },
     ],
   };
 }
@@ -168,6 +183,39 @@ describe("NodeMetricsPanel 放大交互", () => {
     expect(domains[0]).toEqual([0, 60]);  // CPU
     expect(domains[1]).toEqual([0, 75]);  // MEM
     expect(domains[2]).toEqual([0, 35]);  // DISK
+  });
+
+  it("CPU 图表默认显示原始值，削峰模式下使用截顶值缩放但 tooltip 保留原始值", async () => {
+    const user = userEvent.setup();
+    mockGetNodeMetrics.mockImplementation((_token: string, nodeId: number) =>
+      Promise.resolve(makeSpikySamples(nodeId))
+    );
+
+    render(<NodeMetricsPanel nodes={makeNodes(1)} token="test-token" />);
+
+    await waitFor(() => {
+      expect(mockGetNodeMetrics).toHaveBeenCalled();
+    });
+
+    expect(screen.getByRole("button", { name: "原始" })).toHaveAttribute("aria-pressed", "true");
+
+    let yAxes = await screen.findAllByTestId("y-axis");
+    expect(JSON.parse(yAxes[0].getAttribute("data-domain")!)).toEqual([0, 100]);
+
+    await user.click(screen.getByRole("button", { name: "削峰" }));
+
+    yAxes = await screen.findAllByTestId("y-axis");
+    expect(JSON.parse(yAxes[0].getAttribute("data-domain")!)).toEqual([0, 35]);
+    expect(JSON.parse(yAxes[1].getAttribute("data-domain")!)).toEqual([0, 75]);
+    expect(JSON.parse(yAxes[2].getAttribute("data-domain")!)).toEqual([0, 40]);
+
+    const charts = screen.getAllByTestId("area-chart");
+    const cpuChartData = JSON.parse(charts[0].getAttribute("data-chart")!);
+    expect(cpuChartData.at(-1).n1).toBe(28);
+    expect(cpuChartData.at(-1).__raw_n1).toBe(100);
+
+    const tooltips = screen.getAllByTestId("tooltip");
+    expect(JSON.parse(tooltips[0].getAttribute("data-tooltip")!)).toEqual(["100%", "Node-1"]);
   });
 
   it("无在线节点时不渲染任何内容", () => {

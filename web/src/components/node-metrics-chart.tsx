@@ -32,7 +32,19 @@ export type MetricChartProps = {
   onExpand?: () => void;
   idPrefix?: string;
   showLabel?: boolean;
+  clipPercentile?: number;
 };
+
+const RAW_VALUE_PREFIX = "__raw_";
+
+function percentileCap(values: number[], percentile: number) {
+  if (values.length < 4) return null;
+  const sorted = [...values].sort((first, second) => first - second);
+  const index = Math.floor((sorted.length - 1) * percentile);
+  const cap = sorted[index];
+  const max = sorted[sorted.length - 1];
+  return cap > 0 && cap < max ? cap : null;
+}
 
 export function MetricChart({
   metricKey,
@@ -46,6 +58,7 @@ export function MetricChart({
   onExpand,
   idPrefix = "",
   showLabel = true,
+  clipPercentile,
 }: MetricChartProps) {
   const { t } = useTranslation();
 
@@ -54,19 +67,63 @@ export function MetricChart({
     [nodes, metricKey, idPrefix]
   );
 
-  const yMax = useMemo(() => {
-    let max = 0;
+  const { displayData, displayKeyForNode, rawKeyForNode } = useMemo(() => {
+    if (!clipPercentile) {
+      return {
+        displayData: data,
+        displayKeyForNode: (nodeId: number) => `n${nodeId}`,
+        rawKeyForNode: (nodeId: number) => `n${nodeId}`,
+      };
+    }
+
+    const values: number[] = [];
     for (const point of data) {
       for (const node of nodes) {
         if (!enabledNodes.has(node.id)) continue;
-        const v = point[`n${node.id}`];
+        const value = point[`n${node.id}`];
+        if (typeof value === "number") values.push(value);
+      }
+    }
+
+    const cap = percentileCap(values, clipPercentile);
+    if (cap === null) {
+      return {
+        displayData: data,
+        displayKeyForNode: (nodeId: number) => `n${nodeId}`,
+        rawKeyForNode: (nodeId: number) => `n${nodeId}`,
+      };
+    }
+
+    return {
+      displayData: data.map((point) => {
+        const next: ChartPoint = { ...point };
+        for (const node of nodes) {
+          const key = `n${node.id}`;
+          const value = point[key];
+          if (typeof value !== "number") continue;
+          next[`${RAW_VALUE_PREFIX}${key}`] = value;
+          next[key] = Math.min(value, cap);
+        }
+        return next;
+      }),
+      displayKeyForNode: (nodeId: number) => `n${nodeId}`,
+      rawKeyForNode: (nodeId: number) => `${RAW_VALUE_PREFIX}n${nodeId}`,
+    };
+  }, [clipPercentile, data, nodes, enabledNodes]);
+
+  const yMax = useMemo(() => {
+    let max = 0;
+    for (const point of displayData) {
+      for (const node of nodes) {
+        if (!enabledNodes.has(node.id)) continue;
+        const v = point[displayKeyForNode(node.id)];
         if (typeof v === "number" && v > max) max = v;
       }
     }
     if (max <= 0) return 100;
     const padded = max * 1.1;
     return Math.min(100, Math.max(10, Math.ceil(padded / 5) * 5));
-  }, [data, nodes, enabledNodes]);
+  }, [displayData, displayKeyForNode, nodes, enabledNodes]);
 
   return (
     <div className="glass-panel p-4">
@@ -81,13 +138,13 @@ export function MetricChart({
               aria-label={t("nodes.metricExpandAriaLabel", { label })}
               title={t("nodes.metricExpandTitle")}
             >
-              <Maximize2 className="size-3" />
+              <Maximize2 className="size-3" aria-hidden />
             </button>
           )}
         </div>
       )}
       <ResponsiveContainer width="100%" height={height}>
-        <AreaChart data={data} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+        <AreaChart data={displayData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
           <defs>
             {nodes.map((node, i) => {
               const color = nodeColorMap.get(node.id);
@@ -128,10 +185,11 @@ export function MetricChart({
               borderRadius: 6,
             }}
             labelStyle={{ color: "hsl(var(--muted-foreground))" }}
-            formatter={(value, name) => {
+            formatter={(value, name, item) => {
               const nodeId = Number(String(name).replace("n", ""));
               const nodeName = nodeNameMap.get(nodeId) ?? String(name);
-              return [`${value}%`, nodeName];
+              const rawValue = item.payload?.[rawKeyForNode(nodeId)];
+              return [`${typeof rawValue === "number" ? rawValue : value}%`, nodeName];
             }}
           />
           {nodes.map((node, i) => {
@@ -141,7 +199,7 @@ export function MetricChart({
               <Area
                 key={node.id}
                 type="monotone"
-                dataKey={`n${node.id}`}
+                dataKey={displayKeyForNode(node.id)}
                 stroke={color?.stroke}
                 fill={`url(#${gradientIds[i]})`}
                 strokeWidth={1.5}

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend component and quality conventions for the overview chart change"}
+{"file":".trellis/spec/guides/index.md","reason":"Branch workflow and cross-layer thinking guidance before UI changes"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuses existing chart and control patterns in the overview UI"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend testing and check requirements for changed behavior"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Keep chart data normalization and props typed"}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Chart control and dialog accessibility constraints"}

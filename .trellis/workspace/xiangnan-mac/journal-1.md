@@ -1214,3 +1214,36 @@ Updated the local Trellis runtime from 0.5.12 to 0.5.15, preserved project-speci
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: Add CPU peak clipping view
+
+**Date**: 2026-05-15
+**Task**: Add CPU peak clipping view
+**Branch**: `feat/overview-cpu-peak-clipping`
+
+### Summary
+
+Added an Overview CPU raw/clipped display mode that clips chart rendering at a percentile while preserving raw metric values in tooltips, with frontend regression coverage and checks passing.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60a4ed1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
