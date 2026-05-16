@@ -6,7 +6,7 @@
 -- WARNING: 本迁移**不可幂等执行** —— 重复运行会让时间偏移翻倍。
 -- 仅适用于当前 +8h (Asia/Shanghai) 部署；其他时区部署需要 fork 此文件并改 hour 数。
 -- 必须在 maintenance window 执行；不能 in-flight 写入时迁移（否则 race condition）。
--- 详细 runbook 见 docs/migration-utc-cutover.md
+-- 详细 runbook 见 docs/deployment.md#utc-时间戳约定
 --
 -- 事务保护：本 SQLite 迁移由 golang-migrate sqlite3 驱动在 driver 层使用
 -- tx.Begin/Commit 包裹整个 .sql 内容（参见 vendor 中 database/sqlite3/sqlite3.go
@@ -21,7 +21,7 @@
 --
 -- 但 schema_migrations.dirty=1 标记仍会被设置（驱动语义，发生在 commit 后才报错
 -- 的极端场景）；下次启动时由 migrator.go 通过 ALLOW_DIRTY_STARTUP 守卫拒绝启动，
--- 强制运维介入修复。完整流程见 docs/migration-utc-cutover.md「Dirty 状态恢复」。
+-- 强制运维介入修复。完整流程见 docs/deployment.md#utc-时间戳约定「Dirty 状态恢复」。
 --
 -- 平移涉及的所有 (table.column)：
 --   users.created_at, users.updated_at

@@ -32,7 +32,7 @@ func configurePool(db *gorm.DB) error {
 // _loc=UTC tells the driver to interpret stored DATETIME strings as UTC
 // when scanning into time.Time, complementing GORM's UTC NowFunc so
 // timestamps round-trip without timezone drift. See migration 000050 and
-// docs/migration-utc-cutover.md.
+// docs/deployment.md#utc-时间戳约定.
 const sqlitePragmas = "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_synchronous=NORMAL&_txlock=immediate&_loc=UTC"
 
 func buildSQLiteDSN(path string) string {
@@ -98,7 +98,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 	// Combined with SQLite `_loc=UTC` and Postgres `timezone=UTC`, this gives
 	// us end-to-end UTC storage so subsequent reads come back with
 	// time.Time.Location()==UTC. See migration 000050 for the historical
-	// data cutover and docs/migration-utc-cutover.md for the runbook.
+	// data cutover and docs/deployment.md#utc-时间戳约定 for the runbook.
 	gormCfg := &gorm.Config{
 		Logger:  newCtxAwareLogger(logger.Default),
 		NowFunc: func() time.Time { return time.Now().UTC() },

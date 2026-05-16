@@ -116,7 +116,7 @@ fi
 
 echo ""
 echo "[FAIL] 共发现 ${hits} 处违规。"
-echo "       UTC 不变量见 docs/migration-utc-cutover.md。"
+echo "       UTC 不变量见 docs/deployment.md 的 UTC 时间戳约定。"
 echo "       新 migration 应使用 GORM NowFunc 写入 timestamp（不用 SQL DEFAULT），"
 echo "       禁止显式时区转换。如需在历史数据上做 timezone 平移，请仿 000050 形式"
 echo "       并把文件名加入本脚本 EXCLUDE_GLOBS。"

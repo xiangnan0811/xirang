@@ -50,8 +50,8 @@ check "backend/internal/api/router.go" "^backend/README_backend\.md$" \
 check "web/src/router.tsx" "^(README\.md|docs/|\.trellis/spec/frontend/directory-structure\.md)$" \
   "router.tsx 已修改，请同步更新公开入口文档或 frontend structure spec"
 
-check "backend/internal/database/migrations/" "^(backend/README_backend\.md|docs/migration-utc-cutover\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
-  "数据库迁移文件有变更，请同步更新 backend 迁移文档或数据库规范"
+check "backend/internal/database/migrations/" "^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
+  "数据库迁移文件有变更，请同步更新 backend 迁移/部署文档或数据库规范"
 
 check "backend/internal/config/config.go" "^docs/env-vars\.md$" \
   "config.go 已修改，请同步更新 docs/env-vars.md"
@@ -59,11 +59,11 @@ check "backend/internal/config/config.go" "^docs/env-vars\.md$" \
 # 规则 6：发布/镜像/部署/版本检查变更 → 发布相关文档
 # 与 scripts/check-doc-freshness.sh 规则对齐：保持两边检查规则一致，避免漂移。
 release_trigger_re='^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.prod\.yml|\.env\.deploy|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'
-release_doc_re='^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/release-maintainers\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'
+release_doc_re='^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/maintainers/release\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'
 
 if echo "$STAGED" | grep -qE "$release_trigger_re"; then
   if ! echo "$STAGED" | grep -qE "$release_doc_re"; then
-    MSGS+=("发布/镜像/部署/版本检查相关文件已修改，请同步更新配套文档（README/CONTRIBUTING/docs/deployment.md/docs/env-vars.md/docs/release-maintainers.md/AGENTS.md/PULL_REQUEST_TEMPLATE）")
+    MSGS+=("发布/镜像/部署/版本检查相关文件已修改，请同步更新配套文档（README/CONTRIBUTING/docs/deployment.md/docs/env-vars.md/docs/maintainers/release.md/AGENTS.md/PULL_REQUEST_TEMPLATE）")
     WARN=$((WARN + 1))
   fi
 fi

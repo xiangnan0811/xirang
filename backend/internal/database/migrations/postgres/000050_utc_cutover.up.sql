@@ -6,7 +6,7 @@
 -- WARNING: 本迁移**不可幂等执行** —— 重复运行会让时间偏移翻倍。
 -- 仅适用于当前 +8h (Asia/Shanghai) 部署；其他时区部署需要 fork 此文件并改 INTERVAL 数。
 -- 必须在 maintenance window 执行；不能 in-flight 写入时迁移（否则 race condition）。
--- 详细 runbook 见 docs/migration-utc-cutover.md
+-- 详细 runbook 见 docs/deployment.md#utc-时间戳约定
 --
 -- 平移涉及的所有 (table.column) 与 SQLite 版本一致，详见 sqlite/000050_utc_cutover.up.sql 顶部清单。
 -- PostgreSQL 列类型为 timezone-naive TIMESTAMP（无时区），用 INTERVAL '8 hours' 做绝对值平移。
@@ -23,7 +23,7 @@
 --
 -- schema_migrations.dirty=1 标记仍会被设置（驱动语义）；下次启动时由 migrator.go 通过
 -- ALLOW_DIRTY_STARTUP 守卫拒绝启动，强制运维介入修复。
--- 完整流程见 docs/migration-utc-cutover.md「Rollback」与「Dirty 状态恢复」章节。
+-- 完整流程见 docs/deployment.md#utc-时间戳约定「Rollback」与「Dirty 状态恢复」章节。
 
 BEGIN;
 
