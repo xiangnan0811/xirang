@@ -16,18 +16,14 @@
 
 ## HTTPS
 
-All-in-One 镜像检测到以下证书文件时自动启用 HTTPS：
+All-in-One 容器只提供 HTTP 单入口 `10761`。公网 HTTPS 应由外部反向代理或负载均衡终止 TLS，例如 Caddy、Nginx Proxy Manager、Nginx 或云厂商网关。
 
-- `/etc/nginx/certs/fullchain.pem`
-- `/etc/nginx/certs/privkey.pem`
+反向代理建议：
 
-Docker Compose 部署时把证书放到 `./certs`，并在 `docker-compose.prod.yml` 中启用：
-
-```yaml
-- ./certs:/etc/nginx/certs:ro
-```
-
-未挂载证书时容器使用 HTTP 模式，适合内网测试或由外部反向代理终止 TLS 的场景。
+- 只将外部代理暴露到公网，按需限制宿主机 `10761` 端口的访问来源。
+- 保留 `Host`、`X-Forwarded-For`、`X-Forwarded-Proto` 请求头。
+- 支持 WebSocket Upgrade，确保实时日志和终端连接可用。
+- 使用外部域名访问时，在 `.env` 中配置 `CORS_ALLOWED_ORIGINS=https://xirang.example.com`。
 
 ## SSH 主机校验
 
@@ -78,46 +74,4 @@ INTEGRATION_BLOCK_PRIVATE_ENDPOINTS=true
 
 ## 敏感字段保护
 
-以下敏感字段通过 GORM hooks 自动加密或脱敏，不应在 handler、日志或审计详情中直接输出明文：
-
-- 节点 SSH 密码与私钥。
-- SSH Key 私钥。
-- 用户 TOTP secret 与恢复码。
-- 通知渠道 endpoint、secret、proxy URL。
-- 任务中需要保护的命令/路径相关字段（以模型 hook 实现为准）。
-
-密钥轮替时可临时设置 `DATA_ENCRYPTION_LEGACY_KEY` 用于解密旧数据，确认轮替完成后应移除。
-
-## 指标端点保护
-
-`/metrics` 会暴露路由标签和流量画像。生产环境建议配置：
-
-```env
-METRICS_TOKEN=<强随机 token>
-METRICS_RATE_LIMIT=5
-METRICS_RATE_WINDOW=1s
-```
-
-Prometheus 抓取侧使用 Bearer token：
-
-```yaml
-bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
-```
-
-## 审计与权限
-
-- 使用 RBAC 控制用户可访问的节点、策略、任务和系统功能。
-- 重要操作会写入审计日志。
-- Web 终端和 WebSocket 相关路径使用独立认证/审计逻辑。
-- 为不同人员创建独立账号，不要共享 admin 密码。
-
-## 生产检查清单
-
-- [ ] `APP_ENV=production`
-- [ ] `ADMIN_INITIAL_PASSWORD`、`JWT_SECRET`、`DATA_ENCRYPTION_KEY` 已设置强随机值
-- [ ] 已启用 HTTPS 或确认由外部反向代理终止 TLS
-- [ ] `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS=true`
-- [ ] `SSH_STRICT_HOST_KEY_CHECKING=true`
-- [ ] `METRICS_TOKEN` 已配置或确认 `/metrics` 不暴露到公网
-- [ ] 已备份 `.env`、`./data` 和 `./backups`
-- [ ] 管理员账号启用 TOTP
+Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。

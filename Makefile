@@ -32,13 +32,13 @@ dev:
 	@echo "请开两个终端执行：make backend-run 和 make web-dev"
 
 prod-pull:
-	docker compose -f docker-compose.prod.yml pull
+	docker compose pull
 
 prod-up:
-	docker compose -f docker-compose.prod.yml up -d
+	docker compose up -d
 
 prod-down:
-	docker compose -f docker-compose.prod.yml down
+	docker compose down
 
 
 e2e-alert-demo:
@@ -85,12 +85,9 @@ swag-init: ## Regenerate OpenAPI docs from handler annotations
 	cd backend && swag init -g cmd/server/main.go -o internal/api/docs --parseDependency
 
 # ── Docker 镜像 ──
-DOCKER_REGISTRY ?= docker.io
-DOCKER_NAMESPACE ?= linnea7171
-DOCKER_IMAGE ?= xirang
 DOCKER_TAG ?= $(VERSION)
 TAG_LATEST ?= 0
-DOCKER_FULL_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(DOCKER_IMAGE)
+DOCKER_FULL_IMAGE = docker.io/linnea7171/xirang
 DOCKER_TAG_ARGS = -t $(DOCKER_FULL_IMAGE):$(DOCKER_TAG)
 ifeq ($(TAG_LATEST),1)
 DOCKER_TAG_ARGS += -t $(DOCKER_FULL_IMAGE):latest
@@ -116,7 +113,7 @@ docker-buildx:
 # ── 部署初始化 ──
 deploy-init:
 	@mkdir -p deploy-kit
-	@cp docker-compose.prod.yml deploy-kit/docker-compose.yml
+	@cp docker-compose.yml deploy-kit/docker-compose.yml
 	@cp .env.deploy deploy-kit/.env
 	@echo "部署文件已生成到 deploy-kit/ 目录"
 	@echo "1. 修改 deploy-kit/.env 中的密码和密钥"

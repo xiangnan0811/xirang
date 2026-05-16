@@ -59,31 +59,30 @@ RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tm
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
-COPY deploy/nginx/templates/default-http.conf.template /etc/xirang/nginx-http.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
 COPY deploy/allinone/xirang-backup.cron /etc/supercronic/xirang-backup
 
 RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh && \
-    mkdir -p /data /backup/db /etc/supercronic /etc/xirang && \
-    chown -R xirang:xirang /data /backup /usr/share/nginx/html /etc/supercronic /etc/xirang /etc/nginx/templates
+    mkdir -p /data /backup/db /logs /etc/supercronic && \
+    chown -R xirang:xirang /data /backup /logs /usr/share/nginx/html /etc/supercronic /etc/nginx/templates
 
-# 后端监听 3000（容器内部），nginx 监听 8080/8443 对外提供服务
-ENV BACKEND_UPSTREAM=http://127.0.0.1:3000
+# 后端监听 3000（容器内部），nginx 监听 10761 对外提供服务
 ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
 # known_hosts 默认存放在持久化卷，容器重启不丢失
 ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
+ENV LOG_FILE=/logs/xirang.log
 # 默认时区：避免容器落入 UTC 导致备份/日志时间戳与运维偏差；运行时可通过 -e TZ= 覆盖
 ENV TZ=Asia/Shanghai
 
-VOLUME ["/data", "/backup"]
-EXPOSE 8080 8443
+VOLUME ["/data", "/backup", "/logs"]
+EXPOSE 10761
 
 # 镜像层健康检查兜底（compose 已配 healthcheck，此处保证裸 docker run 也能监控）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:10761/healthz || exit 1
 
 # 不设置 USER，由 entrypoint 在修复 bind mount 权限后切换用户
 ENTRYPOINT ["/entrypoint.sh"]

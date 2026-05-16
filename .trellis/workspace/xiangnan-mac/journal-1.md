@@ -1247,3 +1247,36 @@ Added an Overview CPU raw/clipped display mode that clips chart rendering at a p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 38: Simplify Docker deployment
+
+**Date**: 2026-05-16
+**Task**: Simplify Docker deployment
+**Branch**: `fix/deployment-compose-simplify`
+
+### Summary
+
+Collapsed Docker deployment to root docker-compose.yml with fixed linnea7171/xirang image, single 10761 entrypoint, fixed /logs mount, external TLS docs, synced workflows/docs/env examples, and verified compose config, nginx -t with /logs, diff/doc/YAML checks, backend tests/build/lint, and frontend npm check with TMPDIR.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `135f8a9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

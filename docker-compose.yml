@@ -1,33 +1,21 @@
 services:
-  xirang-backend:
-    image: golang:1.26.3
-    container_name: xirang-backend
-    working_dir: /workspace/backend
-    volumes:
-      - ./:/workspace
+  xirang:
+    image: linnea7171/xirang:${IMAGE_TAG:-latest}
+    container_name: xirang
     env_file:
-      - backend/.env
+      - .env
     environment:
-      SERVER_ADDR: :8080
-      SQLITE_PATH: /workspace/backend/xirang.db
-      RSYNC_BINARY: rsync
-      # CORS_ALLOWED_ORIGINS 默认为 http://localhost:5173,http://127.0.0.1:5173。
-      # 局域网 IP 访问时会自动通过"同主机 Origin"回退放行，无需额外配置。
-    ports:
-      - "8080:8080"
-    command: sh -c "go mod download && go run ./cmd/server"
-
-  xirang-web:
-    image: node:20
-    container_name: xirang-web
-    working_dir: /workspace/web
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ./:/workspace
-    environment:
-      VITE_API_BASE_URL: /api/v1
-      VITE_PROXY_TARGET: http://xirang-backend:8080
+      - ./data:/data           # SQLite 数据库及应用数据，务必备份此目录
+      - ./backups:/backup      # 自动备份目录（每日 02:00 备份，保留 30 天）
+      - ./logs:/logs           # 应用与 Nginx 日志
     ports:
-      - "5173:5173"
-    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"
-    depends_on:
-      - xirang-backend
+      - "10761:10761"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped

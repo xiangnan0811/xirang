@@ -40,8 +40,7 @@ jobs:
             platform_key: linux-arm64
             runner: ubuntu-24.04-arm
     env:
-      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-      REGISTRY_IMAGE: docker.io/${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/xirang
+      REGISTRY_IMAGE: docker.io/linnea7171/xirang
 
     steps:
       - name: Reject prerelease releases
@@ -162,8 +161,7 @@ jobs:
     needs:
       - build
     env:
-      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-      REGISTRY_IMAGE: docker.io/${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}/xirang
+      REGISTRY_IMAGE: docker.io/linnea7171/xirang
 
     steps:
       - name: Checkout

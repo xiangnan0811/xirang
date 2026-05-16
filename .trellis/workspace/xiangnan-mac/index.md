@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
-- **Last Active**: 2026-05-15
+- **Total Sessions**: 38
+- **Last Active**: 2026-05-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1249 | Active |
+| `journal-1.md` | ~1282 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-05-16 | Simplify Docker deployment | `135f8a9` | `fix/deployment-compose-simplify` |
 | 37 | 2026-05-15 | Add CPU peak clipping view | `60a4ed1` | `feat/overview-cpu-peak-clipping` |
 | 36 | 2026-05-14 | Update Trellis to 0.5.15 | `0578b8d` | `chore/trellis-update-20260514` |
 | 35 | 2026-05-14 | 修复服务监控 RBAC 权限 | `dcd396b` | `fix/service-monitor-admin-permission` |

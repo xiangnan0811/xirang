@@ -40,11 +40,11 @@ tmp/
 docs/plans/
 
 # deploy
-deploy/certs/
 deploy-kit/
 /certs/
 /data/
 /backups/
+/logs/
 
 # local build artifacts
 backend/.env.production

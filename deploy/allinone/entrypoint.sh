@@ -40,25 +40,17 @@ start_backend() {
 
 # 修复 bind mount 目录权限（宿主机目录可能是 root 所有）
 if is_root; then
-  chown -R xirang:xirang /data /backup 2>/dev/null || true
+  chown -R xirang:xirang /data /backup /logs 2>/dev/null || true
 fi
-mkdir -p /backup/db
+mkdir -p /backup/db /logs
 if is_root; then
-  chown xirang:xirang /backup/db 2>/dev/null || true
+  chown xirang:xirang /backup/db /logs 2>/dev/null || true
 fi
 
 # 确保 known_hosts 目录存在于持久化卷中
 mkdir -p /data/.ssh
 if is_root; then
   chown xirang:xirang /data/.ssh
-fi
-
-# 自动检测 TLS 证书，选择 HTTP 或 HTTPS 模式
-if [ -f /etc/nginx/certs/fullchain.pem ] && [ -f /etc/nginx/certs/privkey.pem ]; then
-  echo "==> TLS 证书已检测到，启用 HTTPS 模式"
-else
-  echo "==> 未检测到 TLS 证书，使用 HTTP 模式（端口 8080）"
-  cp /etc/xirang/nginx-http.conf.template /etc/nginx/templates/default.conf.template
 fi
 
 # 以 xirang 用户启动 supercronic
