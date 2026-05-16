@@ -45,8 +45,8 @@ var builtinHookTemplates = []HookTemplate{
 	{
 		ID:          "docker-stop",
 		Name:        "Docker 容器暂停",
-		PreHook:     "docker compose -f /path/to/docker-compose.yml stop",
-		PostHook:    "docker compose -f /path/to/docker-compose.yml start",
+		PreHook:     "docker compose -f /path/to/compose.yml stop",
+		PostHook:    "docker compose -f /path/to/compose.yml start",
 		Description: "备份前停止容器，备份后重新启动",
 	},
 }

@@ -24,6 +24,7 @@ backend/tmp
 /data
 /backups
 /certs
+/logs
 /deploy-kit
 /tmp
 /.tmp

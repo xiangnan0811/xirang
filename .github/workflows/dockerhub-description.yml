@@ -47,6 +47,6 @@ jobs:
         with:
           username: ${{ steps.credentials.outputs.username }}
           password: ${{ secrets.DOCKERHUB_DESCRIPTION_PASSWORD }}
-          repository: ${{ vars.DOCKERHUB_NAMESPACE || steps.credentials.outputs.username }}/xirang
+          repository: linnea7171/xirang
           short-description: ${{ github.event.repository.description || '轻量、易部署的服务器运维管理平台。' }}
           readme-filepath: ./README.md

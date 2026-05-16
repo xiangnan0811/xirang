@@ -164,18 +164,15 @@
 
 **读取位置**：`VITE_API_BASE_URL` / `VITE_DEV_API_DIRECT_URL` → `web/src/lib/api/core.ts` 和 WebSocket URL 推导；`VITE_PROXY_TARGET` → `web/vite.config.ts`；`VITE_WS_URL` → `web/src/lib/ws/logs-socket.ts`；`VITE_ENABLE_DEMO_MODE` → `web/src/hooks/use-console-data.ts`。
 
-## 12. 部署变量（Docker Compose / All-in-One 模板）
+## 12. 部署变量（Docker Compose / All-in-One 镜像）
 
-以下变量用于 `docker-compose.prod.yml` 或 All-in-One 镜像的 Nginx 模板，部分不是后端应用运行时变量：
+以下变量用于 `docker-compose.yml` 或 All-in-One 镜像，不一定是后端应用运行时变量：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `IMAGE_REGISTRY` | `docker.io` | 镜像仓库地址 |
-| `IMAGE_NAMESPACE` | `linnea7171` | 镜像命名空间；官方公开镜像默认使用 `docker.io/linnea7171/xirang` |
-| `IMAGE_TAG` | `latest` | 镜像标签；`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
-| `HTTP_PORT` | `80` | 宿主机 HTTP 端口映射到容器 `8080` |
-| `HTTPS_PORT` | `443` | 宿主机 HTTPS 端口映射到容器 `8443` |
-| `BACKEND_UPSTREAM` | `http://127.0.0.1:3000` | All-in-One 镜像内 Nginx 反代后端地址，需包含协议 |
+| `IMAGE_TAG` | `latest` | 镜像标签；官方镜像固定为 `docker.io/linnea7171/xirang`，`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
+
+All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761`。HTTPS/TLS 由外部反向代理负责，不通过项目环境变量配置。
 
 ---
 
@@ -245,7 +242,7 @@ scrape_configs:
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `TZ` | string | All-in-One 镜像默认 `Asia/Shanghai` | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`、`UTC`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换 |
-| `LOG_FILE` | string | — | 否 | 设置后应用日志同时写入该文件（保留 stdout 输出供 docker logs/journald 收集）。留空时仅 stdout |
+| `LOG_FILE` | string | All-in-One 镜像默认 `/logs/xirang.log` | 否 | 设置后应用日志同时写入该文件（保留 stdout 输出供 docker logs/journald 收集）。源码运行留空时仅 stdout |
 | `TASK_MAX_EXECUTION_SECONDS` | int | `86400` | 否 | 单次任务执行的全局最大秒数兜底，防 executor 卡死导致 goroutine 泄漏。Policy 级 `max_execution_seconds` >0 时优先于本变量。超时后任务被强制中止并 status=failed，last_error 含"超时"字样 |
 
 **读取位置**：`TZ` → 容器初始化时被 musl 解析，应用层 `time.Now()` 自动遵循；`LOG_FILE` → `backend/internal/logger/logger.go`；`TASK_MAX_EXECUTION_SECONDS` → `backend/internal/task/runner.go`。

@@ -21,6 +21,7 @@ examples so implementation and review agents match the existing codebase.
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Filled |
+| [Deployment Runtime Guidelines](./deployment-runtime.md) | Docker Compose and All-in-One image contracts | Filled |
 
 ---
 

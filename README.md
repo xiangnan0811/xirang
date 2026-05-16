@@ -31,18 +31,15 @@ cp .env.deploy .env
 # DATA_ENCRYPTION_KEY=<加密密钥>
 # 生产环境建议固定稳定版：IMAGE_TAG=vX.Y.Z
 
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
-默认访问地址：
-
-- 未挂载 TLS 证书：`http://<server>`
-- 挂载 `./certs/fullchain.pem` 与 `./certs/privkey.pem` 后：`https://<server>`
+默认访问地址：`http://<server>:10761`。如需 HTTPS，请在外部使用 Caddy、Nginx Proxy Manager 或 Nginx 等反向代理终止 TLS。
 
 首次登录用户名为 `admin`，密码为 `.env` 中的 `ADMIN_INITIAL_PASSWORD`。
 
-完整部署、HTTPS、升级回滚、备份恢复和排障步骤见 [部署指南](docs/deployment.md)。
+完整部署、反向代理、升级回滚、备份恢复和排障步骤见 [部署指南](docs/deployment.md)。
 
 ## 从源码运行
 
@@ -60,7 +57,7 @@ npm install
 npm run dev
 ```
 
-后端不会自动读取 `.env` 文件；源码运行时请通过 shell、systemd、Docker Compose 或 `docker run --env-file` 注入环境变量。
+后端不会自动读取 `.env` 文件；源码运行时请通过 shell、systemd 或 `docker run --env-file` 注入环境变量。
 
 ## 文档
 

@@ -1,6 +1,6 @@
 # 部署、升级与运维
 
-本文档面向自托管 Xirang 的用户，说明生产部署、HTTPS、升级回滚、数据备份、健康检查和常见故障处理。维护者发布链路请看 [维护者发布手册](maintainers/release.md)。
+本文档面向自托管 Xirang 的用户，说明生产部署、外部反向代理、升级回滚、数据备份、健康检查和常见故障处理。维护者发布链路请看 [维护者发布手册](maintainers/release.md)。
 
 ## 官方交付方式
 
@@ -15,8 +15,7 @@
 
 ```text
                   ┌────────────────────────────────┐
-HTTP  :8080  ───> │ Nginx                          │
-HTTPS :8443  ───> │ Nginx（证书存在时启用）           │
+HTTP :10761  ───> │ Nginx                          │
                   │   ├── /api/v1/*  ──> Backend   │
                   │   ├── /healthz   ──> Backend   │
                   │   └── /*         ──> Web UI    │
@@ -27,12 +26,7 @@ HTTPS :8443  ───> │ Nginx（证书存在时启用）           │
                   └────────────────────────────────┘
 ```
 
-容器内端口固定为：
-
-- HTTP：`8080`
-- HTTPS：`8443`
-
-`docker-compose.prod.yml` 默认映射为宿主机 `80:8080` 和 `443:8443`，可通过 `.env` 中的 `HTTP_PORT`、`HTTPS_PORT` 修改宿主机端口。
+容器内入口端口固定为 `10761`。项目不在容器内处理 HTTPS；如需公网 HTTPS，请在外部使用 Caddy、Nginx Proxy Manager、Nginx 或云厂商负载均衡终止 TLS，再反代到 `http://127.0.0.1:10761`。
 
 ## Docker Compose 部署（推荐）
 
@@ -45,7 +39,7 @@ cd xirang
 
 如果你不需要完整源码，也可以只复制发布包或仓库中的以下文件到服务器同一目录：
 
-- `docker-compose.prod.yml`
+- `docker-compose.yml`
 - `.env.deploy`
 
 ### 2. 准备 `.env`
@@ -75,73 +69,61 @@ APP_ENV=production
 TZ=Asia/Shanghai
 DB_TYPE=sqlite
 SQLITE_PATH=/data/xirang.db
-HTTP_PORT=80
-HTTPS_PORT=443
 ```
 
 完整变量说明见 [环境变量参考](env-vars.md)。
 
-### 3. 可选：启用 HTTPS
-
-All-in-One 容器启动时会检测以下文件：
-
-- `/etc/nginx/certs/fullchain.pem`
-- `/etc/nginx/certs/privkey.pem`
-
-存在证书时启用 HTTPS，并将 HTTP 重定向到 HTTPS；不存在时自动使用 HTTP 模式。
+### 3. 启动服务
 
 ```bash
-mkdir -p certs
-cp /path/to/fullchain.pem certs/
-cp /path/to/privkey.pem certs/
-```
-
-然后在 `docker-compose.prod.yml` 中取消注释证书挂载：
-
-```yaml
-# - ./certs:/etc/nginx/certs:ro
-```
-
-### 4. 启动服务
-
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 检查状态：
 
 ```bash
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=200 xirang
-curl -fsS http://127.0.0.1/healthz
+docker compose ps
+docker compose logs --tail=200 xirang
+curl -fsS http://127.0.0.1:10761/healthz
 ```
 
 首次登录：
 
-- 地址：`http://<server>` 或 `https://<server>`
+- 地址：`http://<server>:10761`
 - 用户名：`admin`
 - 密码：`.env` 中的 `ADMIN_INITIAL_PASSWORD`
+
+### 4. 可选：外部反向代理与 HTTPS
+
+Xirang 容器只提供 HTTP 单入口。生产公网访问建议在同机或前置网关部署外部反向代理：
+
+```text
+https://xirang.example.com ──> 外部反向代理 ──> http://127.0.0.1:10761
+```
+
+反代需要保留 `Host`、`X-Forwarded-For`、`X-Forwarded-Proto`，并支持 WebSocket Upgrade。使用外部域名时，在 `.env` 中设置：
+
+```env
+CORS_ALLOWED_ORIGINS=https://xirang.example.com
+```
 
 ## Docker Run 部署
 
 ```bash
 cp .env.deploy .env
-
-mkdir -p certs
+mkdir -p data backups logs
 
 docker run -d \
   --name xirang \
   --restart unless-stopped \
-  -p 80:8080 -p 443:8443 \
-  -v xirang-data:/data \
-  -v xirang-backup:/backup \
-  -v "$(pwd)/certs:/etc/nginx/certs:ro" \
+  -p 10761:10761 \
+  -v "$(pwd)/data:/data" \
+  -v "$(pwd)/backups:/backup" \
+  -v "$(pwd)/logs:/logs" \
   --env-file .env \
   docker.io/linnea7171/xirang:vX.Y.Z
 ```
-
-不使用 HTTPS 时可以省略 `certs` 挂载。
 
 ## PostgreSQL 部署
 
@@ -169,15 +151,15 @@ IMAGE_TAG=vX.Y.Z
 4. 拉取并重启：
 
 ```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 5. 检查健康状态和日志：
 
 ```bash
-curl -fsS http://127.0.0.1/healthz
-docker compose -f docker-compose.prod.yml logs --tail=200 xirang
+curl -fsS http://127.0.0.1:10761/healthz
+docker compose logs --tail=200 xirang
 ```
 
 ### 回滚到旧版本
@@ -185,8 +167,8 @@ docker compose -f docker-compose.prod.yml logs --tail=200 xirang
 回滚镜像版本：
 
 ```bash
-IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
-IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
+IMAGE_TAG=vX.Y.Z docker compose pull
+IMAGE_TAG=vX.Y.Z docker compose up -d
 ```
 
 如果新版本已经执行数据库迁移，回滚前请确认旧版本是否兼容当前 schema。无法确认时，优先恢复升级前数据库备份。
@@ -199,6 +181,7 @@ Docker Compose 默认持久化目录：
 |---|---|---|
 | `./data` | `/data` | SQLite 数据库及应用数据 |
 | `./backups` | `/backup` | 自动/手动备份文件 |
+| `./logs` | `/logs` | 应用日志与 Nginx 访问/错误日志 |
 
 容器内置 cron：
 
@@ -233,22 +216,20 @@ DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
 
 ```bash
 # 容器状态
-docker compose -f docker-compose.prod.yml ps
+docker compose ps
 
-# 实时日志
-docker compose -f docker-compose.prod.yml logs -f xirang
+# 实时 stdout 日志
+docker compose logs -f xirang
 
-# 最近 200 行日志
-docker compose -f docker-compose.prod.yml logs --tail=200 xirang
+# 最近 200 行 stdout 日志
+docker compose logs --tail=200 xirang
 
-# 容器内健康检查目标
-curl -fsS http://127.0.0.1:8080/healthz
+# 持久化日志文件
+ls -lah ./logs
+tail -f ./logs/xirang.log
 
-# 宿主机 HTTP 模式
-curl -fsS http://127.0.0.1/healthz
-
-# 宿主机 HTTPS 模式
-curl -kfsS https://127.0.0.1/healthz
+# 宿主机健康检查
+curl -fsS http://127.0.0.1:10761/healthz
 ```
 
 进入容器排查：
@@ -268,7 +249,7 @@ docker exec -it xirang sh -lc \
 
 `/metrics` 是后端进程提供的 Prometheus 指标端点。生产环境建议配置随机 `METRICS_TOKEN`，否则端点保持公开兼容旧部署，但会暴露路由标签和流量画像。
 
-All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*` 和 `/healthz`，不会把 `/metrics` 暴露到宿主机 `80` / `443`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
+All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz` 和前端静态资源，不会暴露 `/metrics`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
 
 ```bash
 # 后端直连部署（例如源码运行 SERVER_ADDR=:8080）

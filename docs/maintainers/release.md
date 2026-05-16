@@ -42,7 +42,7 @@
 - `RELEASE_PLEASE_TOKEN`（PAT，至少需要 `repo` 和 `workflow`；用于让 release-please 创建的分支正常触发 CI）
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
-- `DOCKERHUB_NAMESPACE`（可用 variable；当前官方命名空间为 `linnea7171`；不设时回退到用户名）
+- 官方 Docker Hub 仓库固定为 `linnea7171/xirang`，发布与描述同步 workflow 不读取命名空间变量。
 
 ### Deploy Environment 级
 
@@ -142,7 +142,7 @@
 - `.github/workflows/publish-images.yml`
 - `.github/workflows/deploy.yml`
 - `.github/workflows/dockerhub-description.yml`
-- `docker-compose.prod.yml`
+- `docker-compose.yml`
 - `.env.deploy`
 - `backend/.env.production.example`
 - `backend/internal/api/handlers/version_handler.go`
