@@ -80,8 +80,9 @@
 | `BATCH_COMMAND_BLACKLIST` | string | 空（使用内置规则） | 否 | 批量命令黑名单（逗号分隔正则） |
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
+| `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`。
 
 ## 7. 节点探测
 
@@ -253,44 +254,11 @@ scrape_configs:
 
 ## 敏感字段加密策略
 
-息壤把"密码、私钥、TOTP 密钥、通知通道 endpoint 与 secret、HTTP 代理地址"统一视为敏感字段，落库前必须加密、读取后必须解密。这一节集中说明实现细节，避免新代码绕过统一加解密路径。
+Xirang 会加密存储密码、私钥、TOTP 密钥、通知通道 endpoint/secret、HTTP 代理地址等敏感字段。生产环境必须设置 `DATA_ENCRYPTION_KEY`；密钥轮替期间可临时设置 `DATA_ENCRYPTION_LEGACY_KEY` 解密旧数据。
 
-### 涉及的字段
+运营建议：
 
-| 模型（`backend/internal/model/models.go`） | 字段 | 钩子位置 |
-|------|------|----------|
-| `User` | `PasswordHash`（bcrypt，不再二次加密）、`TOTPSecret`、`RecoveryCodes` | `BeforeSave` / `AfterFind`（约第 523 / 541 行） |
-| `Node` | `Password`、`PrivateKey` | `BeforeSave` / `AfterFind`（约第 485 / 503 行） |
-| `SSHKey` | `PrivateKey` | `BeforeSave` / `AfterFind`（约第 461 / 473 行） |
-| `Integration` | `Endpoint`、`Secret`、`ProxyURL` | `BeforeSave` / `AfterFind`（约第 136 / 161 行） |
-| `Task` | 命令/路径相关的敏感子字段（按 hook 实现为准） | `BeforeSave` / `AfterFind`（约第 249 / 261 行） |
-
-> 新增任何敏感字段都必须同时实现 `BeforeSave` / `AfterFind` 钩子，并补充模型层测试。
-
-### 加密原语
-
-实现位于 `backend/internal/secure/crypto.go`：
-
-- `EncryptIfNeeded(raw)` / `DecryptIfNeeded(raw)`：幂等版本，对已加密内容跳过；推荐在 model hook 内使用
-- `EncryptString(raw)` / `DecryptString(raw)`：强制版本，用于明确知道当前状态的迁移/工具脚本
-- `IsEncrypted(raw)` / `IsV1Encrypted(raw)`：状态探测，用于轮替密钥时甄别旧版本
-- `ReEncryptV1Value(raw)`：把 v1 密钥加密的内容重新用主密钥加密，用于密钥轮替
-
-### API 响应脱敏
-
-- `Node` 提供 `Sanitized()`（`models.go:40` 附近），在序列化前置空 `Password`、`PrivateKey`、`SSHKey.PrivateKey`；handler 在响应前必须调用
-- `SSHKey` 通过 `backend/internal/api/handlers/ssh_key_handler.go` 中专属的 `sshKeyResponseItem` + `toSSHKeyResponse()` 完成脱敏；模型字段 `PrivateKey` 在 PR-B 之后已改为 `json:"-"` 提供深度防御。**禁止直接** `c.JSON(model.SSHKey{...})`
-- `Integration` 通过 `maskIntegrationEndpoint()` + 模型上 `Secret json:"-"` 双重防护
-
-### 密钥来源与轮替
-
-- 主密钥：环境变量 `DATA_ENCRYPTION_KEY`（参见 §3）；生产必须使用强随机值
-- 旧密钥：环境变量 `DATA_ENCRYPTION_LEGACY_KEY`（如果存在），用于解密历史数据后再以主密钥重写
-- 轮替流程：设置新 `DATA_ENCRYPTION_KEY` 同时保留 `DATA_ENCRYPTION_LEGACY_KEY` → 启动 → 调用迁移工具或下次写入时自然 `ReEncryptV1Value` → 确认无 v1 数据后清理旧密钥
-
-### 不要这样做
-
-- 直接给敏感字段做 JSON marshal 而不走脱敏函数
-- 在 handler 里调用 `EncryptString` / `DecryptString` 重复加解密
-- 在 zerolog 日志里直接打印含 secret 的字段；推送到外部聚合系统前必须脱敏
-- 把任何敏感字段写入 audit log 的 detail JSON 而不脱敏
+- 把 `DATA_ENCRYPTION_KEY` 放入环境变量或密钥管理系统，不要写入公开文档、Issue 或日志。
+- 轮替密钥时，先设置新的 `DATA_ENCRYPTION_KEY` 并保留旧密钥到 `DATA_ENCRYPTION_LEGACY_KEY`，确认历史数据可读并完成重写后再移除旧密钥。
+- 备份数据库前确认密钥备份策略；只有数据库备份而没有加密密钥时，敏感字段无法恢复明文。
+- 详细安全建议见 [安全加固](admin/security.md)。

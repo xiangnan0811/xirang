@@ -1,0 +1,3 @@
+{"file":".trellis/spec/guides/index.md","reason":"Implementation must update Trellis documentation guidance triggers after removing docs/specs from public docs."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Primary Trellis documentation truth rules must be changed from preserving docs/specs to keeping process/archive docs out of the public repo."}
+{"file":".trellis/tasks/05-16-open-source-docs-refresh/research/open-source-docs-conventions.md","reason":"Research-backed conventions for README vs docs organization, deployment docs, admin guides, contributor/process separation, and archive handling."}

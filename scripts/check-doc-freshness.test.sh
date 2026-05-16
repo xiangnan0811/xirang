@@ -34,7 +34,7 @@ run_case "config-with-env-doc" $'backend/internal/config/config.go\ndocs/env-var
 run_case "model-without-model-doc" $'backend/internal/model/models.go' warn
 run_case "model-with-backend-doc" $'backend/internal/model/models.go\nbackend/README_backend.md' clean
 run_case "release-without-doc" $'.github/workflows/publish-images.yml' warn
-run_case "release-with-doc" $'.github/workflows/publish-images.yml\ndocs/release-maintainers.md' clean
+run_case "release-with-doc" $'.github/workflows/publish-images.yml\ndocs/maintainers/release.md' clean
 
 echo ""
 echo "OK: doc freshness self-test passed"

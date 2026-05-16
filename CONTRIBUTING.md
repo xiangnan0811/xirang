@@ -98,7 +98,7 @@ PR 涉及以下变更时，请同步更新对应文档：
 - 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `.trellis/spec/frontend/directory-structure.md`
 - 新增/修改环境变量 → 更新 `docs/env-vars.md`、相关 `.env*.example` 或 `.env.deploy`
 - 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `.trellis/spec/backend/database-guidelines.md`
-- 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/release-maintainers.md` 和 PR 模板/流程说明
+- 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/maintainers/release.md` 和 PR 模板/流程说明
 
 CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
 
@@ -118,4 +118,4 @@ make setup-hooks
 
 本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 `CHANGELOG.md`。合并到 `main` 的 PR 会触发 `Release Please` workflow，并由 Release Please 按配置和提交语义创建或更新 Release PR；合并该 Release PR 后会创建 GitHub Release，并触发 Docker Hub 镜像发布。维护者合并后必须检查这些 workflow 的结果；如果没有正式 release 被触发，应明确记录这一点。
 
-维护者发布与仓库设置说明见 [docs/release-maintainers.md](docs/release-maintainers.md)。
+维护者发布与仓库设置说明见 [docs/maintainers/release.md](docs/maintainers/release.md)。

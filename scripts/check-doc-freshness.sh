@@ -62,8 +62,8 @@ fi
 
 # 规则 4：新增迁移文件 → backend README / migration docs / database spec
 if echo "$CHANGED" | grep -q "backend/internal/database/migrations/"; then
-  if ! has_doc '^(backend/README_backend\.md|docs/migration-utc-cutover\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
-    warn "数据库迁移文件有变更，但 backend 迁移文档或数据库规范未同步更新"
+  if ! has_doc '^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
+    warn "数据库迁移文件有变更，但 backend 迁移/部署文档或数据库规范未同步更新"
   fi
 fi
 
@@ -76,7 +76,7 @@ fi
 
 # 规则 6：发布/镜像/部署/版本检查变更 → 发布文档
 if echo "$CHANGED" | grep -qE '^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.prod\.yml|\.env\.deploy|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'; then
-  if ! echo "$CHANGED" | grep -qE '^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/release-maintainers\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'; then
+  if ! echo "$CHANGED" | grep -qE '^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/maintainers/release\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'; then
     warn "发布/镜像/部署/版本检查相关文件已修改，但配套文档或仓库规范未同步更新"
   fi
 fi

@@ -21,7 +21,7 @@
 - [ ] 已在本地验证功能正常
 - [ ] 无安全风险（无硬编码密钥、无 SQL 注入等）
 - [ ] 涉及接口/模型/页面/配置变更时已同步更新文档
-- [ ] 涉及 release / image / deploy / version-check 变更时，已同步更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/release-maintainers.md`
+- [ ] 涉及 release / image / deploy / version-check 变更时，已同步更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/maintainers/release.md`
 
 ## 合并与发布监控
 

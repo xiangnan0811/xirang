@@ -22,7 +22,7 @@ import (
 // 启动并要求人工介入。
 //
 // 修复路径：
-//  1. 阅读 docs/migration-utc-cutover.md「Dirty 状态恢复」章节判断是否需要 down + 恢复备份
+//  1. 阅读 docs/deployment.md「迁移 dirty 状态排障」章节判断是否需要 down + 恢复备份
 //  2. 用 golang-migrate CLI 跑 `migrate force <version>` 标记 clean（仅当确认数据无中间态损坏）
 //  3. 重新启动服务
 //
@@ -71,7 +71,7 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 			return fmt.Errorf("检查 schema_migrations dirty 状态失败: %w", err)
 		}
 		if dirty {
-			log.Printf("FATAL: schema_migrations.dirty=1, version=%d. 拒绝启动；请按 docs/migration-utc-cutover.md 「Dirty 状态恢复」章节修复后重启，或临时设置 ALLOW_DIRTY_STARTUP=true 跳过本检查（仅用于 rescue）", version)
+			log.Printf("FATAL: schema_migrations.dirty=1, version=%d. 拒绝启动；请按 docs/deployment.md「迁移 dirty 状态排障」章节修复后重启，或临时设置 ALLOW_DIRTY_STARTUP=true 跳过本检查（仅用于 rescue）", version)
 			return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, version)
 		}
 	}
@@ -128,7 +128,7 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 				return fmt.Errorf("数据库处于 dirty 状态（版本 %d），上一次迁移未正常完成。"+
 					"这是已知问题（进程在迁移 commit 后被 kill），通常无需恢复备份。"+
 					"设置环境变量 ALLOW_DIRTY_STARTUP=true 可自动修复。"+
-					"详情见 docs/migration-utc-cutover.md「Dirty 状态恢复」。"+
+					"详情见 docs/deployment.md「迁移 dirty 状态排障」。"+
 					"原始错误: %w", dirtyErr.Version, err)
 			}
 		} else {

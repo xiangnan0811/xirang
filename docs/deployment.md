@@ -1,94 +1,134 @@
-# 构建、发布与部署指南
+# 部署、升级与运维
 
-本文档说明 Xirang 的官方发布约定、生产部署方式、版本回滚和维护者发布入口。
+本文档面向自托管 Xirang 的用户，说明生产部署、HTTPS、升级回滚、数据备份、健康检查和常见故障处理。维护者发布链路请看 [维护者发布手册](maintainers/release.md)。
 
-## 官方交付标准
+## 官方交付方式
 
-- GitHub Release 是唯一权威公开版本源和变更说明源。
-- Docker Hub 是唯一官方镜像源，默认镜像地址为 `docker.io/linnea7171/xirang`。
-- 当前仅支持稳定版 semver：`vX.Y.Z`。
-- `latest` 仅代表最新稳定版；生产环境建议固定到显式版本标签。
-- 公开 release 不自动触发私有部署；维护者部署使用手动 workflow。
+- GitHub Release 是权威公开版本源和变更说明源。
+- 官方公开镜像为 `docker.io/linnea7171/xirang`。
+- `latest` 表示最新稳定版；生产环境建议固定到显式 `vX.Y.Z` 标签。
+- 当前公开发布仅使用稳定版 semver，不提供 nightly/prerelease 镜像通道。
 
-## 架构概览
+## 运行架构
 
-生产环境使用 All-in-One 单容器架构。容器启动时会检测 `/etc/nginx/certs/fullchain.pem` 和 `/etc/nginx/certs/privkey.pem`：存在证书时启用 HTTPS 并将 HTTP 重定向到 HTTPS；未挂载证书时自动使用 HTTP 模式。
+生产部署默认使用 All-in-One 单容器镜像：
 
 ```text
-                    ┌────────────────────────────────┐
-                    │        Docker Container        │
-   :80 (HTTP)  ───> │  Nginx                         │
-   :443 (HTTPS) ──> │  Nginx（证书存在时启用）          │
-                    │    ├── /api/v1/*  ──> Backend  │
-                    │    ├── /healthz   ──> Backend  │
-                    │    └── /*         ──> 静态文件  │
-                    │                                │
-                    │  Backend (:3000)               │
-                    │    └── SQLite(/data) 或 PG     │
-                    │                                │
-                    │  Cron (每日 02:00 自动备份)      │
-                    ├────────────────────────────────┤
-                    │  /data    → 数据库文件           │
-                    │  /backup  → 备份文件            │
-                    └────────────────────────────────┘
+                  ┌────────────────────────────────┐
+HTTP  :8080  ───> │ Nginx                          │
+HTTPS :8443  ───> │ Nginx（证书存在时启用）           │
+                  │   ├── /api/v1/*  ──> Backend   │
+                  │   ├── /healthz   ──> Backend   │
+                  │   └── /*         ──> Web UI    │
+                  │                                │
+                  │ Backend (:3000)                │
+                  │ SQLite(/data) 或 PostgreSQL    │
+                  │ Cron 每日备份数据库              │
+                  └────────────────────────────────┘
 ```
 
-## 生产部署
+容器内端口固定为：
 
-### Docker Compose（推荐）
+- HTTP：`8080`
+- HTTPS：`8443`
 
-`docker-compose.prod.yml` 已默认指向官方 Docker Hub 镜像。
+`docker-compose.prod.yml` 默认映射为宿主机 `80:8080` 和 `443:8443`，可通过 `.env` 中的 `HTTP_PORT`、`HTTPS_PORT` 修改宿主机端口。
+
+## Docker Compose 部署（推荐）
+
+### 1. 获取部署文件
 
 ```bash
-# 1. 获取部署文件
 git clone https://github.com/xiangnan0811/xirang.git
 cd xirang
+```
 
-# 2. 准备环境变量
+如果你不需要完整源码，也可以只复制发布包或仓库中的以下文件到服务器同一目录：
+
+- `docker-compose.prod.yml`
+- `.env.deploy`
+
+### 2. 准备 `.env`
+
+```bash
 cp .env.deploy .env
+```
 
-# 必填项
-# ADMIN_INITIAL_PASSWORD=<强密码>
-# JWT_SECRET=<强随机字符串>
-# DATA_ENCRYPTION_KEY=<加密密钥>
+至少填写这三个必填项：
 
-# 生产环境建议固定稳定版镜像
-echo 'IMAGE_TAG=vX.Y.Z' >> .env
+```env
+ADMIN_INITIAL_PASSWORD=<首次登录 admin 的强密码>
+JWT_SECRET=<至少 16 字符的强随机字符串>
+DATA_ENCRYPTION_KEY=<强随机加密密钥>
+```
 
-# 可选：开启版本检查
-echo 'VERSION_CHECK_URL=https://api.github.com/repos/xiangnan0811/xirang/releases/latest' >> .env
+生产环境建议同时固定镜像版本：
 
-# 3. 可选：启用 HTTPS
+```env
+IMAGE_TAG=vX.Y.Z
+```
+
+常用部署项：
+
+```env
+APP_ENV=production
+TZ=Asia/Shanghai
+DB_TYPE=sqlite
+SQLITE_PATH=/data/xirang.db
+HTTP_PORT=80
+HTTPS_PORT=443
+```
+
+完整变量说明见 [环境变量参考](env-vars.md)。
+
+### 3. 可选：启用 HTTPS
+
+All-in-One 容器启动时会检测以下文件：
+
+- `/etc/nginx/certs/fullchain.pem`
+- `/etc/nginx/certs/privkey.pem`
+
+存在证书时启用 HTTPS，并将 HTTP 重定向到 HTTPS；不存在时自动使用 HTTP 模式。
+
+```bash
 mkdir -p certs
 cp /path/to/fullchain.pem certs/
 cp /path/to/privkey.pem certs/
-# 然后在 docker-compose.prod.yml 中取消注释 ./certs:/etc/nginx/certs:ro
+```
 
-# 4. 拉取并启动
+然后在 `docker-compose.prod.yml` 中取消注释证书挂载：
+
+```yaml
+# - ./certs:/etc/nginx/certs:ro
+```
+
+### 4. 启动服务
+
+```bash
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-默认情况下：
+检查状态：
 
-- 镜像地址：`docker.io/linnea7171/xirang`
-- 数据目录：`./data`
-- 备份目录：`./backups`
-- HTTP 端口：`80 -> 8080`
-- HTTPS 端口：`443 -> 8443`
-- HTTPS 证书目录：`./certs`（需要取消注释 Compose 里的证书挂载；如未挂载证书，容器使用 HTTP 模式）
-
-如需 PostgreSQL，在 `.env` 中改为：
-
-```env
-DB_TYPE=postgres
-DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
+```bash
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail=200 xirang
+curl -fsS http://127.0.0.1/healthz
 ```
 
-### Docker Run
+首次登录：
+
+- 地址：`http://<server>` 或 `https://<server>`
+- 用户名：`admin`
+- 密码：`.env` 中的 `ADMIN_INITIAL_PASSWORD`
+
+## Docker Run 部署
 
 ```bash
 cp .env.deploy .env
+
+mkdir -p certs
 
 docker run -d \
   --name xirang \
@@ -101,71 +141,208 @@ docker run -d \
   docker.io/linnea7171/xirang:vX.Y.Z
 ```
 
-### 环境变量要点
+不使用 HTTPS 时可以省略 `certs` 挂载。
 
-必填变量：
+## PostgreSQL 部署
 
-- `ADMIN_INITIAL_PASSWORD`
-- `JWT_SECRET`
-- `DATA_ENCRYPTION_KEY`
+默认使用 SQLite，适合小规模单机部署。如需 PostgreSQL，在 `.env` 中设置：
 
-常用部署变量：
+```env
+DB_TYPE=postgres
+DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
+```
 
-- `IMAGE_TAG`
-- `DB_TYPE`
-- `DB_DSN`
-- `SQLITE_PATH`
-- `HTTP_PORT`
-- `HTTPS_PORT`
-- `VERSION_CHECK_URL`
+后端会在 PostgreSQL DSN 未显式设置 `timezone` / `TimeZone` 时追加 `timezone=UTC`，确保时间戳按 UTC 读写。
 
-完整列表见 [docs/env-vars.md](env-vars.md)。
+## 升级与回滚
 
-## 更新与回滚
+### 升级到稳定版
 
-### 升级到新稳定版
-
-推荐方式是修改 `.env` 中的 `IMAGE_TAG`：
+1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`。
+2. 备份数据库和 `.env`。
+3. 修改 `.env`：
 
 ```env
 IMAGE_TAG=vX.Y.Z
 ```
 
-然后执行：
+4. 拉取并重启：
 
 ```bash
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-### 临时指定版本
+5. 检查健康状态和日志：
+
+```bash
+curl -fsS http://127.0.0.1/healthz
+docker compose -f docker-compose.prod.yml logs --tail=200 xirang
+```
+
+### 回滚到旧版本
+
+回滚镜像版本：
 
 ```bash
 IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
 IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
 ```
 
-### 关于 `latest`
+如果新版本已经执行数据库迁移，回滚前请确认旧版本是否兼容当前 schema。无法确认时，优先恢复升级前数据库备份。
 
-- `latest` 仅表示当前最新稳定版
-- 适合快速试用
-- 不建议作为生产环境长期固定标签
+## 数据目录与备份
 
-### 版本检查说明
+Docker Compose 默认持久化目录：
 
-`VERSION_CHECK_URL` 会让 `/api/v1/version/check` 请求 GitHub latest release API，并将返回的 `tag_name` 与服务端当前构建版本比较。当前构建版本来自编译时注入；如果二进制或镜像构建时没有注入版本信息，`/api/v1/version` 会返回 `dev`，版本检查结果只能作为开发提示。
+| 宿主机路径 | 容器路径 | 用途 |
+|---|---|---|
+| `./data` | `/data` | SQLite 数据库及应用数据 |
+| `./backups` | `/backup` | 自动/手动备份文件 |
 
-## 镜像构建（仅维护者或高级用户）
+容器内置 cron：
 
-如果你不是在维护发布链路，通常不需要本地构建镜像。
+| 时间 | 操作 |
+|---|---|
+| 每日 02:00 | 执行 `backup-db.sh` 备份数据库到 `/backup/db/` |
+| 每日 02:30 | 清理 30 天前的旧备份文件 |
 
-### All-in-One 单镜像构建
+### 手动备份与恢复
+
+SQLite：
 
 ```bash
-docker build -f deploy/allinone/Dockerfile -t docker.io/linnea7171/xirang:vX.Y.Z-local .
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
+  bash scripts/backup-db.sh ./backups
+
+DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
+  bash scripts/restore-db.sh ./backups/xirang-sqlite-20260301-020000.db
 ```
 
-### 多架构构建
+PostgreSQL：
+
+```bash
+DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
+  bash scripts/backup-db.sh ./backups
+
+DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
+  bash scripts/restore-db.sh ./backups/xirang-postgres-20260301-020000.dump
+```
+
+## 健康检查与日志
+
+```bash
+# 容器状态
+docker compose -f docker-compose.prod.yml ps
+
+# 实时日志
+docker compose -f docker-compose.prod.yml logs -f xirang
+
+# 最近 200 行日志
+docker compose -f docker-compose.prod.yml logs --tail=200 xirang
+
+# 容器内健康检查目标
+curl -fsS http://127.0.0.1:8080/healthz
+
+# 宿主机 HTTP 模式
+curl -fsS http://127.0.0.1/healthz
+
+# 宿主机 HTTPS 模式
+curl -kfsS https://127.0.0.1/healthz
+```
+
+进入容器排查：
+
+```bash
+docker exec -it xirang bash
+```
+
+查看 SQLite 表数据示例：
+
+```bash
+docker exec -it xirang sh -lc \
+  "sqlite3 /data/xirang.db 'SELECT count(*) FROM tasks;'"
+```
+
+## Prometheus `/metrics`
+
+`/metrics` 是后端进程提供的 Prometheus 指标端点。生产环境建议配置随机 `METRICS_TOKEN`，否则端点保持公开兼容旧部署，但会暴露路由标签和流量画像。
+
+All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*` 和 `/healthz`，不会把 `/metrics` 暴露到宿主机 `80` / `443`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
+
+```bash
+# 后端直连部署（例如源码运行 SERVER_ADDR=:8080）
+curl -fsS http://127.0.0.1:8080/metrics | head
+
+# 启用 token
+curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" http://127.0.0.1:8080/metrics | head
+```
+
+Prometheus 示例：
+
+```yaml
+scrape_configs:
+  - job_name: xirang
+    metrics_path: /metrics
+    bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
+    static_configs:
+      - targets: ['backend-host:8080']  # 替换为 Prometheus 可访问的后端地址
+```
+
+详见 [监控、告警与状态页](admin/monitoring-alerting.md)。
+
+## 迁移 dirty 状态排障
+
+后端使用 golang-migrate 维护 `schema_migrations`。如果上一次迁移异常中断，启动日志可能出现：
+
+```text
+schema_migrations.dirty=1
+```
+
+默认情况下服务会拒绝启动，避免基于半完成 schema 继续写入数据。
+
+处理步骤：
+
+1. **先备份当前数据库文件或 PostgreSQL dump**，不要直接删除 `schema_migrations`。
+2. 查看 dirty 版本：
+   ```bash
+   # SQLite
+   sqlite3 ./data/xirang.db "SELECT version, dirty FROM schema_migrations;"
+
+   # PostgreSQL
+   psql "$DB_DSN" -c "SELECT version, dirty FROM schema_migrations;"
+   ```
+3. 根据失败点选择恢复方式：
+   - 如果迁移明显只执行了一部分：恢复最近一次迁移前备份，再重新升级。
+   - 如果确认迁移已完整执行，只是 clean 标记未写入：使用 golang-migrate CLI `force <version>` 标记 clean。
+   - 如果需要短暂启动服务做人工修复，可临时设置 `ALLOW_DIRTY_STARTUP=true`；修复完成后必须移除该变量并重启。
+
+`ALLOW_DIRTY_STARTUP=true` 只适合 rescue，不应作为长期配置。
+
+## UTC 时间戳约定
+
+当前后端使用 UTC 写入时间：
+
+- GORM `NowFunc` 返回 UTC。
+- SQLite DSN 包含 `_loc=UTC`。
+- PostgreSQL DSN 默认追加 `timezone=UTC`。
+
+新增 migration 不应使用 SQL `DEFAULT CURRENT_TIMESTAMP`、`datetime('now')`、`localtime` 或显式时区转换。涉及迁移文件时运行：
+
+```bash
+bash scripts/check-migration-utc-safety.sh
+```
+
+## 本地构建镜像（高级用户）
+
+普通部署应优先使用官方预构建镜像。需要自行构建时：
+
+```bash
+docker build -f deploy/allinone/Dockerfile \
+  -t docker.io/linnea7171/xirang:vX.Y.Z-local .
+```
+
+多架构构建：
 
 ```bash
 docker buildx create --use
@@ -177,177 +354,4 @@ docker buildx build \
   --push .
 ```
 
-说明：
-
-- SQLite 默认要求 `CGO_ENABLED=1`
-- 本仓库的官方镜像发布由 GitHub Actions 完成
-- 用户默认路径应始终优先使用预构建镜像，而不是手工 build
-- 本地/手动构建默认不要推送或覆盖 `latest`；`latest` 只应由正式
-  GitHub Release 触发的发布 workflow 更新
-
-## 数据与备份
-
-### 数据卷
-
-生产容器使用两个持久化目录：
-
-| 路径 | 用途 |
-|------|------|
-| `/data` | SQLite 数据库及应用数据 |
-| `/backup` | 自动/手动备份文件 |
-
-### 自动备份
-
-容器内置 cron：
-
-| 时间 | 操作 |
-|------|------|
-| 每日 02:00 | 执行 `backup-db.sh`，备份数据库到 `/backup/db/` |
-| 每日 02:30 | 清理 30 天前的旧备份文件 |
-
-### 手动备份与恢复
-
-```bash
-# SQLite 备份（Docker Compose 默认 bind mount: ./data -> /data）
-DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
-  bash scripts/backup-db.sh ./backups
-
-# SQLite 恢复
-DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
-  bash scripts/restore-db.sh ./backups/xirang-sqlite-20260301-020000.db
-
-# PostgreSQL 备份
-DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
-  bash scripts/backup-db.sh ./backups
-
-# PostgreSQL 恢复
-DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
-  bash scripts/restore-db.sh ./backups/xirang-postgres-20260301-020000.dump
-```
-
-## 健康检查与运维
-
-### 健康检查
-
-```bash
-# 容器内部
-curl -fsS http://127.0.0.1:8080/healthz
-
-# 通过 HTTP（外部，无证书模式）
-curl -fsS http://127.0.0.1/healthz
-
-# 通过 HTTPS（外部，证书模式）
-curl -kfsS https://127.0.0.1/healthz
-```
-
-### Prometheus 抓取 `/metrics`
-
-`/metrics` 暴露 Prometheus 标准指标。生产环境建议在 `.env` 配置 `METRICS_TOKEN`，
-未设置时端点保持公开（兼容旧行为）但每 10 分钟在日志中提示一次。详细变量见
-`docs/env-vars.md` §14.1。
-
-```bash
-# 未启用 token：直接抓取
-curl -fsS http://127.0.0.1/metrics | head
-
-# 启用 token：必须携带 Bearer 头，否则返回 401
-curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" http://127.0.0.1/metrics | head
-```
-
-Prometheus scrape 配置示例：
-
-```yaml
-scrape_configs:
-  - job_name: xirang
-    metrics_path: /metrics
-    bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
-    static_configs:
-      - targets: ['xirang:8080']
-```
-
-### 常用运维命令
-
-```bash
-# 查看容器状态
-docker compose -f docker-compose.prod.yml ps
-
-# 实时日志
-docker compose -f docker-compose.prod.yml logs -f xirang
-
-# 最近 200 行日志
-docker compose -f docker-compose.prod.yml logs --tail=200 xirang
-
-# 进入容器排查
-docker exec -it xirang bash
-
-# 查看 SQLite 任务数量
-docker exec -it xirang sh -lc \
-  "sqlite3 /data/xirang.db 'SELECT count(*) FROM tasks;'"
-```
-
-## CI/CD 发布链路
-
-### 持续集成
-
-- 工作流：`.github/workflows/ci.yml`
-- 触发：`push` / `pull_request`
-- 检查项：
-  - PR 标题 Conventional Commits 校验
-  - 后端 `golangci-lint`、`go test -coverprofile=coverage.out ./...`、`go build ./...`、`govulncheck ./...`
-  - 前端 `npm audit --audit-level=moderate`、`npm run check`
-  - bundle budget
-  - 文档新鲜度提醒
-  - migration UTC 安全检查与脚本自测
-
-### Release Please
-
-- 工作流：`.github/workflows/release-please.yml`
-- 触发：`main` 分支 push
-- 作用：自动维护 Release PR、更新 `CHANGELOG.md`、生成 GitHub Release
-
-### Docker 镜像发布
-
-- 工作流：`.github/workflows/publish-images.yml`
-- 正式入口：`release.published`
-- 手动入口：仅用于维护者重发
-- 产物标签：
-  - `vX.Y.Z`
-  - `X.Y.Z`
-  - `latest`（仅正式稳定版更新）
-
-### 私有部署
-
-- 工作流：`.github/workflows/deploy.yml`
-- 触发：仅 `workflow_dispatch`
-- 用途：维护者私有环境部署
-- 不属于公开开源发布主线
-
-## 维护者说明
-
-维护者需要额外关注：
-
-- Release Please manifest 与 `CHANGELOG.md`
-- GitHub branch protection / squash merge 设置
-- Docker Hub secrets / variables
-- 镜像重发与私有部署
-
-详见 [docs/release-maintainers.md](release-maintainers.md)。
-
-## 快速参考
-
-```bash
-# 生产部署
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-
-# 健康检查
-curl -fsS http://127.0.0.1/healthz
-curl -kfsS https://127.0.0.1/healthz
-
-# 查看日志
-docker compose -f docker-compose.prod.yml logs -f xirang
-
-# 版本回滚
-IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml pull
-IMAGE_TAG=vX.Y.Z docker compose -f docker-compose.prod.yml up -d
-```
+本地构建默认不要推送或覆盖 `latest`；`latest` 只应由正式 GitHub Release 触发的发布 workflow 更新。
