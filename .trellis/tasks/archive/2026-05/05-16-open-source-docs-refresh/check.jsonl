@@ -1,0 +1,3 @@
+{"file":".trellis/spec/guides/index.md","reason":"Check should verify Trellis guide index no longer directs agents to preserve deleted docs/specs files."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check should verify documentation truth rules align with open-source lean/current docs and no process/archive docs in remote."}
+{"file":".trellis/tasks/05-16-open-source-docs-refresh/research/open-source-docs-conventions.md","reason":"Check should compare final README/docs structure against researched OSS documentation conventions."}
