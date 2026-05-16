@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/xiangnan0811/xirang/compare/v0.33.0...v0.33.1) (2026-05-16)
+
+
+### 📚 Documentation
+
+* refresh open-source documentation ([#175](https://github.com/xiangnan0811/xirang/issues/175)) ([c030f93](https://github.com/xiangnan0811/xirang/commit/c030f93b95dffef9d34ce424eb192e1de2ab6f36))
+
 ## [0.33.0](https://github.com/xiangnan0811/xirang/compare/v0.32.0...v0.33.0) (2026-05-15)
 
 
