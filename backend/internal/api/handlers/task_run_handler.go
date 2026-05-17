@@ -15,6 +15,11 @@ type TaskRunHandler struct {
 	db *gorm.DB
 }
 
+type taskRunDetailResponse struct {
+	model.TaskRun
+	DrillEvidence *model.RestoreDrillEvidence `json:"drill_evidence,omitempty"`
+}
+
 func NewTaskRunHandler(db *gorm.DB) *TaskRunHandler {
 	return &TaskRunHandler{db: db}
 }
@@ -113,7 +118,18 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 		}
 	}
 
-	respondOK(c, run)
+	var evidence model.RestoreDrillEvidence
+	err := h.db.Where("task_run_id = ?", run.ID).First(&evidence).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		respondInternalError(c, err)
+		return
+	}
+	var evidencePtr *model.RestoreDrillEvidence
+	if err == nil {
+		evidencePtr = &evidence
+	}
+
+	respondOK(c, taskRunDetailResponse{TaskRun: run, DrillEvidence: evidencePtr})
 }
 
 // Logs godoc

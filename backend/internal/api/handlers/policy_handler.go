@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	pathpkg "path"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
@@ -58,6 +61,7 @@ type policyRequest struct {
 	BandwidthSchedule   string `json:"bandwidth_schedule"`
 	AppProfile          string `json:"app_profile"`
 	AppCredentialID     *uint  `json:"app_credential_id"`
+	EscalationPolicyID  *uint  `json:"escalation_policy_id"`
 	DrillEnabled        *bool  `json:"drill_enabled"`
 	DrillCron           string `json:"drill_cron"`
 	DrillTargetNodeID   *uint  `json:"drill_target_node_id"`
@@ -101,9 +105,14 @@ func (h *PolicyHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	latestDrillByPolicy, err := h.latestDrillSummaries(c, policies)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	result := make([]gin.H, len(policies))
 	for i, p := range policies {
-		result[i] = buildPolicyResponse(p)
+		result[i] = buildPolicyResponse(p, latestDrillByPolicy[p.ID])
 	}
 	respondOK(c, result)
 }
@@ -137,7 +146,12 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		respondForbidden(c, "无权访问该策略")
 		return
 	}
-	respondOK(c, buildPolicyResponse(p))
+	latestDrill, err := h.latestDrillSummary(c, p.ID)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondOK(c, buildPolicyResponse(p, latestDrill))
 }
 
 // Create godoc
@@ -274,12 +288,17 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	if req.DrillEnabled != nil {
 		drillEnabled = *req.DrillEnabled
 	}
+	drillCron := strings.TrimSpace(req.DrillCron)
+	drillRestorePath := strings.TrimSpace(req.DrillRestorePath)
+	if drillRestorePath == "" {
+		drillRestorePath = "/tmp/xirang-drill"
+	}
 	if drillEnabled {
-		if req.DrillCron == "" {
+		if drillCron == "" {
 			respondBadRequest(c, "启用恢复演练后必须设置 drill_cron")
 			return
 		}
-		if err := validateCronSpec(req.DrillCron); err != nil {
+		if err := validateCronSpec(drillCron); err != nil {
 			respondBadRequest(c, "drill_cron 格式不合法: "+err.Error())
 			return
 		}
@@ -294,11 +313,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 				return
 			}
 		}
-		drillPath := strings.TrimSpace(req.DrillRestorePath)
-		if drillPath == "" {
-			drillPath = "/tmp/xirang-drill"
-		}
-		if err := validateDrillRestorePath(drillPath); err != nil {
+		if err := validateDrillRestorePath(drillRestorePath); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
@@ -361,39 +376,40 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	p := model.Policy{
-		Name:              req.Name,
-		Description:       strings.TrimSpace(req.Description),
-		SourcePath:        req.SourcePath,
-		TargetPath:        req.TargetPath,
-		CronSpec:          req.CronSpec,
-		ExcludeRules:      strings.TrimSpace(req.ExcludeRules),
-		BwLimit:           req.BwLimit,
-		RetentionDays:     req.RetentionDays,
-		MaxConcurrent:     req.MaxConcurrent,
-		Enabled:           enabled,
-		VerifyEnabled:     verifyEnabled,
-		VerifySampleRate:  verifySampleRate,
-		IsTemplate:        isTemplate,
-		PreHook:           preHook,
-		PostHook:          postHook,
-		AppProfile:        appProfile,
-		AppCredentialID:   req.AppCredentialID,
-		BandwidthSchedule: strings.TrimSpace(req.BandwidthSchedule),
-		DrillEnabled:      drillEnabled,
-		DrillCron:         strings.TrimSpace(req.DrillCron),
-		DrillTargetNodeID: req.DrillTargetNodeID,
-		DrillRestorePath:  strings.TrimSpace(req.DrillRestorePath),
-		DrillPreVerify:    strings.TrimSpace(req.DrillPreVerify),
-		DrillVerify:       strings.TrimSpace(req.DrillVerify),
-		DrillPostVerify:   strings.TrimSpace(req.DrillPostVerify),
-		DrillAutoCleanup:  drillAutoCleanup,
-		RPOMinutes:        rpoMinutes,
-		RTOMinutes:        rtoMinutes,
-		RetentionMode:     retentionMode,
-		KeepDaily:         keepDaily,
-		KeepWeekly:        keepWeekly,
-		KeepMonthly:       keepMonthly,
-		KeepYearly:        keepYearly,
+		Name:               req.Name,
+		Description:        strings.TrimSpace(req.Description),
+		SourcePath:         req.SourcePath,
+		TargetPath:         req.TargetPath,
+		CronSpec:           req.CronSpec,
+		ExcludeRules:       strings.TrimSpace(req.ExcludeRules),
+		BwLimit:            req.BwLimit,
+		RetentionDays:      req.RetentionDays,
+		MaxConcurrent:      req.MaxConcurrent,
+		Enabled:            enabled,
+		VerifyEnabled:      verifyEnabled,
+		VerifySampleRate:   verifySampleRate,
+		IsTemplate:         isTemplate,
+		PreHook:            preHook,
+		PostHook:           postHook,
+		AppProfile:         appProfile,
+		AppCredentialID:    req.AppCredentialID,
+		EscalationPolicyID: req.EscalationPolicyID,
+		BandwidthSchedule:  strings.TrimSpace(req.BandwidthSchedule),
+		DrillEnabled:       drillEnabled,
+		DrillCron:          drillCron,
+		DrillTargetNodeID:  req.DrillTargetNodeID,
+		DrillRestorePath:   drillRestorePath,
+		DrillPreVerify:     strings.TrimSpace(req.DrillPreVerify),
+		DrillVerify:        strings.TrimSpace(req.DrillVerify),
+		DrillPostVerify:    strings.TrimSpace(req.DrillPostVerify),
+		DrillAutoCleanup:   drillAutoCleanup,
+		RPOMinutes:         rpoMinutes,
+		RTOMinutes:         rtoMinutes,
+		RetentionMode:      retentionMode,
+		KeepDaily:          keepDaily,
+		KeepWeekly:         keepWeekly,
+		KeepMonthly:        keepMonthly,
+		KeepYearly:         keepYearly,
 	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
@@ -452,7 +468,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 
 	// 重新加载以获取关联节点
 	h.db.Preload("Nodes").First(&p, p.ID)
-	respondCreated(c, buildPolicyResponse(p))
+	respondCreated(c, buildPolicyResponse(p, nil))
 }
 
 // Update godoc
@@ -592,49 +608,72 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	// drill 演练配置校验
-	drillEnabledUpdate := false
+	drillEnabledUpdate := p.DrillEnabled
 	if req.DrillEnabled != nil {
 		drillEnabledUpdate = *req.DrillEnabled
 	}
+	drillCronUpdate := strings.TrimSpace(req.DrillCron)
+	if drillCronUpdate == "" && req.DrillEnabled == nil {
+		drillCronUpdate = p.DrillCron
+	}
+	drillTargetNodeIDUpdate := req.DrillTargetNodeID
+	if drillTargetNodeIDUpdate == nil && req.DrillEnabled == nil {
+		drillTargetNodeIDUpdate = p.DrillTargetNodeID
+	}
+	drillPathUpdate := strings.TrimSpace(req.DrillRestorePath)
+	if drillPathUpdate == "" && req.DrillEnabled == nil {
+		drillPathUpdate = p.DrillRestorePath
+	}
+	if drillPathUpdate == "" {
+		drillPathUpdate = "/tmp/xirang-drill"
+	}
+	drillPreVerifyUpdate := strings.TrimSpace(req.DrillPreVerify)
+	if drillPreVerifyUpdate == "" && req.DrillEnabled == nil {
+		drillPreVerifyUpdate = p.DrillPreVerify
+	}
+	drillVerifyUpdate := strings.TrimSpace(req.DrillVerify)
+	if drillVerifyUpdate == "" && req.DrillEnabled == nil {
+		drillVerifyUpdate = p.DrillVerify
+	}
+	drillPostVerifyUpdate := strings.TrimSpace(req.DrillPostVerify)
+	if drillPostVerifyUpdate == "" && req.DrillEnabled == nil {
+		drillPostVerifyUpdate = p.DrillPostVerify
+	}
 	if drillEnabledUpdate {
-		if req.DrillCron == "" {
+		if drillCronUpdate == "" {
 			respondBadRequest(c, "启用恢复演练后必须设置 drill_cron")
 			return
 		}
-		if err := validateCronSpec(req.DrillCron); err != nil {
+		if err := validateCronSpec(drillCronUpdate); err != nil {
 			respondBadRequest(c, "drill_cron 格式不合法: "+err.Error())
 			return
 		}
-		if req.DrillTargetNodeID == nil || *req.DrillTargetNodeID == 0 {
+		if drillTargetNodeIDUpdate == nil || *drillTargetNodeIDUpdate == 0 {
 			respondBadRequest(c, "启用恢复演练后必须指定沙箱节点 drill_target_node_id")
 			return
 		}
 		// 沙箱节点不能等于任一备份源节点
 		if req.NodeIDs != nil {
 			for _, nid := range req.NodeIDs {
-				if nid == *req.DrillTargetNodeID {
+				if nid == *drillTargetNodeIDUpdate {
 					respondBadRequest(c, "沙箱节点不能与备份源节点相同")
 					return
 				}
 			}
 		}
-		drillPathUpdate := strings.TrimSpace(req.DrillRestorePath)
-		if drillPathUpdate == "" {
-			drillPathUpdate = "/tmp/xirang-drill"
-		}
 		if err := validateDrillRestorePath(drillPathUpdate); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
-		if len(req.DrillPreVerify) > 4096 {
+		if len(drillPreVerifyUpdate) > 4096 {
 			respondBadRequest(c, "drill_pre_verify 长度不能超过 4096 个字符")
 			return
 		}
-		if len(req.DrillVerify) > 4096 {
+		if len(drillVerifyUpdate) > 4096 {
 			respondBadRequest(c, "drill_verify 长度不能超过 4096 个字符")
 			return
 		}
-		if len(req.DrillPostVerify) > 4096 {
+		if len(drillPostVerifyUpdate) > 4096 {
 			respondBadRequest(c, "drill_post_verify 长度不能超过 4096 个字符")
 			return
 		}
@@ -708,16 +747,15 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	p.PostHook = updatePostHook
 	p.AppProfile = appProfile
 	p.AppCredentialID = req.AppCredentialID
+	p.EscalationPolicyID = req.EscalationPolicyID
 	p.BandwidthSchedule = strings.TrimSpace(req.BandwidthSchedule)
-	if req.DrillEnabled != nil {
-		p.DrillEnabled = *req.DrillEnabled
-	}
-	p.DrillCron = strings.TrimSpace(req.DrillCron)
-	p.DrillTargetNodeID = req.DrillTargetNodeID
-	p.DrillRestorePath = strings.TrimSpace(req.DrillRestorePath)
-	p.DrillPreVerify = strings.TrimSpace(req.DrillPreVerify)
-	p.DrillVerify = strings.TrimSpace(req.DrillVerify)
-	p.DrillPostVerify = strings.TrimSpace(req.DrillPostVerify)
+	p.DrillEnabled = drillEnabledUpdate
+	p.DrillCron = drillCronUpdate
+	p.DrillTargetNodeID = drillTargetNodeIDUpdate
+	p.DrillRestorePath = drillPathUpdate
+	p.DrillPreVerify = drillPreVerifyUpdate
+	p.DrillVerify = drillVerifyUpdate
+	p.DrillPostVerify = drillPostVerifyUpdate
 	if req.DrillAutoCleanup != nil {
 		p.DrillAutoCleanup = *req.DrillAutoCleanup
 	}
@@ -808,11 +846,11 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{
 			Code:    0,
 			Message: fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
-			Data:    buildPolicyResponse(p),
+			Data:    buildPolicyResponse(p, nil),
 		})
 		return
 	}
-	respondOK(c, buildPolicyResponse(p))
+	respondOK(c, buildPolicyResponse(p, nil))
 }
 
 // Delete godoc
@@ -880,7 +918,7 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 	}
 
 	var policy model.Policy
-	if err := h.db.First(&policy, id).Error; err != nil {
+	if err := h.db.Preload("Nodes").First(&policy, id).Error; err != nil {
 		respondNotFound(c, "策略不存在")
 		return
 	}
@@ -913,19 +951,24 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 // validateDrillRestorePath 校验 drill 恢复路径的安全性。
 // 要求绝对路径，不含 ..，禁止恢复到系统关键目录。
 func validateDrillRestorePath(path string) error {
-	if path == "" {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
 		return nil
 	}
-	if !strings.HasPrefix(path, "/") {
+	if !strings.HasPrefix(trimmed, "/") {
 		return fmt.Errorf("drill_restore_path 必须是绝对路径")
 	}
-	if strings.Contains(path, "..") {
+	if strings.Contains(trimmed, "..") {
 		return fmt.Errorf("drill_restore_path 不能包含 \"..\"")
 	}
-	// 禁止恢复到系统关键目录
-	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot"}
+	if strings.ContainsAny(trimmed, ";|&$`\\\"'(){}[]<>!#~*?\n\r") {
+		return fmt.Errorf("drill_restore_path 包含非法字符")
+	}
+	// 禁止恢复到系统关键目录及其子路径；与任务执行层保持同一安全边界。
+	cleanPath := pathpkg.Clean(trimmed)
+	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys", "/run", "/var/run"}
 	for _, p := range forbidden {
-		if path == p || strings.HasPrefix(path, p+"/") {
+		if cleanPath == p || strings.HasPrefix(cleanPath, p+"/") {
 			return fmt.Errorf("drill_restore_path 禁止恢复到系统目录: %s", p)
 		}
 	}
@@ -961,8 +1004,65 @@ func validateHookCommand(cmd string) error {
 	return nil
 }
 
+type latestDrillSummary struct {
+	TaskRunID          uint       `json:"task_run_id"`
+	Status             string     `json:"status"`
+	FailedStep         string     `json:"failed_step"`
+	ConfidenceEligible bool       `json:"confidence_eligible"`
+	StartedAt          *time.Time `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
+	DurationMs         int64      `json:"duration_ms"`
+}
+
+func buildLatestDrillSummary(e model.RestoreDrillEvidence) *latestDrillSummary {
+	return &latestDrillSummary{
+		TaskRunID:          e.TaskRunID,
+		Status:             e.Status,
+		FailedStep:         e.FailedStep,
+		ConfidenceEligible: e.ConfidenceEligible,
+		StartedAt:          e.StartedAt,
+		FinishedAt:         e.FinishedAt,
+		DurationMs:         e.DurationMs,
+	}
+}
+
+func (h *PolicyHandler) latestDrillSummary(c *gin.Context, policyID uint) (*latestDrillSummary, error) {
+	var evidence model.RestoreDrillEvidence
+	err := h.db.WithContext(c.Request.Context()).Where("policy_id = ?", policyID).Order("created_at desc, id desc").First(&evidence).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return buildLatestDrillSummary(evidence), nil
+}
+
+func (h *PolicyHandler) latestDrillSummaries(c *gin.Context, policies []model.Policy) (map[uint]*latestDrillSummary, error) {
+	result := make(map[uint]*latestDrillSummary, len(policies))
+	if len(policies) == 0 {
+		return result, nil
+	}
+	policyIDs := make([]uint, 0, len(policies))
+	for _, p := range policies {
+		policyIDs = append(policyIDs, p.ID)
+	}
+
+	var evidences []model.RestoreDrillEvidence
+	if err := h.db.WithContext(c.Request.Context()).Where("policy_id IN ?", policyIDs).Order("policy_id asc, created_at desc, id desc").Find(&evidences).Error; err != nil {
+		return nil, err
+	}
+	for _, evidence := range evidences {
+		if _, exists := result[evidence.PolicyID]; exists {
+			continue
+		}
+		result[evidence.PolicyID] = buildLatestDrillSummary(evidence)
+	}
+	return result, nil
+}
+
 // buildPolicyResponse 构建策略响应，避免序列化 Node 中的敏感字段（Password/PrivateKey）。
-func buildPolicyResponse(p model.Policy) gin.H {
+func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary) gin.H {
 	nodeIDs := make([]uint, len(p.Nodes))
 	for i, n := range p.Nodes {
 		nodeIDs[i] = n.ID
@@ -999,6 +1099,7 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"drill_auto_cleanup":    p.DrillAutoCleanup,
 		"app_profile":           p.AppProfile,
 		"app_credential_id":     p.AppCredentialID,
+		"escalation_policy_id":  p.EscalationPolicyID,
 		"rpo_minutes":           p.RPOMinutes,
 		"rto_minutes":           p.RTOMinutes,
 		"retention_mode":        p.RetentionMode,
@@ -1007,6 +1108,7 @@ func buildPolicyResponse(p model.Policy) gin.H {
 		"keep_monthly":          p.KeepMonthly,
 		"keep_yearly":           p.KeepYearly,
 		"node_ids":              nodeIDs,
+		"latest_drill":          latestDrill,
 		"created_at":            p.CreatedAt,
 		"updated_at":            p.UpdatedAt,
 	}
@@ -1146,5 +1248,5 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 	}
 
 	h.db.Preload("Nodes").First(&newPolicy, newPolicy.ID)
-	respondCreated(c, buildPolicyResponse(newPolicy))
+	respondCreated(c, buildPolicyResponse(newPolicy, nil))
 }

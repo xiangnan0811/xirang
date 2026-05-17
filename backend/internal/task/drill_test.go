@@ -1,6 +1,9 @@
 package task
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -529,6 +532,233 @@ func TestTriggerDrillSuccessReturnsRunID(t *testing.T) {
 	}
 	if !validStatus[run.Status] {
 		t.Fatalf("TaskRun status 不合法: %s", run.Status)
+	}
+}
+
+type drillEvidenceFixture struct {
+	manager *Manager
+	policy  model.Policy
+	task    model.Task
+	sandbox model.Node
+}
+
+func setupDrillEvidenceFixture(t *testing.T, db *gorm.DB) drillEvidenceFixture {
+	t.Helper()
+	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-evidence-src", "192.168.2.10", "evidence-src")
+	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-evidence-sandbox", "192.168.2.20", "evidence-sandbox")
+	targetID := sandbox.ID
+	policy := model.Policy{
+		Name:              "policy-drill-evidence",
+		SourcePath:        "/data/src",
+		TargetPath:        "/backup/dst",
+		CronSpec:          "@daily",
+		DrillEnabled:      true,
+		DrillCron:         "@every 5m",
+		DrillTargetNodeID: &targetID,
+		DrillRestorePath:  "/tmp/xirang-drill-evidence",
+		DrillVerify:       "verify-ok",
+		DrillAutoCleanup:  true,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: srcNode.ID}).Error; err != nil {
+		t.Fatalf("关联源节点失败: %v", err)
+	}
+	taskEntity := model.Task{
+		Name:         "drill-evidence-task",
+		NodeID:       srcNode.ID,
+		Node:         srcNode,
+		PolicyID:     &policy.ID,
+		ExecutorType: "rsync",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+		Status:       "success",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	finishedAt := time.Now().Add(-time.Minute)
+	previousRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success", FinishedAt: &finishedAt}
+	if err := db.Create(&previousRun).Error; err != nil {
+		t.Fatalf("创建成功执行记录失败: %v", err)
+	}
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	manager.drillRestoreFunc = func(_ context.Context, _ model.Task, _ model.Node, _ string, logf func(string, string)) error {
+		logf("info", "restore-ok")
+		return nil
+	}
+	return drillEvidenceFixture{manager: manager, policy: policy, task: taskEntity, sandbox: sandbox}
+}
+
+func TestExecuteDrillRecordsSuccessfulEvidence(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	var scripts []string
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, script string) error {
+		scripts = append(scripts, script)
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&evidence, "task_run_id = ?", runID).Error; err != nil {
+		t.Fatalf("查询恢复演练证据失败: %v", err)
+	}
+	if evidence.Status != "success" || !evidence.ConfidenceEligible {
+		t.Fatalf("期望成功且可作为可信证据，实际 status=%s eligible=%v", evidence.Status, evidence.ConfidenceEligible)
+	}
+	if evidence.RestoreStatus != "success" || evidence.VerifyStatus != "success" || evidence.CleanupStatus != "success" {
+		t.Fatalf("阶段状态不符合预期: restore=%s verify=%s cleanup=%s", evidence.RestoreStatus, evidence.VerifyStatus, evidence.CleanupStatus)
+	}
+	if evidence.FailedStep != "" {
+		t.Fatalf("成功演练不应有失败步骤，实际: %q", evidence.FailedStep)
+	}
+	if evidence.SandboxNodeID != fixture.sandbox.ID || evidence.SandboxPath != fixture.policy.DrillRestorePath {
+		t.Fatalf("沙箱证据不符合预期: node=%d path=%s", evidence.SandboxNodeID, evidence.SandboxPath)
+	}
+	if evidence.SourceTaskRunID == nil {
+		t.Fatal("期望记录来源成功执行记录")
+	}
+	if evidence.SnapshotRef != "task_run:"+fmt.Sprint(*evidence.SourceTaskRunID) {
+		t.Fatalf("期望记录快照引用，实际: %q", evidence.SnapshotRef)
+	}
+	if len(scripts) == 0 || scripts[len(scripts)-1] != "rm -rf '/tmp/xirang-drill-evidence'" {
+		t.Fatalf("期望执行安全清理命令，实际脚本: %#v", scripts)
+	}
+}
+
+func TestExecuteDrillRecordsFailureEvidence(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, script string) error {
+		if script == fixture.policy.DrillVerify {
+			return errors.New("verify mismatch token=FAKE_DRILL_TOKEN_FOR_TEST_ONLY")
+		}
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&evidence, "task_run_id = ?", runID).Error; err != nil {
+		t.Fatalf("查询恢复演练证据失败: %v", err)
+	}
+	if evidence.Status != "failed" || evidence.ConfidenceEligible {
+		t.Fatalf("失败演练不能作为正向证据，实际 status=%s eligible=%v", evidence.Status, evidence.ConfidenceEligible)
+	}
+	if evidence.FailedStep != "verify" || evidence.VerifyStatus != "failed" {
+		t.Fatalf("期望 verify 失败，实际 failed_step=%s verify=%s", evidence.FailedStep, evidence.VerifyStatus)
+	}
+	if !strings.Contains(evidence.VerifyError, "token=***") {
+		t.Fatalf("期望错误信息被脱敏，实际: %q", evidence.VerifyError)
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Fatalf("期望 TaskRun 失败，实际: %s", run.Status)
+	}
+}
+
+func TestExecuteDrillPostVerifyFailureIsNotConfidenceEvidence(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.policy.DrillPostVerify = "post-cleanup-check"
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, script string) error {
+		if script == fixture.policy.DrillPostVerify {
+			return errors.New("post verify token=FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY")
+		}
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&evidence, "task_run_id = ?", runID).Error; err != nil {
+		t.Fatalf("查询恢复演练证据失败: %v", err)
+	}
+	if evidence.Status != "failed" || evidence.ConfidenceEligible {
+		t.Fatalf("post_verify 失败不能作为正向证据，实际 status=%s eligible=%v", evidence.Status, evidence.ConfidenceEligible)
+	}
+	if evidence.FailedStep != "post_verify" || evidence.PostVerifyStatus != "failed" {
+		t.Fatalf("期望 post_verify 失败，实际 failed_step=%s post_verify=%s", evidence.FailedStep, evidence.PostVerifyStatus)
+	}
+	if !strings.Contains(evidence.PostVerifyError, "token=***") {
+		t.Fatalf("期望 post_verify 错误被脱敏，实际: %q", evidence.PostVerifyError)
+	}
+	if evidence.RestoreStatus != "success" || evidence.VerifyStatus != "success" || evidence.CleanupStatus != "success" {
+		t.Fatalf("post_verify 失败仍应保留其他阶段结果，实际 restore=%s verify=%s cleanup=%s", evidence.RestoreStatus, evidence.VerifyStatus, evidence.CleanupStatus)
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "failed" || !strings.Contains(run.LastError, "token=***") {
+		t.Fatalf("期望 TaskRun 失败且错误脱敏，实际 status=%s last_error=%q", run.Status, run.LastError)
+	}
+}
+
+func TestExecuteDrillDoesNotLogVerifyScriptContent(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.policy.DrillPreVerify = "echo token=FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY"
+	fixture.policy.DrillVerify = "echo token=FAKE_VERIFY_TOKEN_FOR_TEST_ONLY"
+	fixture.policy.DrillPostVerify = "echo token=FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY"
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, _ string) error {
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := fixture.manager.Shutdown(ctx); err != nil {
+		t.Fatalf("关闭 manager 失败: %v", err)
+	}
+
+	var logs []model.TaskLog
+	if err := db.Where("task_run_id = ?", runID).Find(&logs).Error; err != nil {
+		t.Fatalf("查询 TaskLog 失败: %v", err)
+	}
+	for _, logEntry := range logs {
+		if strings.Contains(logEntry.Message, "FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY") ||
+			strings.Contains(logEntry.Message, "FAKE_VERIFY_TOKEN_FOR_TEST_ONLY") ||
+			strings.Contains(logEntry.Message, "FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY") {
+			t.Fatalf("日志不应包含脚本原文或敏感 token，实际日志: %q", logEntry.Message)
+		}
+	}
+}
+
+func TestExecuteDrillRejectsUnsafeCleanupBoundary(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.policy.DrillRestorePath = "/etc/xirang-drill"
+	var scripts []string
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, script string) error {
+		scripts = append(scripts, script)
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&evidence, "task_run_id = ?", runID).Error; err != nil {
+		t.Fatalf("查询恢复演练证据失败: %v", err)
+	}
+	if evidence.Status != "failed" || evidence.FailedStep != "restore_path" || evidence.ConfidenceEligible {
+		t.Fatalf("期望非法沙箱路径失败且不可作为证据，实际 status=%s step=%s eligible=%v", evidence.Status, evidence.FailedStep, evidence.ConfidenceEligible)
+	}
+	for _, script := range scripts {
+		if strings.HasPrefix(script, "rm -rf ") {
+			t.Fatalf("不应对不安全路径执行清理命令，实际脚本: %#v", scripts)
+		}
 	}
 }
 

@@ -71,10 +71,11 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 		if task, exists := taskByNode[nid]; exists {
 			// 更新现有任务
 			updates := map[string]interface{}{
-				"rsync_source": policy.SourcePath,
-				"rsync_target": NodeTargetPath(policy.TargetPath, node.BackupDir),
-				"cron_spec":    cronSpec,
-				"name":         fmt.Sprintf("%s-%s", policy.Name, node.Name),
+				"rsync_source":         policy.SourcePath,
+				"rsync_target":         NodeTargetPath(policy.TargetPath, node.BackupDir),
+				"cron_spec":            cronSpec,
+				"name":                 fmt.Sprintf("%s-%s", policy.Name, node.Name),
+				"escalation_policy_id": policy.EscalationPolicyID,
 			}
 			if err := db.Model(task).Updates(updates).Error; err != nil {
 				return fmt.Errorf("更新任务失败(task_id=%d): %w", task.ID, err)
@@ -91,15 +92,16 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			// 创建新任务
 			policyID := policy.ID
 			newTask := model.Task{
-				Name:         fmt.Sprintf("%s-%s", policy.Name, node.Name),
-				NodeID:       nid,
-				PolicyID:     &policyID,
-				RsyncSource:  policy.SourcePath,
-				RsyncTarget:  NodeTargetPath(policy.TargetPath, node.BackupDir),
-				ExecutorType: "rsync",
-				CronSpec:     cronSpec,
-				Status:       "pending",
-				Source:       "policy",
+				Name:               fmt.Sprintf("%s-%s", policy.Name, node.Name),
+				NodeID:             nid,
+				PolicyID:           &policyID,
+				RsyncSource:        policy.SourcePath,
+				RsyncTarget:        NodeTargetPath(policy.TargetPath, node.BackupDir),
+				ExecutorType:       "rsync",
+				CronSpec:           cronSpec,
+				Status:             "pending",
+				Source:             "policy",
+				EscalationPolicyID: policy.EscalationPolicyID,
 			}
 			if err := db.Create(&newTask).Error; err != nil {
 				return fmt.Errorf("创建任务失败(node_id=%d): %w", nid, err)

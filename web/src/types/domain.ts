@@ -93,6 +93,18 @@ export interface NodeRecord {
   useSudo?: boolean;
 }
 
+export type RestoreDrillStatus = "pending" | "running" | "success" | "failed" | "skipped" | "canceled";
+
+export interface PolicyLatestDrillSummary {
+  taskRunId: number;
+  status: RestoreDrillStatus;
+  failedStep?: string;
+  confidenceEligible: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs: number;
+}
+
 export interface PolicyRecord {
   id: number;
   name: string;
@@ -135,6 +147,7 @@ export interface PolicyRecord {
   drill_verify: string;
   drill_post_verify: string;
   drill_auto_cleanup: boolean;
+  latestDrill?: PolicyLatestDrillSummary | null;
 }
 
 export interface NewPolicyInput {
@@ -224,6 +237,41 @@ export interface NewTaskInput {
 
 export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore" | "chain" | "drill";
 
+export interface RestoreDrillEvidence {
+  id: number;
+  policyId: number;
+  taskId: number;
+  taskRunId: number;
+  sourceTaskRunId?: number | null;
+  snapshotRef?: string;
+  sandboxNodeId: number;
+  sandboxNodeName: string;
+  sandboxPath: string;
+  status: RestoreDrillStatus;
+  failedStep?: string;
+  confidenceEligible: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs: number;
+  restoreStatus: RestoreDrillStatus;
+  restoreStartedAt?: string;
+  restoreFinishedAt?: string;
+  restoreError?: string;
+  verifyStatus: RestoreDrillStatus;
+  verifyStartedAt?: string;
+  verifyFinishedAt?: string;
+  verifyError?: string;
+  postVerifyStatus: RestoreDrillStatus;
+  postVerifyFinishedAt?: string;
+  postVerifyError?: string;
+  cleanupStatus: RestoreDrillStatus;
+  cleanupStartedAt?: string;
+  cleanupFinishedAt?: string;
+  cleanupError?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface TaskRunRecord {
   id: number;
   taskId: number;
@@ -240,6 +288,7 @@ export interface TaskRunRecord {
   progress: number;
   lastError?: string;
   createdAt: string;
+  drillEvidence?: RestoreDrillEvidence | null;
 }
 
 export interface LogEvent {

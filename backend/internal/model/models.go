@@ -362,6 +362,42 @@ type TaskRun struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+// RestoreDrillEvidence stores structured restore-drill proof for later trust/confidence consumers.
+type RestoreDrillEvidence struct {
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	PolicyID             uint       `gorm:"not null;index" json:"policy_id"`
+	TaskID               uint       `gorm:"not null;index" json:"task_id"`
+	TaskRunID            uint       `gorm:"not null;uniqueIndex" json:"task_run_id"`
+	SourceTaskRunID      *uint      `gorm:"index" json:"source_task_run_id,omitempty"`
+	SnapshotRef          string     `gorm:"size:128;not null;default:''" json:"snapshot_ref"`
+	SandboxNodeID        uint       `gorm:"not null;index" json:"sandbox_node_id"`
+	SandboxNodeName      string     `gorm:"size:128;not null;default:''" json:"sandbox_node_name"`
+	SandboxPath          string     `gorm:"size:512;not null" json:"sandbox_path"`
+	Status               string     `gorm:"size:32;not null;default:pending;index" json:"status"`
+	FailedStep           string     `gorm:"size:64;not null;default:''" json:"failed_step"`
+	ConfidenceEligible   bool       `gorm:"not null;default:false" json:"confidence_eligible"`
+	StartedAt            *time.Time `json:"started_at"`
+	FinishedAt           *time.Time `json:"finished_at"`
+	DurationMs           int64      `gorm:"not null;default:0" json:"duration_ms"`
+	RestoreStatus        string     `gorm:"size:32;not null;default:pending" json:"restore_status"`
+	RestoreStartedAt     *time.Time `json:"restore_started_at"`
+	RestoreFinishedAt    *time.Time `json:"restore_finished_at"`
+	RestoreError         string     `gorm:"type:text" json:"restore_error"`
+	VerifyStatus         string     `gorm:"size:32;not null;default:pending" json:"verify_status"`
+	VerifyStartedAt      *time.Time `json:"verify_started_at"`
+	VerifyFinishedAt     *time.Time `json:"verify_finished_at"`
+	VerifyError          string     `gorm:"type:text" json:"verify_error"`
+	PostVerifyStatus     string     `gorm:"size:32;not null;default:skipped" json:"post_verify_status"`
+	PostVerifyFinishedAt *time.Time `json:"post_verify_finished_at"`
+	PostVerifyError      string     `gorm:"type:text" json:"post_verify_error"`
+	CleanupStatus        string     `gorm:"size:32;not null;default:pending" json:"cleanup_status"`
+	CleanupStartedAt     *time.Time `json:"cleanup_started_at"`
+	CleanupFinishedAt    *time.Time `json:"cleanup_finished_at"`
+	CleanupError         string     `gorm:"type:text" json:"cleanup_error"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
 type AuditLog struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	UserID     uint      `gorm:"index" json:"user_id"`
@@ -927,7 +963,7 @@ type ServiceMonitor struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	Name               string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
 	Description        string     `gorm:"size:255" json:"description"`
-	Type               string     `gorm:"size:16;not null" json:"type"` // "http" | "tcp"
+	Type               string     `gorm:"size:16;not null" json:"type"`    // "http" | "tcp"
 	Target             string     `gorm:"size:512;not null" json:"target"` // URL or host:port
 	IntervalSeconds    int        `gorm:"not null;default:60" json:"interval_seconds"`
 	TimeoutSeconds     int        `gorm:"not null;default:10" json:"timeout_seconds"`

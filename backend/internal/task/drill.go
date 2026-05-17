@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	pathpkg "path"
 	"strings"
 	"time"
 
@@ -10,8 +12,10 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
+	"xirang/backend/internal/util"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
 
 // validateDrillConfig 校验演习配置的合法性。
@@ -33,7 +37,7 @@ func (m *Manager) validateDrillConfig(policy *model.Policy, sandboxNode *model.N
 	if restorePath == "" {
 		restorePath = "/tmp/xirang-drill"
 	}
-	if err := validateRestorePath(restorePath); err != nil {
+	if err := validateDrillSandboxPath(restorePath); err != nil {
 		return fmt.Errorf("演习恢复路径无效: %w", err)
 	}
 
@@ -41,6 +45,25 @@ func (m *Manager) validateDrillConfig(policy *model.Policy, sandboxNode *model.N
 		return fmt.Errorf("未配置沙箱节点")
 	}
 
+	return nil
+}
+
+// validateDrillSandboxPath 校验恢复演练沙箱路径，禁止指向系统目录及其子路径。
+func validateDrillSandboxPath(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return fmt.Errorf("恢复路径不能为空")
+	}
+	if err := validateRestorePath(trimmed); err != nil {
+		return err
+	}
+	cleanPath := pathpkg.Clean(trimmed)
+	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys", "/run", "/var/run"}
+	for _, dir := range forbidden {
+		if cleanPath == dir || strings.HasPrefix(cleanPath, dir+"/") {
+			return fmt.Errorf("禁止恢复到系统目录: %s", dir)
+		}
+	}
 	return nil
 }
 
@@ -130,9 +153,11 @@ func (m *Manager) findTaskForPolicy(policyID uint) (model.Task, error) {
 	// 优先取有成功记录的任务
 	for _, t := range tasks {
 		var count int64
-		m.db.Model(&model.TaskRun{}).
+		if err := m.db.Model(&model.TaskRun{}).
 			Where("task_id = ? AND status = ?", t.ID, "success").
-			Count(&count)
+			Count(&count).Error; err != nil {
+			return model.Task{}, fmt.Errorf("查询任务成功执行记录失败: %w", err)
+		}
 		if count > 0 {
 			return t, nil
 		}
@@ -146,100 +171,196 @@ func (m *Manager) findTaskForPolicy(policyID uint) (model.Task, error) {
 func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNode model.Node, drillRunID uint) {
 	drillStartedAt := time.Now()
 	runIDPtr := &drillRunID
+	restorePath := strings.TrimSpace(policy.DrillRestorePath)
+	if restorePath == "" {
+		restorePath = "/tmp/xirang-drill"
+	}
+	sourceRunID, err := m.latestSuccessfulRunID(task.ID)
+	if err != nil {
+		logger.Module("task").Warn().Uint("task_id", task.ID).Err(err).Msg("查询恢复演练来源执行记录失败")
+	}
+	snapshotRef := ""
+	if sourceRunID != nil {
+		snapshotRef = fmt.Sprintf("task_run:%d", *sourceRunID)
+	}
+
+	evidence := model.RestoreDrillEvidence{
+		PolicyID:           policy.ID,
+		TaskID:             task.ID,
+		TaskRunID:          drillRunID,
+		SourceTaskRunID:    sourceRunID,
+		SnapshotRef:        snapshotRef,
+		SandboxNodeID:      sandboxNode.ID,
+		SandboxNodeName:    sandboxNode.Name,
+		SandboxPath:        restorePath,
+		Status:             "running",
+		FailedStep:         "",
+		ConfidenceEligible: false,
+		StartedAt:          &drillStartedAt,
+		RestoreStatus:      "pending",
+		VerifyStatus:       "pending",
+		PostVerifyStatus:   "skipped",
+		CleanupStatus:      "skipped",
+	}
+	if err := m.db.Create(&evidence).Error; err != nil {
+		logger.Module("task").Warn().Uint("task_run_id", drillRunID).Err(err).Msg("创建恢复演练证据失败")
+	}
+
+	finishRun := func(status, lastError string, finishedAt time.Time) {
+		duration := drillDurationMs(drillStartedAt, finishedAt)
+		updates := map[string]interface{}{
+			"status":      status,
+			"finished_at": &finishedAt,
+			"duration_ms": duration,
+			"last_error":  util.SanitizeMessage(lastError),
+		}
+		if err := m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(updates).Error; err != nil {
+			logger.Module("task").Warn().Uint("task_run_id", drillRunID).Err(err).Msg("更新恢复演练执行记录失败")
+		}
+	}
+	updateEvidence := func(updates map[string]interface{}) {
+		updates["updated_at"] = time.Now()
+		if err := m.db.Model(&model.RestoreDrillEvidence{}).Where("task_run_id = ?", drillRunID).Updates(updates).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Module("task").Warn().Uint("task_run_id", drillRunID).Err(err).Msg("更新恢复演练证据失败")
+			}
+		}
+	}
+	failDrill := func(step string, err error, alertCode string, messagePrefix string) {
+		finishedAt := time.Now()
+		errorMsg := messagePrefix
+		if err != nil {
+			errorMsg = fmt.Sprintf("%s: %v", messagePrefix, err)
+		}
+		sanitizedErr := util.SanitizeMessage(errorMsg)
+		finishRun("failed", sanitizedErr, finishedAt)
+		updates := map[string]interface{}{
+			"status":              "failed",
+			"failed_step":         step,
+			"confidence_eligible": false,
+			"finished_at":         &finishedAt,
+			"duration_ms":         drillDurationMs(drillStartedAt, finishedAt),
+		}
+		switch step {
+		case "sandbox_precheck", "restore":
+			updates["restore_status"] = "failed"
+			updates["restore_finished_at"] = &finishedAt
+			updates["restore_error"] = sanitizedErr
+		case "pre_verify", "verify":
+			updates["verify_status"] = "failed"
+			updates["verify_finished_at"] = &finishedAt
+			updates["verify_error"] = sanitizedErr
+		case "post_verify":
+			updates["post_verify_status"] = "failed"
+			updates["post_verify_finished_at"] = &finishedAt
+			updates["post_verify_error"] = sanitizedErr
+		case "restore_path":
+			updates["restore_status"] = "failed"
+			updates["restore_finished_at"] = &finishedAt
+			updates["restore_error"] = sanitizedErr
+		case "cleanup_boundary", "cleanup":
+			updates["cleanup_status"] = "failed"
+			updates["cleanup_finished_at"] = &finishedAt
+			updates["cleanup_error"] = sanitizedErr
+		}
+		updateEvidence(updates)
+		m.emitLog(task.ID, runIDPtr, "error", sanitizedErr, "")
+		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, alertCode, sanitizedErr)
+		m.dispatchDrillFailure(policy.ID, drillRunID)
+	}
 
 	// 确保无论成败都清理状态
 	drillCompleted := false
 	defer func() {
 		if !drillCompleted {
 			finishedAt := time.Now()
-			duration := finishedAt.Sub(drillStartedAt).Milliseconds()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
-				"status":      "failed",
-				"finished_at": &finishedAt,
-				"duration_ms": duration,
-				"last_error":  "演习执行异常终止",
+			finishRun("failed", "演习执行异常终止", finishedAt)
+			updateEvidence(map[string]interface{}{
+				"status":              "failed",
+				"failed_step":         "unknown",
+				"confidence_eligible": false,
+				"finished_at":         &finishedAt,
+				"duration_ms":         drillDurationMs(drillStartedAt, finishedAt),
 			})
 		}
 	}()
 
 	// 更新 drill TaskRun 为 running
 	now := time.Now()
-	m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
+	if err := m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
+		"status":     "running",
+		"started_at": &now,
+	}).Error; err != nil {
+		logger.Module("task").Warn().Uint("task_run_id", drillRunID).Err(err).Msg("标记恢复演练执行记录运行中失败")
+	}
+	drillStartedAt = now
+	updateEvidence(map[string]interface{}{
 		"status":     "running",
 		"started_at": &now,
 	})
-	drillStartedAt = now
 
 	m.emitLog(task.ID, runIDPtr, "info", fmt.Sprintf(
 		"开始恢复演练: 策略=%s, 沙箱=%s(%s), 恢复路径=%s",
-		policy.Name, sandboxNode.Name, sandboxNode.Host, policy.DrillRestorePath), "")
+		policy.Name, sandboxNode.Name, sandboxNode.Host, restorePath), "")
 
-	restorePath := strings.TrimSpace(policy.DrillRestorePath)
-	if restorePath == "" {
-		restorePath = "/tmp/xirang-drill"
+	if err := validateDrillSandboxPath(restorePath); err != nil {
+		failDrill("restore_path", err, "drill_restore_path_invalid", "演习恢复路径无效")
+		drillCompleted = true
+		return
 	}
 
 	// ---- Step 0: 沙箱节点连通性预检 ----
+	restoreStartedAt := time.Now()
+	updateEvidence(map[string]interface{}{
+		"restore_status":     "running",
+		"restore_started_at": &restoreStartedAt,
+	})
 	m.emitLog(task.ID, runIDPtr, "info", "正在检查沙箱节点连通性...", "")
-	if err := m.runDrillSSHScript(context.Background(), sandboxNode, "true"); err != nil {
-		errorMsg := fmt.Sprintf("沙箱节点 (%s) 不可达: %v", sandboxNode.Name, err)
-		finishedAt := time.Now()
-		duration := finishedAt.Sub(drillStartedAt).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &finishedAt,
-			"duration_ms": duration,
-			"last_error":  errorMsg,
-		})
+	if err := m.runDrillScript(context.Background(), sandboxNode, "true"); err != nil {
+		failDrill("sandbox_precheck", err, "drill_sandbox_unreachable", fmt.Sprintf("沙箱节点 (%s) 不可达", sandboxNode.Name))
 		drillCompleted = true
-		m.emitLog(task.ID, runIDPtr, "error", errorMsg, "")
-		// 触发沙箱不可达告警
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,
-			"drill_sandbox_unreachable", errorMsg)
-		m.dispatchDrillFailure(policy.ID, drillRunID)
 		return
 	}
 	m.emitLog(task.ID, runIDPtr, "info", "沙箱节点连通性检查通过", "")
 
 	// ---- Step 1: 恢复备份到沙箱 ----
 	m.emitLog(task.ID, runIDPtr, "info", "正在恢复备份到沙箱节点...", "")
-	restoreErr := m.restoreBackupToSandbox(context.Background(), task, sandboxNode, restorePath, func(level, msg string) {
+	restoreErr := m.runDrillRestore(context.Background(), task, sandboxNode, restorePath, func(level, msg string) {
 		if runIDPtr != nil {
 			m.emitLog(task.ID, runIDPtr, level, msg, "")
 		}
 	})
-
+	restoreFinishedAt := time.Now()
 	if restoreErr != nil {
-		errorMsg := fmt.Sprintf("恢复备份到沙箱失败: %v", restoreErr)
-		finishedAt := time.Now()
-		duration := finishedAt.Sub(drillStartedAt).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &finishedAt,
-			"duration_ms": duration,
-			"last_error":  errorMsg,
-		})
+		failDrill("restore", restoreErr, "drill_restore_failed", "恢复备份到沙箱失败")
 		drillCompleted = true
-		m.emitLog(task.ID, runIDPtr, "error", errorMsg, "")
-		// 触发恢复失败告警
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,
-			"drill_restore_failed", errorMsg)
-		m.dispatchDrillFailure(policy.ID, drillRunID)
 		return
 	}
+	updateEvidence(map[string]interface{}{
+		"restore_status":      "success",
+		"restore_finished_at": &restoreFinishedAt,
+		"restore_error":       "",
+	})
 	m.emitLog(task.ID, runIDPtr, "info", "备份恢复至沙箱完成", "")
 
 	// ---- Step 2: 执行校验脚本 ----
+	verifyStartedAt := time.Now()
+	updateEvidence(map[string]interface{}{
+		"verify_status":     "running",
+		"verify_started_at": &verifyStartedAt,
+	})
 	verifyFailed := false
+	failedStep := ""
 	var verifyErr error
 
 	// pre_verify
-	if !verifyFailed && strings.TrimSpace(policy.DrillPreVerify) != "" {
-		m.emitLog(task.ID, runIDPtr, "info", "执行 pre_verify: "+policy.DrillPreVerify, "")
-		err := m.runDrillSSHScript(context.Background(), sandboxNode, policy.DrillPreVerify)
-		if err != nil {
-			m.emitLog(task.ID, runIDPtr, "error", "pre_verify 失败: "+err.Error(), "")
+	if strings.TrimSpace(policy.DrillPreVerify) != "" {
+		m.emitLog(task.ID, runIDPtr, "info", "执行 pre_verify 脚本", "")
+		verifyErr = m.runDrillScript(context.Background(), sandboxNode, policy.DrillPreVerify)
+		if verifyErr != nil {
+			m.emitLog(task.ID, runIDPtr, "error", "pre_verify 失败: "+util.SanitizeError(verifyErr), "")
 			verifyFailed = true
+			failedStep = "pre_verify"
 		} else {
 			m.emitLog(task.ID, runIDPtr, "info", "pre_verify 成功", "")
 		}
@@ -247,66 +368,123 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 
 	// verify（仅在 pre_verify 成功时执行）
 	if !verifyFailed && strings.TrimSpace(policy.DrillVerify) != "" {
-		m.emitLog(task.ID, runIDPtr, "info", "执行 verify: "+policy.DrillVerify, "")
-		verifyErr = m.runDrillSSHScript(context.Background(), sandboxNode, policy.DrillVerify)
+		m.emitLog(task.ID, runIDPtr, "info", "执行 verify 脚本", "")
+		verifyErr = m.runDrillScript(context.Background(), sandboxNode, policy.DrillVerify)
 		if verifyErr != nil {
-			m.emitLog(task.ID, runIDPtr, "error", "verify 失败: "+verifyErr.Error(), "")
+			m.emitLog(task.ID, runIDPtr, "error", "verify 失败: "+util.SanitizeError(verifyErr), "")
 			verifyFailed = true
+			failedStep = "verify"
 		} else {
 			m.emitLog(task.ID, runIDPtr, "info", "verify 成功", "")
 		}
 	}
 
-	// post_verify（无论成败都执行）
+	verifyFinishedAt := time.Now()
+	if verifyFailed {
+		finalError := "pre_verify 执行失败"
+		if failedStep == "verify" {
+			finalError = "演习校验失败"
+		}
+		failDrill(failedStep, verifyErr, "drill_verify_failed", finalError)
+		drillCompleted = true
+		return
+	}
+	updateEvidence(map[string]interface{}{
+		"verify_status":      "success",
+		"verify_finished_at": &verifyFinishedAt,
+		"verify_error":       "",
+	})
+
+	// post_verify（无论成败都执行；失败会使演练不可作为正向可信证据）
+	postVerifyStatus := "skipped"
+	postVerifyError := ""
 	if strings.TrimSpace(policy.DrillPostVerify) != "" {
-		m.emitLog(task.ID, runIDPtr, "info", "执行 post_verify: "+policy.DrillPostVerify, "")
-		err := m.runDrillSSHScript(context.Background(), sandboxNode, policy.DrillPostVerify)
+		m.emitLog(task.ID, runIDPtr, "info", "执行 post_verify 脚本", "")
+		err := m.runDrillScript(context.Background(), sandboxNode, policy.DrillPostVerify)
 		if err != nil {
-			m.emitLog(task.ID, runIDPtr, "warn", "post_verify 失败（不影响演习结果）: "+err.Error(), "")
+			postVerifyStatus = "failed"
+			postVerifyError = util.SanitizeError(err)
+			m.emitLog(task.ID, runIDPtr, "error", "post_verify 失败: "+postVerifyError, "")
 		} else {
+			postVerifyStatus = "success"
 			m.emitLog(task.ID, runIDPtr, "info", "post_verify 成功", "")
 		}
+		postVerifyFinishedAt := time.Now()
+		updateEvidence(map[string]interface{}{
+			"post_verify_status":      postVerifyStatus,
+			"post_verify_finished_at": &postVerifyFinishedAt,
+			"post_verify_error":       postVerifyError,
+		})
 	}
 
 	// ---- Step 3: 自动清理 ----
+	cleanupStatus := "skipped"
+	cleanupError := ""
+	var cleanupStartedAt *time.Time
+	var cleanupFinishedAt *time.Time
 	if policy.DrillAutoCleanup {
+		started := time.Now()
+		cleanupStartedAt = &started
+		cleanupStatus = "running"
+		updateEvidence(map[string]interface{}{
+			"cleanup_status":     cleanupStatus,
+			"cleanup_started_at": cleanupStartedAt,
+		})
 		m.emitLog(task.ID, runIDPtr, "info", "执行自动清理: "+restorePath, "")
-		cleanupCmd := fmt.Sprintf("rm -rf %s", executor.ShellEscape(restorePath))
-		// 安全加固：确保路径不为空且是绝对路径
-		if strings.HasPrefix(restorePath, "/") && len(restorePath) > 1 && !strings.Contains(restorePath, "..") {
-			if err := m.runDrillSSHScript(context.Background(), sandboxNode, cleanupCmd); err != nil {
-				m.emitLog(task.ID, runIDPtr, "warn", "清理失败（不影响演习结果）: "+err.Error(), "")
+		if err := validateDrillSandboxPath(restorePath); err != nil {
+			cleanupStatus = "failed"
+			cleanupError = util.SanitizeMessage("清理路径不在演习沙箱安全边界内: " + err.Error())
+			m.emitLog(task.ID, runIDPtr, "error", cleanupError, "")
+		} else {
+			cleanupCmd := fmt.Sprintf("rm -rf %s", executor.ShellEscape(restorePath))
+			if err := m.runDrillScript(context.Background(), sandboxNode, cleanupCmd); err != nil {
+				cleanupStatus = "failed"
+				cleanupError = util.SanitizeError(err)
+				m.emitLog(task.ID, runIDPtr, "error", "清理失败: "+cleanupError, "")
 			} else {
+				cleanupStatus = "success"
 				m.emitLog(task.ID, runIDPtr, "info", "清理完成", "")
 			}
 		}
+		finished := time.Now()
+		cleanupFinishedAt = &finished
+		updateEvidence(map[string]interface{}{
+			"cleanup_status":      cleanupStatus,
+			"cleanup_finished_at": cleanupFinishedAt,
+			"cleanup_error":       cleanupError,
+		})
 	}
 
 	// ---- Step 4: 记录结果 ----
 	finishedAt := time.Now()
-	duration := finishedAt.Sub(drillStartedAt).Milliseconds()
+	duration := drillDurationMs(drillStartedAt, finishedAt)
 
-	var finalStatus string
-	var finalError string
-	if verifyFailed {
+	finalStatus := "success"
+	finalError := ""
+	failedStep = ""
+	confidenceEligible := true
+	if postVerifyStatus == "failed" {
 		finalStatus = "failed"
-		if verifyErr != nil {
-			finalError = fmt.Sprintf("演习校验失败: %v", verifyErr)
-		} else {
-			finalError = "pre_verify 执行失败"
-		}
-		// 触发校验失败告警
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,
-			"drill_verify_failed", finalError)
-	} else {
-		finalStatus = "success"
+		finalError = "演习 post_verify 失败: " + postVerifyError
+		failedStep = "post_verify"
+		confidenceEligible = false
+		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_post_verify_failed", finalError)
+	}
+	if cleanupStatus == "failed" {
+		finalStatus = "failed"
+		finalError = "演习清理失败: " + cleanupError
+		failedStep = "cleanup"
+		confidenceEligible = false
+		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_cleanup_failed", finalError)
 	}
 
-	m.db.Model(&model.TaskRun{}).Where("id = ?", drillRunID).Updates(map[string]interface{}{
-		"status":      finalStatus,
-		"finished_at": &finishedAt,
-		"duration_ms": duration,
-		"last_error":  finalError,
+	finishRun(finalStatus, finalError, finishedAt)
+	updateEvidence(map[string]interface{}{
+		"status":              finalStatus,
+		"failed_step":         failedStep,
+		"confidence_eligible": confidenceEligible,
+		"finished_at":         &finishedAt,
+		"duration_ms":         duration,
 	})
 	drillCompleted = true
 
@@ -318,6 +496,40 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	m.emitLog(task.ID, runIDPtr, "info", fmt.Sprintf(
 		"恢复演练完成: status=%s, RTO=%.1fs, 沙箱=%s",
 		finalStatus, rtoSeconds, sandboxNode.Name), "")
+}
+
+func drillDurationMs(startedAt, finishedAt time.Time) int64 {
+	duration := finishedAt.Sub(startedAt).Milliseconds()
+	if duration < 0 {
+		return 0
+	}
+	return duration
+}
+
+func (m *Manager) latestSuccessfulRunID(taskID uint) (*uint, error) {
+	var run model.TaskRun
+	err := m.db.Select("id").Where("task_id = ? AND status = ?", taskID, "success").Order("finished_at desc, id desc").First(&run).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &run.ID, nil
+}
+
+func (m *Manager) runDrillScript(ctx context.Context, node model.Node, script string) error {
+	if m.drillSSHScriptFunc != nil {
+		return m.drillSSHScriptFunc(ctx, node, script)
+	}
+	return m.runDrillSSHScript(ctx, node, script)
+}
+
+func (m *Manager) runDrillRestore(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error {
+	if m.drillRestoreFunc != nil {
+		return m.drillRestoreFunc(ctx, srcTask, sandboxNode, drillPath, logf)
+	}
+	return m.restoreBackupToSandbox(ctx, srcTask, sandboxNode, drillPath, logf)
 }
 
 // restoreBackupToSandbox 将备份恢复到沙箱节点。
@@ -340,12 +552,16 @@ func (m *Manager) restoreBackupToSandbox(ctx context.Context, srcTask model.Task
 	}
 
 	// Step B: 将恢复的数据从源节点传输到沙箱节点
-	logf("info", fmt.Sprintf("传输恢复数据: %s -> %s@%s:%s", tempPath, sandboxNode.Username, sandboxNode.Host, drillPath))
+	logf("info", fmt.Sprintf("传输恢复数据到沙箱节点: %s:%s", sandboxNode.Name, drillPath))
 
 	if err := m.transferFilesToSandbox(ctx, srcTask.Node, tempPath, sandboxNode, drillPath, logf); err != nil {
-		// 清理两边的临时文件
+		// 清理两边的临时文件；沙箱路径必须再次通过边界校验后才允许 rm -rf。
 		_ = m.runDrillSSHScript(context.Background(), srcTask.Node, fmt.Sprintf("rm -rf %s", executor.ShellEscape(tempPath)))
-		_ = m.runDrillSSHScript(context.Background(), sandboxNode, fmt.Sprintf("rm -rf %s", executor.ShellEscape(drillPath)))
+		if validateErr := validateDrillSandboxPath(drillPath); validateErr == nil {
+			_ = m.runDrillSSHScript(context.Background(), sandboxNode, fmt.Sprintf("rm -rf %s", executor.ShellEscape(drillPath)))
+		} else {
+			logger.Module("task").Warn().Err(validateErr).Msg("跳过恢复演练传输失败后的沙箱清理：路径不在安全边界内")
+		}
 		return fmt.Errorf("传输文件到沙箱失败: %w", err)
 	}
 
@@ -365,7 +581,7 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 		return fmt.Errorf("恢复前检查失败（目标路径）: %w", err)
 	}
 
-	logf("info", fmt.Sprintf("恢复: %s → %s", restoreTask.RsyncSource, restoreTask.RsyncTarget))
+	logf("info", "开始执行源节点临时恢复")
 
 	// 使用 RunSSHCommandOutput 执行 rsync 恢复（复用 runRemoteRestore 的核心逻辑）
 	client, err := executor.DialSSHForNode(ctx, restoreTask.Node)
@@ -383,7 +599,7 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 		executor.ShellEscape(restoreTask.RsyncSource),
 		executor.ShellEscape(restoreTask.RsyncTarget))
 
-	logf("info", "执行: "+rsyncCmd)
+	logf("info", "执行 rsync 恢复命令")
 	output, err := executor.RunSSHCommandOutput(ctx, client, rsyncCmd)
 	if err != nil {
 		return fmt.Errorf("恢复执行失败: %s, 输出: %s", err, output)
@@ -395,6 +611,10 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 // transferFilesToSandbox 将源节点上的文件传输到沙箱节点。
 // 使用 tar + SSH 管道通过 Xirang 服务器中转。
 func (m *Manager) transferFilesToSandbox(ctx context.Context, srcNode model.Node, srcPath string, dstNode model.Node, dstPath string, logf func(string, string)) error {
+	if err := validateDrillSandboxPath(dstPath); err != nil {
+		return fmt.Errorf("沙箱目标路径不安全: %w", err)
+	}
+
 	// 1. 在沙箱节点上创建目标目录
 	ensureDirCmd := fmt.Sprintf("mkdir -p %s", executor.ShellEscape(dstPath))
 	_, err := m.runSSHCommandOnNode(ctx, dstNode, ensureDirCmd)
@@ -436,7 +656,7 @@ func (m *Manager) transferFilesToSandbox(ctx context.Context, srcNode model.Node
 		executor.ShellEscape(dstPath),
 	)
 
-	logf("info", "在沙箱执行: "+rsyncCmd)
+	logf("info", "在沙箱执行 rsync 拉取命令")
 	output, err := m.runSSHCommandOnNode(ctx, dstNode, rsyncCmd)
 	if err != nil {
 		return fmt.Errorf("文件传输失败: %s, 输出: %s", err, output)

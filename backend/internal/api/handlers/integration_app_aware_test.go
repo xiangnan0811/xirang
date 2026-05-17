@@ -17,11 +17,12 @@ import (
 // setupIntegrationAppAwareTestDB 创建包含 AppCredential + Policy 表的内存数据库。
 func setupIntegrationAppAwareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("APP_ENV", "development")
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.AppCredential{}, &model.Policy{}); err != nil {
+	if err := db.AutoMigrate(&model.AppCredential{}, &model.Policy{}, &model.RestoreDrillEvidence{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	return db
