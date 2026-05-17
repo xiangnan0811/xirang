@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/xiangnan0811/xirang/compare/v0.34.0...v0.35.0) (2026-05-17)
+
+
+### ✨ Features
+
+* **backup:** add confidence center ([#180](https://github.com/xiangnan0811/xirang/issues/180)) ([66afbc2](https://github.com/xiangnan0811/xirang/commit/66afbc2bb1d145feff6b0116f536ef56c1915170))
+
 ## [0.34.0](https://github.com/xiangnan0811/xirang/compare/v0.33.1...v0.34.0) (2026-05-17)
 
 
