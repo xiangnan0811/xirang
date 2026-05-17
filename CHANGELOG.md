@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.0](https://github.com/xiangnan0811/xirang/compare/v0.33.1...v0.34.0) (2026-05-17)
+
+
+### ✨ Features
+
+* **backup:** record restore drill evidence ([6312f7f](https://github.com/xiangnan0811/xirang/commit/6312f7f26bbf7a7c6dee1eed55a42d03c30ab481))
+* **backup:** record restore drill evidence ([#178](https://github.com/xiangnan0811/xirang/issues/178)) ([6312f7f](https://github.com/xiangnan0811/xirang/commit/6312f7f26bbf7a7c6dee1eed55a42d03c30ab481))
+
 ## [0.33.1](https://github.com/xiangnan0811/xirang/compare/v0.33.0...v0.33.1) (2026-05-16)
 
 
