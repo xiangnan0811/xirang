@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
+- **Total Sessions**: 41
 - **Last Active**: 2026-05-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1348 | Active |
+| `journal-1.md` | ~1381 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-05-17 | SSH Fleet Doctor | `b346826` | `feat/ssh-fleet-doctor` |
 | 40 | 2026-05-17 | Backup Confidence Center MVP | `92e0bb5` | `feat/backup-confidence-center` |
 | 39 | 2026-05-17 | Verified Restore Drill Evidence | `ba869ec` | `feature/verified-restore-drill-evidence` |
 | 38 | 2026-05-16 | Simplify Docker deployment | `135f8a9` | `fix/deployment-compose-simplify` |
