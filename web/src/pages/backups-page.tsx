@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { BackupConfidencePanel } from "@/components/backup-confidence-panel";
 import { BackupHealthPanel } from "@/components/backup-health-panel";
 import { StorageUsagePanel } from "@/components/storage-usage-panel";
 import { StorageGuideCard } from "@/components/storage-guide-card";
@@ -57,6 +58,10 @@ export function BackupsPage() {
           </Button>
         }
       />
+
+      <section className="shrink-0 flex flex-col min-h-0">
+        <BackupConfidencePanel />
+      </section>
 
       <section className="shrink-0 flex flex-col min-h-0">
         <BackupHealthPanel />

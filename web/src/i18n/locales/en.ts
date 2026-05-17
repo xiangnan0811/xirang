@@ -1807,6 +1807,33 @@ const en = {
     loadingDesc: "Reading backup health status",
   },
 
+  // ── backup confidence panel ──
+  backupConfidence: {
+    title: "Backup Confidence",
+    description: "Aggregates backup runs, restore drills, verification, RPO, and alerts to explain whether key backup objects are trustworthy.",
+    loadFailed: "Failed to load backup confidence data",
+    loadingTitle: "Loading backup confidence...",
+    summaryAriaLabel: "Backup confidence summary",
+    score: "Confidence score {{score}}",
+    targets: "{{count}} nodes",
+    nextStep: "Next step:",
+    evidenceLabel: "Confidence evidence",
+    noIssues: "Backup, restore drill, and verification evidence all passed.",
+    empty: "No backup policies to evaluate",
+    status: {
+      healthy: "Trusted",
+      warning: "Needs attention",
+      at_risk: "At risk",
+      insufficient: "Insufficient proof",
+    },
+    evidence: {
+      backup: "Backup",
+      drill: "Restore drill",
+      rpo: "RPO",
+      alert: "Alert",
+    },
+  },
+
   // ── backup health panel ──
   backupHealth: {
     loadFailed: "Failed to load backup health data",

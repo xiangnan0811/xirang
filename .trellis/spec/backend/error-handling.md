@@ -169,6 +169,84 @@ Expose one bulk endpoint, validate the whole target set first, perform the unres
 
 ---
 
+## Scenario: Backup Confidence Read Model
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the backup confidence endpoint, confidence scoring,
+  evidence/reason contracts, or frontend confidence mappers.
+- Applies to `GET /api/v1/overview/backup-confidence`, policy/task-run/drill
+  evidence aggregation, and frontend types that expose confidence data.
+
+### 2. Signatures
+
+- Route: `GET /api/v1/overview/backup-confidence` under `/api/v1`.
+- Middleware: authenticated route plus `middleware.RBAC("tasks:read")`.
+- Handler signature: `func (h *BackupConfidenceHandler) Get(c *gin.Context)`.
+- Backend response shape is a standard `Response` envelope whose `data` contains
+  `generated_at`, `summary`, and `items`.
+- Confidence statuses: `healthy`, `warning`, `at_risk`, and `insufficient`.
+- Each item must include `status`, numeric `score`, `reasons`, `evidence`, and
+  `next_steps`.
+
+### 3. Contracts
+
+- The endpoint is read-only; do not persist confidence history in the MVP.
+- Aggregate at policy scope first. Include node target identifiers/names only as
+  safe DTO fields; do not serialize full `Node`, `Task`, `Policy`, or executor
+  config models from this endpoint.
+- Missing restore drill evidence is not healthy. It should add a
+  `drill_missing` reason and drive the item to `insufficient` unless a stronger
+  failure already makes it `at_risk`.
+- Recent failed backup/task runs, RPO over limit, failed or non-confidence-eligible
+  drills, verification failures/warnings, and unresolved integrity/drill/verify
+  alerts must affect status and reasons.
+- Every non-healthy item must include at least one actionable `next_steps` entry.
+- Evidence messages should explain the signal but remain sanitized. Do not expose
+  node hosts, usernames, passwords, private keys, executor configs, raw SQL,
+  encryption errors, or stack traces.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| No enabled non-template policies visible to the caller | Return `items: []` and zeroed summary. |
+| Operator has no owned nodes | Return empty confidence data, not all policies. |
+| Missing task runs | Add missing backup evidence/reasons instead of returning 500. |
+| Missing restore drill evidence | Return item with `drill_missing` and `insufficient`. |
+| Evidence query fails for reasons other than not found | Return standard `respondInternalError`. |
+| Unknown/missing auth role reaches ownership filtering | Fail closed via existing ownership helpers. |
+
+### 5. Tests Required
+
+- Backend handler tests must cover healthy evidence, recent backup failure,
+  RPO exceeded, missing drill evidence, failed drill evidence, integrity/verify
+  alert influence, next-step presence for non-healthy statuses, and sensitive
+  field exclusion.
+- Router/RBAC tests must assert the endpoint is registered and protected by
+  `tasks:read`.
+- Frontend API tests must assert snake_case fields map to camelCase fields,
+  especially `at_risk`, `next_steps`, `observed_at`, `task_run_id`, and
+  `last_backup_at`.
+- UI tests should verify the Backups page provides a visible confidence entry
+  and shows non-healthy reasons/next steps.
+
+### 6. Wrong vs Correct
+
+Wrong:
+
+```go
+respondOK(c, policy) // leaks full policy graph and does not explain status
+```
+
+Correct:
+
+```go
+respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
+```
+
+---
+
 ## Scenario: Restore Drill Evidence Contract
 
 ### 1. Scope / Trigger

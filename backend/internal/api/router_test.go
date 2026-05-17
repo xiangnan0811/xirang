@@ -69,6 +69,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/overview/traffic") {
 		t.Fatalf("未注册概览流量趋势接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/overview/backup-confidence") {
+		t.Fatalf("未注册备份可信度接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/integrations/:id/test") {
 		t.Fatalf("未注册通知通道测试接口")
 	}
@@ -92,6 +95,53 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/nodes/batch-delete") {
 		t.Fatalf("未注册节点批量删除接口")
+	}
+}
+
+func TestBackupConfidenceRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_BACKUP_CONFIDENCE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 2)
+	for _, role := range []string{"admin", "viewer"} {
+		user := model.User{
+			Username:     "backup-confidence-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	viewerReq := httptest.NewRequest(http.MethodGet, "/api/v1/overview/backup-confidence", nil)
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusOK {
+		t.Fatalf("viewer 应能读取备份可信度接口，实际状态码: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	noTokenReq := httptest.NewRequest(http.MethodGet, "/api/v1/overview/backup-confidence", nil)
+	noTokenResp := httptest.NewRecorder()
+	router.ServeHTTP(noTokenResp, noTokenReq)
+	if noTokenResp.Code != http.StatusUnauthorized {
+		t.Fatalf("缺少 token 应返回 401，实际状态码: %d，body=%s", noTokenResp.Code, noTokenResp.Body.String())
 	}
 }
 

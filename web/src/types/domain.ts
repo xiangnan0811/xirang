@@ -511,6 +511,63 @@ export interface BackupHealthData {
   };
 }
 
+export type BackupConfidenceStatus = "healthy" | "warning" | "at_risk" | "insufficient";
+export type BackupConfidenceSeverity = "info" | "warning" | "critical";
+
+export interface BackupConfidenceReason {
+  code: string;
+  severity: BackupConfidenceSeverity;
+  message: string;
+}
+
+export interface BackupConfidenceEvidence {
+  type: string;
+  status: string;
+  message: string;
+  observedAt?: string;
+  taskId?: number;
+  taskRunId?: number;
+  alertId?: number;
+}
+
+export interface BackupConfidenceNextStep {
+  code: string;
+  label: string;
+}
+
+export interface BackupConfidenceTarget {
+  nodeId: number;
+  nodeName: string;
+  lastBackupAt?: string;
+}
+
+export interface BackupConfidenceItem {
+  id: string;
+  scope: "policy" | "node";
+  policyId?: number;
+  policyName?: string;
+  nodeId?: number;
+  nodeName?: string;
+  status: BackupConfidenceStatus;
+  score: number;
+  reasons: BackupConfidenceReason[];
+  evidence: BackupConfidenceEvidence[];
+  nextSteps: BackupConfidenceNextStep[];
+  targets: BackupConfidenceTarget[];
+}
+
+export interface BackupConfidenceData {
+  generatedAt: string;
+  summary: {
+    healthy: number;
+    warning: number;
+    atRisk: number;
+    insufficient: number;
+    total: number;
+  };
+  items: BackupConfidenceItem[];
+}
+
 export interface MountPointInfo {
   path: string;
   usedGB: number;

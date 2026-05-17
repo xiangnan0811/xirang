@@ -68,6 +68,69 @@ describe("overview api", () => {
     expect(result.currentThroughputMbps).toBe(0);
   });
 
+  it("getBackupConfidence 请求 /overview/backup-confidence 并映射可信度字段", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T00:00:00Z",
+          summary: {
+            healthy: "1",
+            warning: 0,
+            at_risk: "1",
+            insufficient: 1,
+            total: "3"
+          },
+          items: [
+            {
+              id: "policy-7",
+              scope: "policy",
+              policy_id: "7",
+              policy_name: "daily-policy",
+              node_id: "9",
+              node_name: "node-a",
+              status: "at_risk",
+              score: "42",
+              reasons: [{ code: "drill_failed", severity: "critical", message: "最近恢复演练失败" }],
+              evidence: [
+                {
+                  type: "drill",
+                  status: "failed",
+                  message: "恢复演练状态 failed",
+                  observed_at: "2026-05-17T01:00:00Z",
+                  task_id: "3",
+                  task_run_id: "11",
+                  alert_id: "5"
+                }
+              ],
+              next_steps: [{ code: "rerun_restore_drill", label: "重新执行恢复演练" }],
+              targets: [{ node_id: "9", node_name: "node-a", last_backup_at: "2026-05-17T00:30:00Z" }]
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getBackupConfidence("token-1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/overview/backup-confidence");
+    expect(result.summary.atRisk).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      policyId: 7,
+      policyName: "daily-policy",
+      nodeId: 9,
+      status: "at_risk",
+      score: 42,
+      reasons: [{ code: "drill_failed", severity: "critical", message: "最近恢复演练失败" }],
+      nextSteps: [{ code: "rerun_restore_drill", label: "重新执行恢复演练" }],
+    });
+    expect(result.items[0].evidence[0]).toMatchObject({ type: "drill", taskRunId: 11, alertId: 5 });
+    expect(result.items[0].targets[0]).toEqual({ nodeId: 9, nodeName: "node-a", lastBackupAt: "2026-05-17T00:30:00Z" });
+  });
+
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({

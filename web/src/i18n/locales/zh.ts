@@ -1807,6 +1807,33 @@ const zh = {
     loadingDesc: "正在读取备份健康状态",
   },
 
+  // ── backup confidence panel ──
+  backupConfidence: {
+    title: "备份可信度",
+    description: "聚合备份执行、恢复演练、校验、RPO 与告警证据，解释每个关键备份对象是否可信。",
+    loadFailed: "备份可信度数据加载失败",
+    loadingTitle: "加载备份可信度...",
+    summaryAriaLabel: "备份可信度汇总",
+    score: "可信分 {{score}}",
+    targets: "{{count}} 个节点",
+    nextStep: "下一步：",
+    evidenceLabel: "可信度证据",
+    noIssues: "备份、恢复演练与校验证据均通过。",
+    empty: "暂无需要评估的备份策略",
+    status: {
+      healthy: "可信",
+      warning: "需关注",
+      at_risk: "有风险",
+      insufficient: "证据不足",
+    },
+    evidence: {
+      backup: "备份",
+      drill: "恢复演练",
+      rpo: "RPO",
+      alert: "告警",
+    },
+  },
+
   // ── backup health panel ──
   backupHealth: {
     loadFailed: "备份健康数据加载失败",
