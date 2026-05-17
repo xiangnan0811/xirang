@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
@@ -21,6 +21,7 @@ export const NodesGrid = React.memo(function NodesGrid({
   selectedNodeIds,
   allVisibleSelected,
   testingNodeId,
+  doctorNodeId,
   triggeringNodeId,
   toggleNodeSelection,
   toggleSelectAllVisible,
@@ -30,6 +31,7 @@ export const NodesGrid = React.memo(function NodesGrid({
   openCreateDialog,
   openEditDialog,
   onTestNode,
+  onOpenDoctor,
   onDeleteNode,
   handleTriggerBackup,
   onOpenTerminal,
@@ -144,7 +146,17 @@ export const NodesGrid = React.memo(function NodesGrid({
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
-                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
+                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
+                    onClick={() => onOpenDoctor?.(node)}
+                    disabled={doctorNodeId === node.id}
+                  >
+                    {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
                   </Button>
                   <Button
                     variant="ghost"
@@ -165,7 +177,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                       onClick={() => onOpenTerminal?.(node)}
                     >
-                      <MonitorPlay className="size-4" />
+                      <MonitorPlay className="size-4" aria-hidden />
                     </Button>
                   )}
                   <Button
@@ -175,7 +187,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                     onClick={() => onOpenFileBrowser?.(node)}
                   >
-                    <FolderOpen className="size-4" />
+                    <FolderOpen className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -184,7 +196,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                     onClick={() => openEditDialog(node)}
                   >
-                    <Wrench className="size-4" />
+                    <Wrench className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -193,7 +205,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                     onClick={() => onDeleteNode(node)}
                   >
-                    <Trash2 className="size-4" />
+                    <Trash2 className="size-4" aria-hidden />
                   </Button>
                 </div>
                 <Button
@@ -201,7 +213,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                   disabled={triggeringNodeId === node.id}
                   onClick={() => void handleTriggerBackup(node.id, node.name)}
                 >
-                  {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                  {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
                   {t("nodes.manualBackup")}
                 </Button>
               </div>
@@ -309,7 +321,17 @@ export const NodesGrid = React.memo(function NodesGrid({
                     onClick={() => void onTestNode(node)}
                     disabled={testingNodeId === node.id}
                   >
-                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
+                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
+                    onClick={() => onOpenDoctor?.(node)}
+                    disabled={doctorNodeId === node.id}
+                  >
+                    {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
                   </Button>
                   <Button
                     variant="ghost"
@@ -330,7 +352,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                       onClick={() => onOpenTerminal?.(node)}
                     >
-                      <MonitorPlay className="size-4" />
+                      <MonitorPlay className="size-4" aria-hidden />
                     </Button>
                   )}
                   <Button
@@ -340,7 +362,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                     onClick={() => onOpenFileBrowser?.(node)}
                   >
-                    <FolderOpen className="size-4" />
+                    <FolderOpen className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -349,7 +371,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                     onClick={() => openEditDialog(node)}
                   >
-                    <Wrench className="size-4" />
+                    <Wrench className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -358,7 +380,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                     onClick={() => onDeleteNode(node)}
                   >
-                    <Trash2 className="size-4" />
+                    <Trash2 className="size-4" aria-hidden />
                   </Button>
                 </div>
                 <div className="flex items-center gap-1">
@@ -370,7 +392,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     onClick={() => onEmergencyBackup?.(node.id, node.name)}
                     title={t("nodes.emergencyBackup")}
                   >
-                    {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <ShieldAlert className="mr-1 size-3.5" />}
+                    {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
                     {t("nodes.emergencyBackup")}
                   </Button>
                   <Button
@@ -380,7 +402,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     onClick={() => onMigrate?.(node)}
                     title={t("nodes.migrateTo")}
                   >
-                    <ArrowRightLeft className="mr-1 size-3.5" />
+                    <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
                     {t("nodes.migrateShort")}
                   </Button>
                   <Button
@@ -389,7 +411,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     disabled={triggeringNodeId === node.id}
                     onClick={() => void handleTriggerBackup(node.id, node.name)}
                   >
-                    {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                    {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
                     {t("nodes.manualBackup")}
                   </Button>
                 </div>

@@ -68,6 +68,7 @@ go run ./cmd/server
 | PUT | /nodes/:id | 🔒 更新节点 |
 | DELETE | /nodes/:id | 🔒 删除节点 |
 | POST | /nodes/:id/test-connection | 🔒 测试连接 |
+| POST | /nodes/:id/doctor | 🔒 SSH Fleet Doctor 诊断 |
 | GET | /nodes/:id/metrics | 🔒 资源指标 |
 | GET | /nodes/:id/status | 🔒 节点状态快照（最新采样 + 1h/24h 聚合 + 告警/任务计数） |
 | GET | /nodes/:id/metric-series | 🔒 按时间窗返回多指标序列（granularity=auto/raw/hourly/daily）|

@@ -93,6 +93,22 @@ export interface NodeRecord {
   useSudo?: boolean;
 }
 
+export type NodeDoctorCheckStatus = "pass" | "warn" | "fail" | "skip";
+
+export interface NodeDoctorCheckResult {
+  check: string;
+  status: NodeDoctorCheckStatus;
+  evidence: string;
+  suggestion: string;
+}
+
+export interface NodeDoctorResult {
+  nodeId: number;
+  nodeName: string;
+  generatedAt: string;
+  checks: NodeDoctorCheckResult[];
+}
+
 export type RestoreDrillStatus = "pending" | "running" | "success" | "failed" | "skipped" | "canceled";
 
 export interface PolicyLatestDrillSummary {

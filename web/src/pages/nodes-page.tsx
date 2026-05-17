@@ -45,6 +45,7 @@ export function NodesPage() {
     setSelectedNodeId,
     selectedNodeIds,
     testingNodeId,
+    doctorNodeId,
     triggeringNodeId,
     emergencyNodeId,
     isAdmin,
@@ -99,6 +100,7 @@ export function NodesPage() {
     selectedNodeIds,
     allVisibleSelected: groupView ? allVisibleSelected : pagedAllVisibleSelected,
     testingNodeId,
+    doctorNodeId,
     triggeringNodeId,
     toggleNodeSelection,
     toggleSelectAllVisible: groupView ? toggleSelectAllVisible : pagedToggleSelectAllVisible,
@@ -108,6 +110,7 @@ export function NodesPage() {
     openCreateDialog,
     openEditDialog,
     onTestNode,
+    onOpenDoctor: state.openDoctor,
     onDeleteNode,
     handleTriggerBackup,
     onEmergencyBackup: handleEmergencyBackup,
@@ -312,6 +315,12 @@ export function NodesPage() {
         refreshNodes={state.refreshNodes}
         handleSaveNode={state.handleSaveNode}
         handleTestConnection={state.handleTestConnection}
+        doctorNode={state.doctorNode}
+        doctorResult={state.doctorResult}
+        doctorLoading={state.doctorLoading}
+        doctorError={state.doctorError}
+        handleDoctorOpenChange={state.handleDoctorOpenChange}
+        runDoctorForNode={state.runDoctorForNode}
       />
     </div>
   );

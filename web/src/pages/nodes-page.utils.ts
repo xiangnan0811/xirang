@@ -85,6 +85,7 @@ export type NodesViewProps = {
   selectedNodeIds: number[];
   allVisibleSelected: boolean;
   testingNodeId: number | null;
+  doctorNodeId?: number | null;
   triggeringNodeId: number | null;
   toggleNodeSelection: (id: number, checked: boolean) => void;
   toggleSelectAllVisible: (checked: boolean) => void;
@@ -94,6 +95,7 @@ export type NodesViewProps = {
   openCreateDialog: () => void;
   openEditDialog: (node: NodeRecord) => void;
   onTestNode: (node: NodeRecord) => void;
+  onOpenDoctor?: (node: NodeRecord) => void;
   onDeleteNode: (node: NodeRecord) => void;
   handleTriggerBackup: (id: number, name: string) => void;
   onOpenTerminal?: (node: NodeRecord) => void;

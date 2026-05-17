@@ -1,4 +1,4 @@
-import type { NewNodeInput, NodeRecord, NodeStatus } from "@/types/domain";
+import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeRecord, NodeStatus } from "@/types/domain";
 import { parseNumericId, request, formatTime } from "./core";
 
 type NodeResponse = {
@@ -37,6 +37,20 @@ type TestNodeResponse = {
   latency_ms?: number;
   disk_used_gb?: number;
   disk_total_gb?: number;
+};
+
+type NodeDoctorCheckResponse = {
+  check?: string;
+  status?: string;
+  evidence?: string;
+  suggestion?: string;
+};
+
+type NodeDoctorResponse = {
+  node_id?: number | string;
+  node_name?: string;
+  generated_at?: string;
+  checks?: NodeDoctorCheckResponse[];
 };
 
 function mapNodeStatus(raw?: string): NodeStatus {
@@ -86,6 +100,41 @@ function mapNode(row: NodeResponse): NodeRecord {
     useSudo: row.use_sudo ?? false,
   };
 }
+
+function safeNumber(value: unknown, fallback = 0): number {
+  const numeric = Number(value ?? fallback);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function mapDoctorStatus(raw?: string): NodeDoctorCheckStatus {
+  switch (raw) {
+    case "pass":
+    case "warn":
+    case "fail":
+    case "skip":
+      return raw;
+    default:
+      return "warn";
+  }
+}
+
+function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
+  return {
+    nodeId: safeNumber(row.node_id),
+    nodeName: String(row.node_name ?? ""),
+    generatedAt: String(row.generated_at ?? ""),
+    checks: Array.isArray(row.checks)
+      ? row.checks.map((check) => ({
+        check: String(check.check ?? "unknown"),
+        status: mapDoctorStatus(check.status),
+        evidence: String(check.evidence ?? ""),
+        suggestion: String(check.suggestion ?? ""),
+      }))
+      : [],
+  };
+}
+
+export const __test__ = { mapNodeDoctorResult };
 
 export function createNodesApi() {
   return {
@@ -173,6 +222,14 @@ export function createNodesApi() {
         method: "POST",
         token
       });
+    },
+
+    async runNodeDoctor(token: string, nodeId: number): Promise<NodeDoctorResult> {
+      const row = await request<NodeDoctorResponse>(`/nodes/${nodeId}/doctor`, {
+        method: "POST",
+        token
+      });
+      return mapNodeDoctorResult(row);
     },
 
     async emergencyBackup(token: string, nodeId: number): Promise<{ triggered: number; task_ids: number[]; errors: string[] }> {

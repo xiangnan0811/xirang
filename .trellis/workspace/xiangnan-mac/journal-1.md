@@ -1346,3 +1346,36 @@ Implemented backup confidence read model and Backups page panel with scoring, ev
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: SSH Fleet Doctor
+
+**Date**: 2026-05-17
+**Task**: SSH Fleet Doctor
+**Branch**: `feat/ssh-fleet-doctor`
+
+### Summary
+
+Implemented SSH Fleet Doctor diagnostics with safe backend allowlisted checks, node-page UI, tests, docs, and code-spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b346826` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
