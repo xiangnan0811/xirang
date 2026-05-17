@@ -106,10 +106,11 @@ func TestEWMA_CpuSpike_Warning(t *testing.T) {
 	if len(findings) == 0 {
 		t.Fatalf("expected at least one finding")
 	}
-	cpuFinding := filterFindings(findings, "cpu_pct")
-	if cpuFinding == nil {
+	cpuFindingPtr := filterFindings(findings, "cpu_pct")
+	if cpuFindingPtr == nil {
 		t.Fatalf("no cpu_pct finding")
 	}
+	cpuFinding := *cpuFindingPtr
 	if cpuFinding.Severity != "warning" && cpuFinding.Severity != "critical" {
 		t.Fatalf("severity=%s, expected warning or critical", cpuFinding.Severity)
 	}
