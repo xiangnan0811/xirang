@@ -1313,3 +1313,36 @@ Implemented structured restore drill evidence with backend persistence/API contr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: Backup Confidence Center MVP
+
+**Date**: 2026-05-17
+**Task**: Backup Confidence Center MVP
+**Branch**: `feat/backup-confidence-center`
+
+### Summary
+
+Implemented backup confidence read model and Backups page panel with scoring, evidence, ownership-safe aggregation, tests, and spec contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `92e0bb5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
