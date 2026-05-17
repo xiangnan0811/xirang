@@ -179,7 +179,7 @@ export function TasksPageDialogs({
                     variant={showSnapshots ? "default" : "outline"}
                     onClick={() => { setShowSnapshots((v: boolean) => !v); setShowDiff(false); setShowSearch(false); }}
                   >
-                    <FolderSearch className="mr-1 size-3.5" />
+                    <FolderSearch className="mr-1 size-3.5" aria-hidden="true" />
                     {t("tasks.browseSnapshots")}
                   </Button>
                   <Button
@@ -187,7 +187,7 @@ export function TasksPageDialogs({
                     variant={showDiff ? "default" : "outline"}
                     onClick={() => { setShowDiff((v: boolean) => !v); setShowSnapshots(false); setShowSearch(false); }}
                   >
-                    <GitCompareArrows className="mr-1 size-3.5" />
+                    <GitCompareArrows className="mr-1 size-3.5" aria-hidden="true" />
                     {t("tasks.compareSnapshots")}
                   </Button>
                   <Button
@@ -195,7 +195,7 @@ export function TasksPageDialogs({
                     variant={showSearch ? "default" : "outline"}
                     onClick={() => { setShowSearch((v: boolean) => !v); setShowSnapshots(false); setShowDiff(false); }}
                   >
-                    <SearchCode className="mr-1 size-3.5" />
+                    <SearchCode className="mr-1 size-3.5" aria-hidden="true" />
                     {t("tasks.searchSnapshots")}
                   </Button>
                 </>
@@ -206,7 +206,7 @@ export function TasksPageDialogs({
                   variant="outline"
                   onClick={() => setRestoreDialogOpen(true)}
                 >
-                  <RotateCcw className="mr-1 size-3.5" />
+                  <RotateCcw className="mr-1 size-3.5" aria-hidden="true" />
                   {t("tasks.restoreFromBackup")}
                 </Button>
               )}

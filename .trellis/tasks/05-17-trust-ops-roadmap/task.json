@@ -1,0 +1,32 @@
+{
+  "id": "trust-ops-roadmap",
+  "name": "trust-ops-roadmap",
+  "title": "可信运维五方向并行推进",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xiangnan-mac",
+  "assignee": "xiangnan-mac",
+  "createdAt": "2026-05-17",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "feature/trust-ops-roadmap",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-17-verified-restore-drill",
+    "05-17-backup-confidence-center",
+    "05-17-ssh-fleet-doctor",
+    "05-17-health-incident-timeline",
+    "05-17-trust-demo-feedback"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

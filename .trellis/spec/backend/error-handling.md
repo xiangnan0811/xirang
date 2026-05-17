@@ -166,3 +166,83 @@ Expose one bulk endpoint, validate the whole target set first, perform the unres
   that shortcut.
 - Do not let client-aborted dashboard/API requests pollute error logs. Preserve
   the context-aware GORM logger behavior.
+
+---
+
+## Scenario: Restore Drill Evidence Contract
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing restore drill evidence persistence, policy drill summaries, task-run detail evidence, or frontend mapping for drill evidence.
+- Applies to `restore_drill_evidences`, `GET /api/v1/policies`, `GET /api/v1/policies/:id`, `GET /api/v1/task-runs/:id`, drill execution, and frontend API mappers that expose drill evidence.
+
+### 2. Signatures
+
+- Database table: `restore_drill_evidences` with one row per drill `task_run_id`.
+- Unique index: `idx_restore_drill_evidences_task_run` on `task_run_id`.
+- Policy response field: `latest_drill` on policy list/detail objects.
+- Task-run detail response field: `drill_evidence` on `GET /api/v1/task-runs/:id`.
+- Frontend domain types: `PolicyLatestDrillSummary`, `RestoreDrillEvidence`, and `TaskRunTriggerType` including `"drill"`.
+
+### 3. Contracts
+
+- `restore_drill_evidences` stores identity fields: `policy_id`, `task_id`, `task_run_id`, optional `source_task_run_id`, optional `snapshot_ref`, `sandbox_node_id`, `sandbox_node_name`, and `sandbox_path`.
+- Top-level evidence status fields: `status`, `failed_step`, `confidence_eligible`, `started_at`, `finished_at`, and `duration_ms`.
+- Phase fields must stay explicit: `restore_status`, `restore_started_at`, `restore_finished_at`, `restore_error`, `verify_status`, `verify_started_at`, `verify_finished_at`, `verify_error`, `post_verify_status`, `post_verify_finished_at`, `post_verify_error`, `cleanup_status`, `cleanup_started_at`, `cleanup_finished_at`, and `cleanup_error`.
+- `latest_drill` contains only scan-friendly summary fields: `task_run_id`, `status`, `started_at`, `finished_at`, `duration_ms`, `failed_step`, and `confidence_eligible`.
+- `drill_evidence` contains the full structured evidence record for the requested task run when a row exists; omit it or return null for non-drill or legacy runs without evidence.
+- Only completed successful drills with successful or skipped cleanup may set `confidence_eligible=true`. Failed, canceled, pending, post-verify-failed, cleanup-failed, or abnormally terminated drills must set `confidence_eligible=false`.
+- Evidence error fields must be sanitized before storage/return; do not expose tokens, SSH secrets, private keys, raw stack traces, or raw SQL/encryption errors.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Drill restore path is blank | Use the default sandbox path or reject configuration at the existing drill config boundary. |
+| Drill restore path is `/`, `/etc`, `/usr`, `/bin`, `/sbin`, `/boot`, `/dev`, `/proc`, `/sys`, `/run`, `/var/run`, or any subpath of those directories | Reject before restore/cleanup; record failed evidence with `failed_step="restore_path"` or `"cleanup_boundary"` when execution reached evidence recording. |
+| Sandbox node is missing, unreachable, or unauthorized by drill config | Do not create positive confidence evidence; return/record a failed drill. |
+| Restore phase fails | Set `status="failed"`, `failed_step="restore"`, `restore_status="failed"`, sanitized `restore_error`, and `confidence_eligible=false`. |
+| Pre-verify or verify fails | Set `status="failed"`, `failed_step="pre_verify"` or `"verify"`, `verify_status="failed"`, sanitized `verify_error`, and `confidence_eligible=false`. |
+| Post-verify fails | Set `status="failed"`, `failed_step="post_verify"`, `post_verify_status="failed"`, sanitized `post_verify_error`, and `confidence_eligible=false`. |
+| Cleanup fails or cleanup boundary validation fails | Set `status="failed"`, `failed_step="cleanup"` or `"cleanup_boundary"`, `cleanup_status="failed"`, sanitized `cleanup_error`, and `confidence_eligible=false`. |
+| Evidence row is absent for task-run detail | Return the task run successfully without `drill_evidence`; absence is not a 500. |
+| Evidence query fails for reasons other than not found | Return the standard internal-error response and keep raw DB details out of the client response. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a drill restores to a sandbox path, verify/post-verify pass, cleanup succeeds, task-run detail returns full `drill_evidence`, and policy list shows `latest_drill.confidence_eligible=true`.
+- Base: a legacy drill task run has no evidence row; task-run detail still returns the run, and policy `latest_drill` remains null until structured evidence exists.
+- Bad: a cleanup failure leaves `status="success"` or `confidence_eligible=true`; Backup Confidence would treat an unsafe drill as proof.
+
+### 6. Tests Required
+
+- Migration tests or startup coverage must include both SQLite and PostgreSQL migration files for `000058_restore_drill_evidence` and later versions.
+- Backend drill tests must assert success evidence, restore/verify/post-verify failure evidence, cleanup failure evidence, `confidence_eligible=false` for unsafe outcomes, and sandbox path rejection for forbidden directories and subpaths.
+- Handler tests must assert policy list/detail includes `latest_drill` and task-run detail includes `drill_evidence` when present.
+- Handler tests must assert task-run detail without evidence still succeeds.
+- Frontend API tests must assert snake_case fields map to camelCase fields, including `latest_drill`, `drill_evidence`, `post_verify_finished_at`, and `trigger_type="drill"`.
+- UI tests must cover the normal task-run detail path loading full evidence from `GET /api/v1/task-runs/:id`, not only list-row fallback data.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```json
+{
+  "status": "success",
+  "last_error": "cleanup failed: rm -rf /var/run/app failed",
+  "confidence_eligible": true
+}
+```
+
+Correct:
+
+```json
+{
+  "status": "failed",
+  "failed_step": "cleanup",
+  "confidence_eligible": false,
+  "cleanup_status": "failed",
+  "cleanup_error": "清理失败: <sanitized error>"
+}
+```

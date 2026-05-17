@@ -86,6 +86,67 @@ func TestDrillTriggerSuccess(t *testing.T) {
 	}
 }
 
+func TestDrillTriggerAllowsOperatorOwningPolicyNode(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	node := model.Node{Name: "owned-drill-node", Host: "10.0.0.10", BackupDir: "/backup/owned-drill-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	policy := model.Policy{
+		Name:         "operator-owned-drill-policy",
+		SourcePath:   "/tmp/src",
+		TargetPath:   "/tmp/dst",
+		CronSpec:     "@daily",
+		DrillEnabled: true,
+		DrillCron:    "@every 5m",
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	const operatorID = uint(7)
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: operatorID}).Error; err != nil {
+		t.Fatalf("创建节点 owner 失败: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	handler.drillTriggerer = &mockDrillTriggerer{
+		fn: func(policyID uint) (uint, error) {
+			if policyID != policy.ID {
+				return 0, fmt.Errorf("策略 ID 不匹配: %d != %d", policyID, policy.ID)
+			}
+			return 77, nil
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "operator")
+		c.Set("userID", operatorID)
+		c.Next()
+	})
+	r.POST("/policies/:id/drill-trigger", handler.TriggerDrill)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/policies/%d/drill-trigger", policy.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	data, ok := envelope.Data.(map[string]interface{})
+	if !ok || data["task_run_id"] != float64(77) {
+		t.Fatalf("响应 task_run_id 不符合预期: %#v", envelope.Data)
+	}
+}
+
 // TestDrillTriggerDisabled 验证对未启用 drill 的策略触发返回 400。
 func TestDrillTriggerDisabled(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)

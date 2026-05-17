@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"Umbrella roadmap coordinates backend-heavy child tasks."}
+{"file":".trellis/spec/frontend/index.md","reason":"Umbrella roadmap coordinates frontend-heavy child tasks."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"All child work must stay on dedicated branches and PRs."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The roadmap spans backend, frontend, docs, and operational flows."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"The demo/README child task must keep public claims accurate."}
+{"file":".trellis/tasks/05-17-verified-restore-drill/research/code-foundations.md","reason":"Child-task research for restore drill evidence."}
+{"file":".trellis/tasks/05-17-backup-confidence-center/research/code-foundations.md","reason":"Child-task research for backup confidence."}
+{"file":".trellis/tasks/05-17-ssh-fleet-doctor/research/code-foundations.md","reason":"Child-task research for SSH diagnostics."}
+{"file":".trellis/tasks/05-17-health-incident-timeline/research/code-foundations.md","reason":"Child-task research for incident timeline."}
+{"file":".trellis/tasks/05-17-trust-demo-feedback/research/code-foundations.md","reason":"Child-task research for demo and feedback funnel."}

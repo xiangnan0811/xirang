@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend implementation against project conventions."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify any drill evidence persistence/migration behavior."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify drill failures and cleanup failures are surfaced correctly."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Run backend quality review expectations."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend drill evidence UI conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check interactive drill UI accessibility."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check API type safety for drill evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check database-to-UI evidence flow."}
+{"file":".trellis/tasks/05-17-verified-restore-drill/research/code-foundations.md","reason":"Check implementation against researched constraints and gaps."}

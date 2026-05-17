@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend confidence API/service conventions."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check any confidence read model/persistence usage."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check missing/stale evidence and reason behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend tests and quality expectations."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend confidence UI conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check confidence UI accessibility."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check API type safety for confidence payloads."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check evidence flow across layers."}
+{"file":".trellis/tasks/05-17-backup-confidence-center/research/code-foundations.md","reason":"Check implementation against researched constraints and gaps."}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, Plus, Trash2, Wrench } from "lucide-react";
+import { Copy, Plus, ShieldCheck, Trash2, Wrench } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { usePoliciesContext } from "@/context/policies-context.hooks";
@@ -33,6 +33,26 @@ import { PolicyCard } from "@/pages/policies-page.card";
 import { PoliciesFilters } from "@/pages/policies-page.filters";
 
 const keywordStorageKey = "xirang.policies.keyword";
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "-";
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainSec = seconds % 60;
+  if (minutes < 60) return `${minutes}m${remainSec}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainMin = minutes % 60;
+  return `${hours}h${remainMin}m`;
+}
+
+function drillTone(status?: string): "success" | "destructive" | "warning" | "neutral" {
+  if (status === "success") return "success";
+  if (status === "failed") return "destructive";
+  if (status === "running" || status === "pending") return "warning";
+  return "neutral";
+}
 
 export function PoliciesPage() {
   const { t } = useTranslation();
@@ -133,6 +153,31 @@ export function PoliciesPage() {
       nodeIds: draft.nodeIds ?? [],
       verifyEnabled: draft.verifyEnabled ?? false,
       verifySampleRate: draft.verifySampleRate ?? 0,
+      preHook: draft.preHook ?? "",
+      postHook: draft.postHook ?? "",
+      hookTimeoutSeconds: draft.hookTimeoutSeconds,
+      maxRetries: draft.maxRetries,
+      retryBaseSeconds: draft.retryBaseSeconds,
+      bandwidthSchedule: draft.bandwidthSchedule ?? "",
+      retention_days: draft.retention_days,
+      retention_mode: draft.retention_mode,
+      keep_daily: draft.keep_daily,
+      keep_weekly: draft.keep_weekly,
+      keep_monthly: draft.keep_monthly,
+      keep_yearly: draft.keep_yearly,
+      rpo_minutes: draft.rpo_minutes,
+      rto_minutes: draft.rto_minutes,
+      escalation_policy_id: draft.escalation_policy_id ?? null,
+      app_profile: draft.app_profile ?? "",
+      app_credential_id: draft.app_credential_id ?? null,
+      drill_enabled: draft.drill_enabled ?? false,
+      drill_cron: draft.drill_cron ?? "",
+      drill_target_node_id: draft.drill_target_node_id ?? null,
+      drill_restore_path: draft.drill_restore_path ?? "/tmp/xirang-drill",
+      drill_pre_verify: draft.drill_pre_verify ?? "",
+      drill_verify: draft.drill_verify ?? "",
+      drill_post_verify: draft.drill_post_verify ?? "",
+      drill_auto_cleanup: draft.drill_auto_cleanup ?? true,
     };
 
     try {
@@ -326,6 +371,7 @@ export function PoliciesPage() {
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnSource')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnTarget')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnNodes')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('policies.columnLatestDrill')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnStatus')}</th>
                   <th scope="col" className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
                 </tr>
@@ -358,6 +404,29 @@ export function PoliciesPage() {
                       <td className="px-3 py-2.5 text-muted-foreground">{policy.targetPath}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">
                         {t('policies.nodeCount', { selected: policy.nodeIds?.length ?? 0, total: nodes?.length ?? 0 })}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {policy.latestDrill ? (
+                          <div className="space-y-1 text-xs">
+                            <Badge tone={drillTone(policy.latestDrill.status)} className="w-fit">
+                              <ShieldCheck className="size-3" aria-hidden="true" />
+                              {t(`policies.drillStatus.${policy.latestDrill.status}`)}
+                            </Badge>
+                            <p className="text-muted-foreground">
+                              {t('policies.latestDrillTime', { time: policy.latestDrill.finishedAt || policy.latestDrill.startedAt || '-' })}
+                            </p>
+                            <p className="text-muted-foreground">
+                              {t('policies.latestDrillDuration', { duration: formatDuration(policy.latestDrill.durationMs) })}
+                            </p>
+                            {policy.latestDrill.failedStep ? (
+                              <p className="text-destructive">
+                                {t('policies.latestDrillFailedStep', { step: t(`policies.drillFailedStep.${policy.latestDrill.failedStep}`, { defaultValue: policy.latestDrill.failedStep }) })}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{t('policies.latestDrillNever')}</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <Switch
@@ -403,7 +472,7 @@ export function PoliciesPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="px-3 py-5">
+                    <td colSpan={9} className="px-3 py-5">
                       <EmptyState
                         className="py-8"
                         title={t('policies.noMatchTitle')}

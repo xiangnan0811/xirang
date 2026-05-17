@@ -87,6 +87,8 @@ type Manager struct {
 	strategyLocks      sync.Map
 	nodeLocks          sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
 	hookRunFunc        func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	drillSSHScriptFunc func(ctx context.Context, node model.Node, script string) error  // 可测试注入
+	drillRestoreFunc   func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
 	runningCancels     sync.Map
 	pendingRuns        sync.Map
 	restoreNodes       sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
@@ -147,6 +149,8 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		settingsSvc:          settingsSvc,
 	}
 	m.hookRunFunc = m.runSSHHook
+	m.drillSSHScriptFunc = m.runDrillSSHScript
+	m.drillRestoreFunc = m.restoreBackupToSandbox
 	m.startLogWorker()
 	m.startSampleWorker()
 	return m

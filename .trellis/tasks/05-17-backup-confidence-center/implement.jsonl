@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend API/service conventions apply to confidence aggregation."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Confidence may need read models or persistence."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Confidence reasons must handle missing/stale evidence safely."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend implementation quality and tests."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend page/component conventions for confidence UI."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Confidence panels and evidence lists should follow component patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Confidence API payloads require typed client models."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Confidence spans evidence sources, API, and UI."}
+{"file":".trellis/tasks/05-17-backup-confidence-center/research/code-foundations.md","reason":"Code-grounded findings and constraints for confidence MVP."}

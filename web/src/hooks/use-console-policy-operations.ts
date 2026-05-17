@@ -99,6 +99,44 @@ export function usePolicyOperations({
     );
   }, [exec, refreshTasks, setPolicies]);
 
+  const buildPolicyUpdateInput = useCallback((policy: PolicyRecord, overrides: Partial<NewPolicyInput> = {}): NewPolicyInput => ({
+    name: policy.name,
+    sourcePath: policy.sourcePath,
+    targetPath: policy.targetPath,
+    cron: policy.cron,
+    criticalThreshold: policy.criticalThreshold,
+    enabled: policy.enabled,
+    nodeIds: policy.nodeIds ?? [],
+    verifyEnabled: policy.verifyEnabled ?? false,
+    verifySampleRate: policy.verifySampleRate ?? 0,
+    preHook: policy.preHook,
+    postHook: policy.postHook,
+    hookTimeoutSeconds: policy.hookTimeoutSeconds,
+    maxRetries: policy.maxRetries,
+    retryBaseSeconds: policy.retryBaseSeconds,
+    bandwidthSchedule: policy.bandwidthSchedule,
+    escalation_policy_id: policy.escalation_policy_id ?? null,
+    app_profile: policy.app_profile,
+    app_credential_id: policy.app_credential_id ?? null,
+    retention_days: policy.retention_days,
+    retention_mode: policy.retention_mode,
+    keep_daily: policy.keep_daily,
+    keep_weekly: policy.keep_weekly,
+    keep_monthly: policy.keep_monthly,
+    keep_yearly: policy.keep_yearly,
+    rpo_minutes: policy.rpo_minutes,
+    rto_minutes: policy.rto_minutes,
+    drill_enabled: policy.drill_enabled,
+    drill_cron: policy.drill_cron,
+    drill_target_node_id: policy.drill_target_node_id ?? null,
+    drill_restore_path: policy.drill_restore_path,
+    drill_pre_verify: policy.drill_pre_verify,
+    drill_verify: policy.drill_verify,
+    drill_post_verify: policy.drill_post_verify,
+    drill_auto_cleanup: policy.drill_auto_cleanup,
+    ...overrides,
+  }), []);
+
   const deletePolicy = useCallback(async (policyID: number) => {
     await exec(i18n.t("policies.actions.deletePolicy"), (t) => apiClient.deletePolicy(t, policyID));
     const policyName = policies.find((policy) => policy.id === policyID)?.name;
@@ -115,35 +153,15 @@ export function usePolicyOperations({
     if (!current) {
       return;
     }
-    await updatePolicy(policyID, {
-      name: current.name,
-      sourcePath: current.sourcePath,
-      targetPath: current.targetPath,
-      cron: current.cron,
-      criticalThreshold: current.criticalThreshold,
-      enabled: !current.enabled,
-      nodeIds: current.nodeIds ?? [],
-      verifyEnabled: current.verifyEnabled ?? false,
-      verifySampleRate: current.verifySampleRate ?? 0,
-    });
-  }, [policies, updatePolicy]);
+    await updatePolicy(policyID, buildPolicyUpdateInput(current, { enabled: !current.enabled }));
+  }, [buildPolicyUpdateInput, policies, updatePolicy]);
 
   const updatePolicySchedule = useCallback(async (policyID: number, cron: string, naturalLanguage: string) => {
     const current = policies.find((policy) => policy.id === policyID);
     if (!current) {
       return;
     }
-    await updatePolicy(policyID, {
-      name: current.name,
-      sourcePath: current.sourcePath,
-      targetPath: current.targetPath,
-      criticalThreshold: current.criticalThreshold,
-      enabled: current.enabled,
-      cron,
-      nodeIds: current.nodeIds ?? [],
-      verifyEnabled: current.verifyEnabled ?? false,
-      verifySampleRate: current.verifySampleRate ?? 0,
-    });
+    await updatePolicy(policyID, buildPolicyUpdateInput(current, { cron }));
     setPolicies((prev) =>
       prev.map((policy) =>
         policy.id === policyID
@@ -151,7 +169,7 @@ export function usePolicyOperations({
           : policy
       )
     );
-  }, [policies, setPolicies, updatePolicy]);
+  }, [buildPolicyUpdateInput, policies, setPolicies, updatePolicy]);
 
   return {
     createPolicy,

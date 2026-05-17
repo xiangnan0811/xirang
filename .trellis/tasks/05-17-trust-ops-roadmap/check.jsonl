@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check roadmap child tasks are compatible with backend conventions."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check roadmap child tasks are compatible with frontend conventions."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Check branch/PR workflow assumptions."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check cross-child API/data-flow dependencies."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check public-facing roadmap/docs truthfulness."}
+{"file":".trellis/tasks/05-17-verified-restore-drill/research/code-foundations.md","reason":"Check restore drill child scope against research."}
+{"file":".trellis/tasks/05-17-backup-confidence-center/research/code-foundations.md","reason":"Check backup confidence child scope against research."}
+{"file":".trellis/tasks/05-17-ssh-fleet-doctor/research/code-foundations.md","reason":"Check SSH doctor child scope against research."}
+{"file":".trellis/tasks/05-17-health-incident-timeline/research/code-foundations.md","reason":"Check incident timeline child scope against research."}
+{"file":".trellis/tasks/05-17-trust-demo-feedback/research/code-foundations.md","reason":"Check demo/feedback child scope against research."}

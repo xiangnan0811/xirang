@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Clock, Play, RotateCcw, Timer, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, Play, RotateCcw, Timer, ChevronLeft, ChevronRight, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -14,13 +14,15 @@ const PAGE_SIZE = 10;
 function getTriggerIcon(type: TaskRunRecord["triggerType"]) {
   switch (type) {
     case "cron":
-      return <Clock className="size-3.5" />;
+      return <Clock className="size-3.5" aria-hidden="true" />;
     case "retry":
-      return <RotateCcw className="size-3.5" />;
+      return <RotateCcw className="size-3.5" aria-hidden="true" />;
     case "restore":
-      return <Timer className="size-3.5" />;
+      return <Timer className="size-3.5" aria-hidden="true" />;
+    case "drill":
+      return <ShieldCheck className="size-3.5" aria-hidden="true" />;
     default:
-      return <Play className="size-3.5" />;
+      return <Play className="size-3.5" aria-hidden="true" />;
   }
 }
 
@@ -29,6 +31,7 @@ function getTriggerLabelKey(type: TaskRunRecord["triggerType"]): string {
     case "cron":
     case "retry":
     case "restore":
+    case "drill":
       return `tasks.triggerType.${type}`;
     default:
       return "tasks.triggerType.manual";
@@ -171,7 +174,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               onClick={() => setPage(Math.max(1, page - 1))}
               aria-label={t('taskRunHistory.prevPage')}
             >
-              <ChevronLeft className="size-3.5" />
+              <ChevronLeft className="size-3.5" aria-hidden="true" />
             </Button>
             <Button
               variant="outline"
@@ -181,7 +184,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               onClick={() => setPage(page + 1)}
               aria-label={t('taskRunHistory.nextPage')}
             >
-              <ChevronRight className="size-3.5" />
+              <ChevronRight className="size-3.5" aria-hidden="true" />
             </Button>
           </div>
         </div>

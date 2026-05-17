@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend timeline API/service conventions."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check aggregation/read model query behavior."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check missing resource and partial evidence behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend tests and quality."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend timeline UI conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check timeline UI accessibility."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check timeline payload type safety."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check event aggregation across layers."}
+{"file":".trellis/tasks/05-17-health-incident-timeline/research/code-foundations.md","reason":"Check implementation against researched aggregation constraints and gaps."}

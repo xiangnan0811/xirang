@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend API/service/model conventions apply to drill evidence contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Drill evidence may require schema or persistence changes."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Restore/drill failures must be represented with clear errors."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend implementation quality and forbidden patterns."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend UI conventions apply to drill history/evidence views."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Drill evidence UI should match component patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"New drill evidence API types must be strongly typed."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Drill evidence spans database, service, API, and UI."}
+{"file":".trellis/tasks/05-17-verified-restore-drill/research/code-foundations.md","reason":"Code-grounded findings and constraints for restore drill evidence."}

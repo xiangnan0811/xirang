@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend demo/mock conventions."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check demo UI component patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check mock/demo type safety."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check demo/onboarding accessibility."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check README/docs and feedback claims for truthfulness."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check demo story consistency across docs and UI."}
+{"file":".trellis/tasks/05-17-trust-demo-feedback/research/code-foundations.md","reason":"Check implementation against researched demo/feedback gaps."}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
@@ -25,7 +26,7 @@ func openPolicyHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Policy{}, &model.Node{}, &model.PolicyNode{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Policy{}, &model.Node{}, &model.PolicyNode{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}); err != nil {
 		t.Fatalf("迁移测试表失败: %v", err)
 	}
 	return db
@@ -129,6 +130,49 @@ func setupDrillTestRouter(handler *PolicyHandler) *gin.Engine {
 }
 
 // TestDrillCreateValid 测试创建启用 drill 的有效策略
+func TestPolicyCreatePersistsEscalationPolicy(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+	escalationPolicyID := uint(42)
+	body := map[string]any{
+		"name":                 "policy-escalation",
+		"source_path":          "/data",
+		"cron_spec":            "0 2 * * *",
+		"escalation_policy_id": escalationPolicyID,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/policies", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			ID                 uint  `json:"id"`
+			EscalationPolicyID *uint `json:"escalation_policy_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Data.EscalationPolicyID == nil || *envelope.Data.EscalationPolicyID != escalationPolicyID {
+		t.Fatalf("期望响应包含 escalation_policy_id=%d，实际: %#v", escalationPolicyID, envelope.Data.EscalationPolicyID)
+	}
+	var policyEntity model.Policy
+	if err := db.First(&policyEntity, envelope.Data.ID).Error; err != nil {
+		t.Fatalf("查询策略失败: %v", err)
+	}
+	if policyEntity.EscalationPolicyID == nil || *policyEntity.EscalationPolicyID != escalationPolicyID {
+		t.Fatalf("期望持久化 escalation_policy_id=%d，实际: %#v", escalationPolicyID, policyEntity.EscalationPolicyID)
+	}
+}
+
 func TestDrillCreateValid(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)
 
@@ -237,7 +281,45 @@ func TestDrillCreateSandboxEqualsSource(t *testing.T) {
 	}
 }
 
-// TestDrillCreateDisabled 测试 drill_enabled=false 时不校验 drill 字段
+// TestDrillCreateRejectsForbiddenSystemSubpaths 测试恢复演练禁止写入系统目录及其子路径。
+func TestDrillCreateRejectsForbiddenSystemSubpaths(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	sandbox := model.Node{Name: "sandbox-forbidden-path", Host: "10.0.0.100", BackupDir: "/backup/sandbox-forbidden"}
+	if err := db.Create(&sandbox).Error; err != nil {
+		t.Fatalf("创建沙箱节点失败: %v", err)
+	}
+	source := model.Node{Name: "source-forbidden-path", Host: "10.0.0.1", BackupDir: "/backup/source-forbidden"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("创建源节点失败: %v", err)
+	}
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+	for _, restorePath := range []string{"/dev", "/dev/xirang", "/proc/self", "/sys/fs", "/run/xirang", "/var/run/xirang"} {
+		t.Run(restorePath, func(t *testing.T) {
+			body := map[string]any{
+				"name":                 "drill-forbidden-path",
+				"source_path":          "/data",
+				"cron_spec":            "0 2 * * *",
+				"drill_enabled":        true,
+				"drill_cron":           "0 3 * * *",
+				"drill_target_node_id": sandbox.ID,
+				"drill_restore_path":   restorePath,
+				"node_ids":             []uint{source.ID},
+			}
+			raw, _ := json.Marshal(body)
+			req := httptest.NewRequest(http.MethodPost, "/policies", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("期望禁止路径 %s 返回 400，实际: %d, body=%s", restorePath, resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
 func TestDrillCreateDisabled(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)
 
@@ -317,6 +399,72 @@ func TestDrillUpdateAddConfig(t *testing.T) {
 	}
 }
 
+// TestDrillUpdateWithoutDrillFieldsPreservesExistingConfig 测试局部更新不会清空既有 drill 配置。
+func TestDrillUpdateWithoutDrillFieldsPreservesExistingConfig(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	sandboxID := uint(42)
+	policyEntity := model.Policy{
+		Name:                "preserve-drill-config",
+		SourcePath:          "/data",
+		TargetPath:          config.BackupRoot,
+		CronSpec:            "0 2 * * *",
+		Enabled:             true,
+		DrillEnabled:        true,
+		DrillCron:           "0 4 * * *",
+		DrillTargetNodeID:   &sandboxID,
+		DrillRestorePath:    "/tmp/drill-preserve",
+		DrillPreVerify:      "test -d /tmp/drill-preserve",
+		DrillVerify:         "test -f /tmp/drill-preserve/ok",
+		DrillPostVerify:     "true",
+		DrillAutoCleanup:    false,
+		MaxConcurrent:       1,
+		RetentionDays:       7,
+		VerifyEnabled:       true,
+		VerifySampleRate:    0,
+		HookTimeoutSeconds:  300,
+		MaxExecutionSeconds: 0,
+		RetentionMode:       "simple",
+	}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+	body := map[string]any{
+		"name":        "preserve-drill-config-renamed",
+		"source_path": "/data-renamed",
+		"cron_spec":   "0 5 * * *",
+		"enabled":     true,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", policyEntity.ID), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.Policy
+	if err := db.First(&updated, policyEntity.ID).Error; err != nil {
+		t.Fatalf("查询更新后策略失败: %v", err)
+	}
+	if !updated.DrillEnabled || updated.DrillCron != policyEntity.DrillCron || updated.DrillRestorePath != policyEntity.DrillRestorePath {
+		t.Fatalf("drill 基础配置未保留: %+v", updated)
+	}
+	if updated.DrillTargetNodeID == nil || *updated.DrillTargetNodeID != sandboxID {
+		t.Fatalf("drill_target_node_id 未保留: %#v", updated.DrillTargetNodeID)
+	}
+	if updated.DrillPreVerify != policyEntity.DrillPreVerify || updated.DrillVerify != policyEntity.DrillVerify || updated.DrillPostVerify != policyEntity.DrillPostVerify {
+		t.Fatalf("drill 校验脚本未保留: %+v", updated)
+	}
+	if updated.DrillAutoCleanup != policyEntity.DrillAutoCleanup {
+		t.Fatalf("drill_auto_cleanup 未保留: %v", updated.DrillAutoCleanup)
+	}
+}
+
 // TestDrillGetIncludesFields 测试获取策略时响应包含 drill 字段
 func TestDrillGetIncludesFields(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)
@@ -377,6 +525,103 @@ func TestDrillGetIncludesFields(t *testing.T) {
 }
 
 // TestGFSCreateValid 测试创建 GFS 保留模式的策略
+func TestPolicyListIncludesLatestDrillSummary(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	policyEntity := model.Policy{Name: "drill-summary", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	taskEntity := model.Task{Name: "task-drill-summary", PolicyID: &policyEntity.ID, NodeID: 1, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	oldRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: "success"}
+	if err := db.Create(&oldRun).Error; err != nil {
+		t.Fatalf("创建旧演练记录失败: %v", err)
+	}
+	oldStartedAt := time.Now().Add(-2 * time.Hour).UTC()
+	if err := db.Create(&model.RestoreDrillEvidence{
+		PolicyID:           policyEntity.ID,
+		TaskID:             taskEntity.ID,
+		TaskRunID:          oldRun.ID,
+		SandboxNodeID:      2,
+		SandboxNodeName:    "sandbox-old",
+		SandboxPath:        "/tmp/drill-old",
+		Status:             "success",
+		ConfidenceEligible: true,
+		StartedAt:          &oldStartedAt,
+		FinishedAt:         &oldStartedAt,
+		DurationMs:         1000,
+	}).Error; err != nil {
+		t.Fatalf("创建旧演练证据失败: %v", err)
+	}
+	newRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: "failed"}
+	if err := db.Create(&newRun).Error; err != nil {
+		t.Fatalf("创建新演练记录失败: %v", err)
+	}
+	newStartedAt := time.Now().Add(-time.Hour).UTC()
+	newFinishedAt := newStartedAt.Add(5 * time.Second)
+	if err := db.Create(&model.RestoreDrillEvidence{
+		PolicyID:           policyEntity.ID,
+		TaskID:             taskEntity.ID,
+		TaskRunID:          newRun.ID,
+		SandboxNodeID:      2,
+		SandboxNodeName:    "sandbox-new",
+		SandboxPath:        "/tmp/drill-new",
+		Status:             "failed",
+		FailedStep:         "verify",
+		ConfidenceEligible: false,
+		StartedAt:          &newStartedAt,
+		FinishedAt:         &newFinishedAt,
+		DurationMs:         5000,
+	}).Error; err != nil {
+		t.Fatalf("创建新演练证据失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	r.GET("/policies", NewPolicyHandler(db, nil).List)
+
+	req := httptest.NewRequest(http.MethodGet, "/policies", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int              `json:"code"`
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if len(envelope.Data) != 1 {
+		t.Fatalf("期望 1 条策略，实际: %d", len(envelope.Data))
+	}
+	latest, ok := envelope.Data[0]["latest_drill"].(map[string]any)
+	if !ok || latest == nil {
+		t.Fatalf("期望 latest_drill 对象，实际: %#v", envelope.Data[0]["latest_drill"])
+	}
+	if latest["task_run_id"] != float64(newRun.ID) {
+		t.Fatalf("期望返回最新演练 run #%d，实际: %v", newRun.ID, latest["task_run_id"])
+	}
+	if latest["status"] != "failed" {
+		t.Fatalf("期望 latest_drill.status=failed，实际: %v", latest["status"])
+	}
+	if latest["failed_step"] != "verify" {
+		t.Fatalf("期望 latest_drill.failed_step=verify，实际: %v", latest["failed_step"])
+	}
+	if latest["confidence_eligible"] != false {
+		t.Fatalf("失败演练不应作为正向可信证据，实际: %v", latest["confidence_eligible"])
+	}
+	if latest["duration_ms"] != float64(5000) {
+		t.Fatalf("期望 latest_drill.duration_ms=5000，实际: %v", latest["duration_ms"])
+	}
+}
+
 func TestGFSCreateValid(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)
 

@@ -102,7 +102,7 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("获取底层连接失败: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {

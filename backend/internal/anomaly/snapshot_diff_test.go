@@ -63,10 +63,12 @@ func TestCalculateBaseline(t *testing.T) {
 		{AddedCount: 10, RemovedCount: 10, ChangedCount: 10}, // total=30
 	}
 	// All records have total=30 → mean=30, stddev=0
-	b := CalculateBaseline(records, 3)
-	if b == nil {
+	baseline := CalculateBaseline(records, 3)
+	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
+	b := *baseline
 	if b.Mean != 30.0 {
 		t.Errorf("Mean = %f, want 30.0", b.Mean)
 	}
@@ -94,10 +96,12 @@ func TestCalculateBaselineSingleSample(t *testing.T) {
 	records := []DiffRecord{
 		{AddedCount: 10, RemovedCount: 5, ChangedCount: 15}, // total=30
 	}
-	b := CalculateBaseline(records, 1)
-	if b == nil {
+	baseline := CalculateBaseline(records, 1)
+	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
+	b := *baseline
 	if b.Mean != 30.0 {
 		t.Errorf("Mean = %f, want 30.0", b.Mean)
 	}
@@ -119,10 +123,12 @@ func TestCalculateBaselineVaried(t *testing.T) {
 	// mean=(10+20+30+40)/4=25
 	// variance=((10-25)^2+(20-25)^2+(30-25)^2+(40-25)^2)/4 = (225+25+25+225)/4 = 500/4 = 125
 	// stddev=sqrt(125) ≈ 11.18
-	b := CalculateBaseline(records, 2)
-	if b == nil {
+	baseline := CalculateBaseline(records, 2)
+	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
+	b := *baseline
 	if math.Abs(b.Mean-25.0) > 0.01 {
 		t.Errorf("Mean = %f, want 25.0", b.Mean)
 	}
@@ -136,33 +142,33 @@ func TestIsAnomalous(t *testing.T) {
 	baseline := &Baseline{Mean: 50.0, StdDev: 10.0, N: 10}
 
 	tests := []struct {
-		name       string
-		current    DiffRecord
-		k          float64
+		name        string
+		current     DiffRecord
+		k           float64
 		wantAnomaly bool
 	}{
 		{
-			name:       "normal churn (70 < 80)",
-			current:    DiffRecord{AddedCount: 50, RemovedCount: 10, ChangedCount: 10}, // total=70
-			k:          3.0,
+			name:        "normal churn (70 < 80)",
+			current:     DiffRecord{AddedCount: 50, RemovedCount: 10, ChangedCount: 10}, // total=70
+			k:           3.0,
 			wantAnomaly: false,
 		},
 		{
-			name:       "anomalous churn (90 > 80)",
-			current:    DiffRecord{AddedCount: 60, RemovedCount: 20, ChangedCount: 10}, // total=90
-			k:          3.0,
+			name:        "anomalous churn (90 > 80)",
+			current:     DiffRecord{AddedCount: 60, RemovedCount: 20, ChangedCount: 10}, // total=90
+			k:           3.0,
 			wantAnomaly: true,
 		},
 		{
-			name:       "edge case equal to threshold (80 == 80)",
-			current:    DiffRecord{AddedCount: 50, RemovedCount: 20, ChangedCount: 10}, // total=80
-			k:          3.0,
+			name:        "edge case equal to threshold (80 == 80)",
+			current:     DiffRecord{AddedCount: 50, RemovedCount: 20, ChangedCount: 10}, // total=80
+			k:           3.0,
 			wantAnomaly: false, // strictly greater, not >=
 		},
 		{
-			name:       "k=1 lower threshold (70 > 60)",
-			current:    DiffRecord{AddedCount: 50, RemovedCount: 10, ChangedCount: 10}, // total=70
-			k:          1.0,
+			name:        "k=1 lower threshold (70 > 60)",
+			current:     DiffRecord{AddedCount: 50, RemovedCount: 10, ChangedCount: 10}, // total=70
+			k:           1.0,
 			wantAnomaly: true, // 70 > 50+10=60
 		},
 	}

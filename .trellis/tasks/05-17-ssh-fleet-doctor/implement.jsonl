@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend API/service conventions apply to diagnostics."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Diagnostic failures need clear structured results."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Diagnostics must not leak sensitive SSH details in logs."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend implementation quality and tests."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend node Doctor UI conventions."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Diagnostic result components should follow existing patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Diagnostic result contracts require typed frontend models."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Doctor spans SSH/probe services, API, and UI."}
+{"file":".trellis/tasks/05-17-ssh-fleet-doctor/research/code-foundations.md","reason":"Code-grounded findings and constraints for allowlisted SSH diagnostics."}

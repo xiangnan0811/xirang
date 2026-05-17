@@ -503,10 +503,12 @@ func TestBuildReportMessage(t *testing.T) {
 
 func TestNewScheduler_CreatesInstance(t *testing.T) {
 	db := openReportingTestDB(t)
-	s := NewScheduler(db)
-	if s == nil {
+	scheduler := NewScheduler(db)
+	if scheduler == nil {
 		t.Fatal("NewScheduler returned nil")
+		return
 	}
+	s := *scheduler
 	if s.db != db {
 		t.Fatal("Scheduler.db not set")
 	}
@@ -799,10 +801,12 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 
 	if actualRPO == nil {
 		t.Fatal("expected actualRPO not nil")
+		return
 	}
+	rpo := *actualRPO
 	// 间隔 = 2h = 120 分钟
-	if *actualRPO != 120 {
-		t.Fatalf("expected actualRPO=120, got %d", *actualRPO)
+	if rpo != 120 {
+		t.Fatalf("expected actualRPO=120, got %d", rpo)
 	}
 	if *rpoCompliant != false {
 		t.Fatal("expected rpoCompliant=false (120 > 60)")
@@ -810,9 +814,11 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 
 	if actualRTO == nil {
 		t.Fatal("expected actualRTO not nil")
+		return
 	}
-	if *actualRTO != 5 { // 300000ms / 60000 = 5
-		t.Fatalf("expected actualRTO=5, got %d", *actualRTO)
+	rto := *actualRTO
+	if rto != 5 { // 300000ms / 60000 = 5
+		t.Fatalf("expected actualRTO=5, got %d", rto)
 	}
 	if *rtoCompliant != true {
 		t.Fatal("expected rtoCompliant=true (5 <= 120)")

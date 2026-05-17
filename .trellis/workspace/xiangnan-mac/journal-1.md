@@ -1280,3 +1280,36 @@ Collapsed Docker deployment to root docker-compose.yml with fixed linnea7171/xir
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: Verified Restore Drill Evidence
+
+**Date**: 2026-05-17
+**Task**: Verified Restore Drill Evidence
+**Branch**: `feature/verified-restore-drill-evidence`
+
+### Summary
+
+Implemented structured restore drill evidence with backend persistence/API contracts, frontend policy/task-run evidence views, safety-boundary tests, code-spec updates, and full backend/frontend verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ba869ec` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
