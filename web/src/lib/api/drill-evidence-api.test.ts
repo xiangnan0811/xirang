@@ -176,7 +176,7 @@ describe("drill evidence API mapping", () => {
             verify_finished_at: "2026-05-17T10:01:30Z",
             verify_error: "",
             post_verify_status: "skipped",
-            post_verify_finished_at: "2026-05-17T10:01:31Z",
+            post_verify_finished_at: "2026-05-17T10:01:31",
             post_verify_error: "",
             cleanup_status: "failed",
             cleanup_started_at: "2026-05-17T10:01:31Z",
@@ -209,7 +209,7 @@ describe("drill evidence API mapping", () => {
       restoreStatus: "success",
       verifyStatus: "success",
       postVerifyStatus: "skipped",
-      postVerifyFinishedAt: "2026-05-17 18:01:31",
+      postVerifyFinishedAt: "2026-05-17 10:01:31",
       cleanupStatus: "failed",
       cleanupError: "permission denied",
     });
