@@ -37,7 +37,7 @@ export function InlineAlert({
       <div className={cn("absolute top-0 left-0 w-1 h-full opacity-60 group-hover:opacity-100 transition-opacity", s.line)} />
       <div className="flex items-start gap-3 pl-2">
         <div className={cn("flex items-center justify-center rounded-lg p-2 shrink-0", s.bg, s.text)}>
-          {icon || <Icon className="size-4" />}
+          {icon || <Icon className="size-4" aria-hidden="true" />}
         </div>
         <div className="flex flex-col gap-0.5 min-w-0 text-sm py-0.5">
           {title && <span className={cn("font-medium", s.text)}>{title}</span>}

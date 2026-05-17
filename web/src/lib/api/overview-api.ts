@@ -1,4 +1,4 @@
-import type { BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
+import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
 import { request } from "./core";
 
@@ -82,6 +82,27 @@ type StorageUsageRaw = {
   per_node?: { node_id: number; node_name: string; path: string; used_gb: number }[];
 };
 
+type BackupConfidenceRaw = {
+  generated_at?: string;
+  summary?: { healthy?: number | string; warning?: number | string; at_risk?: number | string; insufficient?: number | string; total?: number | string };
+  items?: BackupConfidenceItemRaw[];
+};
+
+type BackupConfidenceItemRaw = {
+  id?: string;
+  scope?: string;
+  policy_id?: number | string;
+  policy_name?: string;
+  node_id?: number | string;
+  node_name?: string;
+  status?: string;
+  score?: number | string;
+  reasons?: { code?: string; severity?: string; message?: string }[];
+  evidence?: { type?: string; status?: string; message?: string; observed_at?: string | null; task_id?: number | string; task_run_id?: number | string; alert_id?: number | string }[];
+  next_steps?: { code?: string; label?: string }[];
+  targets?: { node_id?: number | string; node_name?: string; last_backup_at?: string | null }[];
+};
+
 function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthData {
   const staleNodes = Array.isArray(raw?.stale_nodes)
     ? raw.stale_nodes.map((n) => {
@@ -134,6 +155,87 @@ function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthD
   };
 }
 
+function mapConfidenceStatus(raw?: string): BackupConfidenceStatus {
+  switch (raw) {
+    case "healthy":
+    case "warning":
+    case "at_risk":
+    case "insufficient":
+      return raw;
+    default:
+      return "insufficient";
+  }
+}
+
+function mapConfidenceSeverity(raw?: string): BackupConfidenceSeverity {
+  switch (raw) {
+    case "info":
+    case "warning":
+    case "critical":
+      return raw;
+    default:
+      return "info";
+  }
+}
+
+function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidenceItem {
+  return {
+    id: String(raw.id || `policy-${raw.policy_id ?? raw.node_id ?? "unknown"}`),
+    scope: raw.scope === "node" ? "node" : "policy",
+    policyId: Number(raw.policy_id ?? 0) > 0 ? Number(raw.policy_id) : undefined,
+    policyName: raw.policy_name || undefined,
+    nodeId: Number(raw.node_id ?? 0) > 0 ? Number(raw.node_id) : undefined,
+    nodeName: raw.node_name || undefined,
+    status: mapConfidenceStatus(raw.status),
+    score: Number(raw.score ?? 0),
+    reasons: Array.isArray(raw.reasons)
+      ? raw.reasons.map((reason) => ({
+          code: String(reason.code || "unknown"),
+          severity: mapConfidenceSeverity(reason.severity),
+          message: String(reason.message || ""),
+        }))
+      : [],
+    evidence: Array.isArray(raw.evidence)
+      ? raw.evidence.map((evidence) => ({
+          type: String(evidence.type || "unknown"),
+          status: String(evidence.status || "unknown"),
+          message: String(evidence.message || ""),
+          observedAt: evidence.observed_at || undefined,
+          taskId: Number(evidence.task_id ?? 0) > 0 ? Number(evidence.task_id) : undefined,
+          taskRunId: Number(evidence.task_run_id ?? 0) > 0 ? Number(evidence.task_run_id) : undefined,
+          alertId: Number(evidence.alert_id ?? 0) > 0 ? Number(evidence.alert_id) : undefined,
+        }))
+      : [],
+    nextSteps: Array.isArray(raw.next_steps)
+      ? raw.next_steps.map((step) => ({
+          code: String(step.code || "unknown"),
+          label: String(step.label || ""),
+        }))
+      : [],
+    targets: Array.isArray(raw.targets)
+      ? raw.targets.map((target) => ({
+          nodeId: Number(target.node_id ?? 0),
+          nodeName: String(target.node_name || ""),
+          lastBackupAt: target.last_backup_at || undefined,
+        }))
+      : [],
+  };
+}
+
+function mapBackupConfidence(raw: BackupConfidenceRaw | null | undefined): BackupConfidenceData {
+  return {
+    generatedAt: raw?.generated_at ?? "",
+    summary: {
+      healthy: Number(raw?.summary?.healthy || 0),
+      warning: Number(raw?.summary?.warning || 0),
+      atRisk: Number(raw?.summary?.at_risk || 0),
+      insufficient: Number(raw?.summary?.insufficient || 0),
+      total: Number(raw?.summary?.total || 0),
+    },
+    items: Array.isArray(raw?.items) ? raw.items.map(mapBackupConfidenceItem) : [],
+  };
+}
+
 function mapStorageUsage(raw: StorageUsageRaw | null | undefined): StorageUsageData {
   return {
     mountPoints: Array.isArray(raw?.mount_points)
@@ -175,6 +277,11 @@ export function createOverviewApi() {
     async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {
       const payload = await request<BackupHealthRaw>("/overview/backup-health", { token, signal: options?.signal });
       return mapBackupHealth(payload);
+    },
+
+    async getBackupConfidence(token: string, options?: { signal?: AbortSignal }): Promise<BackupConfidenceData> {
+      const payload = await request<BackupConfidenceRaw>("/overview/backup-confidence", { token, signal: options?.signal });
+      return mapBackupConfidence(payload);
     },
 
     async getStorageUsage(token: string, options?: { signal?: AbortSignal }): Promise<StorageUsageData> {

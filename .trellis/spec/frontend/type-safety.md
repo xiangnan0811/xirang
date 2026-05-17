@@ -71,6 +71,63 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 
 ---
 
+## Scenario: Backup Confidence Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to backup confidence items,
+  reasons, evidence, or next-step recommendations.
+- Applies to API modules under `web/src/lib/api/`, shared domain types in
+  `web/src/types/domain.ts`, and components that render backup confidence.
+
+### 2. Signatures
+
+- Raw API endpoint: `GET /overview/backup-confidence` through `request<T>()`.
+- Raw summary fields include `at_risk`; domain summary field is `atRisk`.
+- Raw item fields include `policy_id`, `policy_name`, `node_id`, `node_name`,
+  `next_steps`, and `targets[].last_backup_at`.
+- Raw evidence fields include `observed_at`, `task_id`, `task_run_id`, and
+  `alert_id`.
+- Domain status union: `"healthy" | "warning" | "at_risk" | "insufficient"`.
+
+### 3. Contracts
+
+- Keep raw snake_case confidence response types private to the API module.
+- Map all confidence response fields to camelCase before components render them.
+- Use `Array.isArray` for `items`, `reasons`, `evidence`, `next_steps`, and
+  `targets`; default missing arrays to `[]`.
+- Preserve `at_risk` as the status value because it is the backend/API contract;
+  only the object key changes to `summary.atRisk`.
+- Components must render backend-provided sanitized evidence/reason text as-is;
+  do not parse or enrich it with node connection details or secret-bearing data.
+
+### 4. Tests Required
+
+- API mapper tests must cover `at_risk` -> `atRisk`, `next_steps` ->
+  `nextSteps`, `observed_at` -> `observedAt`, `task_run_id` -> `taskRunId`, and
+  `last_backup_at` -> `lastBackupAt`.
+- UI tests must cover a non-healthy confidence item and assert the Backups page
+  exposes a clear confidence entry.
+- `npm run check` must keep the confidence status union and mapper types valid.
+
+### 5. Wrong vs Correct
+
+Wrong:
+
+```ts
+const status = raw.status === "healthy" ? "healthy" : "warning";
+const firstStep = raw.next_steps?.[0]?.label;
+```
+
+Correct:
+
+```ts
+const item = mapBackupConfidenceItem(raw);
+const firstStep = item.nextSteps[0]?.label;
+```
+
+---
+
 ## Scenario: Drill Evidence Mapping
 
 ### 1. Scope / Trigger
