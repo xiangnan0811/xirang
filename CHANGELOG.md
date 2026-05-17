@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/xiangnan0811/xirang/compare/v0.35.0...v0.36.0) (2026-05-17)
+
+
+### ✨ Features
+
+* **nodes:** add SSH fleet doctor ([33e2b77](https://github.com/xiangnan0811/xirang/commit/33e2b7716834f262098ff789a23d816686a5a08c))
+
 ## [0.35.0](https://github.com/xiangnan0811/xirang/compare/v0.34.0...v0.35.0) (2026-05-17)
 
 
