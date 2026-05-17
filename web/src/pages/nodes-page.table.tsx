@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ export const NodesTable = React.memo(function NodesTable({
   selectedNodeSet,
   allVisibleSelected,
   testingNodeId,
+  doctorNodeId,
   triggeringNodeId,
   toggleNodeSelection,
   toggleSelectAllVisible,
@@ -24,6 +25,7 @@ export const NodesTable = React.memo(function NodesTable({
   openCreateDialog,
   openEditDialog,
   onTestNode,
+  onOpenDoctor,
   onDeleteNode,
   handleTriggerBackup,
   onOpenTerminal,
@@ -176,7 +178,17 @@ export const NodesTable = React.memo(function NodesTable({
                         onClick={() => void onTestNode(node)}
                         disabled={testingNodeId === node.id}
                       >
-                        {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" /> : <Activity className="size-4" />}
+                        {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
+                        onClick={() => onOpenDoctor?.(node)}
+                        disabled={doctorNodeId === node.id}
+                      >
+                        {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
                       </Button>
                       <Button
                         variant="ghost"
@@ -197,7 +209,7 @@ export const NodesTable = React.memo(function NodesTable({
                           aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
                           onClick={() => onOpenTerminal?.(node)}
                         >
-                          <MonitorPlay className="size-4" />
+                          <MonitorPlay className="size-4" aria-hidden />
                         </Button>
                       )}
                       <Button
@@ -207,7 +219,7 @@ export const NodesTable = React.memo(function NodesTable({
                         aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
                         onClick={() => onOpenFileBrowser?.(node)}
                       >
-                        <FolderOpen className="size-4" />
+                        <FolderOpen className="size-4" aria-hidden />
                       </Button>
                       <Button
                         variant="ghost"
@@ -216,7 +228,7 @@ export const NodesTable = React.memo(function NodesTable({
                         aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
                         onClick={() => openEditDialog(node)}
                       >
-                        <Wrench className="size-4" />
+                        <Wrench className="size-4" aria-hidden />
                       </Button>
                       {onMigrate && (
                         <Button
@@ -226,7 +238,7 @@ export const NodesTable = React.memo(function NodesTable({
                           aria-label={t("nodes.migrateShort")} title={t("nodes.migrateShort")}
                           onClick={() => onMigrate(node)}
                         >
-                          <ArrowRightLeft className="size-4" />
+                          <ArrowRightLeft className="size-4" aria-hidden />
                         </Button>
                       )}
                       <Button
@@ -236,7 +248,7 @@ export const NodesTable = React.memo(function NodesTable({
                         aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
                         onClick={() => onDeleteNode(node)}
                       >
-                        <Trash2 className="size-4" />
+                        <Trash2 className="size-4" aria-hidden />
                       </Button>
                       <Button
                         size="sm"
@@ -244,7 +256,7 @@ export const NodesTable = React.memo(function NodesTable({
                         disabled={triggeringNodeId === node.id}
                         onClick={() => void handleTriggerBackup(node.id, node.name)}
                       >
-                        {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" />}
+                        {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
                         {t("nodes.manualBackup")}
                       </Button>
                     </div>

@@ -74,6 +74,85 @@ Simplified Chinese strings.
 
 ---
 
+## Scenario: SSH Fleet Doctor Diagnostics
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing node Doctor diagnostics, diagnostic result fields,
+  or frontend mapping for Doctor results.
+- Applies to `POST /api/v1/nodes/:id/doctor` and any server-side diagnostic
+  runner used by that endpoint.
+
+### 2. Signatures
+
+- Route: `POST /api/v1/nodes/:id/doctor` under `/api/v1`.
+- Middleware: authenticated route plus `middleware.RBAC("nodes:test")` and
+  `middleware.OwnershipNodeCheck`.
+- Backend response shape is a standard `Response` envelope whose `data` contains
+  `node_id`, `node_name`, `generated_at`, and `checks`.
+- Each check item has `check`, `status`, `evidence`, and `suggestion`.
+- Check statuses are `pass`, `warn`, `fail`, and `skip`.
+
+### 3. Contracts
+
+- The endpoint is diagnose-only and read-only. Do not create directories, mutate
+  node status, update SSH key usage, or trigger remediation.
+- The API must not accept arbitrary command strings or caller-selected check
+  definitions. All remote commands must be selected from server-side allowlists.
+- Expected checks include SSH/auth/known_hosts classification, sudo availability,
+  backup directory existence/writability, disk space, required tools, and probe
+  status when available.
+- Evidence must be sanitized and concise. Do not return passwords, private keys,
+  tokens, proxy endpoints, raw SQL/encryption details, or full command output
+  that may contain credentials.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Unknown node | `respondNotFound`. |
+| Non-empty request body or custom command/check input | `respondBadRequest`; do not parse or echo caller-supplied command text. |
+| Auth config invalid | Return structured failed/skipped checks, not a 500. |
+| known_hosts/auth/network/handshake failure | Return structured failed/skipped checks, not a 500. |
+| Database lookup failure for owned node context | `respondInternalError` with generic client message. |
+| Remote diagnostic command is not allowlisted | Reject before opening a session or return an internal diagnostic error; never execute it. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `POST /nodes/:id/doctor` with no body returns sanitized check items and leaves node/task/remote filesystem state unchanged.
+- Base: invalid SSH credentials produce `auth`/`ssh` failures plus skipped SSH-dependent checks such as `sudo`, `tools`, `backup_dir`, and `disk`.
+- Bad: accepting `{ "command": "whoami" }`, using caller-selected checks, creating remote directories, or returning raw SSH/private-key/proxy output.
+
+### 6. Tests Required
+
+- Handler tests for rejecting arbitrary diagnostic input, including chunked/non-empty bodies.
+- Tests for allowlist enforcement around remote diagnostic commands and path/tool arguments.
+- Tests for common diagnostic statuses such as auth failure, SSH classification, probe failure, and settings-derived disk thresholds.
+- Tests that sensitive evidence is redacted and long output stays concise.
+- Router/RBAC tests asserting the endpoint is registered and protected by `nodes:test` plus ownership middleware.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+var req struct { Command string `json:"command"` }
+_ = c.ShouldBindJSON(&req)
+output, err := session.CombinedOutput(req.Command)
+```
+
+Correct:
+
+```go
+if !doctorRequestBodyAllowed(c) {
+    respondBadRequest(c, "Doctor only supports server-side allowlisted diagnostics")
+    return
+}
+output, err := runDoctorCommand(ctx, client, "sudo -n true 2>&1")
+```
+
+---
+
 ## Scenario: Bulk Alert Resolution API
 
 ### 1. Scope / Trigger

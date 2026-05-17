@@ -71,6 +71,75 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 
 ---
 
+## Scenario: SSH Fleet Doctor Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to node Doctor diagnostics.
+- Applies to `web/src/lib/api/nodes-api.ts`, shared domain types in
+  `web/src/types/domain.ts`, and node-context UI that renders Doctor results.
+
+### 2. Signatures
+
+- Raw API endpoint: `POST /nodes/:id/doctor` through `request<T>()`.
+- Raw response fields include `node_id`, `node_name`, `generated_at`, and
+  `checks`.
+- Raw check fields include `check`, `status`, `evidence`, and `suggestion`.
+- Domain types: `NodeDoctorResult`, `NodeDoctorCheckResult`, and
+  `NodeDoctorCheckStatus = "pass" | "warn" | "fail" | "skip"`.
+
+### 3. Contracts
+
+- Keep raw snake_case Doctor response types private to the API module.
+- Map `node_id` to `nodeId`, `node_name` to `nodeName`, and `generated_at` to
+  `generatedAt` before components render data.
+- Use `Array.isArray` for `checks`; default missing checks to `[]`.
+- Preserve backend status values; unknown status values should degrade to a safe
+  non-success status such as `warn`.
+- Components render sanitized `evidence` and `suggestion` from the API as-is;
+  do not enrich them with connection secrets or raw node credentials.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `checks` is absent or not an array | Map to `checks: []`; the dialog should render the empty/fallback state. |
+| `status` is not one of `pass/warn/fail/skip` | Map to `warn`, never to `pass`. |
+| `node_id` is missing, non-numeric, or non-finite | Map to `0` or another safe non-NaN fallback. |
+| `evidence` or `suggestion` is missing | Map to `""` and let the component render existing fallback labels. |
+| API request fails | Keep the selected node dialog context, show an error alert/toast, and do not render stale previous results. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `runNodeDoctor()` receives snake_case payload, maps it to `NodeDoctorResult`, and the dialog renders backend-provided sanitized evidence/suggestions.
+- Base: missing `checks` maps to an empty array while summary counts remain zero.
+- Bad: passing raw `node_id`/`generated_at` objects into components, coercing unknown statuses to `pass`, or allowing `Number("bad")` to become `NaN` in state.
+
+### 6. Tests Required
+
+- API mapper tests must cover snake_case to camelCase mapping and status normalization.
+- API mapper tests must cover invalid numeric IDs and missing check arrays.
+- UI tests must verify a node-context Doctor entry can run diagnostics and show check evidence/suggestions.
+- `npm run check` must keep the Doctor status union and component props valid.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const result = await request<NodeDoctorResult>(`/nodes/${nodeId}/doctor`, { method: "POST", token });
+const nodeId = Number(result.node_id);
+```
+
+Correct:
+
+```ts
+const row = await request<NodeDoctorResponse>(`/nodes/${nodeId}/doctor`, { method: "POST", token });
+return mapNodeDoctorResult(row);
+```
+
+---
+
 ## Scenario: Backup Confidence Mapping
 
 ### 1. Scope / Trigger

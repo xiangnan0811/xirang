@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { DockerVolumesPanel } from "@/components/docker-volumes-panel";
 import { FileBrowser } from "@/components/file-browser";
+import { NodeDoctorDialog } from "@/components/node-doctor-dialog";
 import { createFilesApi } from "@/lib/api/files-api";
 import type { NodesPageState } from "@/pages/nodes-page.state";
 
@@ -38,6 +39,12 @@ export type NodesPageDialogsProps = Pick<
   | "terminalNode"
   | "setTerminalNode"
   | "terminalKey"
+  | "doctorNode"
+  | "doctorResult"
+  | "doctorLoading"
+  | "doctorError"
+  | "handleDoctorOpenChange"
+  | "runDoctorForNode"
   | "fileBrowserNode"
   | "setFileBrowserNode"
   | "fileBrowserTab"
@@ -67,6 +74,12 @@ export function NodesPageDialogs({
   terminalNode,
   setTerminalNode,
   terminalKey,
+  doctorNode,
+  doctorResult,
+  doctorLoading,
+  doctorError,
+  handleDoctorOpenChange,
+  runDoctorForNode,
   fileBrowserNode,
   setFileBrowserNode,
   fileBrowserTab,
@@ -132,6 +145,16 @@ export function NodesPageDialogs({
           </div>
         </DialogContent>
       </Dialog>
+
+      <NodeDoctorDialog
+        open={doctorNode !== null}
+        node={doctorNode}
+        result={doctorResult}
+        loading={doctorLoading}
+        error={doctorError}
+        onOpenChange={handleDoctorOpenChange}
+        onRun={runDoctorForNode}
+      />
 
       {token && fileBrowserNode && (
         <Dialog

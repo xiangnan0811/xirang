@@ -15,7 +15,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewNodeInput, NodeRecord } from "@/types/domain";
+import type { NewNodeInput, NodeDoctorResult, NodeRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -90,6 +90,10 @@ export function useNodesPageState() {
   const [fileBrowserTab, setFileBrowserTab] = useState<"files" | "docker">("files");
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
+  const [doctorNode, setDoctorNode] = useState<NodeRecord | null>(null);
+  const [doctorResult, setDoctorResult] = useState<NodeDoctorResult | null>(null);
+  const [doctorLoading, setDoctorLoading] = useState(false);
+  const [doctorError, setDoctorError] = useState<string | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [batchCmdOpen, setBatchCmdOpen] = useState(false);
@@ -285,6 +289,40 @@ export function useNodesPageState() {
       await onTestNode(existing);
     } catch (error) {
       toast.error(getErrorMessage(error));
+    }
+  };
+
+  const runDoctorForNode = async (node: NodeRecord) => {
+    if (!token) {
+      return;
+    }
+    setDoctorNode(node);
+    setDoctorLoading(true);
+    setDoctorError(null);
+    try {
+      const result = await apiClient.runNodeDoctor(token, node.id);
+      setDoctorResult(result);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setDoctorError(message);
+      toast.error(message);
+    } finally {
+      setDoctorLoading(false);
+    }
+  };
+
+  const openDoctor = (node: NodeRecord) => {
+    setDoctorResult(null);
+    setDoctorError(null);
+    void runDoctorForNode(node);
+  };
+
+  const handleDoctorOpenChange = (open: boolean) => {
+    if (!open) {
+      setDoctorNode(null);
+      setDoctorResult(null);
+      setDoctorError(null);
+      setDoctorLoading(false);
     }
   };
 
@@ -531,6 +569,7 @@ export function useNodesPageState() {
     setSelectedNodeIds,
     // node ids for loading states
     testingNodeId,
+    doctorNodeId: doctorLoading ? doctorNode?.id ?? null : null,
     triggeringNodeId,
     emergencyNodeId,
     // editor
@@ -542,6 +581,13 @@ export function useNodesPageState() {
     setTerminalNode,
     terminalKey,
     setTerminalKey,
+    // doctor
+    doctorNode,
+    doctorResult,
+    doctorLoading,
+    doctorError,
+    handleDoctorOpenChange,
+    runDoctorForNode,
     // file browser
     fileBrowserNode,
     setFileBrowserNode,
@@ -568,6 +614,7 @@ export function useNodesPageState() {
     openEditDialog,
     handleSaveNode,
     handleTestConnection,
+    openDoctor,
     onDeleteNode,
     toggleNodeSelection,
     toggleSelectAllVisible,

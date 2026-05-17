@@ -12,6 +12,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -28,12 +29,18 @@ type NodeTaskTrigger interface {
 }
 
 type NodeHandler struct {
-	db      *gorm.DB
-	trigger NodeTaskTrigger
+	db          *gorm.DB
+	trigger     NodeTaskTrigger
+	settingsSvc *settings.Service
 }
 
 func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger) *NodeHandler {
 	return &NodeHandler{db: db, trigger: trigger}
+}
+
+func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHandler {
+	h.settingsSvc = settingsSvc
+	return h
 }
 
 type nodeRequest struct {

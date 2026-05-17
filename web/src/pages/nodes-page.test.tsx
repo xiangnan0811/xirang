@@ -1,13 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
 
-const { toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
+const { toastSuccessMock, toastErrorMock, runNodeDoctorMock } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
+  runNodeDoctorMock: vi.fn(),
 }));
 
 function createMemoryStorage() {
@@ -69,6 +70,12 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,
+  },
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    runNodeDoctor: runNodeDoctorMock,
   },
 }));
 
@@ -183,6 +190,20 @@ describe("NodesPage", () => {
     setSearchParamsMock.mockReset();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
+    runNodeDoctorMock.mockReset();
+    runNodeDoctorMock.mockResolvedValue({
+      nodeId: 1,
+      nodeName: "node-prod-1",
+      generatedAt: "2026-05-17T10:00:00Z",
+      checks: [
+        {
+          check: "ssh",
+          status: "fail",
+          evidence: "SSH 认证失败",
+          suggestion: "检查用户名和 SSH Key。",
+        },
+      ],
+    });
     searchParamsRef.current = new URLSearchParams();
     createContext();
   });
@@ -333,6 +354,26 @@ describe("NodesPage", () => {
     expect(toastSuccessMock).not.toHaveBeenCalledWith(
       expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
     );
+  });
+
+  it("节点页提供 Fleet Doctor 入口并展示诊断结果", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const doctorButtons = screen.getAllByRole("button", { name: /运行节点 node-prod-1 Fleet Doctor|Run Fleet Doctor for node node-prod-1/ });
+    await user.click(doctorButtons[0]);
+
+    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1);
+    expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("SSH 认证失败")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/建议：检查用户名和 SSH Key。/)).toBeInTheDocument();
   });
 
   it("重置筛选时会同时清空全局搜索并恢复节点列表", async () => {

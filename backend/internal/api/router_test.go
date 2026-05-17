@@ -96,6 +96,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/nodes/batch-delete") {
 		t.Fatalf("未注册节点批量删除接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/nodes/:id/doctor") {
+		t.Fatalf("未注册节点 Doctor 接口")
+	}
 }
 
 func TestBackupConfidenceRouteRBAC(t *testing.T) {
@@ -142,6 +145,90 @@ func TestBackupConfidenceRouteRBAC(t *testing.T) {
 	router.ServeHTTP(noTokenResp, noTokenReq)
 	if noTokenResp.Code != http.StatusUnauthorized {
 		t.Fatalf("缺少 token 应返回 401，实际状态码: %d，body=%s", noTokenResp.Code, noTokenResp.Body.String())
+	}
+}
+
+func TestNodeDoctorRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_NODE_DOCTOR_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 3)
+	userIDs := make(map[string]uint, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username:     "node-doctor-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+		userIDs[role] = user.ID
+	}
+
+	node := model.Node{
+		Name:      "node-doctor-rbac",
+		Host:      "10.0.0.41",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "password",
+		Password:  "",
+		BackupDir: "node-doctor-rbac",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	path := fmt.Sprintf("/api/v1/nodes/%d/doctor", node.ID)
+
+	viewerReq := httptest.NewRequest(http.MethodPost, path, nil)
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 应被 nodes:test 拒绝，实际状态码: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	operatorReq := httptest.NewRequest(http.MethodPost, path, nil)
+	operatorReq.Header.Set("Authorization", "Bearer "+tokens["operator"])
+	operatorResp := httptest.NewRecorder()
+	router.ServeHTTP(operatorResp, operatorReq)
+	if operatorResp.Code != http.StatusForbidden {
+		t.Fatalf("operator 未拥有节点时应被 ownership 拒绝，实际状态码: %d，body=%s", operatorResp.Code, operatorResp.Body.String())
+	}
+
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: userIDs["operator"]}).Error; err != nil {
+		t.Fatalf("创建节点 owner 失败: %v", err)
+	}
+	ownedOperatorReq := httptest.NewRequest(http.MethodPost, path, nil)
+	ownedOperatorReq.Header.Set("Authorization", "Bearer "+tokens["operator"])
+	ownedOperatorResp := httptest.NewRecorder()
+	router.ServeHTTP(ownedOperatorResp, ownedOperatorReq)
+	if ownedOperatorResp.Code != http.StatusOK {
+		t.Fatalf("operator 拥有节点时应能访问 Doctor 接口，实际状态码: %d，body=%s", ownedOperatorResp.Code, ownedOperatorResp.Body.String())
+	}
+
+	adminReq := httptest.NewRequest(http.MethodPost, path, nil)
+	adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminResp := httptest.NewRecorder()
+	router.ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusOK {
+		t.Fatalf("admin 应能访问 Doctor 接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
 	}
 }
 
