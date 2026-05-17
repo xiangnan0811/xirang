@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend diagnostic API/service conventions."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check diagnostic failure semantics."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check diagnostics do not leak sensitive SSH data."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend quality and tests."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend Doctor UI conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check Doctor UI accessibility."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check diagnostic payload type safety."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check diagnostics data flow across layers."}
+{"file":".trellis/tasks/05-17-ssh-fleet-doctor/research/code-foundations.md","reason":"Check implementation against researched security boundaries and gaps."}

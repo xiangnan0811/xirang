@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend API/service conventions apply to incident timeline aggregation."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Timeline may introduce read models or query aggregation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Timeline aggregation must handle missing related resources safely."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend quality and tests."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend timeline UI conventions."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Timeline components should follow existing patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Timeline API payloads require typed frontend models."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Incident timeline spans metrics, alerts, tasks, API, and UI."}
+{"file":".trellis/tasks/05-17-health-incident-timeline/research/code-foundations.md","reason":"Code-grounded findings and constraints for incident timeline MVP."}

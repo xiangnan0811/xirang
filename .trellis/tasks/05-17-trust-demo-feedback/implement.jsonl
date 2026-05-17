@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend demo/mock changes should follow project conventions."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Demo/banner/setup UI should follow component patterns."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Mock data and demo contracts should remain typed."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Demo/onboarding UI should remain accessible."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"README/docs/feedback claims must stay true and user-facing."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Demo stories may span docs, mock data, and UI."}
+{"file":".trellis/tasks/05-17-trust-demo-feedback/research/code-foundations.md","reason":"Code-grounded findings and constraints for trust demo and feedback funnel."}
