@@ -506,6 +506,7 @@ func TestNewScheduler_CreatesInstance(t *testing.T) {
 	scheduler := NewScheduler(db)
 	if scheduler == nil {
 		t.Fatal("NewScheduler returned nil")
+		return
 	}
 	s := *scheduler
 	if s.db != db {
@@ -800,6 +801,7 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 
 	if actualRPO == nil {
 		t.Fatal("expected actualRPO not nil")
+		return
 	}
 	rpo := *actualRPO
 	// 间隔 = 2h = 120 分钟
@@ -812,6 +814,7 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 
 	if actualRTO == nil {
 		t.Fatal("expected actualRTO not nil")
+		return
 	}
 	rto := *actualRTO
 	if rto != 5 { // 300000ms / 60000 = 5
