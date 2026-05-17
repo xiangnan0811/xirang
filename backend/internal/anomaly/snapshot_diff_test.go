@@ -66,6 +66,7 @@ func TestCalculateBaseline(t *testing.T) {
 	baseline := CalculateBaseline(records, 3)
 	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
 	b := *baseline
 	if b.Mean != 30.0 {
@@ -98,6 +99,7 @@ func TestCalculateBaselineSingleSample(t *testing.T) {
 	baseline := CalculateBaseline(records, 1)
 	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
 	b := *baseline
 	if b.Mean != 30.0 {
