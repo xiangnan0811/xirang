@@ -123,10 +123,12 @@ func TestCalculateBaselineVaried(t *testing.T) {
 	// mean=(10+20+30+40)/4=25
 	// variance=((10-25)^2+(20-25)^2+(30-25)^2+(40-25)^2)/4 = (225+25+25+225)/4 = 500/4 = 125
 	// stddev=sqrt(125) ≈ 11.18
-	b := CalculateBaseline(records, 2)
-	if b == nil {
+	baseline := CalculateBaseline(records, 2)
+	if baseline == nil {
 		t.Fatal("expected non-nil baseline")
+		return
 	}
+	b := *baseline
 	if math.Abs(b.Mean-25.0) > 0.01 {
 		t.Errorf("Mean = %f, want 25.0", b.Mean)
 	}
