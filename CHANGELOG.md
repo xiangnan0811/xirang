@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/xiangnan0811/xirang/compare/v0.37.0...v0.38.0) (2026-05-18)
+
+
+### ✨ Features
+
+* **web:** add trusted demo mode ([#186](https://github.com/xiangnan0811/xirang/issues/186)) ([05811ac](https://github.com/xiangnan0811/xirang/commit/05811ac41e8d5a610e1cdb5edcdb4ee871bb3d95))
+
 ## [0.37.0](https://github.com/xiangnan0811/xirang/compare/v0.36.0...v0.37.0) (2026-05-18)
 
 
