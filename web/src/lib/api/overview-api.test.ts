@@ -131,6 +131,110 @@ describe("overview api", () => {
     expect(result.items[0].targets[0]).toEqual({ nodeId: 9, nodeName: "node-a", lastBackupAt: "2026-05-17T00:30:00Z" });
   });
 
+  it("getHealthIncidentTimeline 请求健康事件时间线并映射 camelCase 字段", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T01:00:00Z",
+          window_hours: "72",
+          summary: { total: "1", critical: 1, warning: 0, info: 0 },
+          groups: [
+            {
+              id: "task-7",
+              severity: "critical",
+              resource: {
+                type: "task",
+                id: "7",
+                name: "daily-backup",
+                node_id: "3",
+                node_name: "node-a",
+                policy_id: "5",
+                policy_name: "daily-policy"
+              },
+              last_seen_at: "2026-05-17T00:55:00Z",
+              event_count: "2",
+              likely_cause: "rsync exited with code 23",
+              source_types: ["alert", "task_failure"],
+              next_actions: [{ code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=7" }],
+              signals: [
+                {
+                  type: "task_failure",
+                  severity: "critical",
+                  occurred_at: "2026-05-17T00:55:00Z",
+                  message: "rsync exited with code 23",
+                  task_id: "7",
+                  task_run_id: "11",
+                  node_id: "3",
+                  policy_id: "5"
+                }
+              ]
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getHealthIncidentTimeline("token-1", { windowHours: 72 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/overview/health-incident-timeline?window_hours=72");
+    expect(result.generatedAt).toBe("2026-05-17T01:00:00Z");
+    expect(result.windowHours).toBe(72);
+    expect(result.summary.critical).toBe(1);
+    expect(result.groups[0]).toMatchObject({
+      id: "task-7",
+      severity: "critical",
+      lastSeenAt: "2026-05-17T00:55:00Z",
+      eventCount: 2,
+      likelyCause: "rsync exited with code 23",
+      sourceTypes: ["alert", "task_failure"],
+    });
+    expect(result.groups[0].resource).toMatchObject({
+      type: "task",
+      id: 7,
+      nodeId: 3,
+      nodeName: "node-a",
+      policyId: 5,
+      policyName: "daily-policy",
+    });
+    expect(result.groups[0].nextActions[0]).toEqual({ code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=7" });
+    expect(result.groups[0].signals[0]).toMatchObject({ type: "task_failure", taskRunId: 11, nodeId: 3, policyId: 5 });
+  });
+
+  it("getHealthIncidentTimeline 对缺失数组和未知枚举降级到安全默认值", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          summary: {},
+          groups: [
+            {
+              id: "platform",
+              severity: "unexpected",
+              resource: { type: "unknown", name: "status-page" },
+              event_count: 1,
+              source_types: ["unknown-source"],
+              next_actions: [{ code: "bad", label: "bad", href: "" }]
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getHealthIncidentTimeline("token-1");
+
+    expect(result.summary.total).toBe(0);
+    expect(result.groups[0].severity).toBe("warning");
+    expect(result.groups[0].resource.type).toBe("platform");
+    expect(result.groups[0].sourceTypes).toEqual(["alert"]);
+    expect(result.groups[0].nextActions).toEqual([]);
+    expect(result.groups[0].signals).toEqual([]);
+  });
+
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({

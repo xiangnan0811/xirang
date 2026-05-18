@@ -39,6 +39,7 @@ vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
+const fetchHealthIncidentTimelineMock = vi.fn();
 const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
@@ -77,6 +78,7 @@ function buildContext() {
     },
     refreshVersion: 0,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
+    fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
     loading: false,
     warning: null,
     lastSyncedAt: "",
@@ -132,6 +134,13 @@ describe("OverviewPage a11y smoke", () => {
     mockNavigate.mockReset();
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
+    fetchHealthIncidentTimelineMock.mockReset();
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 0, critical: 0, warning: 0, info: 0 },
+      groups: [],
+    });
     fetchOverviewTrafficMock.mockReset();
     fetchOverviewTrafficMock.mockResolvedValue({
       window: "1h",

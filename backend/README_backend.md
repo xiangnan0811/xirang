@@ -55,6 +55,7 @@ go run ./cmd/server
 | GET | /overview/traffic | 🔒 任务流量趋势 |
 | GET | /overview/backup-health | 🔒 备份健康状态 |
 | GET | /overview/backup-confidence | 🔒 备份可信度 |
+| GET | /overview/health-incident-timeline | 🔒 健康事件时间线 |
 | GET | /overview/storage-usage | 🔒 存储使用统计 |
 
 ### 节点管理

@@ -54,6 +54,7 @@ function createNodes(total: number) {
   });
 }
 
+const fetchHealthIncidentTimelineMock = vi.fn();
 const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
@@ -72,6 +73,7 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
     },
     refreshVersion,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
+    fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
     loading: false,
     warning: null,
     lastSyncedAt: "",
@@ -137,6 +139,13 @@ describe("OverviewPage", () => {
   beforeEach(() => {
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
+    fetchHealthIncidentTimelineMock.mockReset();
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 0, critical: 0, warning: 0, info: 0 },
+      groups: [],
+    });
     fetchOverviewTrafficMock.mockReset();
     fetchOverviewTrafficMock.mockResolvedValue({
       window: "1h",
@@ -147,6 +156,60 @@ describe("OverviewPage", () => {
         { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
         { timestamp: "2026-03-08T00:05:00Z", timestampMs: Date.parse("2026-03-08T00:05:00Z"), label: "00:05", throughputMbps: 160, sampleCount: 1, activeTaskCount: 2, startedCount: 0, failedCount: 0 },
       ]
+    });
+  });
+
+  it("渲染健康事件时间线并使用 camelCase 数据展示下一步入口", async () => {
+    fetchHealthIncidentTimelineMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 1, critical: 1, warning: 0, info: 0 },
+      groups: [
+        {
+          id: "task-7",
+          severity: "critical",
+          resource: {
+            type: "task",
+            id: 7,
+            name: "daily-backup",
+            nodeId: 3,
+            nodeName: "node-a",
+            policyId: 5,
+            policyName: "daily-policy",
+          },
+          lastSeenAt: new Date().toISOString(),
+          eventCount: 2,
+          likelyCause: "rsync exited with code 23",
+          sourceTypes: ["alert", "task_failure"],
+          nextActions: [{ code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=7" }],
+          signals: [],
+        }
+      ],
+    });
+    setContext(2, true);
+
+    render(<OverviewPage />);
+
+    expect(await screen.findByText("健康事件时间线")).toBeInTheDocument();
+    expect(screen.getByText("任务 · daily-backup / node-a")).toBeInTheDocument();
+    expect(screen.getByText("rsync exited with code 23")).toBeInTheDocument();
+    expect(screen.getByText("告警")).toBeInTheDocument();
+    expect(screen.getByText("任务失败")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /查看任务日志/ })).toHaveAttribute("href", "/app/logs?task=7");
+    expect(fetchHealthIncidentTimelineMock.mock.calls[0]?.[0]).toMatchObject({ windowHours: 72 });
+  });
+
+  it("健康事件时间线空状态可刷新", async () => {
+    const user = userEvent.setup();
+    setContext(2, true);
+
+    render(<OverviewPage />);
+
+    expect(await screen.findByText("近期未发现健康事件")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -376,6 +439,8 @@ describe("OverviewPage", () => {
     const nodes = createNodes(2);
     sharedRef.current = {
       ...sharedRef.current,
+      fetchOverviewTraffic: fetchOverviewTrafficMock,
+      fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
       overview: {
         totalNodes: nodes.length,
         healthyNodes: nodes.length,
@@ -386,7 +451,6 @@ describe("OverviewPage", () => {
         avgSyncMbps: 256,
       },
       refreshVersion: 0,
-      fetchOverviewTraffic: fetchOverviewTrafficMock,
       loading: false,
     };
     nodesRef.current = {

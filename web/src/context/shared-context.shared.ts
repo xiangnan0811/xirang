@@ -1,5 +1,6 @@
 import { createContext } from "react";
 import type {
+  HealthIncidentTimelineData,
   OverviewStats,
   OverviewTrafficSeries,
   OverviewTrafficWindow,
@@ -18,6 +19,9 @@ export interface SharedContextValue {
     window: OverviewTrafficWindow,
     options?: { signal?: AbortSignal }
   ) => Promise<OverviewTrafficSeries>;
+  fetchHealthIncidentTimeline: (
+    options?: { windowHours?: number; signal?: AbortSignal }
+  ) => Promise<HealthIncidentTimelineData>;
 }
 
 export const SharedContext = createContext<SharedContextValue | null>(null);

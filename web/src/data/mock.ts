@@ -6,6 +6,7 @@ import type {
   OverviewSummary,
   OverviewTrafficSeries,
   OverviewTrafficWindow,
+  HealthIncidentTimelineData,
   OverviewStats,
   PolicyRecord,
   SSHKeyRecord,
@@ -411,6 +412,55 @@ function generateTrafficValues(count: number, base: number, step: number) {
     const drift = (index % 5) * 4;
     return Math.max(0, Math.round(base + wave + drift));
   });
+}
+
+export function buildMockHealthIncidentTimeline(): HealthIncidentTimelineData {
+  const now = new Date();
+  const recent = new Date(now.getTime() - 9 * 60_000).toISOString();
+  const earlier = new Date(now.getTime() - 34 * 60_000).toISOString();
+  return {
+    generatedAt: now.toISOString(),
+    windowHours: 72,
+    summary: { total: 2, critical: 1, warning: 1, info: 0 },
+    groups: [
+      {
+        id: "task-3014",
+        severity: "critical",
+        resource: {
+          type: "task",
+          id: 3014,
+          name: "消息队列快照",
+          nodeId: 24,
+          nodeName: "天津网关-2",
+          policyId: 11,
+          policyName: "消息队列快照"
+        },
+        lastSeenAt: recent,
+        eventCount: 2,
+        likelyCause: "SSH 认证失败，私钥可能过期",
+        sourceTypes: ["alert", "task_failure"],
+        nextActions: [
+          { code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=3014" },
+          { code: "view_alert", label: "查看告警", href: "/app/notifications?alert=alert-1" }
+        ],
+        signals: [
+          { type: "task_failure", severity: "critical", occurredAt: recent, message: "rsync returned code 23", taskId: 3014, taskRunId: 9001, nodeId: 24 },
+          { type: "alert", severity: "critical", occurredAt: earlier, message: "SSH 认证失败，私钥可能过期", alertId: 1, taskId: 3014, nodeId: 24 }
+        ]
+      },
+      {
+        id: "node-3",
+        severity: "warning",
+        resource: { type: "node", id: 3, name: "广州归档-1", nodeId: 3, nodeName: "广州归档-1" },
+        lastSeenAt: earlier,
+        eventCount: 1,
+        likelyCause: "磁盘使用率 91.5% 超过阈值",
+        sourceTypes: ["metric"],
+        nextActions: [{ code: "view_node_metrics", label: "查看节点指标", href: "/app/nodes/3?tab=metrics" }],
+        signals: [{ type: "metric", severity: "warning", occurredAt: earlier, message: "磁盘使用率 91.5% 超过阈值", nodeId: 3 }]
+      }
+    ]
+  };
 }
 
 export function buildMockOverviewTrafficSeries(window: OverviewTrafficWindow): OverviewTrafficSeries {
