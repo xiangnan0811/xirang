@@ -306,6 +306,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/tasks/:id/snapshots/search", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotSearchHandler.Search)
 
 	secured.GET("/settings", middleware.RequireRole("admin"), settingsHandler.GetAll)
+	secured.GET("/settings/security-risk-summary", middleware.RequireRole("admin"), settingsHandler.SecurityRiskSummary)
 	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
 	secured.DELETE("/settings/:key", middleware.RequireRole("admin"), settingsHandler.Delete)
 

@@ -2328,6 +2328,32 @@ const zh = {
       reset: "重置",
       saved: "设置已保存",
       noChanges: "没有需要保存的变更",
+      securityRisk: {
+        title: "安全风险摘要",
+        description: "只读提示，不会暴露原始凭据，也不会自动修改节点或密钥配置。",
+        loadFailed: "安全风险摘要加载失败",
+        count: "{{count}} 项",
+        examplesLabel: "风险示例",
+        noExamples: "当前未发现此类风险。",
+        items: {
+          root_ssh_users: {
+            title: "Root SSH 用户",
+            description: "使用 root 登录的节点会扩大控制面板被攻陷后的横向移动影响面。",
+          },
+          reused_ssh_keys: {
+            title: "复用的 SSH Key",
+            description: "同一 SSH Key 绑定多个节点会扩大单个密钥泄露后的影响范围。",
+          },
+          sudo_enabled_nodes: {
+            title: "启用 sudo 的节点",
+            description: "sudo 节点允许普通 SSH 用户执行高权限运维命令。",
+          },
+          weak_security_defaults: {
+            title: "弱安全默认项",
+            description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",
+          },
+        },
+      },
     },
     maintenance: {
       title: "系统维护",

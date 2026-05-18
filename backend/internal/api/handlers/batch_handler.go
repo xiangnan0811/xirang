@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const maxCommandLength = 4096
+
 type BatchTaskRunner interface {
 	TriggerManual(taskID uint) (uint, error)
 	RemoveSchedule(taskID uint)
@@ -59,8 +61,8 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		respondBadRequest(c, "命令不能为空")
 		return
 	}
-	if len(command) > 4096 {
-		respondBadRequest(c, "命令长度不能超过 4096 字符")
+	if len(command) > maxCommandLength {
+		respondBadRequest(c, fmt.Sprintf("命令长度不能超过 %d 字符", maxCommandLength))
 		return
 	}
 

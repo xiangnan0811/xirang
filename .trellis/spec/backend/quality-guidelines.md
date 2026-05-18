@@ -221,6 +221,87 @@ var rolePermissions = map[string]map[string]bool{
 }
 ```
 
+### Scenario: Settings Security Risk Summary
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing the advisory security-health/risk summary under Settings.
+- Applies to `GET /api/v1/settings/security-risk-summary`, risk example construction, Settings route registration, and any future risk categories that summarize credentials, nodes, SSH behavior, or deployment defaults.
+
+#### 2. Signatures
+
+- Route signature: `secured.GET("/settings/security-risk-summary", middleware.RequireRole("admin"), settingsHandler.SecurityRiskSummary)`.
+- Handler signature: `func (h *SettingsHandler) SecurityRiskSummary(c *gin.Context)`.
+- Response envelope data shape:
+
+```go
+type securityRiskSummaryResponse struct {
+    GeneratedAt time.Time               `json:"generated_at"`
+    Summary     securityRiskSummaryStat `json:"summary"`
+    Items       []securityRiskItem      `json:"items"`
+}
+
+type securityRiskItem struct {
+    Code        string   `json:"code"`
+    Severity    string   `json:"severity"`
+    Title       string   `json:"title"`
+    Description string   `json:"description"`
+    Count       int64    `json:"count"`
+    Examples    []string `json:"examples"`
+}
+```
+
+- Current risk codes: `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, and `weak_security_defaults`.
+
+#### 3. Contracts
+
+- Endpoint is read-only and admin-only. Do not expose it to operator/viewer roles unless a product decision changes the Settings security model.
+- The response is advisory-only. It must not mutate nodes, SSH keys, settings, credentials, known_hosts, or remote machines.
+- `items[].examples` must contain sanitized labels only: node names, SSH key names, or human-readable setting labels. Never include hostnames, ports, usernames plus hosts, private keys, passwords, tokens, proxy URLs, raw endpoints, executor configs, or command output.
+- Keep examples bounded (`maxSecurityRiskExamples` is the current cap) and return counts separately from examples.
+- Risk categories should be stable string codes so frontend mappers can normalize unknown values safely.
+- If a risk has no findings, keep it in the response with `count=0`; use a non-success severity such as `info` only when the category is explicitly informational.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Missing/expired token | 401 from auth middleware. |
+| Authenticated non-admin role | 403 from `RequireRole("admin")`. |
+| Database query failure while computing a risk | `respondInternalError`; do not return partial unsafely computed data. |
+| Risk example source contains secret-shaped text or user-controlled labels | Sanitize with `util.SanitizeMessage` before returning. |
+| More than the example cap is found | Return the real `count` and only the bounded example list. |
+| Future risk category needs remediation | Add a separate explicit mutation endpoint; do not turn summary rows into one-click fixes. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: root-node risk returns `count=4` and examples like `prod-a`, `db-b`, `cache-c` after sanitization, with no host or credential fields.
+- Base: reused-key risk returns `count=1` and an example like `deploy-key（3 个节点）`; the key name is sanitized and no private/public key material is included.
+- Bad: returning `node.Host`, `node.Username`, `ssh_key.private_key`, `executor_config`, or a remediation button/link payload from the summary endpoint.
+
+#### 6. Tests Required
+
+- Handler test for summary content: counts, stable risk codes, bounded/sanitized examples, and no raw secret-bearing fields in the response body.
+- Full-router RBAC test: admin succeeds; operator/viewer fail with 403 through the real middleware stack.
+- If new risk categories query models with encrypted fields, add tests proving decrypted secrets are not returned.
+- Frontend mapper/UI tests must cover snake_case mapping, invalid numeric fallback, unknown code/severity fallback, and advisory-only rendering.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+item.Examples = append(item.Examples, fmt.Sprintf("%s@%s", node.Username, node.Host))
+respondOK(c, gin.H{"items": items, "fix_url": "/app/nodes?filter=root"})
+```
+
+Correct:
+
+```go
+item.Examples = append(item.Examples, util.SanitizeMessage(node.Name))
+respondOK(c, securityRiskSummaryResponse{GeneratedAt: time.Now().UTC(), Items: items})
+```
+
 ### Test fixture credential naming
 
 Test fixtures that simulate secrets/credentials (passwords, tokens, keys,

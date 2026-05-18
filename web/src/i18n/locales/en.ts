@@ -2328,6 +2328,32 @@ const en = {
       reset: "Reset",
       saved: "Settings saved",
       noChanges: "No changes to save",
+      securityRisk: {
+        title: "Security risk summary",
+        description: "Read-only advisory signals. It never exposes raw credentials or changes nodes and keys automatically.",
+        loadFailed: "Failed to load security risk summary",
+        count: "{{count}} items",
+        examplesLabel: "Risk examples",
+        noExamples: "No matching risk found right now.",
+        items: {
+          root_ssh_users: {
+            title: "Root SSH users",
+            description: "Nodes that log in as root increase lateral-movement impact if the control panel is compromised.",
+          },
+          reused_ssh_keys: {
+            title: "Reused SSH keys",
+            description: "One SSH key bound to multiple nodes expands the blast radius of a single key leak.",
+          },
+          sudo_enabled_nodes: {
+            title: "Sudo-enabled nodes",
+            description: "Sudo-enabled nodes let non-root SSH users run high-privilege operations.",
+          },
+          weak_security_defaults: {
+            title: "Weak security defaults",
+            description: "These switches are advisory only; tighten them according to your deployment boundary.",
+          },
+        },
+      },
     },
     maintenance: {
       title: "Maintenance",

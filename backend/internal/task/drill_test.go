@@ -146,7 +146,61 @@ func TestValidateDrillConfigSystemDirectory(t *testing.T) {
 	}
 }
 
-// TestValidateDrillConfigSuccess 验证合法配置通过校验。
+// TestTransferFilesToSandboxBlocksCredentialSpreading 验证旧跨节点传输路径被阻断。
+func TestTransferFilesToSandboxBlocksCredentialSpreading(t *testing.T) {
+	db := openDrillTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	srcNode := model.Node{
+		Name:       "drill-transfer-src",
+		Host:       "192.168.3.10",
+		Port:       22,
+		Username:   "root",
+		AuthType:   "key",
+		PrivateKey: "FAKE_SOURCE_PRIVATE_KEY_FOR_TEST_ONLY",
+	}
+	dstNode := model.Node{Name: "drill-transfer-sandbox", Host: "192.168.3.20", Port: 22, Username: "root", AuthType: "key"}
+
+	err := m.transferFilesToSandbox(context.Background(), srcNode, "/tmp/src", dstNode, "/tmp/xirang-drill-safe", func(string, string) {})
+	if err == nil {
+		t.Fatal("期望恢复演练跨节点传输被安全基线阻断")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "跨节点传输已禁用") {
+		t.Fatalf("错误信息应说明跨节点传输被禁用，实际: %v", err)
+	}
+	if strings.Contains(message, "FAKE_SOURCE_PRIVATE_KEY_FOR_TEST_ONLY") || strings.Contains(message, "StrictHostKeyChecking=no") || strings.Contains(message, "UserKnownHostsFile=/dev/null") {
+		t.Fatalf("错误信息不应包含源私钥或关闭主机密钥校验的命令片段，实际: %v", err)
+	}
+}
+
+func TestRestoreBackupToSandboxBlocksBeforeRemoteMutation(t *testing.T) {
+	db := openDrillTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	srcNode := model.Node{Name: "drill-restore-src", Host: "192.168.3.30", Port: 22, Username: "root", AuthType: "key"}
+	dstNode := model.Node{Name: "drill-restore-sandbox", Host: "192.168.3.40", Port: 22, Username: "root", AuthType: "key"}
+	srcTask := model.Task{
+		Name:         "drill-restore-task",
+		NodeID:       1,
+		Node:         srcNode,
+		ExecutorType: "rsync",
+		RsyncSource:  "/data/src",
+		RsyncTarget:  "/backup/dst",
+	}
+	calledRemote := false
+	m.drillSSHScriptFunc = func(context.Context, model.Node, string) error {
+		calledRemote = true
+		return nil
+	}
+
+	err := m.restoreBackupToSandbox(context.Background(), srcTask, dstNode, "/tmp/xirang-drill-safe", func(string, string) {})
+	if err == nil || !strings.Contains(err.Error(), "跨节点传输已禁用") {
+		t.Fatalf("期望恢复前被安全基线阻断，实际: %v", err)
+	}
+	if calledRemote {
+		t.Fatal("跨节点传输禁用时不应执行远端脚本或清理命令")
+	}
+}
+
 func TestValidateDrillConfigSuccess(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)

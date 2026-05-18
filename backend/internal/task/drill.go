@@ -67,16 +67,6 @@ func validateDrillSandboxPath(path string) error {
 	return nil
 }
 
-// getNodePrivateKeyContent 获取节点的私钥内容（解密后）。
-func getNodePrivateKeyContent(node model.Node) string {
-	if node.SSHKey != nil {
-		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			return key
-		}
-	}
-	return strings.TrimSpace(node.PrivateKey)
-}
-
 // TriggerDrill 手动或 cron 触发一次恢复演练。
 // 返回创建的 drill TaskRun ID。
 func (m *Manager) TriggerDrill(policyID uint) (uint, error) {
@@ -533,8 +523,12 @@ func (m *Manager) runDrillRestore(ctx context.Context, srcTask model.Task, sandb
 }
 
 // restoreBackupToSandbox 将备份恢复到沙箱节点。
-// 流程：先从源节点恢复备份到临时目录，再将数据同步到沙箱。
+// 当前安全基线禁用旧跨节点传输路径，因此默认实现会在任何远端写操作前失败。
 func (m *Manager) restoreBackupToSandbox(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error {
+	if err := validateDrillCrossNodeTransferAllowed(srcTask.Node, sandboxNode); err != nil {
+		return err
+	}
+
 	// Step A: 在源节点上将备份数据恢复到临时路径
 	tempPath := fmt.Sprintf("/tmp/xirang-drill-src-%d", time.Now().UnixNano())
 	logf("info", fmt.Sprintf("在源节点 (%s) 恢复到临时路径: %s", srcTask.Node.Name, tempPath))
@@ -608,62 +602,20 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 	return nil
 }
 
+// validateDrillCrossNodeTransferAllowed 阻断旧的恢复演练跨节点传输路径。
+// 旧实现会把源节点 SSH 私钥写入沙箱文件系统，并在沙箱上关闭主机密钥校验后
+// 执行 rsync pull。在安全的凭据代理/中转设计落地前，这里必须在任何远端
+// 写操作前失败，避免演练把源节点凭据扩散到沙箱节点。
+func validateDrillCrossNodeTransferAllowed(_ model.Node, _ model.Node) error {
+	return fmt.Errorf("恢复演练跨节点传输已禁用：当前安全基线禁止将源节点 SSH 凭据写入沙箱节点，请等待后续安全传输实现后再启用该演练")
+}
+
 // transferFilesToSandbox 将源节点上的文件传输到沙箱节点。
-// 使用 tar + SSH 管道通过 Xirang 服务器中转。
-func (m *Manager) transferFilesToSandbox(ctx context.Context, srcNode model.Node, srcPath string, dstNode model.Node, dstPath string, logf func(string, string)) error {
+func (m *Manager) transferFilesToSandbox(_ context.Context, srcNode model.Node, _ string, dstNode model.Node, dstPath string, _ func(string, string)) error {
 	if err := validateDrillSandboxPath(dstPath); err != nil {
 		return fmt.Errorf("沙箱目标路径不安全: %w", err)
 	}
-
-	// 1. 在沙箱节点上创建目标目录
-	ensureDirCmd := fmt.Sprintf("mkdir -p %s", executor.ShellEscape(dstPath))
-	_, err := m.runSSHCommandOnNode(ctx, dstNode, ensureDirCmd)
-	if err != nil {
-		return fmt.Errorf("创建沙箱目标目录失败: %w", err)
-	}
-
-	// 2. 用 rsync over SSH 从源传输到沙箱
-	// 策略：将源节点私钥写入沙箱节点临时文件，执行 rsync pull，完成后删除。
-	srcKey := getNodePrivateKeyContent(srcNode)
-	if srcKey == "" {
-		return fmt.Errorf("源节点未配置 SSH 私钥，无法进行跨节点传输")
-	}
-
-	keySuffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	tmpKeyPath := fmt.Sprintf("/tmp/xirang-drill-key-%s.pem", keySuffix)
-
-	// 确保清理临时密钥，即使写入或 chmod 失败也做 best-effort 删除。
-	defer func() {
-		_, _ = m.runSSHCommandOnNode(context.Background(), dstNode, fmt.Sprintf("rm -f %s", executor.ShellEscape(tmpKeyPath)))
-	}()
-
-	// 写入临时密钥到沙箱节点。使用 printf + ShellEscape，避免 heredoc 分隔符被恶意密钥内容截断。
-	writeKeyCmd := fmt.Sprintf("printf '%%s\\n' %s > %s && chmod 600 %s",
-		executor.ShellEscape(srcKey), executor.ShellEscape(tmpKeyPath), executor.ShellEscape(tmpKeyPath))
-	if _, err := m.runSSHCommandOnNode(ctx, dstNode, writeKeyCmd); err != nil {
-		return fmt.Errorf("写入临时密钥到沙箱失败: %w", err)
-	}
-
-	// 从沙箱执行 rsync pull
-	srcUser := executor.ShellEscape(executor.ResolveSSHUser(srcNode))
-	srcHost := executor.ShellEscape(srcNode.Host)
-	rsyncCmd := fmt.Sprintf(
-		"rsync -avz --info=progress2 -e \"ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p %d\" -- %s@%s:%s/ %s/",
-		tmpKeyPath,
-		srcNode.Port,
-		srcUser,
-		srcHost,
-		executor.ShellEscape(strings.TrimRight(srcPath, "/")),
-		executor.ShellEscape(dstPath),
-	)
-
-	logf("info", "在沙箱执行 rsync 拉取命令")
-	output, err := m.runSSHCommandOnNode(ctx, dstNode, rsyncCmd)
-	if err != nil {
-		return fmt.Errorf("文件传输失败: %s, 输出: %s", err, output)
-	}
-
-	return nil
+	return validateDrillCrossNodeTransferAllowed(srcNode, dstNode)
 }
 
 // runSSHCommandOnNode 在指定节点上通过 SSH 执行命令，返回合并输出。
