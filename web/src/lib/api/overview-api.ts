@@ -161,6 +161,11 @@ function positiveNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
   switch (raw) {
     case "critical":
@@ -243,7 +248,7 @@ function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGrou
     severity: mapHealthIncidentSeverity(raw.severity),
     resource: mapHealthIncidentResource(raw.resource),
     lastSeenAt: String(raw.last_seen_at || ""),
-    eventCount: Number(raw.event_count || 0),
+    eventCount: finiteNumber(raw.event_count),
     likelyCause: String(raw.likely_cause || ""),
     sourceTypes: Array.isArray(raw.source_types) ? raw.source_types.map(mapHealthIncidentSourceType) : [],
     nextActions: Array.isArray(raw.next_actions) ? raw.next_actions.map(mapHealthIncidentAction).filter((action) => action.href) : [],
@@ -254,12 +259,12 @@ function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGrou
 function mapHealthIncidentTimeline(raw: HealthIncidentTimelineRaw | null | undefined): HealthIncidentTimelineData {
   return {
     generatedAt: raw?.generated_at ?? "",
-    windowHours: Number(raw?.window_hours || 0),
+    windowHours: finiteNumber(raw?.window_hours),
     summary: {
-      total: Number(raw?.summary?.total || 0),
-      critical: Number(raw?.summary?.critical || 0),
-      warning: Number(raw?.summary?.warning || 0),
-      info: Number(raw?.summary?.info || 0),
+      total: finiteNumber(raw?.summary?.total),
+      critical: finiteNumber(raw?.summary?.critical),
+      warning: finiteNumber(raw?.summary?.warning),
+      info: finiteNumber(raw?.summary?.info),
     },
     groups: Array.isArray(raw?.groups) ? raw.groups.map(mapHealthIncidentGroup) : [],
   };

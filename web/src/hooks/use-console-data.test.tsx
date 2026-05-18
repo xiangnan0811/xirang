@@ -424,10 +424,18 @@ describe("useConsoleData", () => {
     expect(result.current.nodes.length).toBeGreaterThan(0);
     expect(result.current.tasks.length).toBeGreaterThan(0);
     expect(result.current.overview.avgSyncMbps).toBe(318);
+    expect(result.current.policies.find((policy) => policy.id === 1)?.latestDrill?.status).toBe("success");
+    expect(result.current.policies.find((policy) => policy.id === 11)?.latestDrill?.status).toBe("failed");
 
     const traffic = await result.current.fetchOverviewTraffic("24h");
     expect(traffic.window).toBe("24h");
     expect(traffic.points.length).toBeGreaterThan(0);
+
+    const timeline = await result.current.fetchHealthIncidentTimeline({ windowHours: 72 });
+    expect(timeline.groups[0]?.likelyCause).toContain("演示故障");
+
+    const logs = await result.current.fetchTaskLogs(3014);
+    expect(logs.some((log) => log.message.includes("XR-AUTH-011"))).toBe(true);
 
     vi.unstubAllEnvs();
   });

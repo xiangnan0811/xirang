@@ -7,7 +7,7 @@ export function ProtectedRoute({ children }: PropsWithChildren) {
   const { isAuthenticated } = useAuth();
   const location = useLocation();
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && import.meta.env.VITE_ENABLE_DEMO_MODE !== "true") {
     return <Navigate to="/login" replace state={{ from: buildReturnPath(location) }} />;
   }
 

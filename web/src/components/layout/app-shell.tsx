@@ -61,6 +61,9 @@ function AppShellInner() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { username, role, token, logout } = useAuth();
+  const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true" && !token;
+  const displayUsername = username ?? (demoModeEnabled ? t("appShell.demoUser") : null);
+  const displayRole = role ?? (demoModeEnabled ? "viewer" : null);
   const consoleData = useConsoleData(token);
   const cmdPalette = useCommandPalette();
 
@@ -146,7 +149,7 @@ function AppShellInner() {
                 onClick={cmdPalette.toggle}
                 aria-label={t('search.openLabel')}
               >
-                <Search className="size-4" />
+                <Search className="size-4" aria-hidden />
               </Button>
 
               <Button
@@ -159,7 +162,7 @@ function AppShellInner() {
                 title={t('appShell.refreshData')}
                 aria-label={t('appShell.refreshData')}
               >
-                <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`size-4 ${consoleData.loading ? "animate-spin" : ""}`} aria-hidden />
               </Button>
 
               <NotificationBell token={token} />
@@ -185,7 +188,7 @@ function AppShellInner() {
         sidebarCollapsed ? "md:pl-16" : "md:pl-60"
       )}>
         <DesktopSidebar
-          role={role}
+          role={displayRole}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
@@ -193,6 +196,16 @@ function AppShellInner() {
         <div className="flex min-h-[calc(100vh-56px)] min-w-0 flex-1 flex-col">
           <ScrollToTop />
           <main id="main-content" className="flex-1 w-full max-w-[1680px] px-4 py-5 md:px-6 md:py-6 lg:px-8 pb-24 mx-auto">
+            {demoModeEnabled ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+              >
+                <span className="font-medium">{t("appShell.demoBannerTitle")}</span>
+                <span className="ml-2">{t("appShell.demoBannerDesc")}</span>
+              </div>
+            ) : null}
             {consoleData.warning ? (
               <div
                 role="status"
@@ -290,8 +303,8 @@ function AppShellInner() {
       </div>
 
       <MobileNavigation
-        username={username}
-        role={role}
+        username={displayUsername}
+        role={displayRole}
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
       />

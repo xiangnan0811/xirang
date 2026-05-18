@@ -17,6 +17,9 @@ export function UserDropdown() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { username, role, token, logout } = useAuth();
+  const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true" && !token;
+  const displayUsername = username ?? (demoModeEnabled ? t("appShell.demoUser") : null);
+  const displayRole = role ?? (demoModeEnabled ? "viewer" : null);
 
   const handleLogout = async () => {
     if (token) {
@@ -38,25 +41,25 @@ export function UserDropdown() {
           size="sm"
           className="h-8 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
         >
-          {username ?? t("common.unknown")}
-          <ChevronDown className="size-3" />
+          {displayUsername ?? t("common.unknown")}
+          <ChevronDown className="size-3" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuLabel>
-          {username ?? t("common.unknown")}
+          {displayUsername ?? t("common.unknown")}
           <span className="ml-1.5 text-micro font-normal text-muted-foreground">
-            {role}
+            {displayRole}
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate("/app/settings")}>
-          <Settings className="mr-2 size-4" />
+          <Settings className="mr-2 size-4" aria-hidden />
           {t("nav.settings")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => void handleLogout()}>
-          <LogOut className="mr-2 size-4" />
+          <LogOut className="mr-2 size-4" aria-hidden />
           {t("appShell.logout")}
         </DropdownMenuItem>
       </DropdownMenuContent>

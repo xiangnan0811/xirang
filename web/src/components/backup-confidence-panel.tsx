@@ -43,9 +43,37 @@ export function BackupConfidencePanel() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
+        let cancelled = false;
+        setLoading(true);
+        setError(null);
+        import("@/data/mock")
+          .then((mocks) => {
+            if (!cancelled) {
+              setData(mocks.buildMockBackupConfidence());
+            }
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              setError(getErrorMessage(err, t("backupConfidence.loadFailed")));
+            }
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setLoading(false);
+            }
+          });
+        return () => {
+          cancelled = true;
+        };
+      }
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
     apiClient

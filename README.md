@@ -3,7 +3,7 @@
 [![CI](https://github.com/xiangnan0811/xirang/actions/workflows/ci.yml/badge.svg)](https://github.com/xiangnan0811/xirang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-轻量、易部署的服务器运维管理平台。Xirang 通过 SSH 集中管理多台服务器，提供备份、任务调度、监控告警、Web 终端和审计能力。
+轻量、易部署的服务器运维管理平台。Xirang 通过 SSH 集中管理多台服务器，把备份可信度、恢复演练、节点诊断、监控告警、Web 终端和审计日志放在同一个可解释的运维闭环里。
 
 > 名字寓意来自《山海经》中的“息壤”：自适应增长、永不耗减。
 
@@ -11,9 +11,9 @@
 
 - **Agentless 管理**：通过 SSH 接入目标服务器，无需在被管理节点安装 Agent。
 - **单容器部署**：前端、后端和 Nginx 打包为 All-in-One 镜像，默认 SQLite 开箱即用，也支持 PostgreSQL。
-- **备份与恢复**：支持 Rsync、Restic、Rclone，多级保留策略、恢复演练、快照浏览与文件搜索。
+- **可信备份与恢复**：支持 Rsync、Restic、Rclone，多级保留策略、恢复演练、快照浏览与文件搜索，并在控制台汇总备份可信度证据。
 - **任务与自动化**：支持 cron 调度、任务依赖链、批量命令、失败重试、事件触发动作编排。
-- **监控与告警**：节点资源采样、HTTP/TCP uptime 监控、异常检测，以及邮件/Webhook/Slack/Telegram/飞书/钉钉/企业微信通知。
+- **监控、告警与诊断**：节点资源采样、HTTP/TCP uptime 监控、异常检测、SSH Fleet Doctor，以及邮件/Webhook/Slack/Telegram/飞书/钉钉/企业微信通知。
 - **安全与审计**：JWT、RBAC、TOTP 两步验证、登录防护、敏感字段加密、操作审计日志。
 
 ## 快速部署
@@ -40,6 +40,10 @@ docker compose up -d
 首次登录用户名为 `admin`，密码为 `.env` 中的 `ADMIN_INITIAL_PASSWORD`。
 
 完整部署、反向代理、升级回滚、备份恢复和排障步骤见 [部署指南](docs/deployment.md)。
+
+## Demo 模式
+
+前端可通过 `VITE_ENABLE_DEMO_MODE=true` 启用本地 mock 数据演示。Demo 仅用于了解可信备份、恢复演练、SSH 诊断和事件解释流程，不会连接真实服务器、SSH Key 或备份存储，也不代表托管演示服务。
 
 ## 从源码运行
 

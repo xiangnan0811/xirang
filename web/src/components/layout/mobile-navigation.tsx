@@ -192,7 +192,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                 title={t("appShell.closeQuickMenu")}
                 onClick={() => setDrawerOpen(false)}
               >
-                <X className="size-5" />
+                <X className="size-5" aria-hidden />
               </Button>
             </div>
 
@@ -213,7 +213,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                         : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground"
                     )}
                   >
-                    <Icon className="size-4" />
+                    <Icon className="size-4" aria-hidden />
                     {t(item.titleKey)}
                   </Link>
                 );
@@ -222,7 +222,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
 
             <div className="mt-6">
               <Button variant="outline" className="h-10 w-full" onClick={onRefresh}>
-                <RefreshCw className="mr-1 size-4" />
+                <RefreshCw className="mr-1 size-4" aria-hidden />
                 {t("appShell.refreshData")}
               </Button>
             </div>
@@ -239,7 +239,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
                     setDrawerOpen(false);
                   }}
                 >
-                  <LogOut className="mr-1 size-3" />
+                  <LogOut className="mr-1 size-3" aria-hidden />
                   {t("appShell.logoutShort")}
                 </Button>
               </div>

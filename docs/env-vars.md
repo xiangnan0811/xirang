@@ -160,9 +160,9 @@
 | `VITE_PROXY_TARGET` | string | `http://127.0.0.1:8080` | 否 | 开发模式 Vite 代理目标（仅 `vite.config.ts` 使用） |
 | `VITE_DEV_API_DIRECT_URL` | string | — | 否 | 开发模式直连后端地址（`VITE_API_BASE_URL` 为相对路径时使用） |
 | `VITE_WS_URL` | string | 自动推导 | 否 | 自定义 WebSocket 地址 |
-| `VITE_ENABLE_DEMO_MODE` | string | — | 否 | 设为 `true` 启用 mock 数据（仅演示/测试用） |
+| `VITE_ENABLE_DEMO_MODE` | string | — | 否 | 设为 `true` 启用 mock 数据（仅演示/测试用，不连接真实服务器、SSH Key 或备份存储） |
 
-**读取位置**：`VITE_API_BASE_URL` / `VITE_DEV_API_DIRECT_URL` → `web/src/lib/api/core.ts` 和 WebSocket URL 推导；`VITE_PROXY_TARGET` → `web/vite.config.ts`；`VITE_WS_URL` → `web/src/lib/ws/logs-socket.ts`；`VITE_ENABLE_DEMO_MODE` → `web/src/hooks/use-console-data.ts`。
+**读取位置**：`VITE_API_BASE_URL` / `VITE_DEV_API_DIRECT_URL` → `web/src/lib/api/core.ts` 和 WebSocket URL 推导；`VITE_PROXY_TARGET` → `web/vite.config.ts`；`VITE_WS_URL` → `web/src/lib/ws/logs-socket.ts`；`VITE_ENABLE_DEMO_MODE` → `web/src/hooks/use-console-data.ts`、`web/src/components/protected-route.tsx`、登录页与部分 demo 面板。
 
 ## 12. 部署变量（Docker Compose / All-in-One 镜像）
 

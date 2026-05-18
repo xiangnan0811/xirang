@@ -66,7 +66,21 @@ function renderLoginPageWithEntries(initialEntries: string[]) {
 }
 
 describe("LoginPage", () => {
+  it("demo 模式提供 mock-only 入口且不执行登录请求", async () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
+    const user = userEvent.setup();
+
+    renderLoginPage();
+
+    expect(screen.getByText("演示模式仅使用 mock 数据")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "进入演示控制台" }));
+
+    expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
+    expect(apiLoginMock).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
+    vi.unstubAllEnvs();
     navigateMock.mockReset();
     loginMock.mockReset();
     apiLoginMock.mockReset();

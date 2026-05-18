@@ -10,9 +10,12 @@
 
 ### 报告问题
 
-- 使用 [GitHub Issues](https://github.com/xiangnan0811/xirang/issues) 提交 Bug 或功能建议
-- 提交前请先搜索是否已有相同的 Issue
-- Bug 报告请尽量包含：复现步骤、期望行为、实际行为、环境信息
+- 使用 [GitHub Issues](https://github.com/xiangnan0811/xirang/issues) 提交问题或功能建议，提交前请先搜索是否已有相同 Issue。
+- 请选择最接近的反馈入口：部署/升级、备份/恢复、SSH 诊断、功能建议；通用 Bug 可继续使用 Bug 报告模板。
+- 部署类问题请包含部署方式、版本/Commit、关键环境变量是否已设置、日志片段和反向代理信息。
+- 备份/恢复类问题请包含执行器类型、策略配置摘要、任务/恢复演练状态、相关任务日志和错误码。
+- SSH 诊断类问题请包含节点系统、认证方式、Fleet Doctor/测试连接结果、主机密钥策略和可脱敏的错误信息。
+- 安全漏洞不要提交公开 Issue，请按 [安全政策](SECURITY.md) 私下报告。
 
 ### 提交代码
 

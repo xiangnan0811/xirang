@@ -174,10 +174,10 @@ export function DesktopSidebar({
           }
         >
           {isCollapsed ? (
-            <PanelLeftOpen className="size-5" />
+            <PanelLeftOpen className="size-5" aria-hidden />
           ) : (
             <>
-              <PanelLeftClose className="mr-3 size-[18px]" />
+              <PanelLeftClose className="mr-3 size-[18px]" aria-hidden />
               <span className="text-nav font-medium">
                 {t("appShell.collapsePanel")}
               </span>

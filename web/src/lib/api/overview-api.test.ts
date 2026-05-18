@@ -204,21 +204,36 @@ describe("overview api", () => {
     expect(result.groups[0].signals[0]).toMatchObject({ type: "task_failure", taskRunId: 11, nodeId: 3, policyId: 5 });
   });
 
-  it("getHealthIncidentTimeline 对缺失数组和未知枚举降级到安全默认值", async () => {
+  it("getHealthIncidentTimeline 对缺失数组、未知枚举和非法数字降级到安全默认值", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
         code: 0,
         message: "ok",
         data: {
-          summary: {},
+          window_hours: "invalid",
+          summary: { total: "invalid", critical: "NaN", warning: "bad", info: null },
           groups: [
             {
               id: "platform",
               severity: "unexpected",
-              resource: { type: "unknown", name: "status-page" },
-              event_count: 1,
+              resource: { type: "unknown", id: "bad", name: "status-page", node_id: "invalid", policy_id: "0" },
+              event_count: "bad",
               source_types: ["unknown-source"],
-              next_actions: [{ code: "bad", label: "bad", href: "" }]
+              next_actions: [{ code: "bad", label: "bad", href: "" }],
+              signals: [
+                {
+                  type: "unknown-source",
+                  severity: "unexpected",
+                  occurred_at: "2026-05-17T00:00:00Z",
+                  message: "bad ids",
+                  alert_id: "bad",
+                  delivery_id: "0",
+                  task_id: "-1",
+                  task_run_id: "not-a-number",
+                  node_id: "3",
+                  policy_id: ""
+                }
+              ]
             }
           ]
         }
@@ -227,12 +242,14 @@ describe("overview api", () => {
 
     const result = await api.getHealthIncidentTimeline("token-1");
 
-    expect(result.summary.total).toBe(0);
+    expect(result.windowHours).toBe(0);
+    expect(result.summary).toEqual({ total: 0, critical: 0, warning: 0, info: 0 });
     expect(result.groups[0].severity).toBe("warning");
-    expect(result.groups[0].resource.type).toBe("platform");
+    expect(result.groups[0].eventCount).toBe(0);
+    expect(result.groups[0].resource).toMatchObject({ type: "platform", id: undefined, nodeId: undefined, policyId: undefined });
     expect(result.groups[0].sourceTypes).toEqual(["alert"]);
     expect(result.groups[0].nextActions).toEqual([]);
-    expect(result.groups[0].signals).toEqual([]);
+    expect(result.groups[0].signals[0]).toMatchObject({ type: "alert", severity: "warning", alertId: undefined, deliveryId: undefined, taskId: undefined, taskRunId: undefined, nodeId: 3, policyId: undefined });
   });
 
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {

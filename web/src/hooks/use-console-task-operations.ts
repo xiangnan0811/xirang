@@ -16,6 +16,7 @@ import type {
 
 type UseTaskOperationsParams = {
   token: string | null;
+  demoModeEnabled: boolean;
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   tasks: TaskRecord[];
@@ -30,6 +31,7 @@ type UseTaskOperationsParams = {
 
 export function useTaskOperations({
   token,
+  demoModeEnabled,
   nodes,
   policies,
   tasks,
@@ -236,8 +238,15 @@ export function useTaskOperations({
         return [];
       }
     }
+    if (demoModeEnabled) {
+      const mocks = await import("@/data/mock");
+      const rows = mocks.mockSeedLogs
+        .filter((log) => log.taskId === taskID)
+        .sort((first, second) => Number(second.logId ?? 0) - Number(first.logId ?? 0));
+      return rows.slice(0, options?.limit ?? rows.length);
+    }
     return [];
-  }, [setWarning, token]);
+  }, [demoModeEnabled, setWarning, token]);
 
   return {
     createTask,

@@ -28,10 +28,38 @@ export function BackupHealthPanel() {
   const gradientId = useId();
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
+        let cancelled = false;
+        setLoading(true);
+        setError(null);
+        import("@/data/mock")
+          .then((mocks) => {
+            if (!cancelled) {
+              setData(mocks.buildMockBackupHealth());
+            }
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              setError(getErrorMessage(err, t('backupHealth.loadFailed')));
+            }
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setLoading(false);
+            }
+          });
+        return () => {
+          cancelled = true;
+        };
+      }
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     const controller = new AbortController();
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
     setError(null);
@@ -77,7 +105,7 @@ export function BackupHealthPanel() {
       <Card className="glass-panel border-border/70">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <ShieldAlert className="size-4 text-primary" />
+            <ShieldAlert className="size-4 text-primary" aria-hidden />
             {t('backupHealth.title')}
           </CardTitle>
         </CardHeader>
@@ -115,25 +143,25 @@ export function BackupHealthPanel() {
           label={t('backupHealth.neverBackedUp')}
           value={summary.neverBackedUp}
           tone={summary.neverBackedUp > 0 ? "destructive" : "success"}
-          icon={<ServerOff className="size-5" />}
+          icon={<ServerOff className="size-5" aria-hidden />}
         />
         <MiniStat
           label={t('backupHealth.stale48h')}
           value={summary.stale48h}
           tone={summary.stale48h > 0 ? "warning" : "success"}
-          icon={<History className="size-5" />}
+          icon={<History className="size-5" aria-hidden />}
         />
         <MiniStat
           label={t('backupHealth.policiesHealthy')}
           value={`${summary.policiesHealthy}/${summary.policiesHealthy + summary.policiesDegraded}`}
           tone={summary.policiesDegraded > 0 ? "warning" : "success"}
-          icon={<CheckCircle2 className="size-5" />}
+          icon={<CheckCircle2 className="size-5" aria-hidden />}
         />
         <MiniStat
           label={t('backupHealth.successRate7d')}
           value={`${Math.round(summary.successRate7d)}%`}
           tone={summary.successRate7d >= 95 ? "success" : summary.successRate7d >= 80 ? "warning" : "destructive"}
-          icon={<Activity className="size-5" />}
+          icon={<Activity className="size-5" aria-hidden />}
         />
       </div>
 
@@ -142,7 +170,7 @@ export function BackupHealthPanel() {
         <Card className="xl:col-span-2 glass-panel border-border/70 flex flex-col min-h-[300px]">
           <CardHeader className="pb-3 shrink-0 border-b border-border/40">
             <CardTitle className="text-base flex items-center gap-2">
-              <TrendingUp className="size-4 text-primary" />
+              <TrendingUp className="size-4 text-primary" aria-hidden />
               {t('backupHealth.trend7d')}
             </CardTitle>
           </CardHeader>
@@ -207,7 +235,7 @@ export function BackupHealthPanel() {
         <Card className="xl:col-span-1 glass-panel border-border/70 flex flex-col min-h-[300px]">
           <CardHeader className="pb-3 shrink-0 border-b border-border/40">
             <CardTitle className="text-base flex items-center gap-2">
-              <ShieldAlert className="size-4 text-primary" />
+              <ShieldAlert className="size-4 text-primary" aria-hidden />
               {t('backupHealth.problemsTitle', { count: problems.length })}
             </CardTitle>
           </CardHeader>
@@ -221,7 +249,7 @@ export function BackupHealthPanel() {
                   <div className={`absolute top-0 left-0 w-1 h-full ${p.severity === "critical" ? "bg-destructive" : "bg-warning"} opacity-60 group-hover:opacity-100 transition-opacity`} />
                   <div className="flex items-center gap-3 pl-2">
                     <div className={`flex items-center justify-center rounded-lg p-2.5 shrink-0 ${p.severity === "critical" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning"}`}>
-                      <AlertTriangle className="size-4" />
+                      <AlertTriangle className="size-4" aria-hidden />
                     </div>
                     <div className="flex flex-col gap-0.5 min-w-0 text-sm">
                       <span className="font-medium truncate text-foreground/90">{p.label}</span>
@@ -233,7 +261,7 @@ export function BackupHealthPanel() {
             ) : (
               <div className="h-full min-h-[160px] flex flex-col items-center justify-center text-center gap-3 text-muted-foreground p-6">
                 <div className="rounded-full bg-success/10 p-3">
-                  <CheckCircle2 className="size-8 text-success" />
+                  <CheckCircle2 className="size-8 text-success" aria-hidden />
                 </div>
                 <div className="text-sm">
                   <p className="font-medium text-success">{t('backupHealth.allHealthy')}</p>

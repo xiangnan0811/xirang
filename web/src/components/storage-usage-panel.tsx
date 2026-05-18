@@ -38,10 +38,38 @@ export function StorageUsagePanel() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
+        let cancelled = false;
+        setLoading(true);
+        setError(null);
+        import("@/data/mock")
+          .then((mocks) => {
+            if (!cancelled) {
+              setData(mocks.buildMockStorageUsage());
+            }
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              setError(getErrorMessage(err, t('storage.loadFailed')));
+            }
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setLoading(false);
+            }
+          });
+        return () => {
+          cancelled = true;
+        };
+      }
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     const controller = new AbortController();
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
     setError(null);
@@ -100,7 +128,7 @@ export function StorageUsagePanel() {
     <Card className="glass-panel border-border/70">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
-          <HardDrive className="size-4 text-primary" />
+          <HardDrive className="size-4 text-primary" aria-hidden />
           {t('storage.title')}
         </CardTitle>
       </CardHeader>

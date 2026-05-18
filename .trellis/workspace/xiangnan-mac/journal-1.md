@@ -1413,3 +1413,38 @@ Implemented the read-only health incident timeline API and Overview UI, added ba
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: Trust Demo Feedback Funnel
+
+**Date**: 2026-05-18
+**Task**: Trust Demo Feedback Funnel
+**Branch**: `feat/trust-demo-feedback`
+
+### Summary
+
+Added trusted demo mode with mock-only console access and trust-story mock data, added targeted feedback templates and docs, and documented the demo-mode contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3e68148` | (see git log) |
+| `a54c5a4` | (see git log) |
+| `15d1f1b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

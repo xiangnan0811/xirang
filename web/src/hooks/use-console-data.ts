@@ -381,6 +381,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     fetchTaskLogs
   } = useTaskOperations({
     token,
+    demoModeEnabled,
     nodes,
     policies,
     tasks,

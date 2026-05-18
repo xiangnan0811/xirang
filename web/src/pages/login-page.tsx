@@ -18,6 +18,7 @@ export function LoginPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
+  const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -167,21 +168,21 @@ export function LoginPage() {
           <div className="mt-8 grid gap-4 sm:grid-cols-2 animate-slide-up [animation-delay:250ms]">
             <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
+                <ShieldCheck className="size-4" aria-hidden />
               </div>
               <p className="text-sm font-semibold">{t("login.featureMonitor")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t("login.featureMonitorDesc")}</p>
             </div>
             <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
+                <ShieldCheck className="size-4" aria-hidden />
               </div>
               <p className="text-sm font-semibold">{t("login.featureOrchestrate")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t("login.featureOrchestrateDesc")}</p>
             </div>
             <div className="rounded-lg border border-border bg-card shadow-sm hover:bg-accent transition-colors p-4 sm:col-span-2">
               <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <ShieldCheck className="size-4" />
+                <ShieldCheck className="size-4" aria-hidden />
               </div>
               <p className="text-sm font-semibold">{t("login.featureCompliance")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t("login.featureComplianceDesc")}</p>
@@ -192,7 +193,7 @@ export function LoginPage() {
         <Card className="flex flex-col justify-center rounded-lg border border-border bg-card shadow-md animate-slide-up [animation-delay:200ms]">
           <CardHeader className="space-y-3 pb-6 animate-slide-up [animation-delay:250ms]">
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
-              <ShieldCheck className="size-6" />
+              <ShieldCheck className="size-6" aria-hidden />
             </div>
             <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</h1>
             {requires2FA ? (
@@ -250,7 +251,17 @@ export function LoginPage() {
                 </Button>
               </form>
             ) : (
-              <form className="space-y-4" onSubmit={handleSubmit}>
+              <div className="space-y-4">
+                {demoModeEnabled ? (
+                  <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning" role="status">
+                    <p className="font-medium">{t("login.demoTitle")}</p>
+                    <p className="mt-1 text-xs leading-relaxed">{t("login.demoDesc")}</p>
+                    <Button className="mt-3 w-full" type="button" variant="secondary" onClick={() => navigate("/app/overview", { replace: true })}>
+                      {t("login.demoEnter")}
+                    </Button>
+                  </div>
+                ) : null}
+                <form className="space-y-4" onSubmit={handleSubmit}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="username">
                     {t("login.username")}
@@ -316,7 +327,8 @@ export function LoginPage() {
                 <Button className="w-full" type="submit" loading={submitting}>
                   {t("login.loginButton")}
                 </Button>
-              </form>
+                </form>
+              </div>
             )}
           </CardContent>
         </Card>
