@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.2](https://github.com/xiangnan0811/xirang/compare/v0.38.1...v0.38.2) (2026-05-18)
+
+
+### 🐛 Bug Fixes
+
+* **security:** harden credential blast radius ([#191](https://github.com/xiangnan0811/xirang/issues/191)) ([f1a7016](https://github.com/xiangnan0811/xirang/commit/f1a701634a907de85efa35e8d1c0cfd19899def8))
+
 ## [0.38.1](https://github.com/xiangnan0811/xirang/compare/v0.38.0...v0.38.1) (2026-05-18)
 
 
