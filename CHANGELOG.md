@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/xiangnan0811/xirang/compare/v0.36.0...v0.37.0) (2026-05-18)
+
+
+### ✨ Features
+
+* **overview:** add health incident timeline ([#184](https://github.com/xiangnan0811/xirang/issues/184)) ([a9989b7](https://github.com/xiangnan0811/xirang/commit/a9989b73a05188ca68870f10b662fa454ee6ee64))
+
 ## [0.36.0](https://github.com/xiangnan0811/xirang/compare/v0.35.0...v0.36.0) (2026-05-17)
 
 
