@@ -1,0 +1,10 @@
+{"file":".trellis/tasks/05-17-trust-ops-roadmap/prd.md","reason":"Check final audit coverage against original umbrella acceptance criteria."}
+{"file":".trellis/tasks/archive/2026-05/05-17-verified-restore-drill/prd.md","reason":"Check restore drill evidence and sandbox boundaries are still satisfied."}
+{"file":".trellis/tasks/archive/2026-05/05-17-backup-confidence-center/prd.md","reason":"Check confidence output remains explainable and evidence-based."}
+{"file":".trellis/tasks/archive/2026-05/05-17-ssh-fleet-doctor/prd.md","reason":"Check Doctor remains read-only, allowlisted, and non-leaky."}
+{"file":".trellis/tasks/archive/2026-05/05-17-health-incident-timeline/prd.md","reason":"Check timeline aggregation remains read-only and linked to actionable context."}
+{"file":".trellis/tasks/archive/2026-05/05-17-trust-demo-feedback/prd.md","reason":"Check demo/docs/feedback story remains truthful and mock-only."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend mappers, unions, and demo-mode contracts."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check UI/a11y regressions in Trust Ops surfaces."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check cross-layer data flow boundaries and validation points."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check documentation and public template truthfulness."}

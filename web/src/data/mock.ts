@@ -62,7 +62,7 @@ export const mockSSHKeys: SSHKeyRecord[] = [
     name: "ops-prod-rsa",
     username: "root",
     keyType: "rsa",
-    privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\\n...demo...\\n-----END OPENSSH PRIVATE KEY-----",
+    privateKey: "mock-only-key-redacted",
     fingerprint: buildFingerprint(101),
     createdAt: formatDate(60 * 24 * 7),
     lastUsedAt: formatDate(8)
@@ -72,7 +72,7 @@ export const mockSSHKeys: SSHKeyRecord[] = [
     name: "ops-staging-ed25519",
     username: "ubuntu",
     keyType: "ed25519",
-    privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\\n...demo...\\n-----END OPENSSH PRIVATE KEY-----",
+    privateKey: "mock-only-key-redacted",
     fingerprint: buildFingerprint(102),
     createdAt: formatDate(60 * 24 * 3),
     lastUsedAt: formatDate(22)

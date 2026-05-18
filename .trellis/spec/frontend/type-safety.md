@@ -169,12 +169,16 @@ return mapNodeDoctorResult(row);
   only the object key changes to `summary.atRisk`.
 - Components must render backend-provided sanitized evidence/reason text as-is;
   do not parse or enrich it with node connection details or secret-bearing data.
+- Numeric summary counts, scores, IDs, and evidence IDs must use finite-number
+  fallback helpers so invalid wire values never enter React state as `NaN`.
 
 ### 4. Tests Required
 
 - API mapper tests must cover `at_risk` -> `atRisk`, `next_steps` ->
   `nextSteps`, `observed_at` -> `observedAt`, `task_run_id` -> `taskRunId`, and
   `last_backup_at` -> `lastBackupAt`.
+- API mapper tests must cover invalid numeric summary/evidence fields and assert
+  safe fallbacks rather than `NaN`.
 - UI tests must cover a non-healthy confidence item and assert the Backups page
   exposes a clear confidence entry.
 - `npm run check` must keep the confidence status union and mapper types valid.
@@ -226,7 +230,7 @@ const firstStep = item.nextSteps[0]?.label;
 |---|---|
 | `latest_drill` is absent or null | Map to `latestDrill: null` or `undefined`; policy cards should show no latest-drill proof rather than crash. |
 | `drill_evidence` is absent or null | Map to `drillEvidence: null`; task-run detail should render normal run details without evidence sections. |
-| Numeric fields arrive as strings or missing values | Normalize with `Number(...)` and safe defaults at the mapper boundary. |
+| Numeric fields arrive as strings, missing values, or invalid text | Normalize with finite-number checks and safe defaults at the mapper boundary; do not allow `NaN` into state. |
 | Time fields are missing | Keep the corresponding camelCase time field undefined and let the component render a fallback. |
 | `trigger_type` is `drill` | Preserve `"drill"` for labels, badges, and filtering. |
 | Evidence error text is present | Render sanitized text from the API; do not parse or enrich it with sensitive raw data. |

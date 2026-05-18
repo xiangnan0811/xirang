@@ -1,0 +1,10 @@
+{"file":".trellis/tasks/05-17-trust-ops-roadmap/prd.md","reason":"Umbrella scope and cross-feature dependency contract for the Trust Ops roadmap."}
+{"file":".trellis/tasks/archive/2026-05/05-17-verified-restore-drill/prd.md","reason":"Restore drill evidence requirements and safety boundaries to audit."}
+{"file":".trellis/tasks/archive/2026-05/05-17-backup-confidence-center/prd.md","reason":"Backup confidence aggregation and explanation requirements to audit."}
+{"file":".trellis/tasks/archive/2026-05/05-17-ssh-fleet-doctor/prd.md","reason":"Doctor diagnostic contract and read-only allowlist requirements to audit."}
+{"file":".trellis/tasks/archive/2026-05/05-17-health-incident-timeline/prd.md","reason":"Incident timeline aggregation and next-action requirements to audit."}
+{"file":".trellis/tasks/archive/2026-05/05-17-trust-demo-feedback/prd.md","reason":"Demo and feedback funnel requirements to audit."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API mapper and demo-mode contracts for Trust Ops features."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Accessibility expectations for Trust Ops UI review."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer audit checklist for data flow and contract boundaries."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"README/docs/demo/feedback truthfulness audit checklist."}

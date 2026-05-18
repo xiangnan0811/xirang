@@ -38,6 +38,10 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   `respondPaginated`, or the error helpers.
 - Keep sensitive data encrypted via model hooks and strip secrets from response
   structs. Example: `model.Node.Sanitized()`.
+- When user-visible evidence, delivery errors, drill output, incident messages, or
+  notification payloads may contain command output, run them through the shared
+  sanitizer and cover full secret blocks such as PEM private keys, not just
+  `key=value` tokens.
 - Keep encryption-key rotation docs and implementation in lockstep:
   `DATA_ENCRYPTION_KEY` is the primary v2 write key, and
   `DATA_ENCRYPTION_LEGACY_KEY` must be honored by

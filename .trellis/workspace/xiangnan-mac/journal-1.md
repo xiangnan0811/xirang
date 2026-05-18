@@ -1448,3 +1448,36 @@ Added trusted demo mode with mock-only console access and trust-story mock data,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 44: Trust Ops 全链路审查
+
+**Date**: 2026-05-18
+**Task**: Trust Ops 全链路审查
+**Branch**: `chore/trust-ops-review`
+
+### Summary
+
+完成 Trust Ops 五方向发布后全链路审查，修复 restore drill 临时密钥处理、PEM 私钥块脱敏、demo no-token 写 API 边界和前端 Trust Ops mapper NaN fallback，并同步相关 code-spec。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9a032f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

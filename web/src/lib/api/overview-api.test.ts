@@ -131,6 +131,49 @@ describe("overview api", () => {
     expect(result.items[0].targets[0]).toEqual({ nodeId: 9, nodeName: "node-a", lastBackupAt: "2026-05-17T00:30:00Z" });
   });
 
+  it("getBackupConfidence 对未知状态和非法数字降级到安全默认值", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          summary: {
+            healthy: "bad",
+            warning: "NaN",
+            at_risk: "invalid",
+            insufficient: null,
+            total: "oops"
+          },
+          items: [
+            {
+              id: "policy-bad",
+              policy_id: "bad",
+              node_id: "NaN",
+              status: "unexpected",
+              score: "bad-score",
+              reasons: [{ code: "unknown", severity: "unexpected", message: "bad severity" }],
+              evidence: [{ task_id: "bad", task_run_id: "NaN", alert_id: "" }],
+              targets: [{ node_id: "bad", node_name: "node-bad" }]
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getBackupConfidence("token-1");
+
+    expect(result.summary).toEqual({ healthy: 0, warning: 0, atRisk: 0, insufficient: 0, total: 0 });
+    expect(result.items[0]).toMatchObject({
+      policyId: undefined,
+      nodeId: undefined,
+      status: "insufficient",
+      score: 0,
+      reasons: [{ code: "unknown", severity: "info", message: "bad severity" }],
+    });
+    expect(result.items[0].evidence[0]).toMatchObject({ taskId: undefined, taskRunId: undefined, alertId: undefined });
+    expect(result.items[0].targets[0]).toEqual({ nodeId: 0, nodeName: "node-bad", lastBackupAt: undefined });
+  });
+
   it("getHealthIncidentTimeline 请求健康事件时间线并映射 camelCase 字段", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
