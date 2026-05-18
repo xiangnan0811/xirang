@@ -1379,3 +1379,37 @@ Implemented SSH Fleet Doctor diagnostics with safe backend allowlisted checks, n
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: Health Incident Timeline MVP
+
+**Date**: 2026-05-18
+**Task**: Health Incident Timeline MVP
+**Branch**: `feat/health-incident-timeline`
+
+### Summary
+
+Implemented the read-only health incident timeline API and Overview UI, added backend/frontend tests, refreshed API docs, and documented the cross-layer timeline contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d0b2694` | (see git log) |
+| `f6b8eaa` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

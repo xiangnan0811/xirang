@@ -1,4 +1,4 @@
-import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
+import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentAction, HealthIncidentGroup, HealthIncidentResource, HealthIncidentResourceType, HealthIncidentSeverity, HealthIncidentSignal, HealthIncidentSourceType, HealthIncidentTimelineData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
 import { request } from "./core";
 
@@ -70,6 +70,59 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
   };
 }
 
+type HealthIncidentResourceRaw = {
+  type?: string;
+  id?: number | string;
+  name?: string;
+  node_id?: number | string;
+  node_name?: string;
+  policy_id?: number | string;
+  policy_name?: string;
+};
+
+type HealthIncidentActionRaw = {
+  code?: string;
+  label?: string;
+  href?: string;
+};
+
+type HealthIncidentSignalRaw = {
+  type?: string;
+  severity?: string;
+  occurred_at?: string;
+  message?: string;
+  alert_id?: number | string;
+  delivery_id?: number | string;
+  task_id?: number | string;
+  task_run_id?: number | string;
+  node_id?: number | string;
+  policy_id?: number | string;
+};
+
+type HealthIncidentGroupRaw = {
+  id?: string;
+  severity?: string;
+  resource?: HealthIncidentResourceRaw;
+  last_seen_at?: string;
+  event_count?: number | string;
+  likely_cause?: string;
+  source_types?: string[];
+  next_actions?: HealthIncidentActionRaw[];
+  signals?: HealthIncidentSignalRaw[];
+};
+
+type HealthIncidentTimelineRaw = {
+  generated_at?: string;
+  window_hours?: number | string;
+  summary?: {
+    total?: number | string;
+    critical?: number | string;
+    warning?: number | string;
+    info?: number | string;
+  };
+  groups?: HealthIncidentGroupRaw[];
+};
+
 type BackupHealthRaw = {
   stale_nodes?: { id: number; name: string; last_backup_at: string | null }[];
   degraded_policies?: { id: number; name: string; consecutive_failures?: number; last_failed_at?: string }[];
@@ -102,6 +155,115 @@ type BackupConfidenceItemRaw = {
   next_steps?: { code?: string; label?: string }[];
   targets?: { node_id?: number | string; node_name?: string; last_backup_at?: string | null }[];
 };
+
+function positiveNumber(value: unknown): number | undefined {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
+  switch (raw) {
+    case "critical":
+    case "warning":
+    case "info":
+      return raw;
+    default:
+      return "warning";
+  }
+}
+
+function mapHealthIncidentResourceType(raw?: string): HealthIncidentResourceType {
+  switch (raw) {
+    case "node":
+    case "task":
+    case "policy":
+    case "platform":
+      return raw;
+    default:
+      return "platform";
+  }
+}
+
+function mapHealthIncidentSourceType(raw?: string): HealthIncidentSourceType {
+  switch (raw) {
+    case "alert":
+    case "task_failure":
+    case "notification_failure":
+    case "anomaly":
+    case "probe":
+    case "metric":
+    case "backup_stale":
+    case "backup_degraded":
+      return raw;
+    default:
+      return "alert";
+  }
+}
+
+function mapHealthIncidentResource(raw?: HealthIncidentResourceRaw | null): HealthIncidentResource {
+  const type = mapHealthIncidentResourceType(raw?.type);
+  const id = positiveNumber(raw?.id);
+  return {
+    type,
+    id,
+    name: String(raw?.name || (type === "platform" ? "platform" : "")),
+    nodeId: positiveNumber(raw?.node_id),
+    nodeName: raw?.node_name ? String(raw.node_name) : undefined,
+    policyId: positiveNumber(raw?.policy_id),
+    policyName: raw?.policy_name ? String(raw.policy_name) : undefined,
+  };
+}
+
+function mapHealthIncidentAction(raw: HealthIncidentActionRaw): HealthIncidentAction {
+  return {
+    code: String(raw.code || "unknown"),
+    label: String(raw.label || raw.code || ""),
+    href: String(raw.href || ""),
+  };
+}
+
+function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSignal {
+  return {
+    type: mapHealthIncidentSourceType(raw.type),
+    severity: mapHealthIncidentSeverity(raw.severity),
+    occurredAt: String(raw.occurred_at || ""),
+    message: String(raw.message || ""),
+    alertId: positiveNumber(raw.alert_id),
+    deliveryId: positiveNumber(raw.delivery_id),
+    taskId: positiveNumber(raw.task_id),
+    taskRunId: positiveNumber(raw.task_run_id),
+    nodeId: positiveNumber(raw.node_id),
+    policyId: positiveNumber(raw.policy_id),
+  };
+}
+
+function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGroup {
+  return {
+    id: String(raw.id || "incident-unknown"),
+    severity: mapHealthIncidentSeverity(raw.severity),
+    resource: mapHealthIncidentResource(raw.resource),
+    lastSeenAt: String(raw.last_seen_at || ""),
+    eventCount: Number(raw.event_count || 0),
+    likelyCause: String(raw.likely_cause || ""),
+    sourceTypes: Array.isArray(raw.source_types) ? raw.source_types.map(mapHealthIncidentSourceType) : [],
+    nextActions: Array.isArray(raw.next_actions) ? raw.next_actions.map(mapHealthIncidentAction).filter((action) => action.href) : [],
+    signals: Array.isArray(raw.signals) ? raw.signals.map(mapHealthIncidentSignal) : [],
+  };
+}
+
+function mapHealthIncidentTimeline(raw: HealthIncidentTimelineRaw | null | undefined): HealthIncidentTimelineData {
+  return {
+    generatedAt: raw?.generated_at ?? "",
+    windowHours: Number(raw?.window_hours || 0),
+    summary: {
+      total: Number(raw?.summary?.total || 0),
+      critical: Number(raw?.summary?.critical || 0),
+      warning: Number(raw?.summary?.warning || 0),
+      info: Number(raw?.summary?.info || 0),
+    },
+    groups: Array.isArray(raw?.groups) ? raw.groups.map(mapHealthIncidentGroup) : [],
+  };
+}
 
 function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthData {
   const staleNodes = Array.isArray(raw?.stale_nodes)
@@ -272,6 +434,16 @@ export function createOverviewApi() {
       const suffix = query.toString() ? `?${query.toString()}` : "";
       const payload = await request<OverviewTrafficSeriesResponse>(`/overview/traffic${suffix}`, { token, signal: options?.signal });
       return mapOverviewTraffic(payload);
+    },
+
+    async getHealthIncidentTimeline(token: string, options?: { windowHours?: number; signal?: AbortSignal }): Promise<HealthIncidentTimelineData> {
+      const query = new URLSearchParams();
+      if (options?.windowHours) {
+        query.set("window_hours", String(options.windowHours));
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const payload = await request<HealthIncidentTimelineRaw>(`/overview/health-incident-timeline${suffix}`, { token, signal: options?.signal });
+      return mapHealthIncidentTimeline(payload);
     },
 
     async getBackupHealth(token: string, options?: { signal?: AbortSignal }): Promise<BackupHealthData> {

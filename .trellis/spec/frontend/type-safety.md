@@ -261,3 +261,72 @@ const run = mapTaskRun(raw);
 const failedStep = run.drillEvidence?.failedStep;
 const triggerType = run.triggerType;
 ```
+
+---
+
+## Scenario: Health Incident Timeline Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to health incident timeline groups, signals, resources, source types, or next-action links.
+- Applies to `web/src/lib/api/overview-api.ts`, shared domain types in `web/src/types/domain.ts`, shared overview data context, and Overview timeline UI components.
+
+### 2. Signatures
+
+- Raw API endpoint: `GET /overview/health-incident-timeline?window_hours=<n>` through `request<T>()`.
+- Raw top-level fields: `generated_at`, `window_hours`, `summary`, and `groups`.
+- Raw group fields: `last_seen_at`, `event_count`, `likely_cause`, `source_types`, `next_actions`, and `signals`.
+- Raw resource fields include `node_id`, `node_name`, `policy_id`, and `policy_name`.
+- Raw signal fields include `occurred_at`, `alert_id`, `delivery_id`, `task_id`, `task_run_id`, `node_id`, and `policy_id`.
+- Domain types: `HealthIncidentTimelineData`, `HealthIncidentGroup`, `HealthIncidentResource`, `HealthIncidentSignal`, and `HealthIncidentAction`.
+
+### 3. Contracts
+
+- Keep raw snake_case timeline response types private to the API module.
+- Map all response fields to camelCase before shared context or components render them.
+- Use `Array.isArray` for `groups`, `source_types`, `next_actions`, and `signals`; default missing arrays to `[]`.
+- Normalize numeric IDs and counts with finite-number checks; invalid or non-positive optional IDs should become `undefined`, while counts should fall back to `0`.
+- Preserve supported severity/source/resource unions; unknown severity values must degrade to `warning`, unknown source types to `alert`, and unknown resource types to `platform`.
+- Filter out next actions with empty `href` before rendering link buttons.
+- Components must render backend-provided sanitized `likelyCause` and signal messages as-is; do not enrich them with node credentials, executor config, raw logs, or alert delivery secrets.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `groups` is absent or not an array | Map to `groups: []`; Overview should render the empty/fallback state. |
+| `source_types`, `next_actions`, or `signals` is absent or invalid | Map the field to an empty array. |
+| Unknown `severity` | Map to `warning`, never to `info` or a success state. |
+| Unknown `resource.type` | Map to `platform` and use a safe platform name fallback. |
+| Numeric IDs arrive as strings, missing values, zero, or invalid text | Map valid positive IDs to numbers; invalid optional IDs become `undefined`. |
+| API request fails | Keep the Overview page usable, show the timeline error state, and do not render stale previous incident groups. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `overview-api.ts` receives `last_seen_at` and `next_actions`, exposes `lastSeenAt` and `nextActions`, then Overview renders a severity badge, resource label, likely cause, event count, source chips, and primary action link.
+- Base: empty or missing `groups` maps to an empty list while summary counts remain zero, and the Overview panel renders the healthy/empty state.
+- Bad: passing raw snake_case group objects into `OverviewPage`, using `Number("bad")` as `NaN` in state, or rendering action links whose `href` is blank.
+
+### 6. Tests Required
+
+- API mapper tests must cover `last_seen_at` -> `lastSeenAt`, `event_count` -> `eventCount`, `source_types` -> `sourceTypes`, `next_actions` -> `nextActions`, `occurred_at` -> `occurredAt`, and `task_run_id` -> `taskRunId`.
+- API mapper tests must cover unknown severity/source/resource fallback and invalid numeric IDs.
+- UI tests must verify the Overview timeline renders a non-empty incident group with severity, resource, likely cause, event count, and a next-action link.
+- UI tests should cover loading, empty, and error states when the shared context behavior changes.
+- `npm run check` must keep the timeline status/source/resource unions and component props valid.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const firstAction = raw.groups?.[0]?.next_actions?.[0]?.href;
+setIncidentGroups(raw.groups as HealthIncidentGroup[]);
+```
+
+Correct:
+
+```ts
+const timeline = mapHealthIncidentTimeline(raw);
+setIncidentGroups(timeline.groups);
+```

@@ -64,6 +64,73 @@ export interface OverviewTrafficSeries {
   points: OverviewTrafficPoint[];
 }
 
+export type HealthIncidentSeverity = AlertSeverity;
+export type HealthIncidentResourceType = "node" | "task" | "policy" | "platform";
+export type HealthIncidentSourceType =
+  | "alert"
+  | "task_failure"
+  | "notification_failure"
+  | "anomaly"
+  | "probe"
+  | "metric"
+  | "backup_stale"
+  | "backup_degraded";
+
+export interface HealthIncidentTimelineSummary {
+  total: number;
+  critical: number;
+  warning: number;
+  info: number;
+}
+
+export interface HealthIncidentResource {
+  type: HealthIncidentResourceType;
+  id?: number;
+  name: string;
+  nodeId?: number;
+  nodeName?: string;
+  policyId?: number;
+  policyName?: string;
+}
+
+export interface HealthIncidentAction {
+  code: string;
+  label: string;
+  href: string;
+}
+
+export interface HealthIncidentSignal {
+  type: HealthIncidentSourceType;
+  severity: HealthIncidentSeverity;
+  occurredAt: string;
+  message: string;
+  alertId?: number;
+  deliveryId?: number;
+  taskId?: number;
+  taskRunId?: number;
+  nodeId?: number;
+  policyId?: number;
+}
+
+export interface HealthIncidentGroup {
+  id: string;
+  severity: HealthIncidentSeverity;
+  resource: HealthIncidentResource;
+  lastSeenAt: string;
+  eventCount: number;
+  likelyCause: string;
+  sourceTypes: HealthIncidentSourceType[];
+  nextActions: HealthIncidentAction[];
+  signals: HealthIncidentSignal[];
+}
+
+export interface HealthIncidentTimelineData {
+  generatedAt: string;
+  windowHours: number;
+  summary: HealthIncidentTimelineSummary;
+  groups: HealthIncidentGroup[];
+}
+
 export interface NodeRecord {
   id: number;
   name: string;

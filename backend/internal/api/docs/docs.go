@@ -105,6 +105,75 @@ const docTemplate = `{
                 }
             }
         },
+        "/alerts/bulk-resolve": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按告警 ID 或节点 ID 批量将未解决告警标记为已解决",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerts"
+                ],
+                "summary": "批量解决告警",
+                "parameters": [
+                    {
+                        "description": "批量解决请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.bulkResolveAlertsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.bulkResolveAlertsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/alerts/delivery-stats": {
             "get": {
                 "security": [
@@ -1541,6 +1610,289 @@ const docTemplate = `{
                 }
             }
         },
+        "/automation-rules": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回所有自动化规则列表",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "automation-rules"
+                ],
+                "summary": "列出自动化规则",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/xirang_backend_internal_model.AutomationRule"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "创建新的自动化规则",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "automation-rules"
+                ],
+                "summary": "创建自动化规则",
+                "parameters": [
+                    {
+                        "description": "创建自动化规则请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.automationRuleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.AutomationRule"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/automation-rules/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回单个自动化规则",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "automation-rules"
+                ],
+                "summary": "获取自动化规则详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "自动化规则 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.AutomationRule"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "完整更新自动化规则配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "automation-rules"
+                ],
+                "summary": "更新自动化规则",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "自动化规则 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新自动化规则请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.automationRuleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.AutomationRule"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "删除指定自动化规则",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "automation-rules"
+                ],
+                "summary": "删除自动化规则",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "自动化规则 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/batch-commands": {
             "post": {
                 "security": [
@@ -2674,6 +3026,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/nodes/{id}/doctor": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录、磁盘和探针状态；不接受请求体或自定义命令。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "nodes"
+                ],
+                "summary": "运行节点 SSH Fleet Doctor",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.doctorResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/nodes/{id}/emergency-backup": {
             "post": {
                 "security": [
@@ -3232,64 +3654,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/nodes/{id}/doctor": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录、磁盘和探针状态；不接受请求体或自定义命令。",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "nodes"
-                ],
-                "summary": "运行节点 SSH Fleet Doctor",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "节点 ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/nodes/{id}/test": {
             "post": {
                 "security": [
@@ -3367,6 +3731,43 @@ const docTemplate = `{
                 }
             }
         },
+        "/overview/backup-confidence": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "聚合策略、节点、执行记录、恢复演练、校验、RPO/RTO 和告警证据，返回可解释的备份可信度",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overview"
+                ],
+                "summary": "获取备份可信度",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/overview/backup-health": {
             "get": {
                 "security": [
@@ -3382,6 +3783,45 @@ const docTemplate = `{
                     "overview"
                 ],
                 "summary": "获取备份健康状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/overview/health-incident-timeline": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只读聚合近期告警、任务失败、节点探测/指标、通知失败和备份健康降级",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overview"
+                ],
+                "summary": "获取健康事件时间线",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "时间窗口小时数（默认 72，最大 168）",
+                        "name": "window_hours",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -4345,6 +4785,289 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/service-monitors": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回所有服务监控列表",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-monitors"
+                ],
+                "summary": "列出服务监控",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "创建新的 HTTP/TCP 服务监控",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-monitors"
+                ],
+                "summary": "创建服务监控",
+                "parameters": [
+                    {
+                        "description": "创建服务监控请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/service-monitors/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回单个服务监控",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-monitors"
+                ],
+                "summary": "获取服务监控详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "服务监控 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "完整更新服务监控配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-monitors"
+                ],
+                "summary": "更新服务监控",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "服务监控 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新服务监控请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "删除指定服务监控",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-monitors"
+                ],
+                "summary": "删除服务监控",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "服务监控 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -6289,6 +7012,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/{id}/snapshots/search": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "在 restic 快照的文件索引中搜索匹配路径的文件。首次搜索会触发后台索引构建。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "搜索快照文件",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}/snapshots/{sid}/files": {
             "get": {
                 "security": [
@@ -7086,6 +7862,62 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.automationRuleRequest": {
+            "type": "object",
+            "required": [
+                "action_type",
+                "event_type",
+                "name"
+            ],
+            "properties": {
+                "action_config": {
+                    "type": "string"
+                },
+                "action_type": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "event_filter": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.bulkResolveAlertsRequest": {
+            "type": "object",
+            "properties": {
+                "alert_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "node_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.bulkResolveAlertsResponse": {
+            "type": "object",
+            "properties": {
+                "resolved_count": {
+                    "type": "integer"
+                },
+                "skipped_count": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.changePasswordRequest": {
             "type": "object",
             "required": [
@@ -7160,6 +7992,58 @@ const docTemplate = `{
                 },
                 "window_hours": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.doctorCheckResult": {
+            "type": "object",
+            "properties": {
+                "check": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_api_handlers.doctorCheckStatus"
+                },
+                "suggestion": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.doctorCheckStatus": {
+            "type": "string",
+            "enum": [
+                "pass",
+                "warn",
+                "fail",
+                "skip"
+            ],
+            "x-enum-varnames": [
+                "doctorStatusPass",
+                "doctorStatusWarn",
+                "doctorStatusFail",
+                "doctorStatusSkip"
+            ]
+        },
+        "internal_api_handlers.doctorResponse": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.doctorCheckResult"
+                    }
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "node_name": {
+                    "type": "string"
                 }
             }
         },
@@ -7424,6 +8308,9 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
                 "exclude_rules": {
                     "type": "string"
                 },
@@ -7432,6 +8319,18 @@ const docTemplate = `{
                 },
                 "is_template": {
                     "type": "boolean"
+                },
+                "keep_daily": {
+                    "type": "integer"
+                },
+                "keep_monthly": {
+                    "type": "integer"
+                },
+                "keep_weekly": {
+                    "type": "integer"
+                },
+                "keep_yearly": {
+                    "type": "integer"
                 },
                 "max_concurrent": {
                     "type": "integer"
@@ -7460,7 +8359,16 @@ const docTemplate = `{
                 "retention_days": {
                     "type": "integer"
                 },
+                "retention_mode": {
+                    "type": "string"
+                },
                 "retry_base_seconds": {
+                    "type": "integer"
+                },
+                "rpo_minutes": {
+                    "type": "integer"
+                },
+                "rto_minutes": {
                     "type": "integer"
                 },
                 "source_path": {
@@ -7525,6 +8433,46 @@ const docTemplate = `{
                 },
                 "total_failed": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.serviceMonitorRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "target",
+                "type"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "http_expected_status": {
+                    "type": "integer"
+                },
+                "http_headers": {
+                    "type": "string"
+                },
+                "http_method": {
+                    "type": "string"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
                 }
             }
         },
@@ -7841,6 +8789,43 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_model.AutomationRule": {
+            "type": "object",
+            "properties": {
+                "action_config": {
+                    "description": "JSON",
+                    "type": "string"
+                },
+                "action_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "event_filter": {
+                    "description": "JSON",
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "xirang_backend_internal_model.Integration": {
             "type": "object",
             "properties": {
@@ -8047,6 +9032,18 @@ const docTemplate = `{
                 "is_template": {
                     "type": "boolean"
                 },
+                "keep_daily": {
+                    "type": "integer"
+                },
+                "keep_monthly": {
+                    "type": "integer"
+                },
+                "keep_weekly": {
+                    "type": "integer"
+                },
+                "keep_yearly": {
+                    "type": "integer"
+                },
                 "max_concurrent": {
                     "type": "integer"
                 },
@@ -8069,8 +9066,22 @@ const docTemplate = `{
                 "retention_days": {
                     "type": "integer"
                 },
+                "retention_mode": {
+                    "description": "GFS 保留模式: \"simple\" | \"gfs\"",
+                    "type": "string"
+                },
                 "retry_base_seconds": {
                     "type": "integer"
+                },
+                "rpo_minutes": {
+                    "description": "RPO/RTO 目标（分钟，0=未设置）",
+                    "type": "integer"
+                },
+                "rto_minutes": {
+                    "type": "integer"
+                },
+                "skip_next": {
+                    "type": "boolean"
                 },
                 "source_path": {
                     "type": "string"
@@ -8092,6 +9103,12 @@ const docTemplate = `{
         "xirang_backend_internal_model.Report": {
             "type": "object",
             "properties": {
+                "actual_rpo_minutes": {
+                    "type": "integer"
+                },
+                "actual_rto_minutes": {
+                    "type": "integer"
+                },
                 "avg_duration_ms": {
                     "type": "integer"
                 },
@@ -8122,6 +9139,12 @@ const docTemplate = `{
                 },
                 "period_start": {
                     "type": "string"
+                },
+                "rpo_compliant": {
+                    "type": "boolean"
+                },
+                "rto_compliant": {
+                    "type": "boolean"
                 },
                 "success_rate": {
                     "type": "number"
@@ -8206,6 +9229,64 @@ const docTemplate = `{
                 "username": {
                     "description": "PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem\n+ toSSHKeyResponse() 脱敏，此处 json:\"-\" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})",
                     "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_model.ServiceMonitor": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "http_expected_status": {
+                    "type": "integer"
+                },
+                "http_headers": {
+                    "description": "JSON",
+                    "type": "string"
+                },
+                "http_method": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "last_status": {
+                    "description": "\"up\"|\"down\"|\"unknown\"",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "target": {
+                    "description": "URL or host:port",
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "\"http\" | \"tcp\"",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "uptime_pct": {
+                    "description": "trailing 24h",
+                    "type": "number"
                 }
             }
         },

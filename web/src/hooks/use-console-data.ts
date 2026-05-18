@@ -31,6 +31,7 @@ import type {
   NodeRecord,
   OverviewStats,
   OverviewSummary,
+  HealthIncidentTimelineData,
   OverviewTrafficSeries,
   OverviewTrafficWindow,
   PolicyRecord,
@@ -54,6 +55,7 @@ export interface ConsoleDataState {
   setGlobalSearch: (keyword: string) => void;
   refresh: () => void;
   fetchOverviewTraffic: (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }) => Promise<OverviewTrafficSeries>;
+  fetchHealthIncidentTimeline: (options?: { windowHours?: number; signal?: AbortSignal }) => Promise<HealthIncidentTimelineData>;
   refreshNodes: (options?: { limit?: number; offset?: number }) => Promise<void>;
   refreshPolicies: () => Promise<void>;
   refreshTasks: (options?: { limit?: number; offset?: number }) => Promise<void>;
@@ -322,6 +324,22 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     return apiClient.getOverviewTraffic(token, { window, signal: options?.signal });
   }, [demoModeEnabled, token]);
 
+  const fetchHealthIncidentTimeline = useCallback(async (options?: { windowHours?: number; signal?: AbortSignal }): Promise<HealthIncidentTimelineData> => {
+    if (!token) {
+      if (demoModeEnabled) {
+        const mocks = await loadMocks();
+        return mocks.buildMockHealthIncidentTimeline();
+      }
+      return {
+        generatedAt: new Date().toISOString(),
+        windowHours: options?.windowHours ?? 72,
+        summary: { total: 0, critical: 0, warning: 0, info: 0 },
+        groups: []
+      };
+    }
+    return apiClient.getHealthIncidentTimeline(token, { windowHours: options?.windowHours, signal: options?.signal });
+  }, [demoModeEnabled, token]);
+
   const {
     createSSHKey,
     updateSSHKey,
@@ -433,6 +451,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     globalSearch,
     setGlobalSearch,
     fetchOverviewTraffic,
+    fetchHealthIncidentTimeline,
     refresh: () => {
       setRefreshVersion((current) => current + 1);
       void loadData();

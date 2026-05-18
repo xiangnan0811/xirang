@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Maximize2, TrendingUp } from "lucide-react";
+import { AlertTriangle, ArrowRight, Maximize2, ShieldAlert, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,14 +22,166 @@ import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useAuth } from "@/context/auth-context.hooks";
-import { getErrorMessage } from "@/lib/utils";
-import type { OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
+import { formatRelativeTime, formatTime } from "@/lib/date-utils";
+import { getErrorMessage, getLocale } from "@/lib/utils";
+import type { HealthIncidentGroup, HealthIncidentSeverity, HealthIncidentSourceType, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 import { OverviewTrafficChart } from "@/pages/overview-page.traffic";
 import { OverviewRecentTasks } from "@/pages/overview-page.recent-tasks";
 import { OverviewHero } from "@/pages/overview-page.hero";
 
 const MATRIX_PREVIEW_LIMIT = 80;
+const INCIDENT_PREVIEW_LIMIT = 4;
 
+type TFunction = ReturnType<typeof useTranslation>["t"];
+
+function severityTone(severity: HealthIncidentSeverity): "destructive" | "warning" | "info" {
+  if (severity === "critical") return "destructive";
+  if (severity === "warning") return "warning";
+  return "info";
+}
+
+function severityLabel(t: TFunction, severity: HealthIncidentSeverity) {
+  return t(`overview.healthIncidentSeverity.${severity}`);
+}
+
+function sourceLabel(t: TFunction, source: HealthIncidentSourceType) {
+  return t(`overview.healthIncidentSource.${source}`);
+}
+
+function resourceLabel(t: TFunction, group: HealthIncidentGroup) {
+  const resourceName = group.resource.name || t("common.unknown");
+  const typeLabel = t(`overview.healthIncidentResource.${group.resource.type}`);
+  if (group.resource.type === "task" && group.resource.nodeName) {
+    return `${typeLabel} · ${resourceName} / ${group.resource.nodeName}`;
+  }
+  if (group.resource.type === "policy" && group.resource.nodeName) {
+    return `${typeLabel} · ${resourceName} / ${group.resource.nodeName}`;
+  }
+  return `${typeLabel} · ${resourceName}`;
+}
+
+function relativeIncidentTime(value: string) {
+  const locale = getLocale().startsWith("zh") ? "zh" : "en";
+  return formatRelativeTime(value, locale);
+}
+
+function HealthIncidentTimelinePanel({
+  groups,
+  loading,
+  error,
+  onRetry,
+}: {
+  groups: HealthIncidentGroup[];
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  const visibleGroups = groups.slice(0, INCIDENT_PREVIEW_LIMIT);
+
+  return (
+    <DataSurface className="animate-slide-up [animation-delay:180ms]">
+      <DataSurfaceHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <ShieldAlert className="size-4 text-primary" aria-hidden />
+            {t("overview.healthIncidentTitle")}
+          </span>
+        }
+        description={t("overview.healthIncidentDesc")}
+        actions={
+          <Button variant="outline" size="sm" onClick={onRetry} disabled={loading}>
+            {t("common.refresh")}
+          </Button>
+        }
+      />
+      <DataSurfaceContent className="space-y-3">
+        {loading ? (
+          <LoadingState
+            className="rounded-lg border border-border bg-background/60"
+            title={t("overview.healthIncidentLoading")}
+            description={t("overview.healthIncidentLoadingDesc")}
+            rows={2}
+          />
+        ) : null}
+
+        {!loading && error ? (
+          <InlineAlert tone="warning" title={t("overview.healthIncidentErrorTitle")}>
+            <span>{error}</span>
+          </InlineAlert>
+        ) : null}
+
+        {!loading && !error && groups.length === 0 ? (
+          <InlineAlert tone="success" title={t("overview.healthIncidentEmptyTitle")}>
+            <span>{t("overview.healthIncidentEmptyDesc")}</span>
+          </InlineAlert>
+        ) : null}
+
+        {!loading && !error && groups.length > 0 ? (
+          <div className="space-y-3" role="list" aria-label={t("overview.healthIncidentListAriaLabel")}>
+            {visibleGroups.map((group) => {
+              const primaryAction = group.nextActions[0];
+              return (
+                <article
+                  key={group.id}
+                  role="listitem"
+                  className="rounded-lg border border-border bg-background/60 p-3"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone={severityTone(group.severity)}>
+                          {severityLabel(t, group.severity)}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {t("overview.healthIncidentEvents", { count: group.eventCount })}
+                        </span>
+                        <time
+                          dateTime={group.lastSeenAt}
+                          className="text-xs text-muted-foreground"
+                          title={formatTime(group.lastSeenAt)}
+                        >
+                          {relativeIncidentTime(group.lastSeenAt)}
+                        </time>
+                      </div>
+                      <h2 className="text-sm font-semibold text-foreground">
+                        {resourceLabel(t, group)}
+                      </h2>
+                      <p className="text-sm leading-relaxed text-muted-foreground">
+                        {group.likelyCause || t("overview.healthIncidentUnknownCause")}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.sourceTypes.map((source) => (
+                          <Badge key={source} tone="neutral" dot={false} className="text-[11px]">
+                            {sourceLabel(t, source)}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    {primaryAction ? (
+                      <Button asChild variant="ghost" size="sm" className="shrink-0 justify-start">
+                        <Link to={primaryAction.href}>
+                          {primaryAction.label || t("overview.healthIncidentPrimaryAction")}
+                          <ArrowRight className="size-3.5" aria-hidden />
+                        </Link>
+                      </Button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {!loading && !error && groups.length > INCIDENT_PREVIEW_LIMIT ? (
+          <p className="text-xs text-muted-foreground">
+            {t("overview.healthIncidentMore", { count: groups.length - INCIDENT_PREVIEW_LIMIT })}
+          </p>
+        ) : null}
+      </DataSurfaceContent>
+    </DataSurface>
+  );
+}
 
 function parseDateValue(value?: string) {
   if (!value) {
@@ -40,7 +195,7 @@ function parseDateValue(value?: string) {
 export function OverviewPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const { overview, loading, refreshVersion, fetchOverviewTraffic } = useSharedContext();
+  const { overview, loading, refreshVersion, fetchOverviewTraffic, fetchHealthIncidentTimeline } = useSharedContext();
   const { nodes, refreshNodes } = useNodesContext();
   const { tasks, refreshTasks } = useTasksContext();
 
@@ -58,14 +213,53 @@ export function OverviewPage() {
   const [trafficData, setTrafficData] = useState<OverviewTrafficSeries | null>(null);
   const [trafficLoading, setTrafficLoading] = useState(true);
   const [trafficError, setTrafficError] = useState<string | null>(null);
+  const [incidentGroups, setIncidentGroups] = useState<HealthIncidentGroup[]>([]);
+  const [incidentLoading, setIncidentLoading] = useState(true);
+  const [incidentError, setIncidentError] = useState<string | null>(null);
+  const [incidentReloadKey, setIncidentReloadKey] = useState(0);
   const [visibleLayers, setVisibleLayers] = useState({ throughput: true, activity: true, failures: true });
   const trafficRequestRef = useRef(0);
+  const incidentRequestRef = useRef(0);
   const previewNodes = useMemo(() => nodes.slice(0, MATRIX_PREVIEW_LIMIT), [nodes]);
   const hiddenNodeCount = Math.max(0, nodes.length - previewNodes.length);
   const abnormalNodeCount = useMemo(
     () => nodes.filter((node) => node.status !== "online").length,
     [nodes]
   );
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestId = incidentRequestRef.current + 1;
+    incidentRequestRef.current = requestId;
+    setIncidentLoading(true);
+    setIncidentError(null);
+
+    void fetchHealthIncidentTimeline({ windowHours: 72, signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted && incidentRequestRef.current === requestId) {
+          setIncidentGroups(result.groups);
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (incidentRequestRef.current === requestId) {
+          setIncidentError(getErrorMessage(error, t("overview.healthIncidentLoadFailed")));
+          setIncidentGroups([]);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && incidentRequestRef.current === requestId) {
+          setIncidentLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
+  }, [fetchHealthIncidentTimeline, refreshVersion, incidentReloadKey]);
+
   useEffect(() => {
     const controller = new AbortController();
     const requestId = trafficRequestRef.current + 1;
@@ -197,6 +391,13 @@ export function OverviewPage() {
             tone: "primary",
           },
         ]}
+      />
+
+      <HealthIncidentTimelinePanel
+        groups={incidentGroups}
+        loading={incidentLoading}
+        error={incidentError}
+        onRetry={() => setIncidentReloadKey((current) => current + 1)}
       />
 
       <section className="grid gap-4 grid-cols-1 lg:grid-cols-2 animate-slide-up [animation-delay:200ms]">

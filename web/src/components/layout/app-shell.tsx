@@ -212,6 +212,7 @@ function AppShellInner() {
               refresh: consoleData.refresh,
               overview: consoleData.overview,
               fetchOverviewTraffic: consoleData.fetchOverviewTraffic,
+              fetchHealthIncidentTimeline: consoleData.fetchHealthIncidentTimeline,
             }}>
             <NodesContextProvider value={{
               nodes: consoleData.nodes,
