@@ -403,3 +403,73 @@ Correct:
   "cleanup_error": "清理失败: <sanitized error>"
 }
 ```
+
+---
+
+## Scenario: Health Incident Timeline Read Model
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the health incident timeline endpoint, source aggregation, severity/resource grouping, ownership filtering, or frontend timeline mappers.
+- Applies to `GET /api/v1/overview/health-incident-timeline`, alert/task-run/delivery/anomaly/node metric/backup health aggregation, and UI contracts that render timeline groups.
+
+### 2. Signatures
+
+- Route: `GET /api/v1/overview/health-incident-timeline` under `/api/v1`.
+- Query: optional `window_hours`; default 72, maximum 168.
+- Middleware: authenticated route plus `middleware.RBAC("tasks:read")`.
+- Handler signature: `func (h *HealthIncidentTimelineHandler) Get(c *gin.Context)`.
+- Backend response shape is a standard `Response` envelope whose `data` contains `generated_at`, `window_hours`, `summary`, and `groups`.
+- Group fields include `id`, `severity`, `resource`, `last_seen_at`, `event_count`, `likely_cause`, `source_types`, `next_actions`, and `signals`.
+- Severity values are `critical`, `warning`, and `info`; source types include `alert`, `task_failure`, `notification_failure`, `anomaly`, `probe`, `metric`, `backup_stale`, and `backup_degraded`.
+
+### 3. Contracts
+
+- The endpoint is read-only; do not create incident rows, mutate alerts/tasks/nodes, retry notifications, or trigger remediation.
+- Aggregate only safe DTO fields. Do not serialize full `Node`, `Task`, `Policy`, executor config, alert delivery integration config, or raw log bodies from this endpoint.
+- Node-scoped aggregation for task runs must join `task_runs -> tasks`; `TaskRun` has no direct `node_id`.
+- Operator visibility must fail closed through ownership helpers: owned node IDs only; if no owned nodes, return an empty timeline; do not expose `node_id=0` platform alerts to operators.
+- Platform/service events may use `node_id=0`; treat them as platform resources for admin/viewer visibility, never as node-owned events.
+- Every returned group must include at least one `next_actions` entry with a non-empty `href` and a concise `likely_cause` derived from sanitized source data.
+- Keep grouping deterministic by resource/source identity, and sort returned groups by `last_seen_at` descending.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `window_hours` is missing, non-numeric, zero, or negative | Use the default 72-hour window. |
+| `window_hours` exceeds 168 | Clamp to 168 hours. |
+| Operator has no owned nodes | Return `groups: []` and zeroed summary. |
+| Unknown/missing auth role reaches ownership filtering | Fail closed via existing ownership helpers and return standard internal error if role context is invalid. |
+| Source table query fails | Return `respondInternalError`; do not return partial timeline data as successful. |
+| Source rows contain sensitive error text | Sanitize or summarize messages before placing them in `likely_cause` or `signals[].message`. |
+| No recent source rows are visible | Return an empty timeline with a current `generated_at`. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a failed task run joined to its task and a related alert collapse into one task resource group with critical severity, node/policy identifiers, sorted signals, and links to the task run/logs or related resource.
+- Base: an operator with one owned node sees only that node's alerts, task failures, metrics, and backup staleness; platform alerts and unowned node events are absent.
+- Bad: returning raw alert rows plus task-run rows as separate ungrouped arrays, exposing all nodes to operators, or persisting an `Incident` lifecycle record for this MVP.
+
+### 6. Tests Required
+
+- Backend handler tests must cover aggregation grouping, `last_seen_at` sorting, severity escalation, task-run-to-task resource association, and next-action presence.
+- Backend ownership tests must assert operators see only owned node events and no `node_id=0` platform events; no-owned-node operators receive an empty timeline.
+- Backend tests should cover at least task failures, unresolved alerts, node/metric/probe signals, and backup stale/degraded signals when those sources are changed.
+- Router/RBAC tests must assert the endpoint is registered and protected by `tasks:read`.
+- Frontend API tests must assert snake_case fields map to camelCase fields, including `last_seen_at`, `event_count`, `source_types`, `next_actions`, `occurred_at`, `task_run_id`, `node_id`, and `policy_id`.
+- UI tests must assert the Overview page renders at least one group with severity, resource, likely cause, event count, and a next-action link plus loading/empty/error states when changed.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+respondOK(c, gin.H{"alerts": alerts, "task_runs": runs})
+```
+
+Correct:
+
+```go
+respondOK(c, healthIncidentTimelineResponse{Groups: groupedTimeline})
+```
