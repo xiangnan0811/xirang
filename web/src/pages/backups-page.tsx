@@ -19,9 +19,26 @@ export function BackupsPage() {
   const [healthLoading, setHealthLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
+        let cancelled = false;
+        setHealthLoading(true);
+        import("@/data/mock")
+          .then((mocks) => {
+            if (!cancelled) setHealthData(mocks.buildMockBackupHealth());
+          })
+          .finally(() => {
+            if (!cancelled) setHealthLoading(false);
+          });
+        return () => {
+          cancelled = true;
+        };
+      }
+      setHealthData(null);
+      setHealthLoading(false);
+      return;
+    }
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHealthLoading(true);
     apiClient
       .getBackupHealth(token, { signal: controller.signal })

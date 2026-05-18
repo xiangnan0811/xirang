@@ -293,14 +293,19 @@ export function useNodesPageState() {
   };
 
   const runDoctorForNode = async (node: NodeRecord) => {
-    if (!token) {
-      return;
-    }
     setDoctorNode(node);
     setDoctorLoading(true);
     setDoctorError(null);
     try {
-      const result = await apiClient.runNodeDoctor(token, node.id);
+      const result = token
+        ? await apiClient.runNodeDoctor(token, node.id)
+        : import.meta.env.VITE_ENABLE_DEMO_MODE === "true"
+          ? (await import("@/data/mock")).buildMockNodeDoctorResult(node)
+          : null;
+      if (!result) {
+        setDoctorError(t("console.notLoggedIn"));
+        return;
+      }
       setDoctorResult(result);
     } catch (error) {
       const message = getErrorMessage(error);

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
@@ -57,7 +57,8 @@ const backupConfidence: BackupConfidenceData = {
   ],
 };
 
-const { getBackupConfidenceMock, getBackupHealthMock, getStorageUsageMock, verifyMountMock } = vi.hoisted(() => ({
+const { authRef, getBackupConfidenceMock, getBackupHealthMock, getStorageUsageMock, verifyMountMock } = vi.hoisted(() => ({
+  authRef: { current: { token: "test-token" as string | null, role: "admin" as "admin" | null } },
   getBackupConfidenceMock: vi.fn(),
   getBackupHealthMock: vi.fn(),
   getStorageUsageMock: vi.fn(),
@@ -65,10 +66,7 @@ const { getBackupConfidenceMock, getBackupHealthMock, getStorageUsageMock, verif
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({
-    token: "test-token",
-    role: "admin",
-  }),
+  useAuth: () => authRef.current,
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -93,6 +91,15 @@ vi.mock("recharts", () => ({
 }));
 
 describe("BackupsPage", () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    authRef.current = { token: "test-token", role: "admin" };
+    getBackupConfidenceMock.mockReset();
+    getBackupHealthMock.mockReset();
+    getStorageUsageMock.mockReset();
+    verifyMountMock.mockReset();
+  });
+
   it("renders the page action without violating single-child Slot constraints", async () => {
     getBackupConfidenceMock.mockResolvedValue(backupConfidence);
     getBackupHealthMock.mockResolvedValue(backupHealth);
@@ -108,5 +115,21 @@ describe("BackupsPage", () => {
     expect(await screen.findByText(/Backup Confidence|备份可信度/)).toBeInTheDocument();
     expect((await screen.findAllByText(/Insufficient proof|证据不足/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Never backed up|从未备份/)).toBeInTheDocument();
+  });
+
+  it("demo 模式无 token 时展示 mock 可信路径和故障路径", async () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
+    authRef.current = { token: null, role: null };
+
+    render(
+      <MemoryRouter>
+        <BackupsPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("核心 MySQL 增量（演示） · 北京主库-1")).toBeInTheDocument();
+    expect(await screen.findByText("消息队列快照（演示故障） · 天津网关-2")).toBeInTheDocument();
+    expect(screen.getByText(/演示故障：SSH Key 已过期/)).toBeInTheDocument();
+    expect(getBackupConfidenceMock).not.toHaveBeenCalled();
   });
 });
