@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.1](https://github.com/xiangnan0811/xirang/compare/v0.38.0...v0.38.1) (2026-05-18)
+
+
+### 🐛 Bug Fixes
+
+* **trust:** harden Trust Ops review findings ([8a08987](https://github.com/xiangnan0811/xirang/commit/8a089877d82541686b0de5e1c645ae347e25a2f4))
+
 ## [0.38.0](https://github.com/xiangnan0811/xirang/compare/v0.37.0...v0.38.0) (2026-05-18)
 
 
