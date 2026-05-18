@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend security contracts, response sanitization, RBAC/ownership, encryption hooks, and denial tests."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check sensitive fields remain hook-encrypted and no raw decrypted models are returned."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check new errors and diagnostics are sanitized and fail closed."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check new command/drill/risk behavior does not log secrets or raw credential-bearing output."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check frontend quality expectations for Settings UI changes."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check accessibility of Settings risk summary."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check API types and UI rendering preserve sanitized contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check backend/API/frontend consistency and boundary validation."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check validators/sanitizers/UI patterns are reused instead of duplicated."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/current-code-security-surfaces.md","reason":"Check all identified P0 gaps are addressed or explicitly deferred."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/secrets-management.md","reason":"Check final implementation aligns with secret redaction and least-privilege guidance."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/pam-bastion-patterns.md","reason":"Check scope stays layered-hardening and deferred PAM-grade controls remain roadmap items."}

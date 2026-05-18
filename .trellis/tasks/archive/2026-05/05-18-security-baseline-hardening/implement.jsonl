@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend security contracts: sanitize sensitive responses, correct Auth/RBAC/ownership, encrypted sensitive fields, and denial-case tests."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Sensitive model fields must use hooks and handlers must not expose raw decrypted model values."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Client errors and diagnostic evidence must avoid leaking secrets, command output, SSH keys, tokens, or internal details."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Command/log/error changes must not log passwords, private keys, tokens, endpoints, or decrypted values."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Settings risk summary UI should reuse existing component and styling conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Settings risk summary must remain accessible with semantic labels and keyboard-friendly controls."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API types and rendering must preserve sanitized backend contracts without reintroducing raw secrets."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Task spans backend models/handlers, route/RBAC, API client, and Settings UI; cross-layer data flow must stay consistent."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Prefer shared sanitizers/validators and existing Settings card patterns instead of duplicate ad-hoc logic."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/current-code-security-surfaces.md","reason":"Concrete current behavior, gaps, and implementation points for task responses, drill, SSH keys, command validation, ownership, audit, and tests."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/secrets-management.md","reason":"OWASP-aligned API redaction, secret storage, rotation, least-privilege, logging, and incident-response guidance mapped to Xirang."}
+{"file":".trellis/tasks/05-18-security-baseline-hardening/research/pam-bastion-patterns.md","reason":"PAM/bastion/zero-trust patterns mapped to the chosen layered-hardening boundary and deferred roadmap."}
