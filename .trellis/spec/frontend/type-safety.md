@@ -298,7 +298,7 @@ const triggerType = run.triggerType;
 | `source_types`, `next_actions`, or `signals` is absent or invalid | Map the field to an empty array. |
 | Unknown `severity` | Map to `warning`, never to `info` or a success state. |
 | Unknown `resource.type` | Map to `platform` and use a safe platform name fallback. |
-| Numeric IDs arrive as strings, missing values, zero, or invalid text | Map valid positive IDs to numbers; invalid optional IDs become `undefined`. |
+| Numeric IDs, `window_hours`, summary counts, or `event_count` arrive as strings, missing values, zero, or invalid text | Map valid positive IDs to numbers; invalid optional IDs become `undefined`, and count/window fields fall back to `0` rather than `NaN`. |
 | API request fails | Keep the Overview page usable, show the timeline error state, and do not render stale previous incident groups. |
 
 ### 5. Good/Base/Bad Cases
@@ -329,4 +329,91 @@ Correct:
 ```ts
 const timeline = mapHealthIncidentTimeline(raw);
 setIncidentGroups(timeline.groups);
+```
+
+---
+
+## Scenario: Demo Mode Trusted Ops Story
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend demo mode behavior, mock data, no-token
+  console access, trusted-ops walkthroughs, or demo-only write/read flows.
+- Applies to `VITE_ENABLE_DEMO_MODE`, `web/src/data/mock.ts`, auth/routing
+  guards, shared console data hooks, demo operation helpers, and public docs that
+  describe demo behavior.
+
+### 2. Signatures
+
+- Env key: `VITE_ENABLE_DEMO_MODE=true` enables the no-token frontend demo path.
+- Demo data source: `loadMocks() = import("@/data/mock")` should remain lazily
+  loaded from demo/no-token branches.
+- Auth/routing boundary: `/app/*` may be entered without a token only when demo
+  mode is explicitly enabled.
+- User-facing docs/examples: `web/.env.example` and `docs/env-vars.md` must
+  describe demo mode as mock-only.
+
+### 3. Contracts
+
+- Demo mode must be opt-in through `VITE_ENABLE_DEMO_MODE=true`; authenticated
+  users should continue using normal API-backed data paths.
+- No-token demo paths must never call write APIs, connect to real servers, use
+  real SSH keys, or touch backup storage. Use local mock state and demo helper
+  functions instead.
+- Login, app-shell, and any demo entry copy must clearly say the console uses
+  mock data only and is not connected to real infrastructure.
+- Mock data should include at least one successful trusted-ops path and one
+  explainable failure path covering backup confidence, restore drill evidence,
+  SSH diagnostics/Doctor evidence, health incident timeline, and task/log
+  evidence when those surfaces are part of the demo story.
+- Public docs must not claim hosted demo infrastructure, telemetry collection,
+  production maturity, or user scale that is not backed by current repository
+  state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `VITE_ENABLE_DEMO_MODE` is absent or not `true` and there is no token | Protected routes redirect to login; no mock console access. |
+| `VITE_ENABLE_DEMO_MODE=true` and there is no token | Protected routes allow `/app/*`; data comes from lazy-loaded mocks. |
+| A demo write/read action has no token | Use local mock behavior or a safe empty fallback; do not call the backend. |
+| Demo copy or docs mention real infrastructure | Revise to mock-only wording before merging. |
+| Demo mock stories include only healthy states | Add an explainable failure path with evidence and next-step guidance. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: login exposes a demo entry only when demo mode is enabled, `/app/*`
+  renders mock-only banners, and mock data shows a successful backup/drill path
+  plus an SSH/incident failure path with evidence.
+- Base: no-token demo mode is disabled; users without tokens remain on login and
+  the production bundle does not eagerly import mock data.
+- Bad: bypassing `ProtectedRoute` for every environment, silently showing
+  production-looking mock data without a banner, or calling real APIs from a
+  no-token demo action.
+
+### 6. Tests Required
+
+- Route/auth tests must cover no-token access denied by default and allowed only
+  when `VITE_ENABLE_DEMO_MODE=true`.
+- Login or shell tests must assert mock-only demo copy is visible when demo mode
+  is enabled and that entering demo mode does not submit login credentials.
+- Hook or page tests must assert demo mock data includes both a successful
+  trusted path and an explainable failure path with evidence/next actions.
+- `npm run check`, `git diff --check`, and doc freshness checks must pass when
+  demo docs or mock code change.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const demoMode = true;
+return <Navigate to="/app" replace />;
+```
+
+Correct:
+
+```ts
+const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
+if (!token && !demoModeEnabled) return <Navigate to="/login" replace />;
 ```
