@@ -618,17 +618,6 @@ func (m *Manager) transferFilesToSandbox(_ context.Context, srcNode model.Node, 
 	return validateDrillCrossNodeTransferAllowed(srcNode, dstNode)
 }
 
-// runSSHCommandOnNode 在指定节点上通过 SSH 执行命令，返回合并输出。
-func (m *Manager) runSSHCommandOnNode(ctx context.Context, node model.Node, command string) (string, error) {
-	client, err := executor.DialSSHForNode(ctx, node)
-	if err != nil {
-		return "", fmt.Errorf("SSH 连接失败: %w", err)
-	}
-	defer client.Close() //nolint:errcheck
-
-	return executor.RunSSHCommandOutput(ctx, client, command)
-}
-
 // runDrillSSHScript 在指定节点上通过 SSH 执行一段脚本命令。
 func (m *Manager) runDrillSSHScript(ctx context.Context, node model.Node, script string) error {
 	client, err := executor.DialSSHForNode(ctx, node)
