@@ -70,6 +70,41 @@ describe("drill evidence API mapping", () => {
     expect(rows[0].app_credential_id).toBe(11);
   });
 
+  it("normalizes invalid latest_drill numbers without NaN", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, {
+        code: 0,
+        message: "ok",
+        data: [
+          {
+            id: 7,
+            name: "bad-drill-policy",
+            source_path: "/data",
+            target_path: "/backup",
+            cron_spec: "0 2 * * *",
+            enabled: true,
+            node_ids: [3],
+            latest_drill: {
+              task_run_id: "bad",
+              status: "unexpected",
+              confidence_eligible: true,
+              duration_ms: "NaN",
+            },
+          },
+        ],
+      })
+    );
+
+    const rows = await createPoliciesApi().getPolicies("token-policy");
+
+    expect(rows[0].latestDrill).toMatchObject({
+      taskRunId: 0,
+      status: "pending",
+      confidenceEligible: true,
+      durationMs: 0,
+    });
+  });
+
   it("sends advanced policy fields when creating and updating policies", async () => {
     const responsePolicy = {
       id: 8,
@@ -132,6 +167,61 @@ describe("drill evidence API mapping", () => {
         drill_auto_cleanup: true,
       });
     }
+  });
+
+  it("normalizes invalid task run and drill evidence numbers without NaN", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, {
+        code: 0,
+        message: "ok",
+        data: {
+          id: "bad",
+          task_id: "NaN",
+          trigger_type: "drill",
+          status: "unexpected",
+          duration_ms: "invalid",
+          verify_status: "unexpected",
+          throughput_mbps: "bad",
+          progress: "NaN",
+          created_at: "2026-05-17T09:59:59Z",
+          drill_evidence: {
+            id: "bad",
+            policy_id: "NaN",
+            task_id: "invalid",
+            task_run_id: "oops",
+            source_task_run_id: "bad",
+            sandbox_node_id: "not-a-number",
+            status: "unexpected",
+            confidence_eligible: true,
+            duration_ms: "NaN",
+            created_at: "2026-05-17T09:59:59Z",
+          },
+        },
+      })
+    );
+
+    const run = await createTaskRunsApi().getTaskRun("token-task", 42);
+
+    expect(run).toMatchObject({
+      id: 0,
+      taskId: 0,
+      triggerType: "drill",
+      status: "pending",
+      durationMs: 0,
+      throughputMbps: 0,
+      progress: 0,
+    });
+    expect(run.drillEvidence).toMatchObject({
+      id: 0,
+      policyId: 0,
+      taskId: 0,
+      taskRunId: 0,
+      sourceTaskRunId: null,
+      sandboxNodeId: 0,
+      status: "pending",
+      confidenceEligible: true,
+      durationMs: 0,
+    });
   });
 
   it("preserves drill trigger type and maps drill_evidence into camelCase domain fields", async () => {

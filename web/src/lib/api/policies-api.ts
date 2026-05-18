@@ -66,16 +66,21 @@ function mapDrillStatus(raw?: string): RestoreDrillStatus {
   }
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function mapLatestDrillSummary(row?: LatestDrillSummaryResponse | null): PolicyLatestDrillSummary | null {
   if (!row) return null;
   return {
-    taskRunId: Number(row.task_run_id),
+    taskRunId: finiteNumber(row.task_run_id),
     status: mapDrillStatus(row.status),
     failedStep: row.failed_step || undefined,
     confidenceEligible: row.confidence_eligible ?? false,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
-    durationMs: row.duration_ms ?? 0,
+    durationMs: finiteNumber(row.duration_ms),
   };
 }
 

@@ -30,6 +30,7 @@ func SanitizeMessage(msg string) string {
 	if msg == "" {
 		return ""
 	}
+	msg = privateKeyBlockSanitizer.ReplaceAllString(msg, "[PRIVATE_KEY_REDACTED]")
 	msg = redactURLs(msg)
 	msg = botTokenSanitizer.ReplaceAllString(msg, "bot***:***")
 	for _, re := range sensitivePatterns {
@@ -57,6 +58,8 @@ var urlLikePattern = regexp.MustCompile(`(https?|wss?)://[^\s"'<>]+`)
 
 // sensitivePatterns matches tokens/secrets in key=value or key: value form.
 // Captures the key name and replaces the value with "***".
+var privateKeyBlockSanitizer = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+
 var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
 }

@@ -60,7 +60,7 @@ export function SetupWizard() {
       id: "welcome",
       title: t("setupWizard.steps.welcome.title"),
       description: t("setupWizard.steps.welcome.description"),
-      icon: <Rocket className={ICON_CLASS} />,
+      icon: <Rocket className={ICON_CLASS} aria-hidden />,
       linkTo: null,
       linkLabel: null,
     },
@@ -68,7 +68,7 @@ export function SetupWizard() {
       id: "ssh-key",
       title: t("setupWizard.steps.sshKey.title"),
       description: t("setupWizard.steps.sshKey.description"),
-      icon: <Key className={ICON_CLASS} />,
+      icon: <Key className={ICON_CLASS} aria-hidden />,
       linkTo: "/app/ssh-keys",
       linkLabel: t("setupWizard.steps.sshKey.linkLabel"),
     },
@@ -76,7 +76,7 @@ export function SetupWizard() {
       id: "node",
       title: t("setupWizard.steps.addNode.title"),
       description: t("setupWizard.steps.addNode.description"),
-      icon: <Server className={ICON_CLASS} />,
+      icon: <Server className={ICON_CLASS} aria-hidden />,
       linkTo: "/app/nodes",
       linkLabel: t("setupWizard.steps.addNode.linkLabel"),
     },
@@ -84,7 +84,7 @@ export function SetupWizard() {
       id: "policy",
       title: t("setupWizard.steps.createPolicy.title"),
       description: t("setupWizard.steps.createPolicy.description"),
-      icon: <ShieldCheck className={ICON_CLASS} />,
+      icon: <ShieldCheck className={ICON_CLASS} aria-hidden />,
       linkTo: "/app/policies",
       linkLabel: t("setupWizard.steps.createPolicy.linkLabel"),
     },
@@ -92,7 +92,7 @@ export function SetupWizard() {
       id: "task",
       title: t("setupWizard.steps.testBackup.title"),
       description: t("setupWizard.steps.testBackup.description"),
-      icon: <ClipboardList className={ICON_CLASS} />,
+      icon: <ClipboardList className={ICON_CLASS} aria-hidden />,
       linkTo: "/app/tasks",
       linkLabel: t("setupWizard.steps.testBackup.linkLabel"),
     },
@@ -100,7 +100,7 @@ export function SetupWizard() {
       id: "complete",
       title: t("setupWizard.steps.complete.title"),
       description: t("setupWizard.steps.complete.description"),
-      icon: <PartyPopper className={ICON_CLASS} />,
+      icon: <PartyPopper className={ICON_CLASS} aria-hidden />,
       linkTo: null,
       linkLabel: null,
     },
@@ -139,9 +139,12 @@ export function SetupWizard() {
 
   /* ---- 后端标记 ---- */
   const markOnboarded = useCallback(() => {
+    if (!token) {
+      return;
+    }
     void request("/me/onboarded", {
       method: "POST",
-      token: token ?? undefined,
+      token,
     }).catch(() => {
       /* best-effort */
     });
@@ -261,9 +264,9 @@ export function SetupWizard() {
           {isWelcome && (
             <div className="grid grid-cols-3 gap-3">
               {[
-                { icon: <ShieldCheck className="size-5" />, label: t("setupWizard.capabilities.backupMgmt"), desc: t("setupWizard.capabilities.backupMgmtDesc") },
-                { icon: <MonitorCheck className="size-5" />, label: t("setupWizard.capabilities.nodeMonitor"), desc: t("setupWizard.capabilities.nodeMonitorDesc") },
-                { icon: <ClipboardList className="size-5" />, label: t("setupWizard.capabilities.policySchedule"), desc: t("setupWizard.capabilities.policyScheduleDesc") },
+                { icon: <ShieldCheck className="size-5" aria-hidden />, label: t("setupWizard.capabilities.backupMgmt"), desc: t("setupWizard.capabilities.backupMgmtDesc") },
+                { icon: <MonitorCheck className="size-5" aria-hidden />, label: t("setupWizard.capabilities.nodeMonitor"), desc: t("setupWizard.capabilities.nodeMonitorDesc") },
+                { icon: <ClipboardList className="size-5" aria-hidden />, label: t("setupWizard.capabilities.policySchedule"), desc: t("setupWizard.capabilities.policyScheduleDesc") },
               ].map((item) => (
                 <div
                   key={item.label}
@@ -322,7 +325,7 @@ export function SetupWizard() {
                       aria-current={isCurrent ? "step" : undefined}
                     >
                       {isDone ? (
-                        <CheckCircle2 className="size-4 text-success" />
+                        <CheckCircle2 className="size-4 text-success" aria-hidden />
                       ) : (
                         <span
                           className={cn(
@@ -346,7 +349,7 @@ export function SetupWizard() {
                     className="gap-2"
                     onClick={() => handleNavigate(currentStep.linkTo!)}
                   >
-                    <ExternalLink className="size-4" />
+                    <ExternalLink className="size-4" aria-hidden />
                     {currentStep.linkLabel}
                   </Button>
                 </div>
@@ -358,7 +361,7 @@ export function SetupWizard() {
           {isComplete && (
             <div className="flex flex-col items-center text-center space-y-4 py-4">
               <div className="p-4 bg-success/10 rounded-full text-success">
-                <CheckCircle2 className="size-10" />
+                <CheckCircle2 className="size-10" aria-hidden />
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">
@@ -392,7 +395,7 @@ export function SetupWizard() {
           <div className="flex items-center gap-2">
             {!isWelcome && (
               <Button variant="outline" onClick={handlePrevious}>
-                <ChevronLeft className="mr-1 size-4" />
+                <ChevronLeft className="mr-1 size-4" aria-hidden />
                 {t("common.prev")}
               </Button>
             )}
@@ -400,7 +403,7 @@ export function SetupWizard() {
             {isWelcome ? (
               <Button onClick={handleNext} className="w-full sm:w-auto px-8 gap-2">
                 {t("setupWizard.startSetup")}
-                <ChevronRight className="size-4" />
+                <ChevronRight className="size-4" aria-hidden />
               </Button>
             ) : isComplete ? (
               <Button
@@ -408,13 +411,13 @@ export function SetupWizard() {
                 loading={completing}
                 className="bg-success hover:bg-success/90 text-success-foreground px-8 gap-2"
               >
-                <CheckCircle2 className="size-4" />
+                <CheckCircle2 className="size-4" aria-hidden />
                 {t("common.finish")}
               </Button>
             ) : (
               <Button onClick={handleNext} className="px-6 gap-2">
                 {t("common.next")}
-                <ChevronRight className="size-4" />
+                <ChevronRight className="size-4" aria-hidden />
               </Button>
             )}
           </div>

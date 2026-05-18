@@ -632,26 +632,27 @@ func (m *Manager) transferFilesToSandbox(ctx context.Context, srcNode model.Node
 	keySuffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	tmpKeyPath := fmt.Sprintf("/tmp/xirang-drill-key-%s.pem", keySuffix)
 
-	// 写入临时密钥到沙箱节点
-	writeKeyCmd := fmt.Sprintf("cat > %s << 'XIRANG_KEY_EOF'\n%s\nXIRANG_KEY_EOF\nchmod 600 %s",
-		tmpKeyPath, srcKey, tmpKeyPath)
-	if _, err := m.runSSHCommandOnNode(ctx, dstNode, writeKeyCmd); err != nil {
-		return fmt.Errorf("写入临时密钥到沙箱失败: %w", err)
-	}
-
-	// 确保清理临时密钥
+	// 确保清理临时密钥，即使写入或 chmod 失败也做 best-effort 删除。
 	defer func() {
 		_, _ = m.runSSHCommandOnNode(context.Background(), dstNode, fmt.Sprintf("rm -f %s", executor.ShellEscape(tmpKeyPath)))
 	}()
 
+	// 写入临时密钥到沙箱节点。使用 printf + ShellEscape，避免 heredoc 分隔符被恶意密钥内容截断。
+	writeKeyCmd := fmt.Sprintf("printf '%%s\\n' %s > %s && chmod 600 %s",
+		executor.ShellEscape(srcKey), executor.ShellEscape(tmpKeyPath), executor.ShellEscape(tmpKeyPath))
+	if _, err := m.runSSHCommandOnNode(ctx, dstNode, writeKeyCmd); err != nil {
+		return fmt.Errorf("写入临时密钥到沙箱失败: %w", err)
+	}
+
 	// 从沙箱执行 rsync pull
-	srcUser := executor.ResolveSSHUser(srcNode)
+	srcUser := executor.ShellEscape(executor.ResolveSSHUser(srcNode))
+	srcHost := executor.ShellEscape(srcNode.Host)
 	rsyncCmd := fmt.Sprintf(
 		"rsync -avz --info=progress2 -e \"ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p %d\" -- %s@%s:%s/ %s/",
 		tmpKeyPath,
 		srcNode.Port,
 		srcUser,
-		srcNode.Host,
+		srcHost,
 		executor.ShellEscape(strings.TrimRight(srcPath, "/")),
 		executor.ShellEscape(dstPath),
 	)

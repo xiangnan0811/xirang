@@ -157,13 +157,17 @@ type BackupConfidenceItemRaw = {
 };
 
 function positiveNumber(value: unknown): number | undefined {
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  return finitePositiveNumber(value);
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value ?? fallback);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function finitePositiveNumber(value: unknown): number | undefined {
+  const parsed = finiteNumber(value, 0);
+  return parsed > 0 ? parsed : undefined;
 }
 
 function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
@@ -349,12 +353,12 @@ function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidence
   return {
     id: String(raw.id || `policy-${raw.policy_id ?? raw.node_id ?? "unknown"}`),
     scope: raw.scope === "node" ? "node" : "policy",
-    policyId: Number(raw.policy_id ?? 0) > 0 ? Number(raw.policy_id) : undefined,
+    policyId: finitePositiveNumber(raw.policy_id),
     policyName: raw.policy_name || undefined,
-    nodeId: Number(raw.node_id ?? 0) > 0 ? Number(raw.node_id) : undefined,
+    nodeId: finitePositiveNumber(raw.node_id),
     nodeName: raw.node_name || undefined,
     status: mapConfidenceStatus(raw.status),
-    score: Number(raw.score ?? 0),
+    score: finiteNumber(raw.score),
     reasons: Array.isArray(raw.reasons)
       ? raw.reasons.map((reason) => ({
           code: String(reason.code || "unknown"),
@@ -368,9 +372,9 @@ function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidence
           status: String(evidence.status || "unknown"),
           message: String(evidence.message || ""),
           observedAt: evidence.observed_at || undefined,
-          taskId: Number(evidence.task_id ?? 0) > 0 ? Number(evidence.task_id) : undefined,
-          taskRunId: Number(evidence.task_run_id ?? 0) > 0 ? Number(evidence.task_run_id) : undefined,
-          alertId: Number(evidence.alert_id ?? 0) > 0 ? Number(evidence.alert_id) : undefined,
+          taskId: finitePositiveNumber(evidence.task_id),
+          taskRunId: finitePositiveNumber(evidence.task_run_id),
+          alertId: finitePositiveNumber(evidence.alert_id),
         }))
       : [],
     nextSteps: Array.isArray(raw.next_steps)
@@ -381,7 +385,7 @@ function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidence
       : [],
     targets: Array.isArray(raw.targets)
       ? raw.targets.map((target) => ({
-          nodeId: Number(target.node_id ?? 0),
+          nodeId: finiteNumber(target.node_id),
           nodeName: String(target.node_name || ""),
           lastBackupAt: target.last_backup_at || undefined,
         }))
@@ -393,11 +397,11 @@ function mapBackupConfidence(raw: BackupConfidenceRaw | null | undefined): Backu
   return {
     generatedAt: raw?.generated_at ?? "",
     summary: {
-      healthy: Number(raw?.summary?.healthy || 0),
-      warning: Number(raw?.summary?.warning || 0),
-      atRisk: Number(raw?.summary?.at_risk || 0),
-      insufficient: Number(raw?.summary?.insufficient || 0),
-      total: Number(raw?.summary?.total || 0),
+      healthy: finiteNumber(raw?.summary?.healthy),
+      warning: finiteNumber(raw?.summary?.warning),
+      atRisk: finiteNumber(raw?.summary?.at_risk),
+      insufficient: finiteNumber(raw?.summary?.insufficient),
+      total: finiteNumber(raw?.summary?.total),
     },
     items: Array.isArray(raw?.items) ? raw.items.map(mapBackupConfidenceItem) : [],
   };

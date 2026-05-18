@@ -169,6 +169,17 @@ func TestSanitizeMessage_Truncates(t *testing.T) {
 	}
 }
 
+func TestSanitizeMessage_RedactsPrivateKeyBlocks(t *testing.T) {
+	const fakeKey = "-----BEGIN FAKE PRIVATE KEY-----\nFAKE_PRIVATE_KEY_BODY_FOR_TEST_ONLY\n-----END FAKE PRIVATE KEY-----"
+	result := SanitizeMessage("restore failed: " + fakeKey)
+	if strings.Contains(result, "FAKE_PRIVATE_KEY_BODY_FOR_TEST_ONLY") || strings.Contains(result, "BEGIN FAKE PRIVATE KEY") {
+		t.Fatalf("期望私钥块被屏蔽，实际: %s", result)
+	}
+	if !strings.Contains(result, "[PRIVATE_KEY_REDACTED]") {
+		t.Fatalf("期望包含私钥屏蔽占位符，实际: %s", result)
+	}
+}
+
 func TestSanitizeDeliveryErrorNilError(t *testing.T) {
 	result := SanitizeDeliveryError("telegram", nil)
 	if result != "" {

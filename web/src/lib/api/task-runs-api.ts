@@ -122,16 +122,29 @@ function mapDrillStatus(raw?: string): RestoreDrillStatus {
   }
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function nullableFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function mapDrillEvidence(row?: RestoreDrillEvidenceResponse | null): RestoreDrillEvidence | null {
   if (!row) return null;
   return {
-    id: Number(row.id),
-    policyId: Number(row.policy_id),
-    taskId: Number(row.task_id),
-    taskRunId: Number(row.task_run_id),
-    sourceTaskRunId: row.source_task_run_id ?? null,
+    id: finiteNumber(row.id),
+    policyId: finiteNumber(row.policy_id),
+    taskId: finiteNumber(row.task_id),
+    taskRunId: finiteNumber(row.task_run_id),
+    sourceTaskRunId: nullableFiniteNumber(row.source_task_run_id),
     snapshotRef: row.snapshot_ref || undefined,
-    sandboxNodeId: Number(row.sandbox_node_id),
+    sandboxNodeId: finiteNumber(row.sandbox_node_id),
     sandboxNodeName: row.sandbox_node_name ?? "",
     sandboxPath: row.sandbox_path ?? "",
     status: mapDrillStatus(row.status),
@@ -139,7 +152,7 @@ function mapDrillEvidence(row?: RestoreDrillEvidenceResponse | null): RestoreDri
     confidenceEligible: row.confidence_eligible ?? false,
     startedAt: formatTime(row.started_at),
     finishedAt: formatTime(row.finished_at),
-    durationMs: row.duration_ms ?? 0,
+    durationMs: finiteNumber(row.duration_ms),
     restoreStatus: mapDrillStatus(row.restore_status),
     restoreStartedAt: formatTime(row.restore_started_at),
     restoreFinishedAt: formatTime(row.restore_finished_at),
@@ -168,16 +181,16 @@ function mapLogLevel(raw?: string): LogEvent["level"] {
 
 function mapTaskRun(row: TaskRunResponse): TaskRunRecord {
   return {
-    id: row.id,
-    taskId: row.task_id,
+    id: finiteNumber(row.id),
+    taskId: finiteNumber(row.task_id),
     triggerType: mapTriggerType(row.trigger_type),
     status: mapRunStatus(row.status),
     startedAt: formatTime(row.started_at),
     finishedAt: formatTime(row.finished_at),
-    durationMs: row.duration_ms,
+    durationMs: finiteNumber(row.duration_ms),
     verifyStatus: mapVerifyStatus(row.verify_status),
-    throughputMbps: row.throughput_mbps,
-    progress: row.progress ?? 0,
+    throughputMbps: finiteNumber(row.throughput_mbps),
+    progress: finiteNumber(row.progress),
     lastError: row.last_error ?? undefined,
     createdAt: formatTime(row.created_at),
     drillEvidence: mapDrillEvidence(row.drill_evidence),
