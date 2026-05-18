@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 45
+- **Total Sessions**: 46
 - **Last Active**: 2026-05-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1521 | Active |
+| `journal-1.md` | ~1554 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 46 | 2026-05-18 | Security baseline hardening | `394823e` | `security/baseline-hardening` |
 | 45 | 2026-05-18 | Trust Ops roadmap closure | `6312f7f`, `66afbc2`, `33e2b77`, `a9989b7`, `05811ac`, `8a08987` | `chore/archive-trust-ops-roadmap` |
 | 44 | 2026-05-18 | Trust Ops 全链路审查 | `9a032f0` | `chore/trust-ops-review` |
 | 43 | 2026-05-18 | Trust Demo Feedback Funnel | `3e68148`, `a54c5a4`, `15d1f1b` | `feat/trust-demo-feedback` |
