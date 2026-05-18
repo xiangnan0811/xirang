@@ -171,6 +171,64 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	}
 }
 
+func TestTaskResponsesRedactExecutorConfig(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	node := model.Node{Name: "node-redact", Host: "10.0.0.8", Username: "root", AuthType: "key", BackupDir: "node-redact"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	secretConfig := `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY","append_only":true}`
+	taskEntity := model.Task{
+		Name:           "task-redact",
+		NodeID:         node.ID,
+		ExecutorType:   "restic",
+		RsyncSource:    "/data/src",
+		RsyncTarget:    "/backup/repo",
+		ExecutorConfig: secretConfig,
+		Status:         "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	r.GET("/tasks", handler.List)
+	r.GET("/tasks/:id", handler.Get)
+	r.POST("/tasks", handler.Create)
+	r.PUT("/tasks/:id", handler.Update)
+
+	requests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/tasks"},
+		{method: http.MethodGet, path: fmt.Sprintf("/tasks/%d", taskEntity.ID)},
+		{method: http.MethodPost, path: "/tasks", body: fmt.Sprintf(`{"name":"task-create-redact","node_id":%d,"executor_type":"restic","rsync_source":"/data/src","rsync_target":"/backup/repo","executor_config":%q}`, node.ID, secretConfig)},
+		{method: http.MethodPut, path: fmt.Sprintf("/tasks/%d", taskEntity.ID), body: fmt.Sprintf(`{"name":"task-update-redact","node_id":%d,"executor_type":"restic","rsync_source":"/data/src","rsync_target":"/backup/repo","executor_config":%q}`, node.ID, secretConfig)},
+	}
+	for _, tc := range requests {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		if tc.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
+		if resp.Code < 200 || resp.Code >= 300 {
+			t.Fatalf("%s %s 期望成功，实际: %d body=%s", tc.method, tc.path, resp.Code, resp.Body.String())
+		}
+		body := resp.Body.String()
+		if strings.Contains(body, "executor_config") || strings.Contains(body, "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY") {
+			t.Fatalf("%s %s 响应不应暴露 executor_config 或密码，实际: %s", tc.method, tc.path, body)
+		}
+	}
+}
+
 func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.NodeOwner{}); err != nil {
@@ -373,6 +431,23 @@ func TestValidateTaskRequestRejectsCommandWithEmptyContent(t *testing.T) {
 	}
 	if err := validateTaskRequest(req); err == nil {
 		t.Fatalf("期望 command 内容为空时被拒绝")
+	}
+}
+
+func TestValidateTaskRequestRejectsCommandSafetyViolations(t *testing.T) {
+	req := taskRequest{
+		Name:         "task-cmd",
+		NodeID:       1,
+		ExecutorType: "command",
+		Command:      strings.Repeat("a", maxCommandLength+1),
+	}
+	if err := validateTaskRequest(req); err == nil || !strings.Contains(err.Error(), "命令长度不能超过") {
+		t.Fatalf("期望 command 长度超限被拒绝，实际: %v", err)
+	}
+
+	req.Command = "rm -rf /etc"
+	if err := validateTaskRequest(req); err == nil || !strings.Contains(err.Error(), "安全策略拦截") {
+		t.Fatalf("期望危险 command 被拒绝，实际: %v", err)
 	}
 }
 

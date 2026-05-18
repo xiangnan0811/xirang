@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -79,6 +81,31 @@ func generateFingerprint(privateKey string) string {
 	return fmt.Sprintf("SHA256:%s", encoded)
 }
 
+func (h *SSHKeyHandler) visibleSSHKeysQuery(c *gin.Context) (*gorm.DB, error) {
+	query := h.db.Model(&model.SSHKey{})
+	switch middleware.CurrentRole(c) {
+	case "admin":
+		return query, nil
+	case "viewer":
+		return query.Where("id IN (?)", h.db.Model(&model.Node{}).
+			Select("DISTINCT ssh_key_id").
+			Where("ssh_key_id IS NOT NULL")), nil
+	case "operator":
+		ownedNodeIDs, err := middleware.OwnedNodeIDs(h.db, middleware.CurrentUserID(c))
+		if err != nil {
+			return nil, err
+		}
+		if len(ownedNodeIDs) == 0 {
+			return query.Where("1 = 0"), nil
+		}
+		return query.Where("id IN (?)", h.db.Model(&model.Node{}).
+			Select("DISTINCT ssh_key_id").
+			Where("id IN ? AND ssh_key_id IS NOT NULL", ownedNodeIDs)), nil
+	default:
+		return nil, errUnknownRole
+	}
+}
+
 func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, string, string, string, error) {
 	normalizedName := strings.TrimSpace(name)
 	normalizedUsername := strings.TrimSpace(username)
@@ -104,8 +131,13 @@ func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, s
 // @Failure      401  {object}  handlers.Response
 // @Router       /ssh-keys [get]
 func (h *SSHKeyHandler) List(c *gin.Context) {
+	query, err := h.visibleSSHKeysQuery(c)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var items []model.SSHKey
-	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
+	if err := query.Order("id asc").Find(&items).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -133,9 +165,18 @@ func (h *SSHKeyHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	query, err := h.visibleSSHKeysQuery(c)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	var item model.SSHKey
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "ssh key 不存在")
+	if err := query.Where("id = ?", id).First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "ssh key 不存在")
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 	respondOK(c, toSSHKeyResponse(item))
@@ -501,7 +542,12 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 	scope := strings.ToLower(strings.TrimSpace(c.DefaultQuery("scope", "all")))
 	idsParam := strings.TrimSpace(c.Query("ids"))
 
-	query := h.db.Model(&model.SSHKey{}).Order("id asc")
+	query, err := h.visibleSSHKeysQuery(c)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	query = query.Order("id asc")
 
 	// 按 scope 过滤
 	if scope == "in_use" {

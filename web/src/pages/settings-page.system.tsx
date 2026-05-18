@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast-sonner";
 import { cn, getErrorMessage } from "@/lib/utils";
-import type { SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
+import type { SecurityRiskItem, SecurityRiskSummary, SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
 
 const CATEGORY_ORDER = ["security", "node_monitor", "retention", "storage", "alert", "anomaly"];
+
+const riskToneClasses: Record<SecurityRiskItem["severity"], string> = {
+  info: "border-info/30 bg-info/5 text-info",
+  warning: "border-warning/30 bg-warning/5 text-warning-foreground dark:text-warning",
+  critical: "border-destructive/30 bg-destructive/5 text-destructive",
+};
 
 export function SystemTab() {
   const { t } = useTranslation();
@@ -23,22 +29,38 @@ export function SystemTab() {
 
   const [logRetentionDays, setLogRetentionDays] = useState(30);
   const [logRetentionSaving, setLogRetentionSaving] = useState(false);
+  const [securityRisk, setSecurityRisk] = useState<SecurityRiskSummary | null>(null);
+  const [securityRiskError, setSecurityRiskError] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
     if (!token) return;
     try {
-      const [res, logSettings] = await Promise.all([
+      const [settingsResult, logSettingsResult, riskResult] = await Promise.allSettled([
         apiClient.getSettings(token),
         apiClient.getLogsSettings(token),
+        apiClient.getSecurityRiskSummary(token),
       ]);
-      setDefinitions(res.definitions);
-      setValues(res.values);
-      const edits: Record<string, string> = {};
-      for (const [key, val] of Object.entries(res.values)) {
-        edits[key] = val.value;
+
+      if (settingsResult.status === "fulfilled") {
+        const res = settingsResult.value;
+        setDefinitions(res.definitions);
+        setValues(res.values);
+        const edits: Record<string, string> = {};
+        for (const [key, val] of Object.entries(res.values)) {
+          edits[key] = val.value;
+        }
+        setEditValues(edits);
       }
-      setEditValues(edits);
-      setLogRetentionDays(logSettings.default_retention_days);
+      if (logSettingsResult.status === "fulfilled") {
+        setLogRetentionDays(logSettingsResult.value.default_retention_days);
+      }
+      if (riskResult.status === "fulfilled") {
+        setSecurityRisk(riskResult.value);
+        setSecurityRiskError(null);
+      } else {
+        setSecurityRisk(null);
+        setSecurityRiskError(getErrorMessage(riskResult.reason));
+      }
     } catch {
       // ignore
     } finally {
@@ -132,6 +154,63 @@ export function SystemTab() {
     <div className="space-y-6 max-w-3xl">
       <h2 className="text-lg font-semibold">{t("settings.system.title")}</h2>
 
+      <section
+        aria-labelledby="security-risk-summary-title"
+        className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4"
+      >
+        <div className="absolute top-0 left-0 w-1 h-full bg-warning/60" />
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 rounded-full bg-warning/10 p-2 text-warning-foreground dark:text-warning">
+            <ShieldAlert className="size-4" aria-hidden />
+          </span>
+          <div className="space-y-1">
+            <h3 id="security-risk-summary-title" className="text-sm font-semibold">
+              {t("settings.system.securityRisk.title")}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.system.securityRisk.description")}
+            </p>
+          </div>
+        </div>
+
+        {securityRiskError ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="status">
+            {t("settings.system.securityRisk.loadFailed")}: {securityRiskError}
+          </p>
+        ) : null}
+
+        {securityRisk ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {securityRisk.items.map((item) => (
+              <article key={item.code} className="rounded-md border border-border bg-background/60 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-medium">
+                      {t(`settings.system.securityRisk.items.${item.code}.title`, { defaultValue: item.title })}
+                    </h4>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t(`settings.system.securityRisk.items.${item.code}.description`, { defaultValue: item.description })}
+                    </p>
+                  </div>
+                  <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium", riskToneClasses[item.severity])}>
+                    {t("settings.system.securityRisk.count", { count: item.count })}
+                  </span>
+                </div>
+                {item.examples.length > 0 ? (
+                  <ul className="space-y-1 text-xs text-muted-foreground" aria-label={t("settings.system.securityRisk.examplesLabel")}>
+                    {item.examples.map((example) => (
+                      <li key={example} className="truncate">{example}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{t("settings.system.securityRisk.noExamples")}</p>
+                )}
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
       {grouped.map(({ category, items }) => (
         <div key={category} className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4">
           <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
@@ -145,7 +224,7 @@ export function SystemTab() {
                     <p className="text-sm font-medium truncate">{def.description}</p>
                     {def.requires_restart && (
                       <span className="inline-flex items-center gap-0.5 text-micro text-warning-foreground dark:text-warning" title={t("settings.system.requiresRestart")}>
-                        <AlertTriangle className="size-3" />
+                        <AlertTriangle className="size-3" aria-hidden />
                         {t("settings.system.restart")}
                       </span>
                     )}

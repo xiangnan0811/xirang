@@ -335,6 +335,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	if req.ExecutorType == "" {
 		req.ExecutorType = taskEntity.ExecutorType
 	}
+	req.ExecutorConfig = mergeTaskExecutorConfigForUpdate(taskEntity.ExecutorType, req.ExecutorType, taskEntity.ExecutorConfig, req.ExecutorConfig)
 
 	ensureNodeTargetPrefix(h.db, &req)
 	// When node changes for rsync/restic tasks, regenerate target from new node
@@ -773,6 +774,66 @@ func inferTaskExecutor(req *taskRequest, _ string) {
 	req.ExecutorType = "rsync"
 }
 
+func mergeTaskExecutorConfigForUpdate(previousExecutorType, nextExecutorType, previousConfig, nextConfig string) string {
+	previousExecutorType = strings.TrimSpace(strings.ToLower(previousExecutorType))
+	nextExecutorType = strings.TrimSpace(strings.ToLower(nextExecutorType))
+	if previousExecutorType != nextExecutorType {
+		return nextConfig
+	}
+
+	trimmedNext := strings.TrimSpace(nextConfig)
+	if trimmedNext == "" {
+		return previousConfig
+	}
+
+	merged, ok := preserveBlankSecretConfigValues(previousConfig, trimmedNext)
+	if ok {
+		return merged
+	}
+	return nextConfig
+}
+
+func preserveBlankSecretConfigValues(previousConfig, nextConfig string) (string, bool) {
+	var previous map[string]interface{}
+	var next map[string]interface{}
+	if err := json.Unmarshal([]byte(previousConfig), &previous); err != nil {
+		return "", false
+	}
+	if err := json.Unmarshal([]byte(nextConfig), &next); err != nil {
+		return "", false
+	}
+
+	changed := false
+	for key, value := range next {
+		if !isSecretConfigKey(key) {
+			continue
+		}
+		if str, ok := value.(string); ok && strings.TrimSpace(str) == "" {
+			if previousValue, exists := previous[key]; exists {
+				next[key] = previousValue
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return nextConfig, true
+	}
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+func isSecretConfigKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "api_key") ||
+		strings.Contains(normalized, "access_key")
+}
+
 func newTaskRefValidationError(message string) error {
 	return &taskRefValidationError{message: message}
 }
@@ -875,8 +936,15 @@ func validateTaskRequest(req taskRequest) error {
 	}
 
 	if req.ExecutorType == "command" {
-		if strings.TrimSpace(req.Command) == "" {
+		command := strings.TrimSpace(req.Command)
+		if command == "" {
 			return fmt.Errorf("命令类型任务必须填写命令内容")
+		}
+		if len(command) > maxCommandLength {
+			return fmt.Errorf("命令长度不能超过 %d 字符", maxCommandLength)
+		}
+		if isDangerousCommand(command) {
+			return fmt.Errorf("该命令被安全策略拦截，禁止执行")
 		}
 	} else {
 		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {

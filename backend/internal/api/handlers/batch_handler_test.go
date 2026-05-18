@@ -64,6 +64,50 @@ func TestBatchCreateRejectsUnownedNodeForOperator(t *testing.T) {
 	}
 }
 
+func TestBatchGetRedactsExecutorConfig(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-batch-redact", Host: "10.0.0.3", Username: "root", AuthType: "key", BackupDir: "node-batch-redact"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	if err := db.Create(&model.Task{
+		Name:           "batch-redact-task",
+		NodeID:         node.ID,
+		ExecutorType:   "restic",
+		RsyncSource:    "/data/src",
+		RsyncTarget:    "/backup/repo",
+		ExecutorConfig: `{"repository_password":"FAKE_BATCH_RESTIC_PASSWORD_FOR_TEST_ONLY"}`,
+		Status:         "pending",
+		BatchID:        "batch-redact",
+		Source:         "batch",
+	}).Error; err != nil {
+		t.Fatalf("创建批量任务失败: %v", err)
+	}
+
+	handler := NewBatchHandler(db, &mockTaskRunner{})
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "admin")
+		c.Next()
+	})
+	r.GET("/batch-commands/:batch_id", handler.Get)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/batch-commands/batch-redact", nil)
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("batch get status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if strings.Contains(body, "executor_config") || strings.Contains(body, "FAKE_BATCH_RESTIC_PASSWORD_FOR_TEST_ONLY") {
+		t.Fatalf("批次详情不应暴露 executor_config 或密码，实际: %s", body)
+	}
+}
+
 func TestBatchGetRejectsUnownedBatchForOperator(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}); err != nil {

@@ -5161,6 +5161,37 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/security-risk-summary": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回只读的轻量安全风险提示，不包含任何原始凭据",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "获取安全风险摘要",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/settings/{key}": {
             "delete": {
                 "security": [
@@ -9313,9 +9344,6 @@ const docTemplate = `{
                 },
                 "escalation_policy_id": {
                     "type": "integer"
-                },
-                "executor_config": {
-                    "type": "string"
                 },
                 "executor_type": {
                     "type": "string"

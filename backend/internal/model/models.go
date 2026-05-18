@@ -300,7 +300,7 @@ type Task struct {
 	RsyncSource        string     `gorm:"size:512" json:"rsync_source"`
 	RsyncTarget        string     `gorm:"size:512" json:"rsync_target"`
 	ExecutorType       string     `gorm:"size:32;not null;default:local" json:"executor_type"`
-	ExecutorConfig     string     `gorm:"type:text" json:"executor_config,omitempty"`
+	ExecutorConfig     string     `gorm:"type:text" json:"-"`
 	CronSpec           string     `gorm:"size:128" json:"cron_spec"`
 	Status             string     `gorm:"size:32;not null;index" json:"status"`
 	BatchID            string     `gorm:"size:64;index" json:"batch_id,omitempty"`

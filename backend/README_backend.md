@@ -285,6 +285,7 @@ go run ./cmd/server
 | GET | /settings | 🔒 全部设置 |
 | PUT | /settings | 🔒 批量更新 |
 | DELETE | /settings/:key | 🔒 删除设置 |
+| GET | /settings/security-risk-summary | 🔒 安全风险摘要（admin；只读计数与脱敏示例） |
 | GET | /settings/logs | 🔒 节点日志保留默认天数（admin） |
 | PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
 | GET | /config/export | 🔒 导出配置 |
@@ -341,6 +342,8 @@ go run ./cmd/server
 支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000057_service_uptime`。
 
 核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
+
+敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 不参与 JSON 序列化以避免泄露执行器密钥。
 
 新增接口（P5b 智能告警）：
 - `GET    /api/v1/silences` — 列出静默规则（?active=true 仅返回生效中，alerts:read）

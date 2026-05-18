@@ -99,6 +99,57 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/nodes/:id/doctor") {
 		t.Fatalf("未注册节点 Doctor 接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/settings/security-risk-summary") {
+		t.Fatalf("未注册安全风险摘要接口")
+	}
+}
+
+func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.SystemSetting{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_SETTINGS_RISK_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 2)
+	for _, role := range []string{"admin", "viewer"} {
+		user := model.User{
+			Username:     "settings-risk-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	viewerReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/security-risk-summary", nil)
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 应被 settings risk summary RBAC 拒绝，实际状态码: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/security-risk-summary", nil)
+	adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminResp := httptest.NewRecorder()
+	router.ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusOK {
+		t.Fatalf("admin 应能访问安全风险摘要接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
 }
 
 func TestBackupConfidenceRouteRBAC(t *testing.T) {

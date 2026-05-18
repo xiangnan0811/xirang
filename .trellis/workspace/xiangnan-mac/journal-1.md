@@ -1519,3 +1519,36 @@ Added trusted demo mode with mock-only console access and trust-story mock data,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: Security baseline hardening
+
+**Date**: 2026-05-18
+**Task**: Security baseline hardening
+**Branch**: `security/baseline-hardening`
+
+### Summary
+
+Hardened credential blast-radius risks by redacting executor configs, blocking unsafe drill key propagation, scoping SSH key visibility, validating command tasks, adding Settings risk visibility, and updating specs/tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `394823e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

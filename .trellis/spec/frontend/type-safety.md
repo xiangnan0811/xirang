@@ -201,6 +201,72 @@ const firstStep = item.nextSteps[0]?.label;
 
 ---
 
+## Scenario: Settings Security Risk Summary Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to Settings security-risk summary data.
+- Applies to `web/src/lib/api/settings-api.ts`, Settings system-tab UI, locale strings for risk summaries, and tests that render the advisory cards.
+
+### 2. Signatures
+
+- Raw API endpoint: `GET /settings/security-risk-summary` through `request<T>()`.
+- Raw response fields: `generated_at`, `summary.total_risks`, `summary.categories`, and `items`.
+- Raw item fields: `code`, `severity`, `title`, `description`, `count`, and `examples`.
+- Domain types: `SecurityRiskSummary`, `SecurityRiskItem`, `SecurityRiskCode`, and `SecurityRiskSeverity`.
+- API mapper signature: `mapSecurityRiskSummary(raw) -> SecurityRiskSummary`.
+
+### 3. Contracts
+
+- Keep raw snake_case response types private to `settings-api.ts`.
+- Map `generated_at` to `generatedAt`, `total_risks` to `totalRisks`, and preserve item arrays as camelCase domain data before components render them.
+- Supported codes are `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, and `weak_security_defaults`; unknown codes must degrade to a safe known code rather than entering component state as arbitrary strings.
+- Supported severities are `info`, `warning`, and `critical`; unknown severities must degrade to `warning`, never to a success state.
+- Normalize numeric fields with finite-number fallbacks so invalid counts never become `NaN`.
+- `examples` must be an array of strings after mapping; invalid or missing examples become `[]`.
+- Components render backend-provided advisory text/examples as-is after mapping. Do not enrich them with hostnames, usernames, credentials, executor configs, raw endpoints, remediation links, or one-click actions.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Response is null/undefined | Map to empty generatedAt, zero summary counts, and empty item list. |
+| `items` is absent or not an array | Map to `items: []`. |
+| `summary.total_risks`, `summary.categories`, or item `count` is invalid | Map to `0`, not `NaN`. |
+| Unknown `severity` | Map to `warning`. |
+| Unknown `code` | Map to a safe known code such as `weak_security_defaults`. |
+| `examples` includes non-string values | Convert displayable entries to strings and drop empty values. |
+| API request fails | Settings system tab should keep the rest of settings usable and avoid rendering stale risk details as confirmed current data. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: mapper receives `generated_at`, `total_risks`, and `root_ssh_users`; Settings renders an advisory card with count, title, description, and sanitized examples.
+- Base: missing `items` maps to an empty list; Settings shows the rest of the system settings normally.
+- Bad: passing raw snake_case data into the component, rendering a link/button that mutates nodes/SSH keys, or appending extra host/credential details on the client side.
+
+### 6. Tests Required
+
+- API mapper tests must cover snake_case to camelCase mapping and invalid numeric fallback.
+- API mapper tests must cover unknown code/severity fallback and invalid examples handling.
+- Settings UI tests must verify advisory risk cards render counts/examples and do not expose remediation links/actions.
+- `npm run check` must keep risk code/severity unions and component props valid.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const risks = await request<SecurityRiskSummary>("/settings/security-risk-summary", { token });
+const count = risks.summary.total_risks;
+```
+
+Correct:
+
+```ts
+const raw = await request<SecurityRiskSummaryRaw>("/settings/security-risk-summary", { token });
+return mapSecurityRiskSummary(raw);
+```
+
 ## Scenario: Drill Evidence Mapping
 
 ### 1. Scope / Trigger
