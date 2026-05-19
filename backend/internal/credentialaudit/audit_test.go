@@ -105,7 +105,11 @@ func TestWriteSanitizesMetadataAndBoundsFields(t *testing.T) {
 			"format":      "json",
 			"private_key": "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
 			"note":        "fixture note",
+			"stage":       "contains token-like text",
+			"labels":      []string{"safe label", "password-like text"},
 			"command":     "fixture operation text",
+			"content":     "FAKE_FILE_CONTENT_FOR_TEST_ONLY",
+			"payload":     "FAKE_EXPORT_PAYLOAD_FOR_TEST_ONLY",
 		},
 	})
 	if err != nil {
@@ -133,10 +137,25 @@ func TestWriteSanitizesMetadataAndBoundsFields(t *testing.T) {
 	if _, ok := metadata["private_key"]; ok {
 		t.Fatalf("private key metadata key should be dropped: %#v", metadata)
 	}
+	if _, ok := metadata["stage"]; ok {
+		t.Fatalf("metadata value containing forbidden token marker should be dropped: %#v", metadata)
+	}
+	labels, _ := metadata["labels"].([]any)
+	if len(labels) != 1 || labels[0] != "safe label" {
+		t.Fatalf("metadata string list should drop only forbidden values: %#v", metadata)
+	}
 	if _, ok := metadata["command"]; ok {
 		t.Fatalf("command metadata key should be dropped: %#v", metadata)
 	}
-	if strings.Contains(record.Metadata, "FAKE_PRIVATE_KEY_FOR_TEST_ONLY") || strings.Contains(record.Metadata, "fixture operation text") {
-		t.Fatalf("metadata should not contain sensitive-field values: %s", record.Metadata)
+	if _, ok := metadata["content"]; ok {
+		t.Fatalf("content metadata key should be dropped: %#v", metadata)
+	}
+	if _, ok := metadata["payload"]; ok {
+		t.Fatalf("payload metadata key should be dropped: %#v", metadata)
+	}
+	for _, forbidden := range []string{"FAKE_PRIVATE_KEY_FOR_TEST_ONLY", "fixture operation text", "FAKE_FILE_CONTENT_FOR_TEST_ONLY", "FAKE_EXPORT_PAYLOAD_FOR_TEST_ONLY"} {
+		if strings.Contains(record.Metadata, forbidden) {
+			t.Fatalf("metadata should not contain sensitive-field values: %s", record.Metadata)
+		}
 	}
 }

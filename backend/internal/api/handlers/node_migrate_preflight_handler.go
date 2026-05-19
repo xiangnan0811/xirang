@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -16,6 +18,7 @@ import (
 	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // MigratePreflightRequest 迁移预检请求
@@ -95,11 +98,19 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	// 加载源节点和目标节点
 	var sourceNode, targetNode model.Node
 	if err := h.db.Preload("SSHKey").First(&sourceNode, sourceID).Error; err != nil {
-		respondNotFound(c, "源节点不存在")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "源节点不存在")
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 	if err := h.db.Preload("SSHKey").First(&targetNode, req.TargetNodeID).Error; err != nil {
-		respondNotFound(c, "目标节点不存在")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "目标节点不存在")
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 	if targetNode.Archived {
@@ -197,7 +208,11 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	// === 检查 1: SSH 连通性 ===
 	sshFailed := false
-	probe, probeErr := sshutil.ProbeNode(targetNode, h.db)
+	auditCredential := sshutil.ResolvedCredential{}
+	probe, probeCredential, probeErr := sshutil.ProbeNodeForPurpose(targetNode, h.db, sshutil.PurposeNodeMigration)
+	if probeCredential.Kind != "" || probeCredential.Source != "" || probeCredential.KeyID != nil {
+		auditCredential = probeCredential
+	}
 	if probeErr != nil {
 		checks = append(checks, PreflightCheckItem{
 			Name: "ssh", Status: "fail",
@@ -217,7 +232,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	// === 检查 2: 工具检测 ===
 	if sshFailed {
-		for tool := range toolSet {
+		for _, tool := range sortedPreflightTools(toolSet) {
 			checks = append(checks, PreflightCheckItem{
 				Name: "tool_" + tool, Status: "skip", Message: "SSH 不通，跳过工具检测",
 			})
@@ -225,9 +240,13 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	} else if len(toolSet) > 0 {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
+		tools := sortedPreflightTools(toolSet)
 		client, dialErr := executor.DialSSHForNodePurpose(ctx, targetNode, sshutil.PurposeNodeMigration)
 		if dialErr != nil {
-			for tool := range toolSet {
+			if resolved := resolveNodeCredentialForAudit(targetNode, h.db, sshutil.PurposeNodeMigration); resolved.Kind != "" || resolved.Source != "" || resolved.KeyID != nil {
+				auditCredential = resolved
+			}
+			for _, tool := range tools {
 				checks = append(checks, PreflightCheckItem{
 					Name: "tool_" + tool, Status: "fail",
 					Message: fmt.Sprintf("无法建立 SSH 会话检测工具: %s", dialErr.Error()),
@@ -236,8 +255,8 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 			}
 		} else {
 			defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-			for tool := range toolSet {
-				cmd := fmt.Sprintf("which %s 2>/dev/null || command -v %s 2>/dev/null", tool, tool)
+			for _, tool := range tools {
+				cmd := fmt.Sprintf("command -v %s >/dev/null 2>&1", executor.ShellEscape(tool))
 				if _, err := executor.RunSSHCommandOutput(ctx, client, cmd); err != nil {
 					checks = append(checks, PreflightCheckItem{
 						Name: "tool_" + tool, Status: "fail",
@@ -263,9 +282,8 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 					continue
 				}
 				checkedPaths[path] = struct{}{}
-				checkCmd := fmt.Sprintf("test -d %s && echo EXISTS || echo MISSING", executor.ShellEscape(path))
-				out, _ := executor.RunSSHCommandOutput(ctx, client, checkCmd)
-				if strings.Contains(out, "MISSING") || !strings.Contains(out, "EXISTS") {
+				checkCmd := fmt.Sprintf("test -d %s", executor.ShellEscape(path))
+				if _, err := executor.RunSSHCommandOutput(ctx, client, checkCmd); err != nil {
 					checks = append(checks, PreflightCheckItem{
 						Name: "path", Status: "warn",
 						Message: fmt.Sprintf("目标节点路径不存在: %s", path),
@@ -302,9 +320,12 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 
 	// === 检查 5: 运行中的任务 ===
 	var runningCount int64
-	h.db.Model(&model.Task{}).
+	if err := h.db.Model(&model.Task{}).
 		Where("node_id = ? AND status IN ?", sourceID, []string{"running", "retrying"}).
-		Count(&runningCount)
+		Count(&runningCount).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	if runningCount > 0 {
 		checks = append(checks, PreflightCheckItem{
 			Name: "running_tasks", Status: "warn",
@@ -353,7 +374,100 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	}
 
 	resp.Checks = checks
+	h.writeMigrationPreflightAudit(c, targetNode, auditCredential, preflightAuditOutcome(checks), checks, map[string]any{
+		"source_node_id":  sourceNode.ID,
+		"target_node_id":  targetNode.ID,
+		"policy_count":    len(policies),
+		"task_count":      len(tasks),
+		"tool_count":      len(toolSet),
+		"can_proceed":     resp.CanProceed,
+		"data_migratable": resp.DataMigratable,
+	})
 	respondOK(c, resp)
+}
+
+func resolveNodeCredentialForAudit(node model.Node, db *gorm.DB, purpose string) sshutil.ResolvedCredential {
+	_, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, purpose)
+	if err != nil {
+		return credential
+	}
+	return credential
+}
+
+func (h *NodeHandler) writeMigrationPreflightAudit(c *gin.Context, targetNode model.Node, credential sshutil.ResolvedCredential, outcome string, checks []PreflightCheckItem, metadata map[string]any) {
+	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(targetNode)
+	kind, source, keyID := eventCredentialFields(credential, fallbackKind, fallbackSource)
+	if keyID == nil {
+		keyID = fallbackKeyID
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	passCount, warnCount, failCount, skipCount := preflightCheckCounts(checks)
+	metadata["stage"] = "complete"
+	metadata["check_count"] = len(checks)
+	metadata["pass_count"] = passCount
+	metadata["warn_count"] = warnCount
+	metadata["failure_count"] = failCount
+	metadata["skip_count"] = skipCount
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "node_migration.preflight",
+		Purpose:          sshutil.PurposeNodeMigration,
+		CredentialKind:   kind,
+		CredentialSource: source,
+		SSHKeyID:         keyID,
+		NodeID:           credentialaudit.PtrUint(targetNode.ID),
+		Outcome:          outcome,
+		Metadata:         metadata,
+	})
+}
+
+func preflightAuditOutcome(checks []PreflightCheckItem) string {
+	_, _, failCount, _ := preflightCheckCounts(checks)
+	if failCount == 0 {
+		return credentialaudit.OutcomeSuccess
+	}
+	for _, check := range checks {
+		if check.Status == "fail" && check.Name == "ssh" {
+			return credentialaudit.OutcomeBlocked
+		}
+	}
+	return credentialaudit.OutcomeFailure
+}
+
+func sortedPreflightTools(toolSet map[string]struct{}) []string {
+	preferred := []string{"rsync", "restic", "rclone"}
+	tools := make([]string, 0, len(toolSet))
+	seen := make(map[string]struct{}, len(toolSet))
+	for _, tool := range preferred {
+		if _, ok := toolSet[tool]; ok {
+			tools = append(tools, tool)
+			seen[tool] = struct{}{}
+		}
+	}
+	for tool := range toolSet {
+		if _, ok := seen[tool]; ok {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func preflightCheckCounts(checks []PreflightCheckItem) (passCount, warnCount, failCount, skipCount int) {
+	for _, check := range checks {
+		switch check.Status {
+		case "pass":
+			passCount++
+		case "warn":
+			warnCount++
+		case "fail":
+			failCount++
+		case "skip":
+			skipCount++
+		}
+	}
+	return passCount, warnCount, failCount, skipCount
 }
 
 // estimateDirSizeMB 使用 du -sm 估算目录大小（MB），5 秒超时，失败返回 0。

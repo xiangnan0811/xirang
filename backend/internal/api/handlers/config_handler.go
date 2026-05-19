@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
@@ -61,6 +62,17 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	if includeSecrets {
 		role, _ := c.Get("role")
 		if role != "admin" {
+			writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+				Action:           "config.export",
+				Purpose:          "config_export",
+				CredentialKind:   "config_export",
+				CredentialSource: "config.export",
+				Outcome:          credentialaudit.OutcomeBlocked,
+				Metadata: map[string]any{
+					"stage":          "authorization",
+					"with_sensitive": true,
+				},
+			})
 			respondForbidden(c, "仅管理员可导出敏感数据")
 			return
 		}
@@ -198,14 +210,37 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 
 	// 导出系统设置（仅 DB 覆盖值）
 	var dbSettings []model.SystemSetting
-	h.db.Find(&dbSettings)
+	if err := h.db.Find(&dbSettings).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	exportSettings := make([]gin.H, 0, len(dbSettings))
 	for _, s := range dbSettings {
+		if !includeSecrets && configExportSettingLooksSensitive(s) {
+			continue
+		}
 		exportSettings = append(exportSettings, gin.H{
 			"key":   s.Key,
 			"value": s.Value,
 		})
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "config.export",
+		Purpose:          "config_export",
+		CredentialKind:   "config_export",
+		CredentialSource: "config.export",
+		Outcome:          credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"stage":          "success",
+			"with_sensitive": includeSecrets,
+			"node_count":     len(exportNodes),
+			"key_count":      len(exportKeys),
+			"policy_count":   len(exportPolicies),
+			"task_count":     len(exportTasks),
+			"setting_count":  len(exportSettings),
+		},
+	})
 
 	respondOK(c, gin.H{
 		"version":     "1.0",
@@ -648,6 +683,28 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		"imported":        importedNodes + importedKeys + importedPolicies + importedTasks + importedSettings,
 		"skipped":         0,
 	})
+}
+
+func configExportSettingLooksSensitive(setting model.SystemSetting) bool {
+	key := strings.ToLower(strings.TrimSpace(setting.Key))
+	for _, marker := range []string{"password", "token", "secret", "private", "credential", "bearer", "api_key", "apikey", "proxy"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	value := strings.ToLower(strings.TrimSpace(setting.Value))
+	if value == "" {
+		return false
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "ws://") || strings.HasPrefix(value, "wss://") {
+		return true
+	}
+	for _, marker := range []string{"-----begin", "private key", "bearer ", "authorization:", "token=", "password=", "secret="} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeConfigImportData(body []byte) (configImportData, error) {

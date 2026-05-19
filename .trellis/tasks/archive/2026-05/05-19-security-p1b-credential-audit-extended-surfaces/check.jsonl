@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check credential-use audit event contracts, Settings risk summary stability/sanitization, and security-sensitive test coverage."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check new audit/diagnostic failures return sanitized errors and do not leak secrets, SQL, command output, file content, or export payloads."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check no audit/log/error contains private keys, passwords, tokens, file/terminal streams, unsafe command output, executor config, or exported secrets."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check no unnecessary schema change; if any schema changes appear, paired migration and UTC safety rules apply."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check handler/audit/settings/frontend contract consistency and boundary validation."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check credential audit helpers and SSH purpose constants are reused across surfaces rather than duplicated."}
+{"file":".trellis/tasks/05-19-security-p1b-credential-audit-extended-surfaces/research/code-surfaces.md","reason":"Check implementation covers researched P1b surfaces and respects bounded background-worker decision."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1-least-privilege-audit/prd.md","reason":"Check P1b builds on P1 core event model and does not regress prior least-privilege/audit behavior."}

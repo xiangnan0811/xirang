@@ -144,17 +144,28 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 			t.Fatalf("创建引用风险 key 的节点失败: %v", err)
 		}
 	}
-	if err := db.Create(&model.CredentialAuditEvent{
-		Action:           "ssh_key.export",
-		Purpose:          sshutil.PurposeSSHKeyExport,
-		CredentialKind:   "ssh_key",
-		CredentialSource: "ssh_key_export",
-		Outcome:          "success",
-		Metadata:         `{"scope":"all"}`,
-		CreatedAt:        now,
-	}).Error; err != nil {
-		t.Fatalf("创建凭据审计事件失败: %v", err)
+	createAudit := func(action, purpose, metadata, errorMessage string) {
+		t.Helper()
+		if err := db.Create(&model.CredentialAuditEvent{
+			Action:           action,
+			Purpose:          purpose,
+			CredentialKind:   "ssh_key",
+			CredentialSource: "ssh_key_export",
+			Outcome:          "success",
+			Metadata:         metadata,
+			ErrorMessage:     errorMessage,
+			CreatedAt:        now,
+		}).Error; err != nil {
+			t.Fatalf("创建凭据审计事件失败: %v", err)
+		}
 	}
+	for i := 0; i < 3; i++ {
+		createAudit("ssh_key.export", sshutil.PurposeSSHKeyExport, `{"scope":"all"}`, "")
+	}
+	for i := 0; i < 2; i++ {
+		createAudit("file_browser.preview", sshutil.PurposeFileBrowser, `{"path":"/safe/FAKE_FILE_NAME_FOR_TEST_ONLY","content":"FAKE_FILE_CONTENT_FOR_TEST_ONLY"}`, "preview failed: output: FAKE_SFTP_OUTPUT_FOR_TEST_ONLY")
+	}
+	createAudit("docker_volumes.discover", sshutil.PurposeDockerVolumes, `{"volume":"volume-prod-data","output":"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY"}`, "docker failed: output: FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY")
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
@@ -195,7 +206,8 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["stale_ssh_keys"].Count != 2 {
 		t.Fatalf("长期未使用 key 风险数量应为 2，实际: %+v", byCode["stale_ssh_keys"])
 	}
-	if byCode["recent_credential_operations"].Count != 1 || !strings.Contains(strings.Join(byCode["recent_credential_operations"].Examples, ","), "SSH Key 导出") {
+	recentExamples := strings.Join(byCode["recent_credential_operations"].Examples, ",")
+	if byCode["recent_credential_operations"].Count != 6 || !strings.Contains(recentExamples, "SSH Key 导出") || !strings.Contains(recentExamples, "节点文件预览") || !strings.Contains(recentExamples, "Docker 卷发现") {
 		t.Fatalf("近期凭据操作风险不符合预期: %+v", byCode["recent_credential_operations"])
 	}
 	if byCode["weak_security_defaults"].Count == 0 {
@@ -205,9 +217,11 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	for _, forbidden := range []string{
 		"PrivateKey",
 		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
-		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
-		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
-		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_FILE_NAME_FOR_TEST_ONLY",
+		"FAKE_FILE_CONTENT_FOR_TEST_ONLY",
+		"FAKE_SFTP_OUTPUT_FOR_TEST_ONLY",
+		"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY",
+		"volume-prod-data",
 		"10.10.0.",
 	} {
 		if strings.Contains(body, forbidden) {

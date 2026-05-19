@@ -155,13 +155,12 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 		return
 	}
 
-	// 审计日志
-	for key, value := range req {
+	// 审计日志：仅记录设置键和变更事实，不写入可能包含密码、令牌、端点或代理地址的值。
+	for key := range req {
 		logger.Module("audit").Info().
 			Str("action", "settings_update").
 			Str("key", key).
-			Str("old_value", oldValues[key]).
-			Str("new_value", value).
+			Bool("changed", oldValues[key] != req[key]).
 			Str("source", "db").
 			Uint("user_id", userID).
 			Msg("系统设置变更")
@@ -193,8 +192,7 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 	logger.Module("audit").Info().
 		Str("action", "settings_reset").
 		Str("key", key).
-		Str("old_value", oldVal).
-		Str("new_value", newVal).
+		Bool("changed", oldVal != newVal).
 		Uint("user_id", userID).
 		Msg("系统设置重置为默认值")
 	respondMessage(c, "设置已重置")
@@ -470,6 +468,15 @@ func (h *SettingsHandler) recentCredentialOperationRiskItem() (securityRiskItem,
 func highRiskCredentialAuditActions() []string {
 	return []string{
 		"ssh_key.export",
+		"file_browser.list",
+		"file_browser.preview",
+		"docker_volumes.discover",
+		"config.export",
+		"node.doctor.run",
+		"node_migration.preflight",
+		"probe.ssh",
+		"probe.metrics",
+		"node_logs.collect",
 		"terminal.open",
 		"terminal.failure",
 		"task.manual_trigger",
@@ -486,6 +493,24 @@ func credentialActionLabel(action string) string {
 	switch action {
 	case "ssh_key.export":
 		return "SSH Key 导出"
+	case "file_browser.list":
+		return "节点文件列表浏览"
+	case "file_browser.preview":
+		return "节点文件预览"
+	case "docker_volumes.discover":
+		return "Docker 卷发现"
+	case "config.export":
+		return "配置导出"
+	case "node.doctor.run":
+		return "节点 Doctor 诊断"
+	case "node_migration.preflight":
+		return "节点迁移预检"
+	case "probe.ssh":
+		return "后台 SSH 探针"
+	case "probe.metrics":
+		return "后台指标采集"
+	case "node_logs.collect":
+		return "节点日志采集"
 	case "terminal.open":
 		return "终端会话打开"
 	case "terminal.failure":

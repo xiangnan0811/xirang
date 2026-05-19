@@ -113,6 +113,52 @@ func TestIsInMaintenanceWindow(t *testing.T) {
 	}
 }
 
+func TestRecordMetricAuditFailureTracksNodeAndStage(t *testing.T) {
+	p := &Prober{failThreshold: 3}
+	first := p.recordMetricAuditFailure(7, "dial")
+	second := p.recordMetricAuditFailure(7, "dial")
+	otherStage := p.recordMetricAuditFailure(7, "host_key")
+	otherNode := p.recordMetricAuditFailure(8, "dial")
+
+	if first != 1 || second != 2 || otherStage != 1 || otherNode != 1 {
+		t.Fatalf("unexpected metric audit counters: first=%d second=%d otherStage=%d otherNode=%d", first, second, otherStage, otherNode)
+	}
+	if shouldAuditProbeCredentialFailure(first-1, first, p.failThreshold) != true {
+		t.Fatal("first metrics failure should be audited")
+	}
+	if shouldAuditProbeCredentialFailure(second-1, second, p.failThreshold) != false {
+		t.Fatal("second below-threshold metrics failure should be skipped")
+	}
+}
+
+func TestShouldAuditProbeCredentialFailure(t *testing.T) {
+	tests := []struct {
+		name             string
+		previousFailures int
+		newFailures      int
+		threshold        int
+		want             bool
+	}{
+		{name: "invalid_count", previousFailures: 0, newFailures: 0, threshold: 3, want: false},
+		{name: "first_failure", previousFailures: 0, newFailures: 1, threshold: 3, want: true},
+		{name: "below_threshold_repeat", previousFailures: 1, newFailures: 2, threshold: 3, want: false},
+		{name: "threshold_crossing", previousFailures: 2, newFailures: 3, threshold: 3, want: true},
+		{name: "post_threshold_non_power_of_two", previousFailures: 4, newFailures: 5, threshold: 3, want: false},
+		{name: "post_threshold_power_of_two", previousFailures: 7, newFailures: 8, threshold: 3, want: true},
+		{name: "disabled_threshold_first_repeat", previousFailures: 1, newFailures: 2, threshold: 0, want: true},
+		{name: "negative_previous_clamped", previousFailures: -1, newFailures: 1, threshold: 3, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldAuditProbeCredentialFailure(tt.previousFailures, tt.newFailures, tt.threshold)
+			if got != tt.want {
+				t.Fatalf("shouldAuditProbeCredentialFailure(%d, %d, %d) = %v, want %v", tt.previousFailures, tt.newFailures, tt.threshold, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCleanupOldMetrics_DropsBeyondRetention(t *testing.T) {
 	db := openProbeTestDB(t)
 	now := time.Now().UTC()

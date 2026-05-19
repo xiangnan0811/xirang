@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -135,6 +137,212 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	}
 	if importedDependent.DependsOnTaskID == nil || *importedDependent.DependsOnTaskID != importedTask.ID {
 		t.Fatalf("导入后应恢复任务依赖关系，实际 depends_on_task_id=%v，期望 %d", importedDependent.DependsOnTaskID, importedTask.ID)
+	}
+}
+
+func TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	secure.ResetForTesting()
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化数据库失败: %v", err)
+	}
+
+	key := model.SSHKey{
+		Name:        "export-key",
+		Username:    "deploy",
+		KeyType:     "auto",
+		PrivateKey:  "FAKE_SSH_PRIVATE_KEY_FOR_TEST_ONLY",
+		Fingerprint: "SHA256:export-key",
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("创建 SSH key 失败: %v", err)
+	}
+	node := model.Node{
+		Name:       "export-node",
+		Host:       "10.77.0.10",
+		Port:       22,
+		Username:   "root",
+		AuthType:   "key",
+		SSHKeyID:   &key.ID,
+		Password:   "FAKE_NODE_PASSWORD_FOR_TEST_ONLY",
+		PrivateKey: "FAKE_NODE_PRIVATE_KEY_FOR_TEST_ONLY",
+		BackupDir:  "export-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	taskEntity := model.Task{
+		Name:           "export-task",
+		NodeID:         node.ID,
+		ExecutorType:   "restic",
+		RsyncSource:    "/data/export",
+		RsyncTarget:    "/backup/export",
+		ExecutorConfig: "{\"token\":\"FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY\"}",
+		Status:         "pending",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	for _, setting := range []model.SystemSetting{
+		{Key: "smtp.password", Value: "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY"},
+		{Key: "metrics.remote_bearer_token", Value: "FAKE_METRICS_TOKEN_FOR_TEST_ONLY"},
+		{Key: "storage.min_free_gb", Value: "42"},
+	} {
+		if err := db.Create(&setting).Error; err != nil {
+			t.Fatalf("创建系统设置失败: %v", err)
+		}
+	}
+
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.GET("/config/export", func(c *gin.Context) {
+		c.Set("userID", uint(10))
+		c.Set("username", "admin")
+		c.Set("role", "admin")
+		handler.Export(c)
+	})
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("导出接口期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{
+		"FAKE_SSH_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_NODE_PASSWORD_FOR_TEST_ONLY",
+		"FAKE_NODE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY",
+		"FAKE_SMTP_PASSWORD_FOR_TEST_ONLY",
+		"FAKE_METRICS_TOKEN_FOR_TEST_ONLY",
+		"metrics.remote_bearer_token",
+		"private_key",
+		"password",
+		"executor_config",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("默认配置导出不应包含敏感字段 %q，响应: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, "storage.min_free_gb") || !strings.Contains(body, "42") {
+		t.Fatalf("默认配置导出应保留非敏感系统设置，响应: %s", body)
+	}
+
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "config.export").First(&event).Error; err != nil {
+		t.Fatalf("应写入 config.export 凭据审计事件: %v", err)
+	}
+	if event.Purpose != "config_export" || event.Outcome != credentialaudit.OutcomeSuccess || event.Username != "admin" || event.Role != "admin" {
+		t.Fatalf("config export audit event 不符合预期: %+v", event)
+	}
+	if strings.Contains(event.Metadata, "FAKE_") || strings.Contains(event.Metadata, "private_key") || strings.Contains(event.Metadata, "executor_config") {
+		t.Fatalf("config export audit metadata 不应包含导出载荷或密钥材料: %s", event.Metadata)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["with_sensitive"] != false || metadata["node_count"] == nil || metadata["key_count"] == nil || metadata["task_count"] == nil {
+		t.Fatalf("config export audit metadata 缺少安全计数字段: %#v", metadata)
+	}
+}
+
+func TestConfigExportIncludeSecretsRequiresAdminAndAuditsBlockedAttempt(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化数据库失败: %v", err)
+	}
+
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.GET("/config/export", func(c *gin.Context) {
+		c.Set("userID", uint(20))
+		c.Set("username", "bob")
+		c.Set("role", "operator")
+		handler.Export(c)
+	})
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/config/export?include_secrets=true", nil))
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("非 admin include_secrets 应返回 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "config.export").First(&event).Error; err != nil {
+		t.Fatalf("应写入 blocked config.export 审计事件: %v", err)
+	}
+	if event.Outcome != credentialaudit.OutcomeBlocked || event.Username != "bob" || event.Role != "operator" {
+		t.Fatalf("blocked config export audit event 不符合预期: %+v", event)
+	}
+	if strings.Contains(event.Metadata, "secret") || strings.Contains(event.Metadata, "FAKE_") || strings.Contains(event.Metadata, "payload") {
+		t.Fatalf("blocked audit metadata 不应包含敏感键/载荷: %s", event.Metadata)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["stage"] != "authorization" || metadata["with_sensitive"] != true {
+		t.Fatalf("blocked audit metadata 缺少授权阶段标记: %#v", metadata)
+	}
+}
+
+func TestConfigExportIncludeSecretsAsAdminAuditsWithoutPayload(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	secure.ResetForTesting()
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化数据库失败: %v", err)
+	}
+	key := model.SSHKey{Name: "admin-export-key", Username: "deploy", KeyType: "auto", PrivateKey: "FAKE_ADMIN_EXPORT_PRIVATE_KEY_FOR_TEST_ONLY", Fingerprint: "SHA256:admin-export-key"}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("创建 SSH key 失败: %v", err)
+	}
+	node := model.Node{Name: "admin-export-node", Host: "10.77.0.11", Port: 22, Username: "root", AuthType: "key", SSHKeyID: &key.ID, Password: "FAKE_ADMIN_EXPORT_PASSWORD_FOR_TEST_ONLY", BackupDir: "admin-export-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	if err := db.Create(&model.SystemSetting{Key: "smtp.password", Value: "FAKE_ADMIN_EXPORT_SMTP_PASSWORD_FOR_TEST_ONLY"}).Error; err != nil {
+		t.Fatalf("创建系统设置失败: %v", err)
+	}
+
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.GET("/config/export", func(c *gin.Context) {
+		c.Set("userID", uint(30))
+		c.Set("username", "admin")
+		c.Set("role", "admin")
+		handler.Export(c)
+	})
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/config/export?include_secrets=true", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("admin include_secrets 应返回 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	for _, expected := range []string{"FAKE_ADMIN_EXPORT_PRIVATE_KEY_FOR_TEST_ONLY", "FAKE_ADMIN_EXPORT_PASSWORD_FOR_TEST_ONLY", "FAKE_ADMIN_EXPORT_SMTP_PASSWORD_FOR_TEST_ONLY"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("admin include_secrets 响应应包含请求的敏感导出值 %q，响应: %s", expected, body)
+		}
+	}
+
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "config.export").First(&event).Error; err != nil {
+		t.Fatalf("应写入 config.export 审计事件: %v", err)
+	}
+	if event.Outcome != credentialaudit.OutcomeSuccess {
+		t.Fatalf("admin include_secrets 审计事件应成功: %+v", event)
+	}
+	if strings.Contains(event.Metadata, "FAKE_ADMIN_EXPORT") || strings.Contains(event.Metadata, "private_key") || strings.Contains(event.Metadata, "password") {
+		t.Fatalf("审计 metadata 不应复制导出载荷或敏感字段名: %s", event.Metadata)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["with_sensitive"] != true || metadata["stage"] != "success" {
+		t.Fatalf("admin include_secrets 审计 metadata 不符合预期: %#v", metadata)
 	}
 }
 
