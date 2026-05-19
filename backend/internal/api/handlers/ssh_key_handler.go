@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -28,11 +30,29 @@ func NewSSHKeyHandler(db *gorm.DB) *SSHKeyHandler {
 	return &SSHKeyHandler{db: db}
 }
 
+type sshKeyScopeRequest struct {
+	Disabled        bool       `json:"disabled"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	AllowedPurposes string     `json:"allowed_purposes"`
+	AllowedNodeIDs  string     `json:"allowed_node_ids"`
+	AllowedNodeTags string     `json:"allowed_node_tags"`
+}
+
+type sshKeyScopePatchRequest struct {
+	Disabled        *bool      `json:"disabled"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	ExpiresAtSet    bool       `json:"-"`
+	AllowedPurposes *string    `json:"allowed_purposes"`
+	AllowedNodeIDs  *string    `json:"allowed_node_ids"`
+	AllowedNodeTags *string    `json:"allowed_node_tags"`
+}
+
 type sshKeyCreateRequest struct {
 	Name       string `json:"name" binding:"required"`
 	Username   string `json:"username" binding:"required"`
 	KeyType    string `json:"key_type"`
 	PrivateKey string `json:"private_key" binding:"required"`
+	sshKeyScopeRequest
 }
 
 type sshKeyUpdateRequest struct {
@@ -40,19 +60,43 @@ type sshKeyUpdateRequest struct {
 	Username   string `json:"username" binding:"required"`
 	KeyType    string `json:"key_type"`
 	PrivateKey string `json:"private_key"`
+	sshKeyScopePatchRequest
+}
+
+func (r *sshKeyUpdateRequest) UnmarshalJSON(data []byte) error {
+	type alias sshKeyUpdateRequest
+	var raw alias
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["expires_at"]; ok {
+		raw.ExpiresAtSet = true
+	}
+	*r = sshKeyUpdateRequest(raw)
+	return nil
 }
 
 // sshKeyResponseItem 是 SSH Key API 响应结构，包含派生的公钥，不暴露私钥。
 type sshKeyResponseItem struct {
-	ID          uint       `json:"id"`
-	Name        string     `json:"name"`
-	Username    string     `json:"username"`
-	KeyType     string     `json:"key_type"`
-	Fingerprint string     `json:"fingerprint"`
-	PublicKey   string     `json:"public_key,omitempty"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID              uint       `json:"id"`
+	Name            string     `json:"name"`
+	Username        string     `json:"username"`
+	KeyType         string     `json:"key_type"`
+	Fingerprint     string     `json:"fingerprint"`
+	PublicKey       string     `json:"public_key,omitempty"`
+	Disabled        bool       `json:"disabled"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	AllowedPurposes string     `json:"allowed_purposes"`
+	AllowedNodeIDs  string     `json:"allowed_node_ids"`
+	AllowedNodeTags string     `json:"allowed_node_tags"`
+	BroadScope      bool       `json:"broad_scope"`
+	LastUsedAt      *time.Time `json:"last_used_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // toSSHKeyResponse 将 model.SSHKey 转换为安全的响应结构（含派生公钥，不含私钥）。
@@ -63,15 +107,21 @@ func toSSHKeyResponse(item model.SSHKey) sshKeyResponseItem {
 		keyType = sshutil.SSHKeyTypeAuto
 	}
 	return sshKeyResponseItem{
-		ID:          item.ID,
-		Name:        item.Name,
-		Username:    item.Username,
-		KeyType:     keyType,
-		Fingerprint: item.Fingerprint,
-		PublicKey:   publicKey,
-		LastUsedAt:  item.LastUsedAt,
-		CreatedAt:   item.CreatedAt,
-		UpdatedAt:   item.UpdatedAt,
+		ID:              item.ID,
+		Name:            item.Name,
+		Username:        item.Username,
+		KeyType:         keyType,
+		Fingerprint:     item.Fingerprint,
+		PublicKey:       publicKey,
+		Disabled:        item.Disabled,
+		ExpiresAt:       item.ExpiresAt,
+		AllowedPurposes: item.AllowedPurposes,
+		AllowedNodeIDs:  item.AllowedNodeIDs,
+		AllowedNodeTags: item.AllowedNodeTags,
+		BroadScope:      sshutil.IsBroadScope(item),
+		LastUsedAt:      item.LastUsedAt,
+		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 	}
 }
 
@@ -119,6 +169,50 @@ func normalizeSSHKeyInput(name, username, keyType, privateKey string) (string, s
 		storedType = normalizedType
 	}
 	return normalizedName, normalizedUsername, storedType, preparedKey, nil
+}
+
+func applySSHKeyScopeInput(item *model.SSHKey, scope sshKeyScopeRequest) error {
+	allowedPurposes, err := sshutil.NormalizePurposeList(scope.AllowedPurposes)
+	if err != nil {
+		return err
+	}
+	allowedNodeIDs, err := sshutil.NormalizeNodeIDList(scope.AllowedNodeIDs)
+	if err != nil {
+		return err
+	}
+	item.Disabled = scope.Disabled
+	item.ExpiresAt = scope.ExpiresAt
+	item.AllowedPurposes = allowedPurposes
+	item.AllowedNodeIDs = allowedNodeIDs
+	item.AllowedNodeTags = sshutil.NormalizeTagList(scope.AllowedNodeTags)
+	return nil
+}
+
+func applySSHKeyScopePatch(item *model.SSHKey, scope sshKeyScopePatchRequest) error {
+	if scope.Disabled != nil {
+		item.Disabled = *scope.Disabled
+	}
+	if scope.ExpiresAtSet {
+		item.ExpiresAt = scope.ExpiresAt
+	}
+	if scope.AllowedPurposes != nil {
+		allowedPurposes, err := sshutil.NormalizePurposeList(*scope.AllowedPurposes)
+		if err != nil {
+			return err
+		}
+		item.AllowedPurposes = allowedPurposes
+	}
+	if scope.AllowedNodeIDs != nil {
+		allowedNodeIDs, err := sshutil.NormalizeNodeIDList(*scope.AllowedNodeIDs)
+		if err != nil {
+			return err
+		}
+		item.AllowedNodeIDs = allowedNodeIDs
+	}
+	if scope.AllowedNodeTags != nil {
+		item.AllowedNodeTags = sshutil.NormalizeTagList(*scope.AllowedNodeTags)
+	}
+	return nil
 }
 
 // List godoc
@@ -219,6 +313,10 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 		PrivateKey:  preparedKey,
 		Fingerprint: generateFingerprint(preparedKey),
 	}
+	if err := applySSHKeyScopeInput(&item, req.sshKeyScopeRequest); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 	if err := h.db.Create(&item).Error; err != nil {
 		respondBadRequest(c, err.Error())
 		return
@@ -296,6 +394,10 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 			item.PrivateKey = preparedKey
 			item.Fingerprint = generateFingerprint(preparedKey)
 		}
+	}
+	if err := applySSHKeyScopePatch(&item, req.sshKeyScopePatchRequest); err != nil {
+		respondBadRequest(c, err.Error())
+		return
 	}
 	if err := h.db.Save(&item).Error; err != nil {
 		respondBadRequest(c, err.Error())
@@ -400,21 +502,26 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 	}
 
 	results := make([]testResult, 0, len(nodes))
+	successCount := 0
+	failureCount := 0
+	blockedCount := 0
 	for _, node := range nodes {
 		// 构造临时节点，将 SSHKey 指向待测试的密钥
 		testNode := node
 		testNode.AuthType = "key"
 		testNode.SSHKey = &sshKey
+		testNode.SSHKeyID = &sshKey.ID
 
-		authMethods, err := sshutil.BuildSSHAuth(testNode, h.db)
+		authMethods, _, err := sshutil.BuildSSHAuthForPurpose(testNode, h.db, sshutil.PurposeSSHKeyTest)
 		if err != nil {
+			blockedCount++
 			results = append(results, testResult{
 				NodeID:  node.ID,
 				Name:    node.Name,
 				Host:    node.Host,
 				Port:    node.Port,
 				Success: false,
-				Error:   err.Error(),
+				Error:   sanitizedClientError(err),
 			})
 			continue
 		}
@@ -428,6 +535,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 		cancel()
 
 		if dialErr != nil {
+			failureCount++
 			results = append(results, testResult{
 				NodeID:    node.ID,
 				Name:      node.Name,
@@ -435,11 +543,12 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 				Port:      node.Port,
 				Success:   false,
 				LatencyMs: latency,
-				Error:     dialErr.Error(),
+				Error:     sanitizedClientError(dialErr),
 			})
 			continue
 		}
 		_ = client.Close()
+		successCount++
 
 		results = append(results, testResult{
 			NodeID:    node.ID,
@@ -450,6 +559,21 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 			LatencyMs: latency,
 		})
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "ssh_key.test_connection",
+		Purpose:          sshutil.PurposeSSHKeyTest,
+		CredentialKind:   "ssh_key",
+		CredentialSource: fmt.Sprintf("ssh_key_id=%d", sshKey.ID),
+		SSHKeyID:         &sshKey.ID,
+		Outcome:          credentialAuditOutcome(successCount, failureCount, blockedCount),
+		Metadata: map[string]any{
+			"node_count":    len(nodes),
+			"success_count": successCount,
+			"failure_count": failureCount,
+			"blocked_count": blockedCount,
+		},
+	})
 
 	respondOK(c, results)
 }
@@ -514,6 +638,10 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 			PrivateKey:  preparedKey,
 			Fingerprint: generateFingerprint(preparedKey),
 		}
+		if err := applySSHKeyScopeInput(&item, k.sshKeyScopeRequest); err != nil {
+			results = append(results, batchResult{Name: normalizedName, Status: "error", Error: err.Error()})
+			continue
+		}
 		if err := h.db.Create(&item).Error; err != nil {
 			results = append(results, batchResult{Name: normalizedName, Status: "error", Error: err.Error()})
 			continue
@@ -574,10 +702,34 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 		return
 	}
 
+	exportable := make([]model.SSHKey, 0, len(items))
+	blockedCount := 0
+	for _, item := range items {
+		if err := sshutil.ValidateSSHKeyPurpose(item, sshutil.PurposeSSHKeyExport); err != nil {
+			blockedCount++
+			continue
+		}
+		exportable = append(exportable, item)
+	}
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "ssh_key.export",
+		Purpose:          sshutil.PurposeSSHKeyExport,
+		CredentialKind:   "ssh_key",
+		CredentialSource: "ssh_key_export",
+		Outcome:          credentialAuditOutcome(len(exportable), 0, blockedCount),
+		Metadata: map[string]any{
+			"format":          format,
+			"scope":           scope,
+			"requested_count": len(items),
+			"exported_count":  len(exportable),
+			"blocked_count":   blockedCount,
+		},
+	})
+
 	switch format {
 	case "authorized_keys":
 		var lines []string
-		for _, item := range items {
+		for _, item := range exportable {
 			pub, err := sshutil.DerivePublicKey(item.PrivateKey)
 			if err != nil || pub == "" {
 				continue
@@ -589,8 +741,8 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(strings.Join(lines, "\n")+"\n"))
 
 	case "json":
-		result := make([]sshKeyResponseItem, 0, len(items))
-		for _, item := range items {
+		result := make([]sshKeyResponseItem, 0, len(exportable))
+		for _, item := range exportable {
 			result = append(result, toSSHKeyResponse(item))
 		}
 		c.Header("Content-Disposition", "attachment; filename=ssh_keys.json")
@@ -605,7 +757,7 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 		// 写入 BOM 以支持 Excel 正确识别 UTF-8
 		_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 		_ = w.Write([]string{"id", "name", "username", "key_type", "fingerprint", "public_key", "created_at", "updated_at"})
-		for _, item := range items {
+		for _, item := range exportable {
 			pub, _ := sshutil.DerivePublicKey(item.PrivateKey)
 			_ = w.Write([]string{
 				strconv.FormatUint(uint64(item.ID), 10),

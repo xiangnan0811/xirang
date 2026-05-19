@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -25,7 +26,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 	}
 
 	// 使用共享 SSH 连接逻辑
-	client, err := DialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskCommand)
 	if err != nil {
 		return -1, err
 	}

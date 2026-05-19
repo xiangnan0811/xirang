@@ -51,6 +51,23 @@ function keyTypeBadgeVariant(keyType: string): "neutral" | "warning" {
   }
 }
 
+function scopeBadges(key: SSHKeyRecord, t: (key: string) => string) {
+  const badges: Array<{ label: string; tone: "neutral" | "warning" | "destructive" }> = [];
+  if (key.disabled) {
+    badges.push({ label: t("sshKeys.scopeDisabledBadge"), tone: "destructive" });
+  }
+  if (key.expiresAt) {
+    badges.push({ label: t("sshKeys.scopeExpiringBadge"), tone: "warning" });
+  }
+  if (key.broadScope) {
+    badges.push({ label: t("sshKeys.scopeBroadBadge"), tone: "warning" });
+  }
+  if (!badges.length) {
+    badges.push({ label: t("sshKeys.scopeRestrictedBadge"), tone: "neutral" });
+  }
+  return badges;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -167,6 +184,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <Badge tone={keyTypeBadgeVariant(key.keyType)}>
                     {key.keyType.toUpperCase()}
                   </Badge>
+                  {scopeBadges(key, t).map((badge) => (
+                    <Badge key={badge.label} tone={badge.tone}>
+                      {badge.label}
+                    </Badge>
+                  ))}
                   <SSHKeyActionsMenu
                     sshKey={key}
                     nodeCount={nodeCount}
@@ -183,7 +205,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
               <div className="mt-2">
                 <div className="flex items-center gap-2">
                   <span className="rounded-md border border-primary/20 bg-primary/10 p-1 text-primary">
-                    <KeyRound className="size-3.5" />
+                    <KeyRound className="size-3.5" aria-hidden />
                   </span>
                   <p className="font-medium">{key.name}</p>
                 </div>
@@ -222,7 +244,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                     title={t("sshKeys.copyPublicKey")}
                     onClick={() => void handleCopyPublicKey(key)}
                   >
-                    <Copy className="size-4" />
+                    <Copy className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -232,7 +254,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                     title={t("sshKeys.testConnection")}
                     onClick={() => setTestConnectionKey(key)}
                   >
-                    <Plug className="size-4" />
+                    <Plug className="size-4" aria-hidden />
                   </Button>
                 </div>
               </div>
@@ -268,7 +290,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                     onChange={(e) => toggleSelection(key.id, e.target.checked)}
                   />
                   <span className="rounded-md border border-primary/20 bg-primary/10 p-1 text-primary">
-                    <KeyRound className="size-3.5" />
+                    <KeyRound className="size-3.5" aria-hidden />
                   </span>
                   <div className="min-w-0">
                     <p className="font-medium truncate">{key.name}</p>
@@ -279,6 +301,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <Badge tone={keyTypeBadgeVariant(key.keyType)}>
                     {key.keyType.toUpperCase()}
                   </Badge>
+                  {scopeBadges(key, t).map((badge) => (
+                    <Badge key={badge.label} tone={badge.tone}>
+                      {badge.label}
+                    </Badge>
+                  ))}
                   <SSHKeyActionsMenu
                     sshKey={key}
                     nodeCount={nodeCount}
@@ -323,7 +350,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                     title={t("sshKeys.copyPublicKey")}
                     onClick={() => void handleCopyPublicKey(key)}
                   >
-                    <Copy className="size-4" />
+                    <Copy className="size-4" aria-hidden />
                   </Button>
                   <Button
                     variant="ghost"
@@ -333,7 +360,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                     title={t("sshKeys.testConnection")}
                     onClick={() => setTestConnectionKey(key)}
                   >
-                    <Plug className="size-4" />
+                    <Plug className="size-4" aria-hidden />
                   </Button>
                 </div>
               </div>

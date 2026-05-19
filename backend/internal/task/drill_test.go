@@ -2,12 +2,14 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 
 	"github.com/robfig/cron/v3"
@@ -681,6 +683,54 @@ func TestExecuteDrillRecordsSuccessfulEvidence(t *testing.T) {
 	}
 	if len(scripts) == 0 || scripts[len(scripts)-1] != "rm -rf '/tmp/xirang-drill-evidence'" {
 		t.Fatalf("期望执行安全清理命令，实际脚本: %#v", scripts)
+	}
+}
+
+func TestExecuteDrillWritesSecretSafePhaseCredentialAudit(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.policy.DrillPreVerify = "pre-check-token=FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY"
+	fixture.policy.DrillPostVerify = "post-check-token=FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY"
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, _ string) error {
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var events []model.CredentialAuditEvent
+	if err := db.Where("action = ?", "drill.phase").Order("id asc").Find(&events).Error; err != nil {
+		t.Fatalf("查询恢复演练凭据审计事件失败: %v", err)
+	}
+	if len(events) < 6 {
+		t.Fatalf("期望写入多个演练阶段凭据审计事件，实际 %d 条: %#v", len(events), events)
+	}
+	phases := map[string]bool{}
+	for _, event := range events {
+		if event.TaskID == nil || *event.TaskID != fixture.task.ID || event.TaskRunID == nil || *event.TaskRunID != runID || event.NodeID == nil || *event.NodeID != fixture.sandbox.ID {
+			t.Fatalf("演练阶段审计缺少任务/执行/节点上下文: %+v", event)
+		}
+		if event.PolicyID == nil || *event.PolicyID != fixture.policy.ID {
+			t.Fatalf("演练阶段审计缺少策略上下文: %+v", event)
+		}
+		if event.Purpose != "drill" || event.Outcome != credentialaudit.OutcomeSuccess {
+			t.Fatalf("演练阶段审计 purpose/outcome 不符合预期: %+v", event)
+		}
+		if strings.Contains(event.Metadata, "FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY") || strings.Contains(event.Metadata, "FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY") || strings.Contains(event.Metadata, "pre-check-token") || strings.Contains(event.Metadata, "post-check-token") || strings.Contains(event.Metadata, "rm -rf") {
+			t.Fatalf("演练阶段审计 metadata 不应包含脚本或命令文本: %s", event.Metadata)
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+			t.Fatalf("解析 metadata 失败: %v", err)
+		}
+		if phase, ok := metadata["phase"].(string); ok {
+			phases[phase] = true
+		}
+	}
+	for _, phase := range []string{"sandbox_precheck", "restore", "pre_verify", "verify", "post_verify", "cleanup"} {
+		if !phases[phase] {
+			t.Fatalf("缺少演练阶段审计事件 phase=%s，已有: %#v", phase, phases)
+		}
 	}
 }
 

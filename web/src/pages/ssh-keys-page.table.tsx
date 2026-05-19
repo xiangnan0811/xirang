@@ -48,6 +48,23 @@ function keyTypeBadgeVariant(keyType: string): "neutral" | "warning" {
   }
 }
 
+function scopeBadges(key: SSHKeyRecord, t: (key: string) => string) {
+  const badges: Array<{ label: string; tone: "neutral" | "warning" | "destructive" }> = [];
+  if (key.disabled) {
+    badges.push({ label: t("sshKeys.scopeDisabledBadge"), tone: "destructive" });
+  }
+  if (key.expiresAt) {
+    badges.push({ label: t("sshKeys.scopeExpiringBadge"), tone: "warning" });
+  }
+  if (key.broadScope) {
+    badges.push({ label: t("sshKeys.scopeBroadBadge"), tone: "warning" });
+  }
+  if (!badges.length) {
+    badges.push({ label: t("sshKeys.scopeRestrictedBadge"), tone: "neutral" });
+  }
+  return badges;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -90,6 +107,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colType")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colFingerprint")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colLastUsed")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("sshKeys.colScope")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colNodes")}</th>
             <th scope="col" className="px-3 py-2.5 text-right">{t("sshKeys.colActions")}</th>
           </tr>
@@ -97,13 +115,13 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={8} className="px-3 py-4 text-muted-foreground">
+              <td colSpan={9} className="px-3 py-4 text-muted-foreground">
                 {t("common.loading")}
               </td>
             </tr>
           ) : !pagedItems.length ? (
             <tr>
-              <td colSpan={8} className="px-3 py-6">
+              <td colSpan={9} className="px-3 py-6">
                 {isFiltered ? (
                   <FilteredEmptyState
                     className="py-8"
@@ -147,7 +165,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
                       <span className="rounded-md border border-primary/20 bg-primary/10 p-1 text-primary">
-                        <KeyRound className="size-3.5" />
+                        <KeyRound className="size-3.5" aria-hidden />
                       </span>
                       <span className="font-medium">{key.name}</span>
                     </div>
@@ -171,6 +189,15 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     ) : (
                       <span className="italic">{t("sshKeys.neverUsed")}</span>
                     )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex flex-wrap gap-1">
+                      {scopeBadges(key, t).map((badge) => (
+                        <Badge key={badge.label} tone={badge.tone}>
+                          {badge.label}
+                        </Badge>
+                      ))}
+                    </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge tone={nodeCount > 0 ? "success" : "neutral"}>

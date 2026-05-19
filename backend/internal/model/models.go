@@ -29,13 +29,18 @@ type SSHKey struct {
 	Name string `gorm:"size:128;not null;uniqueIndex" json:"name"`
 	// PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem
 	// + toSSHKeyResponse() 脱敏，此处 json:"-" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})
-	Username    string     `gorm:"size:128;not null" json:"username"`
-	KeyType     string     `gorm:"size:32;not null;default:auto" json:"key_type"`
-	PrivateKey  string     `gorm:"type:text;not null" json:"-"`
-	Fingerprint string     `gorm:"size:255;not null" json:"fingerprint"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	Username        string     `gorm:"size:128;not null" json:"username"`
+	KeyType         string     `gorm:"size:32;not null;default:auto" json:"key_type"`
+	PrivateKey      string     `gorm:"type:text;not null" json:"-"`
+	Fingerprint     string     `gorm:"size:255;not null" json:"fingerprint"`
+	Disabled        bool       `gorm:"not null;default:false" json:"disabled"`
+	ExpiresAt       *time.Time `gorm:"index" json:"expires_at"`
+	AllowedPurposes string     `gorm:"type:text;not null;default:''" json:"allowed_purposes"`
+	AllowedNodeIDs  string     `gorm:"type:text;not null;default:''" json:"allowed_node_ids"`
+	AllowedNodeTags string     `gorm:"type:text;not null;default:''" json:"allowed_node_tags"`
+	LastUsedAt      *time.Time `json:"last_used_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Sanitized 返回去除敏感字段（密码、私钥）的节点副本，用于 API 响应。
@@ -411,6 +416,31 @@ type AuditLog struct {
 	PrevHash   string    `gorm:"size:64;index" json:"prev_hash,omitempty"`
 	EntryHash  string    `gorm:"size:64;index" json:"entry_hash,omitempty"`
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
+// CredentialAuditEvent stores domain-specific evidence that a credential was used
+// or attempted for a high-risk operation. It must never contain raw secrets,
+// terminal streams, command output, or executor config.
+type CredentialAuditEvent struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	UserID           uint      `gorm:"index" json:"user_id"`
+	Username         string    `gorm:"size:64;index" json:"username"`
+	Role             string    `gorm:"size:32;index" json:"role"`
+	Action           string    `gorm:"size:64;not null;index" json:"action"`
+	Purpose          string    `gorm:"size:64;not null;index" json:"purpose"`
+	CredentialKind   string    `gorm:"size:32;not null;index" json:"credential_kind"`
+	CredentialSource string    `gorm:"size:64;not null" json:"credential_source"`
+	SSHKeyID         *uint     `gorm:"index" json:"ssh_key_id,omitempty"`
+	NodeID           *uint     `gorm:"index" json:"node_id,omitempty"`
+	TaskID           *uint     `gorm:"index" json:"task_id,omitempty"`
+	TaskRunID        *uint     `gorm:"index" json:"task_run_id,omitempty"`
+	PolicyID         *uint     `gorm:"index" json:"policy_id,omitempty"`
+	Outcome          string    `gorm:"size:16;not null;index" json:"outcome"`
+	ErrorMessage     string    `gorm:"type:text;not null;default:''" json:"error_message,omitempty"`
+	Metadata         string    `gorm:"type:text;not null;default:'{}'" json:"metadata,omitempty"`
+	ClientIP         string    `gorm:"size:64" json:"client_ip"`
+	UserAgent        string    `gorm:"size:255" json:"user_agent"`
+	CreatedAt        time.Time `gorm:"index" json:"created_at"`
 }
 
 type TaskLog struct {

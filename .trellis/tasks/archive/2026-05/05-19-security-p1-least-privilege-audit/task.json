@@ -1,0 +1,30 @@
+{
+  "id": "security-p1-least-privilege-audit",
+  "name": "security-p1-least-privilege-audit",
+  "title": "security p1 least privilege audit",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xiangnan-mac",
+  "assignee": "xiangnan-mac",
+  "createdAt": "2026-05-19",
+  "completedAt": "2026-05-19",
+  "branch": null,
+  "base_branch": "security/p1-least-privilege-audit",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-19-security-p1b-credential-audit-extended-surfaces",
+    "05-19-security-p1c-credential-audit-ui-export",
+    "05-19-security-p1d-step-up-auth-high-risk"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

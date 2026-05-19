@@ -24,101 +24,118 @@ import (
 var knownHostsWriteMu sync.Mutex
 
 // ResolveKeyContent resolves the SSH private key content for a node.
-// Returns (keyContent, keySource, error).
+// Returns (keyContent, keySource, error). Legacy callers should prefer
+// ResolveKeyContentForPurpose so managed SSHKey metadata is enforced.
 func ResolveKeyContent(node model.Node, db *gorm.DB) (string, string, error) {
+	content, source, _, err := ResolveKeyContentForPurpose(node, db, "")
+	return content, source, err
+}
+
+// ResolveKeyContentForPurpose resolves private key content and enforces managed
+// SSHKey least-privilege metadata when the key comes from ssh_keys.
+func ResolveKeyContentForPurpose(node model.Node, db *gorm.DB, purpose string) (string, string, ResolvedCredential, error) {
 	if node.SSHKey != nil {
 		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			if node.SSHKeyID != nil {
-				return key, fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID), nil
+			credential := credentialFromSSHKey(node.SSHKeyID, node.SSHKey.ID)
+			if err := ValidateSSHKeyScope(*node.SSHKey, node, purpose); err != nil {
+				return "", credential.Source, credential, err
 			}
-			return key, "ssh_key_ref", nil
+			return key, credential.Source, credential, nil
 		}
 	}
 
 	if node.SSHKeyID != nil {
 		keyID := *node.SSHKeyID
+		credential := credentialFromSSHKey(&keyID, keyID)
 		var key model.SSHKey
 		if err := db.First(&key, keyID).Error; err != nil {
-			return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥不存在，请重新选择")
+			return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥不存在，请重新选择")
+		}
+		if err := ValidateSSHKeyScope(key, node, purpose); err != nil {
+			return "", credential.Source, credential, err
 		}
 		if content := strings.TrimSpace(key.PrivateKey); content != "" {
-			return content, fmt.Sprintf("ssh_key_id=%d", keyID), nil
+			return content, credential.Source, credential, nil
 		}
-		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥内容为空，请重新配置")
+		return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥内容为空，请重新配置")
 	}
 
 	if content := strings.TrimSpace(node.PrivateKey); content != "" {
-		return content, "node.private_key", nil
+		return content, "node.private_key", ResolvedCredential{Kind: "node_private_key", Source: "node.private_key"}, nil
 	}
-	return "", "", nil
+	return "", "", ResolvedCredential{}, nil
 }
 
 // BuildSSHAuth builds SSH authentication methods for a node.
 // Returns (authMethods, error). For key auth, it validates and parses the private key.
 func BuildSSHAuth(node model.Node, db *gorm.DB) ([]ssh.AuthMethod, error) {
-	switch node.AuthType {
-	case "password":
-		if node.Password == "" {
-			return nil, fmt.Errorf("密码认证模式下请填写密码")
-		}
-		return []ssh.AuthMethod{ssh.Password(node.Password)}, nil
-	case "key":
-		keyContent, keySource, resolveErr := ResolveKeyContent(node, db)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if keyContent == "" {
-			return nil, fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
-		}
-		preparedKey, _, err := ValidateAndPreparePrivateKey(keyContent, SSHKeyTypeAuto)
-		if err != nil {
-			if strings.TrimSpace(keySource) == "" {
-				keySource = "unknown"
-			}
-			return nil, fmt.Errorf("私钥校验失败(来源: %s)，请检查密钥内容是否正确", keySource)
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(preparedKey))
-		if err != nil {
-			return nil, fmt.Errorf("解析私钥失败")
-		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
-	default:
-		return nil, fmt.Errorf("不支持的认证方式")
-	}
+	authMethods, _, err := BuildSSHAuthWithCredential(node, db, "")
+	return authMethods, err
+}
+
+func BuildSSHAuthForPurpose(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, ResolvedCredential, error) {
+	return BuildSSHAuthWithCredential(node, db, purpose)
 }
 
 // BuildSSHAuthWithKey builds SSH authentication methods and also returns the prepared key content.
 // This is used by handlers that need the prepared key (e.g., for updating SSHKey.LastUsedAt).
 func BuildSSHAuthWithKey(node model.Node, db *gorm.DB) ([]ssh.AuthMethod, string, error) {
+	authMethods, preparedKey, _, err := BuildSSHAuthWithKeyForPurpose(node, db, "")
+	return authMethods, preparedKey, err
+}
+
+func BuildSSHAuthWithKeyForPurpose(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, string, ResolvedCredential, error) {
 	switch node.AuthType {
 	case "password":
 		if node.Password == "" {
-			return nil, "", fmt.Errorf("密码认证模式下请填写密码")
+			return nil, "", ResolvedCredential{Kind: "password", Source: "node.password"}, fmt.Errorf("密码认证模式下请填写密码")
 		}
-		return []ssh.AuthMethod{ssh.Password(node.Password)}, "", nil
+		return []ssh.AuthMethod{ssh.Password(node.Password)}, "", ResolvedCredential{Kind: "password", Source: "node.password"}, nil
 	case "key":
-		keyContent, keySource, resolveErr := ResolveKeyContent(node, db)
+		keyContent, keySource, credential, resolveErr := ResolveKeyContentForPurpose(node, db, purpose)
 		if resolveErr != nil {
-			return nil, "", resolveErr
+			return nil, "", credential, resolveErr
 		}
 		if keyContent == "" {
-			return nil, "", fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
+			return nil, "", credential, fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
 		}
 		preparedKey, _, err := ValidateAndPreparePrivateKey(keyContent, SSHKeyTypeAuto)
 		if err != nil {
 			if strings.TrimSpace(keySource) == "" {
 				keySource = "unknown"
 			}
-			return nil, "", fmt.Errorf("私钥校验失败(来源: %s)，请检查密钥内容是否正确", keySource)
+			return nil, "", credential, fmt.Errorf("私钥校验失败(来源: %s)，请检查密钥内容是否正确", keySource)
 		}
 		signer, err := ssh.ParsePrivateKey([]byte(preparedKey))
 		if err != nil {
-			return nil, "", fmt.Errorf("解析私钥失败")
+			return nil, "", credential, fmt.Errorf("解析私钥失败")
 		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, preparedKey, nil
+		markSSHKeyLastUsed(db, credential)
+		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, preparedKey, credential, nil
 	default:
-		return nil, "", fmt.Errorf("不支持的认证方式")
+		return nil, "", ResolvedCredential{}, fmt.Errorf("不支持的认证方式")
 	}
+}
+
+func BuildSSHAuthWithCredential(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, ResolvedCredential, error) {
+	authMethods, _, credential, err := BuildSSHAuthWithKeyForPurpose(node, db, purpose)
+	return authMethods, credential, err
+}
+
+func markSSHKeyLastUsed(db *gorm.DB, credential ResolvedCredential) {
+	if db == nil || credential.KeyID == nil {
+		return
+	}
+	now := time.Now().UTC()
+	_ = db.Model(&model.SSHKey{}).Where("id = ?", *credential.KeyID).Update("last_used_at", now).Error
+}
+
+func credentialFromSSHKey(nodeSSHKeyID *uint, keyID uint) ResolvedCredential {
+	resolvedID := keyID
+	if nodeSSHKeyID != nil && *nodeSSHKeyID != 0 {
+		resolvedID = *nodeSSHKeyID
+	}
+	return ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), KeyID: &resolvedID}
 }
 
 // ResolveSSHHostKeyCallback returns the host key callback based on env config.

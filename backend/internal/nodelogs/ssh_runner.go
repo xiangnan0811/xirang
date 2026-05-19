@@ -25,7 +25,7 @@ func (r *sshRunner) Run(ctx context.Context, node model.Node, cmd string, timeou
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	auth, err := sshutil.BuildSSHAuth(node, r.db)
+	auth, _, err := sshutil.BuildSSHAuthForPurpose(node, r.db, sshutil.PurposeNodeLogs)
 	if err != nil {
 		return "", fmt.Errorf("build auth: %w", err)
 	}

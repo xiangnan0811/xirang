@@ -82,7 +82,7 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 
 // dialSSHForDocker 建立 SSH 连接，用于执行 Docker 命令。
 func dialSSHForDocker(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, error) {
-	auth, err := sshutil.BuildSSHAuth(node, db)
+	auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeDockerVolumes)
 	if err != nil {
 		return nil, err
 	}

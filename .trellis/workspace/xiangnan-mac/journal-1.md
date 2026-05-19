@@ -1552,3 +1552,36 @@ Hardened credential blast-radius risks by redacting executor configs, blocking u
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: P1 SSH key least-privilege audit
+
+**Date**: 2026-05-19
+**Task**: P1 SSH key least-privilege audit
+**Branch**: `security/p1-least-privilege-audit`
+
+### Summary
+
+Implemented SSH key scope metadata, credential-use audit events, Settings risk summary expansion, frontend scope UI/mappers, migrations, tests, and recorded P1 follow-up tasks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3dd34f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

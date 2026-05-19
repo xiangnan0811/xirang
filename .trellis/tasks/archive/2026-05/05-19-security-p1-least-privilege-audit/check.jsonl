@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend security contracts, denial tests, risk summary stability/sanitization, and test fixture naming."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check paired SQLite/PostgreSQL migrations, safe defaults, indexes, and rollback safety."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check scope enforcement and audit failures return sanitized, fail-closed errors."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check no credential-use event, log, or error contains private keys, passwords, tokens, decrypted executor config, terminal streams, or unsafe command output."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend API mappers and UI use camelCase domain data with safe fallbacks."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check frontend tests, loading/error states, i18n, and npm run check readiness."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check new Settings/audit UI accessibility and icon labeling."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check DB/model/API/frontend contract consistency and boundary validation."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check SSH key scope and credential audit helpers are reused across paths rather than duplicated."}
+{"file":".trellis/tasks/05-19-security-p1-least-privilege-audit/research/ssh-key-scope-patterns.md","reason":"Check implementation follows the chosen metadata, permissive migration defaults, and enforcement boundary recommendations."}
+{"file":".trellis/tasks/05-19-security-p1-least-privilege-audit/research/credential-use-audit.md","reason":"Check implementation uses a secret-safe dedicated credential-use audit model and covers the P1 core event set."}
+{"file":".trellis/tasks/archive/2026-05/05-18-security-baseline-hardening/research/current-code-security-surfaces.md","reason":"Check P1 builds on the P0 surfaces and does not regress prior hardening behavior."}

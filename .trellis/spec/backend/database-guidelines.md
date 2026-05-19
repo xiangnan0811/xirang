@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000058_restore_drill_evidence`.
+  latest migration is `000059_ssh_key_scope_credential_audit`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -68,6 +68,31 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `idx_node_logs_node_created` and `idx_alerts_dedup`.
 - JSON names on models also use snake_case and are part of the API contract.
   Keep frontend API mappers in sync when adding or renaming fields.
+
+---
+
+## Durable Schema Contracts
+
+- Managed SSH key least-privilege metadata lives on `ssh_keys` as nullable or
+  permissive-by-default fields: `disabled BOOLEAN/INTEGER NOT NULL DEFAULT
+  false`, `expires_at` nullable timestamp, and text list fields
+  `allowed_purposes`, `allowed_node_ids`, and `allowed_node_tags` with empty
+  string defaults. Empty scope fields are a compatibility contract meaning
+  unrestricted for that dimension.
+- SSH key list fields are stored as normalized comma-separated text because the
+  scope checks run in Go against a specific key/node/purpose. Do not use SQL
+  substring matching as the source of truth for authorization decisions.
+- `credential_audit_events` is the domain-specific credential-use event table.
+  It stores safe actor/resource identifiers, action/purpose labels, outcome,
+  sanitized error text, and sanitized JSON metadata; it must not store raw
+  credentials, decrypted executor config, terminal streams, command output, or
+  file contents.
+- `credential_audit_events.metadata` is text JSON on both SQLite and PostgreSQL
+  for cross-engine parity. Add explicit columns and indexes for fields that need
+  filtering instead of relying on database-specific JSON querying.
+- Config export/import must preserve SSH key scope columns (`disabled`,
+  `expires_at`, `allowed_purposes`, `allowed_node_ids`, `allowed_node_tags`) even
+  when `include_secrets=false`; `private_key` remains secret-only export data.
 
 ---
 

@@ -1,0 +1,21 @@
+DROP INDEX IF EXISTS idx_credential_audit_events_created_at;
+DROP INDEX IF EXISTS idx_credential_audit_events_outcome;
+DROP INDEX IF EXISTS idx_credential_audit_events_policy_id;
+DROP INDEX IF EXISTS idx_credential_audit_events_task_run_id;
+DROP INDEX IF EXISTS idx_credential_audit_events_task_id;
+DROP INDEX IF EXISTS idx_credential_audit_events_node_id;
+DROP INDEX IF EXISTS idx_credential_audit_events_ssh_key_id;
+DROP INDEX IF EXISTS idx_credential_audit_events_credential_kind;
+DROP INDEX IF EXISTS idx_credential_audit_events_purpose;
+DROP INDEX IF EXISTS idx_credential_audit_events_action;
+DROP INDEX IF EXISTS idx_credential_audit_events_role;
+DROP INDEX IF EXISTS idx_credential_audit_events_username;
+DROP INDEX IF EXISTS idx_credential_audit_events_user_id;
+DROP TABLE IF EXISTS credential_audit_events;
+
+DROP INDEX IF EXISTS idx_ssh_keys_expires_at;
+ALTER TABLE ssh_keys DROP COLUMN allowed_node_tags;
+ALTER TABLE ssh_keys DROP COLUMN allowed_node_ids;
+ALTER TABLE ssh_keys DROP COLUMN allowed_purposes;
+ALTER TABLE ssh_keys DROP COLUMN expires_at;
+ALTER TABLE ssh_keys DROP COLUMN disabled;

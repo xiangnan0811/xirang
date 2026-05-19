@@ -29,6 +29,11 @@ interface ParsedEntry {
   username: string;
   keyType: string;
   privateKey: string;
+  disabled: boolean;
+  expiresAt: string;
+  allowedPurposes: string;
+  allowedNodeIds: string;
+  allowedNodeTags: string;
   status: ValidationStatus;
   error?: string;
 }
@@ -54,7 +59,19 @@ function validateEntries(
 
     // 基本类型校验
     if (typeof item !== "object" || item === null) {
-      return { index, name: "", username: "", keyType: "", privateKey: "", status: "format_error" };
+      return {
+        index,
+        name: "",
+        username: "",
+        keyType: "",
+        privateKey: "",
+        disabled: false,
+        expiresAt: "",
+        allowedPurposes: "",
+        allowedNodeIds: "",
+        allowedNodeTags: "",
+        status: "format_error",
+      };
     }
 
     const obj = item as Record<string, unknown>;
@@ -62,18 +79,59 @@ function validateEntries(
     const username = typeof obj.username === "string" ? obj.username.trim() : "";
     const keyType = typeof obj.keyType === "string" ? obj.keyType : "auto";
     const privateKey = typeof obj.privateKey === "string" ? obj.privateKey.trim() : "";
+    const disabled = typeof obj.disabled === "boolean" ? obj.disabled : false;
+    const expiresAt = typeof obj.expiresAt === "string" ? obj.expiresAt.trim() : "";
+    const allowedPurposes = typeof obj.allowedPurposes === "string" ? obj.allowedPurposes.trim() : "";
+    const allowedNodeIds = typeof obj.allowedNodeIds === "string" ? obj.allowedNodeIds.trim() : "";
+    const allowedNodeTags = typeof obj.allowedNodeTags === "string" ? obj.allowedNodeTags.trim() : "";
 
     // 必填字段校验
     if (!name || !username || !privateKey) {
-      return { index, name, username, keyType, privateKey, status: "format_error" };
+      return {
+        index,
+        name,
+        username,
+        keyType,
+        privateKey,
+        disabled,
+        expiresAt,
+        allowedPurposes,
+        allowedNodeIds,
+        allowedNodeTags,
+        status: "format_error",
+      };
     }
 
     // 重名检测
     if (existingNames.has(name)) {
-      return { index, name, username, keyType, privateKey, status: "name_exists" };
+      return {
+        index,
+        name,
+        username,
+        keyType,
+        privateKey,
+        disabled,
+        expiresAt,
+        allowedPurposes,
+        allowedNodeIds,
+        allowedNodeTags,
+        status: "name_exists",
+      };
     }
 
-    return { index, name, username, keyType, privateKey, status: "valid" };
+    return {
+      index,
+      name,
+      username,
+      keyType,
+      privateKey,
+      disabled,
+      expiresAt,
+      allowedPurposes,
+      allowedNodeIds,
+      allowedNodeTags,
+      status: "valid",
+    };
   });
 }
 
@@ -185,6 +243,11 @@ export function SSHKeyBatchImportDialog({
       username: e.username,
       keyType: parseSSHKeyType(e.keyType),
       privateKey: e.privateKey,
+      disabled: e.disabled,
+      expiresAt: e.expiresAt,
+      allowedPurposes: e.allowedPurposes,
+      allowedNodeIds: e.allowedNodeIds,
+      allowedNodeTags: e.allowedNodeTags,
     }));
 
     try {
@@ -208,21 +271,21 @@ export function SSHKeyBatchImportDialog({
       case "valid":
         return (
           <span className="inline-flex items-center gap-1 text-xs text-success">
-            <CheckCircle2 className="size-3.5" />
+            <CheckCircle2 className="size-3.5" aria-hidden />
             {t("sshKeys.validKey")}
           </span>
         );
       case "name_exists":
         return (
           <span className="inline-flex items-center gap-1 text-xs text-warning">
-            <AlertCircle className="size-3.5" />
+            <AlertCircle className="size-3.5" aria-hidden />
             {t("sshKeys.nameExists")}
           </span>
         );
       case "format_error":
         return (
           <span className="inline-flex items-center gap-1 text-xs text-destructive">
-            <XCircle className="size-3.5" />
+            <XCircle className="size-3.5" aria-hidden />
             {t("sshKeys.formatError")}
           </span>
         );
@@ -258,7 +321,7 @@ export function SSHKeyBatchImportDialog({
                 onDragLeave={handleDragLeave}
               >
                 <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-                  <Upload className="size-5 text-muted-foreground" />
+                  <Upload className="size-5 text-muted-foreground" aria-hidden />
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-medium">{t("sshKeys.dropOrUpload")}</p>
@@ -291,7 +354,9 @@ export function SSHKeyBatchImportDialog({
     "name": "prod-deploy",
     "username": "deploy",
     "keyType": "auto",
-    "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\\n..."
+    "privateKey": "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+    "allowedPurposes": "terminal,task_command",
+    "allowedNodeTags": "prod"
   }
 ]`}
                 </pre>
@@ -347,7 +412,7 @@ export function SSHKeyBatchImportDialog({
                     setEntries([]);
                   }}
                 >
-                  <FileUp className="size-3.5" />
+                  <FileUp className="size-3.5" aria-hidden />
                   {t("sshKeys.dropOrUpload")}
                 </button>
               )}

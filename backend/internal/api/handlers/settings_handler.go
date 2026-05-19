@@ -11,6 +11,7 @@ import (
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
@@ -43,7 +44,11 @@ type securityRiskItem struct {
 	Examples    []string `json:"examples"`
 }
 
-const maxSecurityRiskExamples = 3
+const (
+	maxSecurityRiskExamples = 3
+	staleSSHKeyAge          = 90 * 24 * time.Hour
+	credentialAuditRiskAge  = 7 * 24 * time.Hour
+)
 
 // NewSettingsHandler 创建设置处理器
 func NewSettingsHandler(db *gorm.DB, svc *settings.Service) *SettingsHandler {
@@ -208,8 +213,38 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	broadScopeItem, err := h.broadScopeSSHKeyRiskItem()
+	if err != nil {
+		return nil, err
+	}
+	disabledInUseItem, err := h.disabledSSHKeyInUseRiskItem()
+	if err != nil {
+		return nil, err
+	}
+	expiredInUseItem, err := h.expiredSSHKeyInUseRiskItem()
+	if err != nil {
+		return nil, err
+	}
+	staleItem, err := h.staleSSHKeyRiskItem()
+	if err != nil {
+		return nil, err
+	}
+	credentialOpsItem, err := h.recentCredentialOperationRiskItem()
+	if err != nil {
+		return nil, err
+	}
 	weakItem := h.weakSecurityDefaultsRiskItem()
-	return []securityRiskItem{rootItem, reusedItem, sudoItem, weakItem}, nil
+	return []securityRiskItem{
+		rootItem,
+		reusedItem,
+		sudoItem,
+		broadScopeItem,
+		disabledInUseItem,
+		expiredInUseItem,
+		staleItem,
+		credentialOpsItem,
+		weakItem,
+	}, nil
 }
 
 func (h *SettingsHandler) rootSSHUserRiskItem() (securityRiskItem, error) {
@@ -287,6 +322,193 @@ func (h *SettingsHandler) reusedSSHKeyRiskItem() (securityRiskItem, error) {
 	return item, nil
 }
 
+func (h *SettingsHandler) broadScopeSSHKeyRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "broad_scope_ssh_keys",
+		Severity:    "warning",
+		Title:       "范围过宽的 SSH Key",
+		Description: "未限制用途或节点范围的 SSH Key 仍可兼容使用，但应逐步收敛到最小权限。",
+	}
+	var keys []model.SSHKey
+	if err := h.db.Select("id", "name", "allowed_purposes", "allowed_node_ids", "allowed_node_tags").Order("id asc").Find(&keys).Error; err != nil {
+		return item, err
+	}
+	for _, key := range keys {
+		if !sshutil.IsBroadScope(key) {
+			continue
+		}
+		item.Count++
+		if len(item.Examples) < maxSecurityRiskExamples {
+			item.Examples = append(item.Examples, sshKeyNameExample(key))
+		}
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) disabledSSHKeyInUseRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "disabled_ssh_keys_in_use",
+		Severity:    "critical",
+		Title:       "已禁用但仍被引用的 SSH Key",
+		Description: "节点仍引用已禁用的 SSH Key，后续连接会被阻断并可能影响任务执行。",
+	}
+	type keyUsageRow struct {
+		SSHKeyID  uint
+		KeyName   string
+		NodeCount int64
+	}
+	var rows []keyUsageRow
+	if err := h.db.Table("nodes").
+		Select("nodes.ssh_key_id AS ssh_key_id, ssh_keys.name AS key_name, COUNT(nodes.id) AS node_count").
+		Joins("JOIN ssh_keys ON ssh_keys.id = nodes.ssh_key_id").
+		Where("nodes.ssh_key_id IS NOT NULL AND ssh_keys.disabled = ?", true).
+		Group("nodes.ssh_key_id, ssh_keys.name").
+		Order("node_count desc, nodes.ssh_key_id asc").
+		Find(&rows).Error; err != nil {
+		return item, err
+	}
+	item.Count = int64(len(rows))
+	for _, row := range rows {
+		if len(item.Examples) >= maxSecurityRiskExamples {
+			break
+		}
+		item.Examples = append(item.Examples, keyUsageExample(row.SSHKeyID, row.KeyName, row.NodeCount))
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) expiredSSHKeyInUseRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "expired_ssh_keys_in_use",
+		Severity:    "critical",
+		Title:       "已过期但仍被引用的 SSH Key",
+		Description: "节点仍引用已过期的 SSH Key，后续连接会被阻断并可能影响任务执行。",
+	}
+	type keyUsageRow struct {
+		SSHKeyID  uint
+		KeyName   string
+		NodeCount int64
+	}
+	var rows []keyUsageRow
+	if err := h.db.Table("nodes").
+		Select("nodes.ssh_key_id AS ssh_key_id, ssh_keys.name AS key_name, COUNT(nodes.id) AS node_count").
+		Joins("JOIN ssh_keys ON ssh_keys.id = nodes.ssh_key_id").
+		Where("nodes.ssh_key_id IS NOT NULL AND ssh_keys.expires_at IS NOT NULL AND ssh_keys.expires_at <= ?", time.Now().UTC()).
+		Group("nodes.ssh_key_id, ssh_keys.name").
+		Order("node_count desc, nodes.ssh_key_id asc").
+		Find(&rows).Error; err != nil {
+		return item, err
+	}
+	item.Count = int64(len(rows))
+	for _, row := range rows {
+		if len(item.Examples) >= maxSecurityRiskExamples {
+			break
+		}
+		item.Examples = append(item.Examples, keyUsageExample(row.SSHKeyID, row.KeyName, row.NodeCount))
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) staleSSHKeyRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "stale_ssh_keys",
+		Severity:    "warning",
+		Title:       "长期未使用的 SSH Key",
+		Description: "长期未使用或从未使用的 SSH Key 应定期复核，降低遗留凭据带来的风险。",
+	}
+	cutoff := time.Now().UTC().Add(-staleSSHKeyAge)
+	var keys []model.SSHKey
+	if err := h.db.Select("id", "name", "last_used_at", "created_at").
+		Where("(last_used_at IS NULL AND created_at <= ?) OR last_used_at <= ?", cutoff, cutoff).
+		Order("id asc").
+		Find(&keys).Error; err != nil {
+		return item, err
+	}
+	item.Count = int64(len(keys))
+	for _, key := range keys {
+		if len(item.Examples) >= maxSecurityRiskExamples {
+			break
+		}
+		item.Examples = append(item.Examples, sshKeyNameExample(key))
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) recentCredentialOperationRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "recent_credential_operations",
+		Severity:    "info",
+		Title:       "近期高风险凭据操作",
+		Description: "近期存在 SSH Key 导出、终端或批量/命令任务等凭据使用事件；请结合审计记录复核操作者与用途。",
+	}
+	cutoff := time.Now().UTC().Add(-credentialAuditRiskAge)
+	type credentialOperationRow struct {
+		Action string
+		Count  int64
+	}
+	var rows []credentialOperationRow
+	if err := h.db.Model(&model.CredentialAuditEvent{}).
+		Select("action, COUNT(*) AS count").
+		Where("created_at >= ? AND action IN ?", cutoff, highRiskCredentialAuditActions()).
+		Group("action").
+		Order("count desc, action asc").
+		Find(&rows).Error; err != nil {
+		return item, err
+	}
+	for _, row := range rows {
+		item.Count += row.Count
+		if len(item.Examples) < maxSecurityRiskExamples {
+			item.Examples = append(item.Examples, util.SanitizeMessage(fmt.Sprintf("%s（%d 次）", credentialActionLabel(row.Action), row.Count)))
+		}
+	}
+	if item.Count > 0 {
+		item.Severity = "warning"
+	}
+	return item, nil
+}
+
+func highRiskCredentialAuditActions() []string {
+	return []string{
+		"ssh_key.export",
+		"terminal.open",
+		"terminal.failure",
+		"task.manual_trigger",
+		"task.restore_trigger",
+		"task.batch_trigger",
+		"task.credential.use",
+		"batch_command.create",
+		"drill.trigger",
+		"drill.phase",
+	}
+}
+
+func credentialActionLabel(action string) string {
+	switch action {
+	case "ssh_key.export":
+		return "SSH Key 导出"
+	case "terminal.open":
+		return "终端会话打开"
+	case "terminal.failure":
+		return "终端会话失败"
+	case "task.manual_trigger":
+		return "手动任务触发"
+	case "task.restore_trigger":
+		return "恢复任务触发"
+	case "task.batch_trigger":
+		return "批量任务触发"
+	case "task.credential.use":
+		return "任务运行凭据使用"
+	case "batch_command.create":
+		return "批量命令创建"
+	case "drill.trigger":
+		return "恢复演练触发"
+	case "drill.phase":
+		return "恢复演练阶段凭据使用"
+	default:
+		return "凭据操作"
+	}
+}
+
 func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
 	examples := make([]string, 0, maxSecurityRiskExamples)
 	appendEnvBoolRisk := func(key string, defaultValue bool, riskyValue bool, label string) {
@@ -351,4 +573,20 @@ func nodeNameExamples(nodes []model.Node) []string {
 		examples = append(examples, util.SanitizeMessage(name))
 	}
 	return examples
+}
+
+func sshKeyNameExample(key model.SSHKey) string {
+	name := strings.TrimSpace(key.Name)
+	if name == "" {
+		name = fmt.Sprintf("SSH Key #%d", key.ID)
+	}
+	return util.SanitizeMessage(name)
+}
+
+func keyUsageExample(keyID uint, keyName string, nodeCount int64) string {
+	name := strings.TrimSpace(keyName)
+	if name == "" {
+		name = fmt.Sprintf("SSH Key #%d", keyID)
+	}
+	return util.SanitizeMessage(fmt.Sprintf("%s（%d 个节点）", name, nodeCount))
 }

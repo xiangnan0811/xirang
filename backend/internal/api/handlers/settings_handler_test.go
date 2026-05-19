@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -58,23 +60,66 @@ func doSettingsAnomalySmoke(r *gin.Engine, method, path, body string) *httptest.
 
 func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
-	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_32_BYTES_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("migrate security risk tables: %v", err)
 	}
+	now := time.Now().UTC()
+	old := now.Add(-120 * 24 * time.Hour)
+	expiredAt := now.Add(-24 * time.Hour)
 	key := model.SSHKey{
-		Name:        "risk-shared-key",
-		Username:    "root",
-		KeyType:     "auto",
-		PrivateKey:  "FAKE_SHARED_PRIVATE_KEY_FOR_TEST_ONLY",
-		Fingerprint: "SHA256:risk-shared-key",
+		Name:            "risk-shared-key",
+		Username:        "root",
+		KeyType:         "auto",
+		PrivateKey:      "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		Fingerprint:     "SHA256:risk-shared-key",
+		LastUsedAt:      &old,
+		AllowedPurposes: sshutil.PurposeTerminal,
+		AllowedNodeIDs:  "1",
 	}
 	if err := db.Create(&key).Error; err != nil {
 		t.Fatalf("创建 SSH key 失败: %v", err)
+	}
+	disabledKey := model.SSHKey{
+		Name:            "risk-disabled-key",
+		Username:        "ops",
+		KeyType:         "auto",
+		PrivateKey:      "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		Fingerprint:     "SHA256:risk-disabled-key",
+		Disabled:        true,
+		AllowedPurposes: sshutil.PurposeTaskCommand,
+		AllowedNodeIDs:  "3",
+		LastUsedAt:      &old,
+	}
+	if err := db.Create(&disabledKey).Error; err != nil {
+		t.Fatalf("创建禁用 SSH key 失败: %v", err)
+	}
+	expiredKey := model.SSHKey{
+		Name:            "risk-expired-key",
+		Username:        "ops",
+		KeyType:         "auto",
+		PrivateKey:      "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		Fingerprint:     "SHA256:risk-expired-key",
+		ExpiresAt:       &expiredAt,
+		AllowedPurposes: sshutil.PurposeTaskCommand,
+		AllowedNodeIDs:  "4",
+	}
+	if err := db.Create(&expiredKey).Error; err != nil {
+		t.Fatalf("创建过期 SSH key 失败: %v", err)
+	}
+	broadKey := model.SSHKey{
+		Name:        "risk-broad-key",
+		Username:    "ops",
+		KeyType:     "auto",
+		PrivateKey:  "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		Fingerprint: "SHA256:risk-broad-key",
+	}
+	if err := db.Create(&broadKey).Error; err != nil {
+		t.Fatalf("创建宽范围 SSH key 失败: %v", err)
 	}
 	for i := 1; i <= 2; i++ {
 		node := model.Node{
@@ -90,6 +135,25 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		if err := db.Create(&node).Error; err != nil {
 			t.Fatalf("创建节点失败: %v", err)
 		}
+	}
+	for _, node := range []model.Node{
+		{Name: "risk-disabled-node", Host: "10.10.0.3", Port: 22, Username: "ops", AuthType: "key", SSHKeyID: &disabledKey.ID, BackupDir: "risk-disabled-node"},
+		{Name: "risk-expired-node", Host: "10.10.0.4", Port: 22, Username: "ops", AuthType: "key", SSHKeyID: &expiredKey.ID, BackupDir: "risk-expired-node"},
+	} {
+		if err := db.Create(&node).Error; err != nil {
+			t.Fatalf("创建引用风险 key 的节点失败: %v", err)
+		}
+	}
+	if err := db.Create(&model.CredentialAuditEvent{
+		Action:           "ssh_key.export",
+		Purpose:          sshutil.PurposeSSHKeyExport,
+		CredentialKind:   "ssh_key",
+		CredentialSource: "ssh_key_export",
+		Outcome:          "success",
+		Metadata:         `{"scope":"all"}`,
+		CreatedAt:        now,
+	}).Error; err != nil {
+		t.Fatalf("创建凭据审计事件失败: %v", err)
 	}
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
@@ -119,11 +183,36 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["sudo_enabled_nodes"].Count != 1 {
 		t.Fatalf("sudo 风险数量应为 1，实际: %+v", byCode["sudo_enabled_nodes"])
 	}
+	if byCode["broad_scope_ssh_keys"].Count != 1 || !strings.Contains(strings.Join(byCode["broad_scope_ssh_keys"].Examples, ","), "risk-broad-key") {
+		t.Fatalf("宽范围 SSH key 风险不符合预期: %+v", byCode["broad_scope_ssh_keys"])
+	}
+	if byCode["disabled_ssh_keys_in_use"].Count != 1 || !strings.Contains(strings.Join(byCode["disabled_ssh_keys_in_use"].Examples, ","), "risk-disabled-key") {
+		t.Fatalf("禁用 key 引用风险不符合预期: %+v", byCode["disabled_ssh_keys_in_use"])
+	}
+	if byCode["expired_ssh_keys_in_use"].Count != 1 || !strings.Contains(strings.Join(byCode["expired_ssh_keys_in_use"].Examples, ","), "risk-expired-key") {
+		t.Fatalf("过期 key 引用风险不符合预期: %+v", byCode["expired_ssh_keys_in_use"])
+	}
+	if byCode["stale_ssh_keys"].Count != 2 {
+		t.Fatalf("长期未使用 key 风险数量应为 2，实际: %+v", byCode["stale_ssh_keys"])
+	}
+	if byCode["recent_credential_operations"].Count != 1 || !strings.Contains(strings.Join(byCode["recent_credential_operations"].Examples, ","), "SSH Key 导出") {
+		t.Fatalf("近期凭据操作风险不符合预期: %+v", byCode["recent_credential_operations"])
+	}
 	if byCode["weak_security_defaults"].Count == 0 {
 		t.Fatalf("弱安全默认项应至少包含测试环境设置，实际: %+v", byCode["weak_security_defaults"])
 	}
-	if strings.Contains(resp.Body.String(), "PrivateKey") || strings.Contains(resp.Body.String(), "FAKE_SHARED_PRIVATE_KEY_FOR_TEST_ONLY") {
-		t.Fatalf("安全风险摘要不应暴露原始私钥，实际: %s", resp.Body.String())
+	body := resp.Body.String()
+	for _, forbidden := range []string{
+		"PrivateKey",
+		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"10.10.0.",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("安全风险摘要不应暴露敏感字段 %q，实际: %s", forbidden, body)
+		}
 	}
 }
 

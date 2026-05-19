@@ -28,6 +28,11 @@ export type SecurityRiskCode =
   | "root_ssh_users"
   | "reused_ssh_keys"
   | "sudo_enabled_nodes"
+  | "broad_scope_ssh_keys"
+  | "disabled_ssh_keys_in_use"
+  | "expired_ssh_keys_in_use"
+  | "stale_ssh_keys"
+  | "recent_credential_operations"
   | "weak_security_defaults";
 
 export type SecurityRiskItem = {
@@ -83,6 +88,11 @@ function normalizeRiskCode(value?: string): SecurityRiskCode {
     case "root_ssh_users":
     case "reused_ssh_keys":
     case "sudo_enabled_nodes":
+    case "broad_scope_ssh_keys":
+    case "disabled_ssh_keys_in_use":
+    case "expired_ssh_keys_in_use":
+    case "stale_ssh_keys":
+    case "recent_credential_operations":
     case "weak_security_defaults":
       return value;
     default:

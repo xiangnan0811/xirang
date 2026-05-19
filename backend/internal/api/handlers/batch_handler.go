@@ -8,7 +8,9 @@ import (
 	"regexp"
 	"strings"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -121,17 +123,22 @@ func (h *BatchHandler) Create(c *gin.Context) {
 
 	// 逐个触发任务执行
 	runIDs := make([]uint, 0, len(taskIDs))
+	successCount := 0
+	failureCount := 0
 	for _, tid := range taskIDs {
 		if h.manager == nil {
+			failureCount++
 			runIDs = append(runIDs, 0)
 			continue
 		}
 		runID, err := h.manager.TriggerManual(tid)
 		if err != nil {
 			// 记录失败但不中断整体流程——任务已创建，仅触发失败
+			failureCount++
 			runIDs = append(runIDs, 0)
 			continue
 		}
+		successCount++
 		runIDs = append(runIDs, runID)
 	}
 
@@ -139,6 +146,21 @@ func (h *BatchHandler) Create(c *gin.Context) {
 	if req.Retain != nil {
 		retain = *req.Retain
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:  "batch_command.create",
+		Purpose: sshutil.PurposeBatchCommand,
+		Outcome: credentialAuditOutcome(successCount, failureCount, 0),
+		Metadata: map[string]any{
+			"batch_id":      batchID,
+			"node_count":    len(nodes),
+			"task_count":    len(taskIDs),
+			"run_count":     len(runIDs),
+			"success_count": successCount,
+			"failure_count": failureCount,
+			"retain":        retain,
+		},
+	})
 
 	respondOK(c, gin.H{
 		"batch_id": batchID,

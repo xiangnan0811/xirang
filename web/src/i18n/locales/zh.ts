@@ -1455,6 +1455,17 @@ const zh = {
     boundNodes: "绑定节点",
     securityWarning: "安全提示：请妥善保管私钥，避免在不安全的环境中暴露。",
     inUseWarning: "该密钥正在被节点使用，删除前请先解绑。",
+    scopeDisabled: "停用此 SSH Key",
+    scopeDisabledHint: "停用后所有使用此密钥的 SSH 连接都会被阻断。",
+    scopeExpiresAt: "过期时间",
+    scopeAllowedPurposes: "允许用途",
+    scopeAllowedNodeIds: "允许节点 ID",
+    scopeAllowedNodeTags: "允许节点标签",
+    scopeHint: "用途、节点 ID、标签留空表示兼容旧配置并允许全部；建议逐步收敛为最小权限。",
+    scopeDisabledBadge: "已停用",
+    scopeExpiringBadge: "有过期时间",
+    scopeBroadBadge: "范围过宽",
+    scopeRestrictedBadge: "已限制",
 
     // 页面统计
     total: "总计",
@@ -1591,6 +1602,7 @@ const zh = {
     colType: "类型",
     colFingerprint: "指纹",
     colLastUsed: "最后使用",
+    colScope: "权限范围",
     colNodes: "节点数",
     colActions: "操作",
     neverUsed: "从未使用",
@@ -2347,6 +2359,26 @@ const zh = {
           sudo_enabled_nodes: {
             title: "启用 sudo 的节点",
             description: "sudo 节点允许普通 SSH 用户执行高权限运维命令。",
+          },
+          broad_scope_ssh_keys: {
+            title: "范围过宽的 SSH Key",
+            description: "未限制用途或节点范围的 SSH Key 可兼容旧配置，但应逐步收敛到最小权限。",
+          },
+          disabled_ssh_keys_in_use: {
+            title: "已停用但仍被引用的 SSH Key",
+            description: "节点仍引用已停用的 SSH Key，后续连接会被阻断。",
+          },
+          expired_ssh_keys_in_use: {
+            title: "已过期但仍被引用的 SSH Key",
+            description: "节点仍引用已过期的 SSH Key，后续连接会被阻断。",
+          },
+          stale_ssh_keys: {
+            title: "长期未使用的 SSH Key",
+            description: "长期未使用或从未使用的 SSH Key 应定期复核。",
+          },
+          recent_credential_operations: {
+            title: "近期高风险凭据操作",
+            description: "近期存在 SSH Key 导出、终端或批量任务等凭据使用事件，请结合审计记录复核。",
           },
           weak_security_defaults: {
             title: "弱安全默认项",

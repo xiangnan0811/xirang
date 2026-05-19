@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 
 	"gorm.io/gorm"
@@ -169,7 +170,7 @@ func IncrementalIndex(ctx context.Context, db *gorm.DB, task model.Task) error {
 
 // indexSnapshot 索引单个快照中的所有文件。
 func indexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snapshotID string) error {
-	client, err := executor.DialSSHForNode(ctx, task.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeSnapshot)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}

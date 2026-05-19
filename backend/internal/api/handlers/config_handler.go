@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -120,10 +122,15 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	exportKeys := make([]gin.H, 0, len(sshKeys))
 	for _, k := range sshKeys {
 		item := gin.H{
-			"name":        k.Name,
-			"username":    k.Username,
-			"key_type":    k.KeyType,
-			"fingerprint": k.Fingerprint,
+			"name":              k.Name,
+			"username":          k.Username,
+			"key_type":          k.KeyType,
+			"fingerprint":       k.Fingerprint,
+			"disabled":          k.Disabled,
+			"expires_at":        k.ExpiresAt,
+			"allowed_purposes":  k.AllowedPurposes,
+			"allowed_node_ids":  k.AllowedNodeIDs,
+			"allowed_node_tags": k.AllowedNodeTags,
 		}
 		if includeSecrets {
 			item["private_key"] = k.PrivateKey
@@ -285,6 +292,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
 					existing.PrivateKey = privateKey
 				}
+				applyImportedSSHKeyScope(&existing, keyData)
 				if err := tx.Save(&existing).Error; err == nil {
 					importedKeys++
 				}
@@ -302,6 +310,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if fingerprint, ok := keyData["fingerprint"].(string); ok {
 					newKey.Fingerprint = fingerprint
 				}
+				applyImportedSSHKeyScope(&newKey, keyData)
 				if err := tx.Create(&newKey).Error; err == nil {
 					importedKeys++
 				}
@@ -663,6 +672,60 @@ func decodeConfigImportData(body []byte) (configImportData, error) {
 func readStringField(values map[string]interface{}, key string) string {
 	raw, _ := values[key].(string)
 	return strings.TrimSpace(raw)
+}
+
+func applyImportedSSHKeyScope(key *model.SSHKey, data map[string]interface{}) {
+	if key == nil {
+		return
+	}
+	if disabled, ok := data["disabled"].(bool); ok {
+		key.Disabled = disabled
+	}
+	if raw, ok := data["expires_at"]; ok {
+		key.ExpiresAt = parseImportedTimePtr(raw)
+	}
+	if raw, ok := data["allowed_purposes"]; ok {
+		if normalized, err := sshutil.NormalizePurposeList(importStringValue(raw)); err == nil {
+			key.AllowedPurposes = normalized
+		}
+	}
+	if raw, ok := data["allowed_node_ids"]; ok {
+		if normalized, err := sshutil.NormalizeNodeIDList(importStringValue(raw)); err == nil {
+			key.AllowedNodeIDs = normalized
+		}
+	}
+	if raw, ok := data["allowed_node_tags"]; ok {
+		key.AllowedNodeTags = sshutil.NormalizeTagList(importStringValue(raw))
+	}
+}
+
+func importStringValue(raw interface{}) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64:
+		if v == float64(uint64(v)) {
+			return strconv.FormatUint(uint64(v), 10)
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	default:
+		return ""
+	}
+}
+
+func parseImportedTimePtr(raw interface{}) *time.Time {
+	value, ok := raw.(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return nil
+	}
+	parsed = parsed.UTC()
+	return &parsed
 }
 
 func resolveImportNodeID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool) {

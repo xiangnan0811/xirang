@@ -27,6 +27,12 @@ export function buildDemoSSHKey(input: NewSSHKeyInput): SSHKeyRecord {
     keyType: input.keyType,
     privateKey: input.privateKey,
     fingerprint: buildFingerprint(input.privateKey),
+    disabled: input.disabled,
+    expiresAt: input.expiresAt || undefined,
+    allowedPurposes: input.allowedPurposes,
+    allowedNodeIds: input.allowedNodeIds,
+    allowedNodeTags: input.allowedNodeTags,
+    broadScope: !input.allowedPurposes || (!input.allowedNodeIds && !input.allowedNodeTags),
     createdAt: formatTime(new Date().toISOString())
   };
 }
