@@ -519,11 +519,6 @@ func readIntEnvWithDefault(key string, defaultValue int) (int, error) {
 	return value, nil
 }
 
-func resolveNodePrivateKey(node model.Node) (string, string, error) {
-	content, source, _, err := resolveNodePrivateKeyForPurpose(node, "")
-	return content, source, err
-}
-
 func resolveNodePrivateKeyForPurpose(node model.Node, purpose string) (string, string, sshutil.ResolvedCredential, error) {
 	if node.SSHKey != nil {
 		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
