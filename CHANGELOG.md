@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.0](https://github.com/xiangnan0811/xirang/compare/v0.38.2...v0.39.0) (2026-05-19)
+
+
+### ✨ Features
+
+* **security:** add SSH key least-privilege audit ([#193](https://github.com/xiangnan0811/xirang/issues/193)) ([ecea8b6](https://github.com/xiangnan0811/xirang/commit/ecea8b672d08c205b5cbe292ab45b289e7104ce6))
+
 ## [0.38.2](https://github.com/xiangnan0811/xirang/compare/v0.38.1...v0.38.2) (2026-05-18)
 
 
