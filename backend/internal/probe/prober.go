@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
@@ -25,6 +26,8 @@ type Prober struct {
 	failThreshold       int
 	concurrency         int
 	metricRetentionDays int
+	metricAuditMu       sync.Mutex
+	metricAuditFailures map[string]int
 	cancel              context.CancelFunc
 	done                chan struct{}
 }
@@ -39,6 +42,7 @@ func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency i
 		failThreshold:       failThreshold,
 		concurrency:         concurrency,
 		metricRetentionDays: 7,
+		metricAuditFailures: make(map[string]int),
 		done:                make(chan struct{}),
 	}
 }
@@ -140,11 +144,17 @@ func (p *Prober) probeNode(node model.Node) {
 	}
 
 	now := time.Now()
-	result, err := sshutil.ProbeNode(node, p.db)
+	result, credential, err := sshutil.ProbeNode(node, p.db)
 
 	if err != nil {
 		// Failed
 		newFailures := node.ConsecutiveFailures + 1
+		outcome := probeAuditOutcome(err)
+		if shouldAuditProbeCredentialFailure(node.ConsecutiveFailures, newFailures, p.failThreshold) {
+			p.writeSystemCredentialAudit(node, credential, sshutil.PurposeProbe, "probe.ssh", outcome, "probe", err, map[string]any{
+				"failure_count": newFailures,
+			})
+		}
 		updates := map[string]interface{}{
 			"status":               "offline",
 			"connection_latency":   0,
@@ -247,19 +257,22 @@ func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, disk
 }
 
 func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetrics, error) {
-	authMethods, _, err := sshutil.BuildSSHAuthForPurpose(node, p.db, sshutil.PurposeProbe)
+	authMethods, credential, err := sshutil.BuildSSHAuthForPurpose(node, p.db, sshutil.PurposeProbe)
 	if err != nil {
+		p.writeMetricCredentialAudit(node, credential, credentialaudit.OutcomeBlocked, "auth_build", err)
 		return nil, fmt.Errorf("构建 SSH 认证失败: %w", err)
 	}
 
 	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
+		p.writeMetricCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "host_key", err)
 		return nil, fmt.Errorf("解析主机密钥回调失败: %w", err)
 	}
 
 	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
 	client, err := sshutil.DialSSH(ctx, addr, node.Username, authMethods, hostKeyCallback)
 	if err != nil {
+		p.writeMetricCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "dial", err)
 		return nil, err
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
@@ -286,6 +299,156 @@ func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetr
 	}
 
 	return parseMetricsOutput(strings.TrimSpace(string(out)))
+}
+
+func (p *Prober) writeMetricCredentialAudit(node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error) {
+	failureCount := p.recordMetricAuditFailure(node.ID, stage)
+	if !shouldAuditProbeCredentialFailure(failureCount-1, failureCount, p.failThreshold) {
+		return
+	}
+	p.writeSystemCredentialAudit(node, credential, sshutil.PurposeProbe, "probe.metrics", outcome, stage, err, map[string]any{
+		"failure_count": failureCount,
+	})
+}
+
+func (p *Prober) recordMetricAuditFailure(nodeID uint, stage string) int {
+	key := fmt.Sprintf("%d:%s", nodeID, strings.TrimSpace(stage))
+	p.metricAuditMu.Lock()
+	defer p.metricAuditMu.Unlock()
+	if p.metricAuditFailures == nil {
+		p.metricAuditFailures = make(map[string]int)
+	}
+	p.metricAuditFailures[key]++
+	return p.metricAuditFailures[key]
+}
+
+func (p *Prober) writeSystemCredentialAudit(node model.Node, credential sshutil.ResolvedCredential, purpose, action, outcome, stage string, err error, metadata map[string]any) {
+	kind := strings.TrimSpace(credential.Kind)
+	if kind == "" {
+		switch strings.ToLower(strings.TrimSpace(node.AuthType)) {
+		case "password":
+			kind = "password"
+		case "key":
+			if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
+				kind = "ssh_key"
+			} else if strings.TrimSpace(node.PrivateKey) != "" {
+				kind = "node_private_key"
+			}
+		}
+	}
+	if kind == "" {
+		kind = "unknown"
+	}
+	source := strings.TrimSpace(credential.Source)
+	if source == "" {
+		switch kind {
+		case "password":
+			source = "node.password"
+		case "ssh_key":
+			if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
+				source = fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID)
+			}
+		case "node_private_key":
+			source = "node.private_key"
+		}
+	}
+	if source == "" {
+		source = "unknown"
+	}
+	keyID := credential.KeyID
+	if keyID == nil && kind == "ssh_key" && node.SSHKeyID != nil {
+		keyID = node.SSHKeyID
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["stage"] = stage
+	if err != nil {
+		metadata["has_error"] = true
+	}
+	event := credentialaudit.Event{
+		Username:         "system",
+		Role:             "system",
+		Action:           action,
+		Purpose:          purpose,
+		CredentialKind:   kind,
+		CredentialSource: source,
+		SSHKeyID:         keyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          outcome,
+		Metadata:         metadata,
+	}
+	if err != nil {
+		event.ErrorMessage = credentialAuditSafeProbeError(stage)
+	}
+	if writeErr := credentialaudit.Write(p.db, event); writeErr != nil {
+		logger.Module("credential_audit").Warn().Err(writeErr).
+			Str("action", event.Action).
+			Str("purpose", event.Purpose).
+			Msg("系统凭据审计事件写入失败")
+	}
+}
+
+func probeAuditOutcome(err error) string {
+	if err == nil {
+		return credentialaudit.OutcomeSuccess
+	}
+	if isProbeCredentialBlockedError(err) {
+		return credentialaudit.OutcomeBlocked
+	}
+	return credentialaudit.OutcomeFailure
+}
+
+func shouldAuditProbeCredentialFailure(previousFailures, newFailures, threshold int) bool {
+	if newFailures <= 0 {
+		return false
+	}
+	if previousFailures < 0 {
+		previousFailures = 0
+	}
+	if newFailures == 1 {
+		return true
+	}
+	if threshold > 0 && previousFailures < threshold && newFailures >= threshold {
+		return true
+	}
+	if threshold <= 0 {
+		threshold = 1
+	}
+	return newFailures > threshold && isPowerOfTwo(newFailures)
+}
+
+func isPowerOfTwo(value int) bool {
+	return value > 0 && value&(value-1) == 0
+}
+
+func isProbeCredentialBlockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"构建 ssh 认证失败",
+		"ssh key 已禁用",
+		"ssh key 已过期",
+		"ssh key 不允许",
+		"密钥认证",
+		"密码认证",
+		"不支持的认证方式",
+	} {
+		if strings.Contains(msg, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func credentialAuditSafeProbeError(stage string) string {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		stage = "probe"
+	}
+	return fmt.Sprintf("%s failed", stage)
 }
 
 func parseMetricsOutput(output string) (*nodeMetrics, error) {

@@ -390,18 +390,19 @@ respondOK(c, securityRiskSummaryResponse{GeneratedAt: time.Now().UTC(), Items: i
 - Writer API: `credentialaudit.Write(db, credentialaudit.Event)`, `credentialaudit.FromGin(c, event)`, `credentialaudit.WithRuntimeContext(ctx, db, event)`, and `credentialaudit.WriteRuntime(ctx, event)`.
 - Outcome strings: `success`, `failure`, and `blocked`.
 - Common fields include `user_id`, `username`, `role`, `action`, `purpose`, `credential_kind`, `credential_source`, optional `ssh_key_id`, `node_id`, `task_id`, `task_run_id`, `policy_id`, `outcome`, sanitized `error_message`, sanitized JSON `metadata`, `client_ip`, `user_agent`, and `created_at`.
-- Current P1 action strings: `ssh_key.test_connection`, `ssh_key.export`, `node.credential.test_connection`, `terminal.open`, `terminal.failure`, `terminal.close`, `task.manual_trigger`, `task.restore_trigger`, `task.batch_trigger`, `batch_command.create`, `task.credential.use`, `drill.trigger`, and `drill.phase`.
+- Current P1/P1b action strings: `ssh_key.test_connection`, `ssh_key.export`, `node.credential.test_connection`, `terminal.open`, `terminal.failure`, `terminal.close`, `task.manual_trigger`, `task.restore_trigger`, `task.batch_trigger`, `batch_command.create`, `task.credential.use`, `drill.trigger`, `drill.phase`, `file_browser.list`, `file_browser.preview`, `docker_volumes.discover`, `config.export`, `node.doctor.run`, `node_migration.preflight`, `probe.ssh`, `probe.metrics`, and `node_logs.collect`.
 
 #### 3. Contracts
 
 - Credential-use audit is a domain event table, not a replacement for hash-chained HTTP `audit_logs`. It can be written for GET, WebSocket, and background/runtime flows where `AuditLogger` does not have enough domain context.
-- Events must identify who or what used which safe credential source for which purpose/resource, without storing raw passwords, private keys, TOTP/JWT/recovery codes, decrypted executor config, terminal input/output, file contents, raw command output, or full command text.
+- Events must identify who or what used which safe credential source for which purpose/resource, without storing raw passwords, private keys, TOTP/JWT/recovery codes, decrypted executor config, terminal input/output, SFTP payloads, file contents, raw command output, Docker output or volume names, diagnostic evidence, exported config payloads, or full command text.
 - `credential_kind` and `credential_source` must be safe labels such as `ssh_key` / `ssh_key_id=<id>`, `password` / `node.password`, `node_private_key` / `node.private_key`, or a route-specific non-secret label. Never place secret values in either field.
-- `metadata` is for small, sanitized, bounded context such as counts, stage names, format/scope labels, latency, run IDs, or booleans. Keys or values containing `private`, `password`, `token`, `secret`, `credential`, `config`, `output`, `stream`, or `command` must be dropped rather than persisted.
+- `metadata` is for small, sanitized, bounded context such as counts, stage names, format/scope labels, latency, path hashes, run IDs, or booleans. Keys or values containing `private`, `password`, `token`, `secret`, `credential`, `config`, `output`, `stream`, `command`, `content`, or `payload` must be dropped rather than persisted.
 - Error messages must be run through the shared sanitizer and redact text after output markers such as `输出:`, `output:`, `stdout:`, or `stderr:`.
 - Audit writes should be best-effort from API handlers and runtime paths: log a warning with `logger.Module("credential_audit")` when the audit write fails, but do not expose the audit-storage failure to the end user or block the primary operation unless the product contract explicitly changes.
 - Runtime task/executor writes should use context propagation (`WithRuntimeContext` / `WriteRuntime`) so task, run, policy, node, purpose, and actor/system context stay correlated.
-- Settings risk summaries may aggregate high-risk credential-audit action counts, but must not echo raw event metadata or error messages.
+- Settings risk summaries may aggregate high-risk credential-audit action counts, including file browser, Docker volume discovery, config export, node Doctor, migration preflight, probe, metrics, and node-log actions, but must not echo raw event metadata or error messages.
+- Background system credential audit must stay bounded: record meaningful blocked/failure outcomes and sparse repeated probe failures, not every successful probe or SSH dial.
 
 #### 4. Validation & Error Matrix
 
@@ -418,7 +419,7 @@ respondOK(c, securityRiskSummaryResponse{GeneratedAt: time.Now().UTC(), Items: i
 #### 5. Tests Required
 
 - Writer tests must prove forbidden metadata keys/values are dropped, long or user-controlled fields are bounded, and output-bearing error messages are redacted.
-- Handler tests for P1 operations should assert an event is written with action, purpose, outcome, safe IDs/sources, and no raw secret material.
+- Handler tests for P1/P1b operations should assert an event is written with action, purpose, outcome, safe IDs/sources, and no raw secret material, file content, Docker output, diagnostic evidence, or exported payload material.
 - Runtime task/executor tests should assert `WriteRuntime` merges context with operation-specific fields and preserves task/run/node/policy correlation.
 - Terminal tests must assert open/failure/close events do not include terminal input or output.
 - Drill tests must assert phase events include policy/task/run/evidence context and sanitized phase errors.

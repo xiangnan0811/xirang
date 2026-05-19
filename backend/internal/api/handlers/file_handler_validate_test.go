@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,7 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/pkg/sftp"
 	"gorm.io/driver/sqlite"
@@ -319,6 +325,58 @@ func TestValidateNodePath_TaskRsyncSourceAlsoActsAsRoot(t *testing.T) {
 // 这里的 smoke 测试只是验证 *sftp.Client.RealPath() 方法签名兼容 realPathResolver 接口，
 // 真实的符号链接解析行为由前面的 fsRealPathResolver 单元测试覆盖。生产环境对接的是 OpenSSH SFTP server，
 // 其 RealPath 走 realpath(3) 语义会解析符号链接。
+func TestFileBrowserAuditDoesNotPersistPathOrPreviewContent(t *testing.T) {
+	db := newValidateTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate audit tables: %v", err)
+	}
+	h := NewFileHandler(db)
+	node := model.Node{ID: 42, Name: "file-node", Host: "10.20.30.40", AuthType: "key", SSHKeyID: credentialaudit.PtrUint(7)}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("userID", uint(101))
+	c.Set("username", "alice")
+	c.Set("role", "operator")
+	req := httptest.NewRequest("GET", "/nodes/42/files/content?path=/safe/FAKE_FILE_NAME_FOR_TEST_ONLY", nil)
+	c.Request = req
+
+	h.writeFileBrowserAudit(c, node, sshutil.ResolvedCredential{Kind: "ssh_key", Source: "ssh_key_id=7", KeyID: credentialaudit.PtrUint(7)}, "file_browser.preview", credentialaudit.OutcomeSuccess, nil, map[string]any{
+		"stage":         "success",
+		"kind":          "file",
+		"path_hash":     safePathHash("/safe/FAKE_FILE_NAME_FOR_TEST_ONLY"),
+		"preview_bytes": 23,
+		"content":       "FAKE_FILE_CONTENT_FOR_TEST_ONLY",
+		"output":        "FAKE_SFTP_OUTPUT_FOR_TEST_ONLY",
+	})
+
+	var event model.CredentialAuditEvent
+	if err := db.First(&event).Error; err != nil {
+		t.Fatalf("load audit event: %v", err)
+	}
+	if event.Action != "file_browser.preview" || event.Purpose != sshutil.PurposeFileBrowser || event.Outcome != credentialaudit.OutcomeSuccess {
+		t.Fatalf("unexpected file audit event: %+v", event)
+	}
+	if event.NodeID == nil || *event.NodeID != node.ID || event.SSHKeyID == nil || *event.SSHKeyID != 7 {
+		t.Fatalf("expected node/key ids in audit event: %+v", event)
+	}
+	if strings.Contains(event.Metadata, "/safe/") || strings.Contains(event.Metadata, "FAKE_FILE_CONTENT_FOR_TEST_ONLY") || strings.Contains(event.Metadata, "FAKE_SFTP_OUTPUT_FOR_TEST_ONLY") {
+		t.Fatalf("file audit metadata must not include raw path/content/output: %s", event.Metadata)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["path_hash"] == "" || metadata["preview_bytes"] == nil {
+		t.Fatalf("safe file audit metadata missing expected fields: %#v", metadata)
+	}
+	if _, ok := metadata["content"]; ok {
+		t.Fatalf("content metadata key should be dropped: %#v", metadata)
+	}
+	if _, ok := metadata["output"]; ok {
+		t.Fatalf("output metadata key should be dropped: %#v", metadata)
+	}
+}
+
 func TestSFTPClient_SatisfiesRealPathResolver(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("net.Pipe + sftp server 在 Windows CI 路径表示有差异，跳过")

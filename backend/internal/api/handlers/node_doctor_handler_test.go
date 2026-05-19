@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 )
@@ -119,6 +121,73 @@ func TestNodeDoctorAuthFailureSkipsSSHDependentChecks(t *testing.T) {
 		if statuses[check] != doctorStatusSkip {
 			t.Fatalf("%s 应跳过，实际: %+v", check, statuses)
 		}
+	}
+}
+
+func TestNodeDoctorWritesSafeCredentialAuditForBlockedDiagnostics(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.Task{}, &model.Policy{}, &model.PolicyNode{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	keyID := uint(12)
+	node := model.Node{
+		Name:      "doctor-audit-node",
+		Host:      "10.88.0.12",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "key",
+		SSHKeyID:  &keyID,
+		BackupDir: "doctor-audit-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	r := gin.New()
+	handler := NewNodeHandler(db, nil)
+	r.POST("/nodes/:id/doctor", func(c *gin.Context) {
+		c.Set("userID", uint(101))
+		c.Set("username", "alice")
+		c.Set("role", "operator")
+		handler.RunDoctor(c)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/doctor", node.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("Doctor 认证配置失败应返回结构化 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "node.doctor.run").First(&event).Error; err != nil {
+		t.Fatalf("应写入 node.doctor.run 审计事件: %v", err)
+	}
+	if event.Purpose != sshutil.PurposeNodeTest || event.Outcome != credentialaudit.OutcomeBlocked || event.NodeID == nil || *event.NodeID != node.ID || event.SSHKeyID == nil || *event.SSHKeyID != keyID {
+		t.Fatalf("doctor audit event 不符合预期: %+v", event)
+	}
+	for _, forbidden := range []string{"FAKE_", "10.88.0.12", "doctor-audit-node", "未绑定", "私钥", "password", "PRIVATE KEY"} {
+		if strings.Contains(event.Metadata, forbidden) || strings.Contains(event.ErrorMessage, forbidden) {
+			t.Fatalf("doctor audit 不应复制诊断证据/主机/敏感词 %q: metadata=%s error=%s", forbidden, event.Metadata, event.ErrorMessage)
+		}
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["stage"] != "complete" || metadata["check_count"] == nil || metadata["failure_count"] == nil || metadata["skip_count"] == nil {
+		t.Fatalf("doctor audit metadata 缺少安全计数字段: %#v", metadata)
+	}
+}
+
+func TestNodeDoctorAuditOutcomeClassifiesAuthFailureAsBlocked(t *testing.T) {
+	checks := []doctorCheckResult{
+		{Check: "auth", Status: doctorStatusFail, Evidence: "FAKE_PRIVATE_KEY_FOR_TEST_ONLY", Suggestion: "检查凭据"},
+		{Check: "ssh", Status: doctorStatusFail},
+		{Check: "disk", Status: doctorStatusSkip},
+	}
+	if got := doctorAuditOutcome(checks); got != credentialaudit.OutcomeBlocked {
+		t.Fatalf("auth/ssh failure 应归类为 blocked，got %s", got)
 	}
 }
 

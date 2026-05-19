@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -89,9 +90,13 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		return
 	}
 
-	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
+	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialAuditSSHOutcome("dial", err), err, map[string]any{
+			"stage":     "dial",
+			"path_hash": safePathHash(rawPath),
+		})
 		respondBadGateway(c, "SFTP 连接失败，请检查节点连接配置")
 		return
 	}
@@ -102,6 +107,10 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeBlocked, err, map[string]any{
+			"stage":     "path_validate",
+			"path_hash": safePathHash(rawPath),
+		})
 		respondForbidden(c, err.Error())
 		return
 	}
@@ -109,9 +118,22 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 读取目录失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeFailure, err, map[string]any{
+			"stage":     "read_dir",
+			"path_hash": safePathHash(cleanPath),
+		})
 		respondBadGateway(c, "读取目录失败")
 		return
 	}
+
+	h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeSuccess, nil, map[string]any{
+		"stage":        "success",
+		"kind":         "directory",
+		"path_hash":    safePathHash(cleanPath),
+		"count":        len(entries),
+		"truncated":    truncated,
+		"preview_size": 0,
+	})
 
 	respondOK(c, FileListResponse{
 		Path:      cleanPath,
@@ -153,9 +175,13 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		return
 	}
 
-	client, sftpClient, err := dialSFTP(c.Request.Context(), node, h.db)
+	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialAuditSSHOutcome("dial", err), err, map[string]any{
+			"stage":     "dial",
+			"path_hash": safePathHash(rawPath),
+		})
 		respondBadGateway(c, "SFTP 连接失败，请检查节点连接配置")
 		return
 	}
@@ -165,16 +191,29 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeBlocked, err, map[string]any{
+			"stage":     "path_validate",
+			"path_hash": safePathHash(rawPath),
+		})
 		respondForbidden(c, err.Error())
 		return
 	}
 
 	stat, err := sftpClient.Stat(cleanPath)
 	if err != nil {
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
+			"stage":     "stat",
+			"path_hash": safePathHash(cleanPath),
+		})
 		respondNotFound(c, "文件不存在")
 		return
 	}
 	if stat.IsDir() {
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeBlocked, fmt.Errorf("target is directory"), map[string]any{
+			"stage":     "stat",
+			"kind":      "directory",
+			"path_hash": safePathHash(cleanPath),
+		})
 		respondBadRequest(c, "目标路径是目录，无法预览")
 		return
 	}
@@ -182,6 +221,10 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	f, err := sftpClient.Open(cleanPath)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("SFTP 打开文件失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
+			"stage":     "open",
+			"path_hash": safePathHash(cleanPath),
+		})
 		respondBadGateway(c, "打开文件失败")
 		return
 	}
@@ -191,6 +234,10 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	n, err := io.ReadFull(f, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		logger.Log.Error().Err(err).Msg("SFTP 读取文件失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
+			"stage":     "read",
+			"path_hash": safePathHash(cleanPath),
+		})
 		respondBadGateway(c, "读取文件失败")
 		return
 	}
@@ -199,6 +246,15 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	if truncated {
 		n = filePreviewMaxBytes
 	}
+
+	h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeSuccess, nil, map[string]any{
+		"stage":         "success",
+		"kind":          "file",
+		"path_hash":     safePathHash(cleanPath),
+		"size":          stat.Size(),
+		"preview_bytes": n,
+		"truncated":     truncated,
+	})
 
 	respondOK(c, FileContentResponse{
 		Path:      cleanPath,
@@ -274,15 +330,37 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 
 // --- 内部辅助函数 ---
 
-// dialSFTP 建立 SSH+SFTP 会话。
-func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Close() error }, *sftp.Client, error) {
-	auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeFileBrowser)
+func (h *FileHandler) writeFileBrowserAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, action, outcome string, err error, metadata map[string]any) {
+	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(node)
+	kind, source, keyID := eventCredentialFields(credential, fallbackKind, fallbackSource)
+	if keyID == nil {
+		keyID = fallbackKeyID
+	}
+	event := credentialaudit.Event{
+		Action:           action,
+		Purpose:          sshutil.PurposeFileBrowser,
+		CredentialKind:   kind,
+		CredentialSource: source,
+		SSHKeyID:         keyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          outcome,
+		Metadata:         metadata,
+	}
 	if err != nil {
-		return nil, nil, err
+		event.ErrorMessage = credentialAuditSafeError(fmt.Sprint(metadata["stage"]), err)
+	}
+	writeCredentialAuditFromGin(c, h.db, event)
+}
+
+// dialSFTP 建立 SSH+SFTP 会话。
+func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Close() error }, *sftp.Client, sshutil.ResolvedCredential, error) {
+	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeFileBrowser)
+	if err != nil {
+		return nil, nil, credential, err
 	}
 	hostKey, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, credential, err
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -291,15 +369,15 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Clo
 	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
 	sshClient, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, credential, err
 	}
 
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		_ = sshClient.Close()
-		return nil, nil, fmt.Errorf("SFTP 子系统初始化失败: %w", err)
+		return nil, nil, credential, fmt.Errorf("SFTP 子系统初始化失败: %w", err)
 	}
-	return sshClient, sftpClient, nil
+	return sshClient, sftpClient, credential, nil
 }
 
 // realPathResolver 抽象出"把任意路径解析为节点端真实绝对路径"的能力。

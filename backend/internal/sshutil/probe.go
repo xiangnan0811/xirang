@@ -20,15 +20,20 @@ type ProbeResult struct {
 }
 
 // ProbeNode performs SSH connection test and disk probe on a node.
-func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, error) {
-	authMethods, _, err := BuildSSHAuthForPurpose(node, db, PurposeProbe)
+func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, ResolvedCredential, error) {
+	return ProbeNodeForPurpose(node, db, PurposeProbe)
+}
+
+// ProbeNodeForPurpose performs the same SSH probe with a caller-specific purpose.
+func ProbeNodeForPurpose(node model.Node, db *gorm.DB, purpose string) (ProbeResult, ResolvedCredential, error) {
+	authMethods, credential, err := BuildSSHAuthForPurpose(node, db, purpose)
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("构建 SSH 认证失败: %w", err)
+		return ProbeResult{}, credential, fmt.Errorf("构建 SSH 认证失败: %w", err)
 	}
 
 	hostKeyCallback, err := ResolveSSHHostKeyCallback()
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("解析主机密钥回调失败: %w", err)
+		return ProbeResult{}, credential, fmt.Errorf("解析主机密钥回调失败: %w", err)
 	}
 
 	address := fmt.Sprintf("%s:%d", node.Host, node.Port)
@@ -40,7 +45,7 @@ func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, error) {
 		Timeout:         5 * time.Second,
 	})
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("SSH 连接失败: %w", err)
+		return ProbeResult{}, credential, fmt.Errorf("SSH 连接失败: %w", err)
 	}
 	defer client.Close() //nolint:errcheck
 
@@ -63,7 +68,7 @@ func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, error) {
 		}
 	}
 
-	return result, nil
+	return result, credential, nil
 }
 
 // ParseDiskProbe parses df -BG output like "100G 42G" where the first field is

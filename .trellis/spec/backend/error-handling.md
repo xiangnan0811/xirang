@@ -68,9 +68,10 @@ message from `respondInternalError`.
 - Unexpected server error: `respondInternalError(c, err)`. This logs the error
   with module `api` and the route path, then returns a generic 500 envelope.
 
-Do not expose raw SQL, encryption, SSH private key, token, or stack-like error
-details to clients. For current user-facing messages, the codebase mostly uses
-Simplified Chinese strings.
+Do not expose raw SQL, encryption, SSH private key, token, command output,
+SFTP/file content, Docker output, diagnostic evidence, exported config payloads,
+or stack-like error details to clients. For current user-facing messages, the
+codebase mostly uses Simplified Chinese strings.
 
 ---
 

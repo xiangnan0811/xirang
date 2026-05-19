@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	OutcomeSuccess = "success"
-	OutcomeFailure = "failure"
-	OutcomeBlocked = "blocked"
+	OutcomeSuccess     = "success"
+	OutcomeFailure     = "failure"
+	OutcomeBlocked     = "blocked"
+	maxMetadataEntries = 16
 )
 
 type Event struct {
@@ -216,17 +217,21 @@ func sanitizeMetadata(input map[string]any) map[string]any {
 		}
 		switch v := value.(type) {
 		case string:
-			if metadataValueDenied(cleanKey) {
+			cleanValue := strings.TrimSpace(util.SanitizeMessage(v))
+			if cleanValue == "" || metadataValueDenied(cleanValue) {
 				continue
 			}
-			out[cleanKey] = util.SanitizeMessage(v)
+			out[cleanKey] = cleanValue
 		case []string:
 			items := make([]string, 0, len(v))
 			for _, item := range v {
 				clean := strings.TrimSpace(util.SanitizeMessage(item))
-				if clean != "" {
+				if clean != "" && !metadataValueDenied(clean) {
 					items = append(items, clean)
 				}
+			}
+			if len(items) == 0 {
+				continue
 			}
 			out[cleanKey] = items
 		case bool:
@@ -242,9 +247,13 @@ func sanitizeMetadata(input map[string]any) map[string]any {
 		case float64:
 			out[cleanKey] = v
 		default:
-			out[cleanKey] = util.SanitizeMessage(strings.TrimSpace(toString(v)))
+			cleanValue := strings.TrimSpace(util.SanitizeMessage(toString(v)))
+			if cleanValue == "" || metadataValueDenied(cleanValue) {
+				continue
+			}
+			out[cleanKey] = cleanValue
 		}
-		if len(out) >= 12 {
+		if len(out) >= maxMetadataEntries {
 			break
 		}
 	}
@@ -253,7 +262,7 @@ func sanitizeMetadata(input map[string]any) map[string]any {
 
 func metadataKeyDenied(key string) bool {
 	lower := strings.ToLower(key)
-	for _, forbidden := range []string{"private", "password", "token", "secret", "credential", "config", "output", "stream", "command"} {
+	for _, forbidden := range []string{"private", "password", "token", "secret", "credential", "config", "output", "stream", "command", "content", "payload"} {
 		if strings.Contains(lower, forbidden) {
 			return true
 		}
@@ -261,8 +270,14 @@ func metadataKeyDenied(key string) bool {
 	return false
 }
 
-func metadataValueDenied(key string) bool {
-	return metadataKeyDenied(key)
+func metadataValueDenied(value string) bool {
+	lower := strings.ToLower(value)
+	for _, forbidden := range []string{"private", "password", "token", "secret", "credential", "config", "output", "stream", "command", "content", "payload", "bearer", "authorization:"} {
+		if strings.Contains(lower, forbidden) {
+			return true
+		}
+	}
+	return false
 }
 
 func toString(value any) string {

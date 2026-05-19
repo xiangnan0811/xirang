@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
 	"xirang/backend/internal/settings"
@@ -82,15 +83,17 @@ func (h *NodeHandler) RunDoctor(c *gin.Context) {
 		return
 	}
 
-	result, err := h.runNodeDoctor(c.Request.Context(), node)
+	result, credential, err := h.runNodeDoctor(c.Request.Context(), node)
 	if err != nil {
+		h.writeNodeDoctorAudit(c, node, credential, credentialaudit.OutcomeFailure, "run", err, nil)
 		respondInternalError(c, err)
 		return
 	}
+	h.writeNodeDoctorAudit(c, node, credential, doctorAuditOutcome(result.Checks), "complete", nil, result.Checks)
 	respondOK(c, result)
 }
 
-func (h *NodeHandler) runNodeDoctor(ctx context.Context, node model.Node) (doctorResponse, error) {
+func (h *NodeHandler) runNodeDoctor(ctx context.Context, node model.Node) (doctorResponse, sshutil.ResolvedCredential, error) {
 	runner := &nodeDoctorRunner{
 		db:          h.db,
 		settingsSvc: h.settingsSvc,
@@ -122,14 +125,14 @@ type nodeDoctorRunner struct {
 	checks      []doctorCheckResult
 }
 
-func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, error) {
+func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.ResolvedCredential, error) {
 	r.checkAuthConfig()
-	authMethods, _, _, authErr := sshutil.BuildSSHAuthWithKeyForPurpose(r.node, r.db, sshutil.PurposeNodeTest)
+	authMethods, _, credential, authErr := sshutil.BuildSSHAuthWithKeyForPurpose(r.node, r.db, sshutil.PurposeNodeTest)
 	if authErr != nil {
 		r.add("ssh", doctorStatusFail, "SSH 认证配置无效", "检查节点认证方式、密码或绑定的 SSH Key。")
 		r.add("known_hosts", doctorStatusSkip, "未建立 SSH 连接，跳过主机密钥校验", "先修复认证配置后重新运行 Doctor。")
 		r.addSSHDependentSkips()
-		return r.response(), nil
+		return r.response(), credential, nil
 	}
 
 	callback, knownHostsEvidence, knownHostsStatus, knownHostsSuggestion := resolveDoctorHostKeyCallback()
@@ -137,7 +140,7 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, error) {
 		r.add("known_hosts", knownHostsStatus, knownHostsEvidence, knownHostsSuggestion)
 		r.add("ssh", doctorStatusSkip, "known_hosts 配置不可用，未尝试 SSH 连接", "修复 known_hosts 配置后重新运行 Doctor。")
 		r.addSSHDependentSkips()
-		return r.response(), nil
+		return r.response(), credential, nil
 	}
 
 	client, latency, sshEvidence, sshStatus, sshSuggestion := r.dial(ctx, authMethods, callback)
@@ -152,7 +155,7 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, error) {
 			}
 		}
 		r.addSSHDependentSkips()
-		return r.response(), nil
+		return r.response(), credential, nil
 	}
 	defer client.Close() //nolint:errcheck // close error is not actionable after diagnostics
 
@@ -167,7 +170,72 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, error) {
 	r.checkDisk(ctx, client)
 	r.checkProbeStatus()
 
-	return r.response(), nil
+	return r.response(), credential, nil
+}
+
+func (h *NodeHandler) writeNodeDoctorAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, checks []doctorCheckResult) {
+	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(node)
+	kind, source, keyID := eventCredentialFields(credential, fallbackKind, fallbackSource)
+	if keyID == nil {
+		keyID = fallbackKeyID
+	}
+	metadata := map[string]any{
+		"stage": stage,
+	}
+	if len(checks) > 0 {
+		passCount, warnCount, failCount, skipCount := doctorCheckCounts(checks)
+		metadata["check_count"] = len(checks)
+		metadata["pass_count"] = passCount
+		metadata["warn_count"] = warnCount
+		metadata["failure_count"] = failCount
+		metadata["skip_count"] = skipCount
+	}
+	event := credentialaudit.Event{
+		Action:           "node.doctor.run",
+		Purpose:          sshutil.PurposeNodeTest,
+		CredentialKind:   kind,
+		CredentialSource: source,
+		SSHKeyID:         keyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          outcome,
+		Metadata:         metadata,
+	}
+	if err != nil {
+		event.ErrorMessage = credentialAuditSafeError(stage, err)
+	}
+	writeCredentialAuditFromGin(c, h.db, event)
+}
+
+func doctorAuditOutcome(checks []doctorCheckResult) string {
+	_, _, failCount, _ := doctorCheckCounts(checks)
+	if failCount == 0 {
+		return credentialaudit.OutcomeSuccess
+	}
+	for _, check := range checks {
+		if check.Status != doctorStatusFail {
+			continue
+		}
+		if check.Check == "auth" || (check.Check == "ssh" && strings.Contains(check.Evidence, "认证")) {
+			return credentialaudit.OutcomeBlocked
+		}
+	}
+	return credentialaudit.OutcomeFailure
+}
+
+func doctorCheckCounts(checks []doctorCheckResult) (passCount, warnCount, failCount, skipCount int) {
+	for _, check := range checks {
+		switch check.Status {
+		case doctorStatusPass:
+			passCount++
+		case doctorStatusWarn:
+			warnCount++
+		case doctorStatusFail:
+			failCount++
+		case doctorStatusSkip:
+			skipCount++
+		}
+	}
+	return passCount, warnCount, failCount, skipCount
 }
 
 func (r *nodeDoctorRunner) response() doctorResponse {

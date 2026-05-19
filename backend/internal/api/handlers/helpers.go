@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +55,86 @@ func sanitizedClientError(err error) string {
 		return ""
 	}
 	return util.SanitizeMessage(err.Error())
+}
+
+func eventCredentialFields(credential sshutil.ResolvedCredential, fallbackKind, fallbackSource string) (string, string, *uint) {
+	kind := strings.TrimSpace(credential.Kind)
+	if kind == "" {
+		kind = fallbackKind
+	}
+	source := strings.TrimSpace(credential.Source)
+	if source == "" {
+		source = fallbackSource
+	}
+	return kind, source, credential.KeyID
+}
+
+func nodeCredentialFallback(node model.Node) (string, string, *uint) {
+	switch strings.ToLower(strings.TrimSpace(node.AuthType)) {
+	case "password":
+		return "password", "node.password", nil
+	case "key":
+		if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
+			return "ssh_key", fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID), node.SSHKeyID
+		}
+		if strings.TrimSpace(node.PrivateKey) != "" {
+			return "node_private_key", "node.private_key", nil
+		}
+	}
+	return "unknown", "unknown", nil
+}
+
+func safePathHash(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func credentialAuditSafeError(stage string, err error) string {
+	if err == nil {
+		return ""
+	}
+	stage = strings.TrimSpace(util.SanitizeMessage(stage))
+	if stage == "" {
+		return "operation failed"
+	}
+	return fmt.Sprintf("%s failed", stage)
+}
+
+func credentialAuditSSHOutcome(stage string, err error) string {
+	if err == nil {
+		return credentialaudit.OutcomeSuccess
+	}
+	if strings.TrimSpace(stage) == "auth_build" || isCredentialBlockedError(err) {
+		return credentialaudit.OutcomeBlocked
+	}
+	return credentialaudit.OutcomeFailure
+}
+
+func isCredentialBlockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	blockedMarkers := []string{
+		"ssh key 已禁用",
+		"ssh key 已过期",
+		"ssh key 不允许",
+		"构建 ssh 认证失败",
+		"认证配置无效",
+		"密钥认证模式下",
+		"密码认证模式下",
+		"不支持的认证方式",
+	}
+	for _, marker := range blockedMarkers {
+		if strings.Contains(msg, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ownershipNodeFilter 返回当前 operator 拥有的节点 ID 列表。

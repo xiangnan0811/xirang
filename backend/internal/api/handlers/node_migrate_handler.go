@@ -304,7 +304,7 @@ func migrateLocalBackupData(ctx context.Context, tasks []model.Task, targetNodeB
 		cancel()
 
 		if copyErr != nil {
-			logger.Module("migrate").Error().Err(copyErr).Uint("task_id", t.ID).Str("output", string(output)).Msg("rsync 数据复制失败")
+			logger.Module("migrate").Error().Err(copyErr).Uint("task_id", t.ID).Int("output_bytes", len(output)).Msg("rsync 数据复制失败")
 			results = append(results, DataMigrateItem{
 				PolicyID: policyID, PolicyName: policyName,
 				Status: "error", Message: fmt.Sprintf("复制失败: %s", copyErr.Error()),

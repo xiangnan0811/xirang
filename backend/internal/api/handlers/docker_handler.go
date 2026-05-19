@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -59,8 +60,9 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 		return
 	}
 
-	sshClient, err := dialSSHForDocker(c.Request.Context(), node, h.db)
+	sshClient, credential, err := dialSSHForDocker(c.Request.Context(), node, h.db)
 	if err != nil {
+		h.writeDockerVolumeAudit(c, node, credential, credentialAuditSSHOutcome("dial", err), "dial", err, 0, false)
 		respondBadGateway(c, "SSH 连接失败")
 		return
 	}
@@ -69,9 +71,16 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	volumes, warning, err := listDockerVolumes(sshClient)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
+		h.writeDockerVolumeAudit(c, node, credential, credentialaudit.OutcomeFailure, "list", err, 0, false)
 		respondOK(c, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
 		return
 	}
+
+	volumeOutcome := credentialaudit.OutcomeSuccess
+	if warning != "" {
+		volumeOutcome = credentialaudit.OutcomeFailure
+	}
+	h.writeDockerVolumeAudit(c, node, credential, volumeOutcome, "success", nil, len(volumes), warning != "")
 
 	resp := gin.H{"data": volumes}
 	if warning != "" {
@@ -80,22 +89,49 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	respondOK(c, resp)
 }
 
-// dialSSHForDocker 建立 SSH 连接，用于执行 Docker 命令。
-func dialSSHForDocker(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, error) {
-	auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeDockerVolumes)
+func (h *DockerHandler) writeDockerVolumeAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, count int, warning bool) {
+	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(node)
+	kind, source, keyID := eventCredentialFields(credential, fallbackKind, fallbackSource)
+	if keyID == nil {
+		keyID = fallbackKeyID
+	}
+	event := credentialaudit.Event{
+		Action:           "docker_volumes.discover",
+		Purpose:          sshutil.PurposeDockerVolumes,
+		CredentialKind:   kind,
+		CredentialSource: source,
+		SSHKeyID:         keyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          outcome,
+		Metadata: map[string]any{
+			"stage":       stage,
+			"count":       count,
+			"has_warning": warning,
+		},
+	}
 	if err != nil {
-		return nil, err
+		event.ErrorMessage = credentialAuditSafeError(stage, err)
+	}
+	writeCredentialAuditFromGin(c, h.db, event)
+}
+
+// dialSSHForDocker 建立 SSH 连接，用于执行 Docker 命令。
+func dialSSHForDocker(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, sshutil.ResolvedCredential, error) {
+	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeDockerVolumes)
+	if err != nil {
+		return nil, credential, err
 	}
 	hostKey, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		return nil, err
+		return nil, credential, err
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
-	return sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
+	client, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
+	return client, credential, err
 }
 
 // dockerVolumeLsEntry 用于解析 docker volume ls --format '{{json .}}' 的输出。
@@ -124,7 +160,7 @@ func listDockerVolumes(client *ssh.Client) ([]DockerVolume, string, error) {
 		if strings.Contains(outStr, "permission denied") || strings.Contains(outStr, "Cannot connect") {
 			return []DockerVolume{}, "无权访问 Docker（当前用户可能不在 docker 组中）", nil
 		}
-		return []DockerVolume{}, fmt.Sprintf("执行 docker volume ls 失败: %s", outStr), nil
+		return []DockerVolume{}, "执行 docker volume ls 失败", nil
 	}
 
 	// 解析 JSON 行

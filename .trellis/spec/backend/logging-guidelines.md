@@ -75,5 +75,9 @@ the change is intentionally minimal.
 - Do not log full command output when it may contain credentials. When output is
   needed for diagnosis, keep it scoped to existing patterns and prefer task log
   storage over global process logs.
+- Do not log decrypted system setting values, exported config payloads, SFTP file
+  contents, Docker command output or volume names, node Doctor evidence, migration
+  preflight command output, executor config, or credential audit metadata that may
+  contain raw remote evidence.
 - Do not downgrade unexpected server failures to silent catches. Either return
   the error to the caller or log it with enough structured fields to debug.

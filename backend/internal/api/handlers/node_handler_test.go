@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -252,6 +253,78 @@ func TestNodeMigratePreflightReturnsInternalErrorWhenPolicyLookupFails(t *testin
 	}
 	if envelope.Code != http.StatusInternalServerError {
 		t.Fatalf("期望标准错误信封，实际: %+v", envelope)
+	}
+}
+
+func TestMigrationPreflightAuditDoesNotCopyDiagnosticHostOrPath(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	source := model.Node{Name: "source-audit-node", Host: "10.91.0.1", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", BackupDir: "source-audit-node", DiskUsedGB: 12}
+	target := model.Node{Name: "target-audit-node", Host: "10.91.0.2", Port: 22, Username: "root", AuthType: "password", Password: "", BackupDir: "target-audit-node"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("创建源节点失败: %v", err)
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("创建目标节点失败: %v", err)
+	}
+	policy := model.Policy{Name: "preflight-policy", SourcePath: "/very/sensitive/source/path", TargetPath: "/backup/target", Enabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	if err := db.Create(&model.Task{Name: "preflight-task", NodeID: source.ID, PolicyID: &policy.ID, Source: "policy", ExecutorType: "rsync", RsyncSource: "/very/sensitive/source/path", RsyncTarget: "/tmp/not-used", Status: "pending"}).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	r := gin.New()
+	handler := NewNodeHandler(db, nil)
+	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
+		c.Set("userID", uint(101))
+		c.Set("username", "alice")
+		c.Set("role", "admin")
+		handler.MigratePreflight(c)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/migrate-preflight", source.ID), strings.NewReader(fmt.Sprintf(`{"targetNodeId":%d}`, target.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("预检认证失败仍应返回结构化 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "node_migration.preflight").First(&event).Error; err != nil {
+		t.Fatalf("应写入 node_migration.preflight 审计事件: %v", err)
+	}
+	if event.Purpose != sshutil.PurposeNodeMigration || event.Outcome != credentialaudit.OutcomeBlocked || event.NodeID == nil || *event.NodeID != target.ID {
+		t.Fatalf("migration preflight audit event 不符合预期: %+v", event)
+	}
+	for _, forbidden := range []string{"10.91.0.", "target-audit-node", "source-audit-node", "/very/sensitive/source/path", "FAKE_", "SSH 连接目标节点失败"} {
+		if strings.Contains(event.Metadata, forbidden) || strings.Contains(event.ErrorMessage, forbidden) {
+			t.Fatalf("preflight audit 不应复制诊断主机/路径/证据 %q: metadata=%s error=%s", forbidden, event.Metadata, event.ErrorMessage)
+		}
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+		t.Fatalf("metadata json: %v", err)
+	}
+	if metadata["source_node_id"] == nil || metadata["target_node_id"] == nil || metadata["policy_count"] == nil || metadata["check_count"] == nil || metadata["failure_count"] == nil || metadata["stage"] != "complete" {
+		t.Fatalf("preflight audit metadata 缺少安全字段: %#v", metadata)
+	}
+}
+
+func TestPreflightAuditOutcomeClassifiesSSHFailureAsBlocked(t *testing.T) {
+	checks := []PreflightCheckItem{
+		{Name: "ssh", Status: "fail", Message: "SSH 连接目标节点失败: FAKE_PASSWORD_FOR_TEST_ONLY"},
+		{Name: "disk", Status: "skip"},
+	}
+	if got := preflightAuditOutcome(checks); got != credentialaudit.OutcomeBlocked {
+		t.Fatalf("ssh failure 应归类为 blocked，got %s", got)
 	}
 }
 

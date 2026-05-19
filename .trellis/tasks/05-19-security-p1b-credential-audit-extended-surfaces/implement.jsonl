@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security-sensitive backend contracts for credential-use audit events, Settings security risk summary, no-secret metadata, and test expectations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Audit and SSH diagnostics must fail safely with sanitized errors and no raw SQL/secrets/command output."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Credential audit/logging must never persist private keys, passwords, tokens, terminal/file streams, command output, executor config, or exported secret material."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check whether schema changes are avoided or migration safety is required; preserve existing credential_audit_events contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Task spans handler surfaces, backend audit aggregation, possible frontend risk mapper behavior, and tests."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse shared credentialaudit helpers and sshutil purpose constants rather than duplicating audit/enforcement logic."}
+{"file":".trellis/tasks/05-19-security-p1b-credential-audit-extended-surfaces/research/code-surfaces.md","reason":"Maps P1b missing surfaces, existing P1 audit helpers, implementation boundaries, and recommended tests."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1-least-privilege-audit/prd.md","reason":"P1 core decisions and boundaries that P1b extends without changing table/model direction."}
