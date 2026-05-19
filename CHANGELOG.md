@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.0](https://github.com/xiangnan0811/xirang/compare/v0.39.0...v0.40.0) (2026-05-19)
+
+
+### ✨ Features
+
+* **security:** extend credential audit coverage ([#195](https://github.com/xiangnan0811/xirang/issues/195)) ([e92618b](https://github.com/xiangnan0811/xirang/commit/e92618b52518f0b02ac6cd25cc4d65e40d392f3c))
+
 ## [0.39.0](https://github.com/xiangnan0811/xirang/compare/v0.38.2...v0.39.0) (2026-05-19)
 
 
