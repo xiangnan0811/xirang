@@ -12,6 +12,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/util"
 )
@@ -123,7 +124,7 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	client, err := executor.DialSSHForNode(ctx, task.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeRetention)
 	if err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 保留清理: SSH 连接失败")
 		return
@@ -178,7 +179,7 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	client, err := executor.DialSSHForNode(ctx, task.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeRetention)
 	if err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("rclone 保留清理: SSH 连接失败")
 		return

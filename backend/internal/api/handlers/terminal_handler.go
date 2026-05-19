@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -130,6 +131,21 @@ func (h *TerminalHandler) writeTerminalAuditEntry(c *gin.Context, claims *auth.C
 	_ = middleware.SaveAuditLogWithHashChain(h.db, &entry)
 }
 
+func (h *TerminalHandler) writeTerminalCredentialAudit(c *gin.Context, claims *auth.Claims, event credentialaudit.Event) {
+	if claims != nil {
+		if event.UserID == 0 {
+			event.UserID = claims.UserID
+		}
+		if event.Username == "" {
+			event.Username = claims.Username
+		}
+		if event.Role == "" {
+			event.Role = claims.Role
+		}
+	}
+	writeCredentialAuditFromGin(c, h.db, event)
+}
+
 // ServeTerminal godoc
 // @Summary      WebSocket SSH 终端
 // @Description  建立 WebSocket 连接，通过 SSH PTY 提供交互式终端（JWT 通过首条消息认证，仅 admin）
@@ -225,10 +241,23 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 
 	// 建立 SSH 连接
-	authMethods, err := sshutil.BuildSSHAuth(node, h.db)
+	authMethods, credential, err := sshutil.BuildSSHAuthForPurpose(node, h.db, sshutil.PurposeTerminal)
 	if err != nil {
 		log.Printf("warn: terminal: 构建 SSH 认证失败 (node=%d): %v", node.ID, err)
 		h.writeTerminalAuditEntry(c, claims, "ssh-auth-init-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeBlocked,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "auth_build",
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 认证初始化失败"))
@@ -240,6 +269,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	if err != nil {
 		log.Printf("warn: terminal: 解析主机密钥失败 (node=%d): %v", node.ID, err)
 		h.writeTerminalAuditEntry(c, claims, "host-key-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "host_key",
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "主机密钥校验失败"))
@@ -250,6 +292,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
 	ctx, cancel := context.WithTimeout(context.Background(), terminalSessionTimeout)
 
+	dialStartedAt := time.Now()
 	sshClient, err := sshutil.DialSSH(ctx, addr, node.Username, authMethods, hostKeyCallback)
 	if err != nil {
 		cancel()
@@ -257,6 +300,20 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		// Wave 2 (PR-C C4): SSH 拨号失败 = 节点不可达 / 端口错 / 认证拒绝 →
 		// 这是 admin 滥用扫描的关键审计点。
 		h.writeTerminalAuditEntry(c, claims, "ssh-dial-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage":      "dial",
+				"latency_ms": int(time.Since(dialStartedAt).Milliseconds()),
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 连接失败，请检查节点配置"))
@@ -270,6 +327,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = sshClient.Close()
 		log.Printf("warn: terminal: SSH 会话创建失败 (node=%d): %v", node.ID, err)
 		h.writeTerminalAuditEntry(c, claims, "ssh-session-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "session",
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 会话创建失败"))
@@ -289,6 +359,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = sshClient.Close()
 		log.Printf("warn: terminal: 请求 PTY 失败 (node=%d): %v", node.ID, err)
 		h.writeTerminalAuditEntry(c, claims, "pty-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "pty",
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "终端初始化失败"))
@@ -302,6 +385,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		cancel()
 		_ = session.Close()
 		_ = sshClient.Close()
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "stdin_pipe",
+			},
+		})
 		freePending()
 		_ = conn.Close()
 		return
@@ -311,6 +407,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		cancel()
 		_ = session.Close()
 		_ = sshClient.Close()
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "stdout_pipe",
+			},
+		})
 		freePending()
 		_ = conn.Close()
 		return
@@ -323,6 +432,19 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = sshClient.Close()
 		log.Printf("warn: terminal: 启动 Shell 失败 (node=%d): %v", node.ID, err)
 		h.writeTerminalAuditEntry(c, claims, "shell-failed", http.StatusInternalServerError)
+		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			Action:           "terminal.failure",
+			Purpose:          sshutil.PurposeTerminal,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "shell",
+			},
+		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Shell 启动失败"))
@@ -350,6 +472,20 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 注册会话：把先前 reserveSlotID 的占位 ID 替换为真正 sessionID + cancel。
 	// 自此 pendingID 已被 promoteSlot 删除，无需再 freePending。
 	sessionID := fmt.Sprintf("term-%d-%d", node.ID, time.Now().UnixNano())
+	sessionOpenedAt := time.Now()
+	h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+		Action:           "terminal.open",
+		Purpose:          sshutil.PurposeTerminal,
+		CredentialKind:   credential.Kind,
+		CredentialSource: credential.Source,
+		SSHKeyID:         credential.KeyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"stage":      "open",
+			"session_id": sessionID,
+		},
+	})
 	h.promoteSlot(pendingID, sessionID, cancel)
 	pendingFreed = true
 
@@ -381,6 +517,20 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 				CreatedAt:  time.Now().UTC(),
 			}
 			_ = middleware.SaveAuditLogWithHashChain(h.db, &closeEntry)
+			h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+				Action:           "terminal.close",
+				Purpose:          sshutil.PurposeTerminal,
+				CredentialKind:   credential.Kind,
+				CredentialSource: credential.Source,
+				SSHKeyID:         credential.KeyID,
+				NodeID:           credentialaudit.PtrUint(node.ID),
+				Outcome:          credentialaudit.OutcomeSuccess,
+				Metadata: map[string]any{
+					"stage":       "close",
+					"session_id":  sessionID,
+					"duration_ms": int(time.Since(sessionOpenedAt).Milliseconds()),
+				},
+			})
 		})
 	}
 

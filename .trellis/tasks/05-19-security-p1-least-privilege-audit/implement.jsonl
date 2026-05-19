@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security-sensitive backend contracts: sanitized responses, RBAC/ownership denial tests, Settings security risk summary, and test fixture naming."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Schema changes require paired SQLite/PostgreSQL migrations, safe defaults, snake_case fields, and hook-based secret handling."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"SSH enforcement and audit errors must fail closed and avoid leaking raw SQL, SSH private keys, tokens, or command output."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Credential-use audit and SSH enforcement must not log passwords, private keys, tokens, decrypted values, or unsafe command output."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Settings risk/audit API responses need typed mappers, safe numeric fallbacks, and no raw snake_case in components."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Frontend changes should reuse existing Settings/system-tab component patterns and UI primitives."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Any new Settings/audit UI must keep icons decorative, controls labeled, and keyboard/screen-reader behavior accessible."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Task spans DB migrations, models, SSH use services, handlers, API docs, frontend API mappers, and Settings UI."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse shared SSH auth/scope/audit helpers instead of duplicating enforcement logic across many SSH use paths."}
+{"file":".trellis/tasks/05-19-security-p1-least-privilege-audit/research/ssh-key-scope-patterns.md","reason":"Defines practical SSHKey disabled/expiry/purpose/node/tag scope metadata, migration defaults, and enforcement boundaries."}
+{"file":".trellis/tasks/05-19-security-p1-least-privilege-audit/research/credential-use-audit.md","reason":"Defines credential-use event design, dedicated table tradeoffs, safe fields, migration/test implications, and initial event set."}
+{"file":".trellis/tasks/archive/2026-05/05-18-security-baseline-hardening/research/current-code-security-surfaces.md","reason":"Prior P0 security research documents current security surfaces and code paths that this P1 task extends."}

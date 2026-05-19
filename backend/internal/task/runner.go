@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
@@ -302,6 +303,10 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	execTimeout := computeExecTimeout(taskEntity)
 	execCtx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	execCtx = m.withTaskCredentialAuditContext(execCtx, taskEntity, runID, reason, map[string]any{
+		"operation":            "task_run",
+		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
+	})
 	m.runningCancels.Store(taskID, cancel)
 	defer m.runningCancels.Delete(taskID)
 	defer cancel()
@@ -614,6 +619,9 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	// 尽早注册取消句柄，使排队等锁期间也能被 Cancel() 中断；
 	// 同时受 Policy.MaxExecutionSeconds / TASK_MAX_EXECUTION_SECONDS 全局兜底。
 	execCtx, cancel := context.WithTimeout(context.Background(), computeExecTimeout(restoreTask))
+	execCtx = m.withTaskCredentialAuditContext(execCtx, restoreTask, runID, "restore", map[string]any{
+		"operation": "restore_task",
+	})
 	m.runningCancels.Store(taskID, cancel)
 	defer m.runningCancels.Delete(taskID)
 	defer cancel()
@@ -835,6 +843,27 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "恢复任务成功"); resolveErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 	}
+}
+
+func (m *Manager) withTaskCredentialAuditContext(ctx context.Context, taskEntity model.Task, runID uint, triggerType string, metadata map[string]any) context.Context {
+	baseMetadata := map[string]any{
+		"trigger_type":  triggerType,
+		"executor_type": strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType)),
+		"source":        strings.TrimSpace(taskEntity.Source),
+	}
+	for key, value := range metadata {
+		baseMetadata[key] = value
+	}
+	return credentialaudit.WithRuntimeContext(ctx, m.db, credentialaudit.Event{
+		Username:  "system",
+		Role:      "system",
+		Action:    "task.credential.use",
+		NodeID:    credentialaudit.PtrUint(taskEntity.NodeID),
+		TaskID:    credentialaudit.PtrUint(taskEntity.ID),
+		TaskRunID: credentialaudit.PtrUint(runID),
+		PolicyID:  taskEntity.PolicyID,
+		Metadata:  baseMetadata,
+	})
 }
 
 func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates map[string]interface{}) error {

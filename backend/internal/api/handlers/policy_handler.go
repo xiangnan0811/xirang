@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
 	"xirang/backend/internal/profile"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -941,9 +943,29 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 
 	taskRunID, err := h.drillTriggerer.TriggerDrill(policy.ID)
 	if err != nil {
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:       "drill.trigger",
+			Purpose:      sshutil.PurposeDrill,
+			PolicyID:     credentialaudit.PtrUint(policy.ID),
+			Outcome:      credentialaudit.OutcomeFailure,
+			ErrorMessage: err.Error(),
+			Metadata: map[string]any{
+				"node_count": len(policy.Nodes),
+			},
+		})
 		respondBadRequest(c, err.Error())
 		return
 	}
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:    "drill.trigger",
+		Purpose:   sshutil.PurposeDrill,
+		PolicyID:  credentialaudit.PtrUint(policy.ID),
+		TaskRunID: credentialaudit.PtrUint(taskRunID),
+		Outcome:   credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"node_count": len(policy.Nodes),
+		},
+	})
 	respondOK(c, gin.H{"task_run_id": taskRunID, "message": "恢复演练已触发"})
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 
 	"golang.org/x/crypto/ssh"
@@ -55,7 +56,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
-	client, err := DialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskBackup)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -97,7 +98,7 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
-	client, err := DialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}

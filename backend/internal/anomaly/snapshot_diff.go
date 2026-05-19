@@ -11,6 +11,7 @@ import (
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 
 	"gorm.io/gorm"
@@ -325,7 +326,7 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 	}
 
 	// SSH 连接（使用 ctx 已有的超时控制）
-	client, err := executor.DialSSHForNode(ctx, fullTask.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, fullTask.Node, sshutil.PurposeSnapshotDiff)
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}

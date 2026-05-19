@@ -244,7 +244,7 @@ func dialSSHForTask(ctx context.Context, task model.Task, db *gorm.DB) (*ssh.Cli
 		return nil, fmt.Errorf("任务未关联节点")
 	}
 
-	authMethods, err := sshutil.BuildSSHAuth(task.Node, db)
+	authMethods, _, err := sshutil.BuildSSHAuthForPurpose(task.Node, db, sshutil.PurposeIntegrityCheck)
 	if err != nil {
 		return nil, fmt.Errorf("构建 SSH 认证失败: %w", err)
 	}

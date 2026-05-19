@@ -19,6 +19,22 @@ describe("settings api mappers", () => {
           examples: ["node-a", "node-b"],
         },
         {
+          code: "broad_scope_ssh_keys",
+          severity: "warning",
+          title: "Broad scope keys",
+          description: "broad keys",
+          count: "1",
+          examples: ["ops-key"],
+        },
+        {
+          code: "recent_credential_operations",
+          severity: "info",
+          title: "Recent credential operations",
+          description: "recent operations",
+          count: "3",
+          examples: ["SSH Key export"],
+        },
+        {
           code: "unexpected",
           severity: "unexpected",
           title: "Unknown",
@@ -39,6 +55,18 @@ describe("settings api mappers", () => {
       examples: ["node-a", "node-b"],
     });
     expect(mapped.items[1]).toMatchObject({
+      code: "broad_scope_ssh_keys",
+      severity: "warning",
+      count: 1,
+      examples: ["ops-key"],
+    });
+    expect(mapped.items[2]).toMatchObject({
+      code: "recent_credential_operations",
+      severity: "info",
+      count: 3,
+      examples: ["SSH Key export"],
+    });
+    expect(mapped.items[3]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,

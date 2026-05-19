@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 
 	"github.com/gin-gonic/gin"
@@ -107,7 +108,7 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	client, err := executor.DialSSHForNode(ctx, task.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeSnapshotDiff)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("SSH 连接失败: %w", err))
 		return
@@ -134,14 +135,14 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 // parseDiffOutput 解析 restic diff 的文本输出。
 // 每行格式：
 //
-//	+    /path/to/file    (added)
-//	-    /path/to/file    (removed)
-//	M    /path/to/file    (changed)
+//   - /path/to/file    (added)
+//   - /path/to/file    (removed)
+//     M    /path/to/file    (changed)
 //
 // 也可能有带大小信息的行：
 //
-//	+    1.234 KiB /path/to/file
-//	M    1.234 KiB 2.345 KiB /path/to/file
+//   - 1.234 KiB /path/to/file
+//     M    1.234 KiB 2.345 KiB /path/to/file
 func parseDiffOutput(output string, snap1, snap2 string) DiffResult {
 	result := DiffResult{
 		Snap1:   snap1,

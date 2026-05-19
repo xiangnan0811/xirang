@@ -90,7 +90,13 @@ export function useNodeOperations({
               username: input.username,
               keyType: input.keyType,
               privateKey: input.privateKey,
-              fingerprint: buildDemoSSHKey(input).fingerprint
+              fingerprint: buildDemoSSHKey(input).fingerprint,
+              disabled: input.disabled,
+              expiresAt: input.expiresAt || undefined,
+              allowedPurposes: input.allowedPurposes,
+              allowedNodeIds: input.allowedNodeIds,
+              allowedNodeTags: input.allowedNodeTags,
+              broadScope: !input.allowedPurposes || (!input.allowedNodeIds && !input.allowedNodeTags)
             }
           : item
       )
@@ -141,7 +147,12 @@ export function useNodeOperations({
         name: input.inlineKeyName?.trim() || `${input.name}-key`,
         username: input.username,
         keyType: input.inlineKeyType ?? "auto",
-        privateKey: input.inlinePrivateKey.trim()
+        privateKey: input.inlinePrivateKey.trim(),
+        disabled: false,
+        expiresAt: "",
+        allowedPurposes: "",
+        allowedNodeIds: "",
+        allowedNodeTags: ""
       });
     }
 
@@ -169,7 +180,12 @@ export function useNodeOperations({
         name: input.inlineKeyName?.trim() || `${input.name}-key`,
         username: input.username,
         keyType: input.inlineKeyType ?? "auto",
-        privateKey: input.inlinePrivateKey.trim()
+        privateKey: input.inlinePrivateKey.trim(),
+        disabled: false,
+        expiresAt: "",
+        allowedPurposes: "",
+        allowedNodeIds: "",
+        allowedNodeTags: ""
       });
     }
 

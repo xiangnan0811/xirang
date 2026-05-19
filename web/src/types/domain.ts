@@ -488,7 +488,15 @@ export interface NewIntegrationInput {
   proxyUrl?: string;
 }
 
-export interface SSHKeyRecord {
+export interface SSHKeyScopeFields {
+  disabled: boolean;
+  expiresAt?: string;
+  allowedPurposes: string;
+  allowedNodeIds: string;
+  allowedNodeTags: string;
+}
+
+export interface SSHKeyRecord extends SSHKeyScopeFields {
   id: string;
   name: string;
   username: string;
@@ -496,11 +504,12 @@ export interface SSHKeyRecord {
   privateKey?: string;
   publicKey?: string;
   fingerprint: string;
+  broadScope: boolean;
   createdAt: string;
   lastUsedAt?: string;
 }
 
-export interface NewSSHKeyInput {
+export interface NewSSHKeyInput extends SSHKeyScopeFields {
   name: string;
   username: string;
   keyType: SSHKeyType;

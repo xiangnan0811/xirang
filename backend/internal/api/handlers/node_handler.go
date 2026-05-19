@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
@@ -670,7 +671,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		return
 	}
 
-	authMethods, _, err := sshutil.BuildSSHAuthWithKey(node, h.db)
+	authMethods, _, credential, err := sshutil.BuildSSHAuthWithKeyForPurpose(node, h.db, sshutil.PurposeNodeTest)
 	if err != nil {
 		probeAt := time.Now()
 		node.Status = "offline"
@@ -683,6 +684,19 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:           "node.credential.test_connection",
+			Purpose:          sshutil.PurposeNodeTest,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeBlocked,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "auth_build",
+			},
+		})
 		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
@@ -704,6 +718,19 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:           "node.credential.test_connection",
+			Purpose:          sshutil.PurposeNodeTest,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage": "host_key",
+			},
+		})
 		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
@@ -730,6 +757,20 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:           "node.credential.test_connection",
+			Purpose:          sshutil.PurposeNodeTest,
+			CredentialKind:   credential.Kind,
+			CredentialSource: credential.Source,
+			SSHKeyID:         credential.KeyID,
+			NodeID:           credentialaudit.PtrUint(node.ID),
+			Outcome:          credentialaudit.OutcomeFailure,
+			ErrorMessage:     err.Error(),
+			Metadata: map[string]any{
+				"stage":      "dial",
+				"latency_ms": int(time.Since(start).Milliseconds()),
+			},
+		})
 		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
@@ -776,12 +817,31 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		log.Printf("恢复节点探测告警失败(node_id=%d): %v", node.ID, resolveErr)
 	}
 
+	lastUsedUpdated := false
 	if node.SSHKeyID != nil {
 		now := time.Now()
 		if err := h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error; err != nil {
 			log.Printf("更新 SSH Key 最近使用时间失败(ssh_key_id=%d): %v", *node.SSHKeyID, err)
+		} else {
+			lastUsedUpdated = true
 		}
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "node.credential.test_connection",
+		Purpose:          sshutil.PurposeNodeTest,
+		CredentialKind:   credential.Kind,
+		CredentialSource: credential.Source,
+		SSHKeyID:         credential.KeyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"stage":                "success",
+			"latency_ms":           latency,
+			"disk_probe_success":   node.DiskTotalGB > 0,
+			"last_used_at_updated": lastUsedUpdated,
+		},
+	})
 
 	respondOK(c, gin.H{
 		"ok":            true,

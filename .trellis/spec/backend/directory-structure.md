@@ -27,6 +27,7 @@ backend/
 ├── cmd/server/                 # process bootstrap and worker wiring
 ├── internal/api/               # Gin router, Swagger docs, REST handlers
 ├── internal/auth/              # JWT, password, login lock, TOTP
+├── internal/credentialaudit/   # domain credential-use audit event writer
 ├── internal/middleware/        # auth, RBAC, audit, metrics, request logging
 ├── internal/model/             # GORM models and model hooks
 ├── internal/database/          # DB open, GORM logger, migrations
@@ -64,6 +65,10 @@ backend/
 - Put SSH-specific logic in `backend/internal/sshutil/` or
   `backend/internal/task/executor/`; avoid duplicating connection/auth parsing
   in unrelated packages.
+- Put domain credential-use audit writing and sanitization in
+  `backend/internal/credentialaudit/`. HTTP request envelope audit remains in
+  `backend/internal/middleware/audit.go`; do not overload it with
+  credential-event metadata.
 
 ---
 

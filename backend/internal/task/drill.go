@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	pathpkg "path"
@@ -9,8 +11,10 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/util"
 
@@ -216,6 +220,18 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 			}
 		}
 	}
+	writePhaseAudit := func(phase string, node model.Node, outcome string, startedAt time.Time, err error, metadata map[string]any) {
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata["phase"] = phase
+		metadata["duration_ms"] = drillDurationMs(startedAt, time.Now())
+		metadata["sandbox_node_id"] = sandboxNode.ID
+		if sourceRunID != nil {
+			metadata["source_task_run_id"] = *sourceRunID
+		}
+		m.writeDrillPhaseCredentialAudit(policy, task, node, drillRunID, outcome, err, metadata)
+	}
 	failDrill := func(step string, err error, alertCode string, messagePrefix string) {
 		finishedAt := time.Now()
 		errorMsg := messagePrefix
@@ -306,26 +322,38 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		"restore_started_at": &restoreStartedAt,
 	})
 	m.emitLog(task.ID, runIDPtr, "info", "正在检查沙箱节点连通性...", "")
-	if err := m.runDrillScript(context.Background(), sandboxNode, "true"); err != nil {
+	precheckCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "sandbox_precheck", map[string]any{"has_script": false})
+	if err := m.runDrillScript(precheckCtx, sandboxNode, "true"); err != nil {
+		writePhaseAudit("sandbox_precheck", sandboxNode, credentialaudit.OutcomeFailure, restoreStartedAt, err, map[string]any{"has_script": false})
 		failDrill("sandbox_precheck", err, "drill_sandbox_unreachable", fmt.Sprintf("沙箱节点 (%s) 不可达", sandboxNode.Name))
 		drillCompleted = true
 		return
 	}
+	writePhaseAudit("sandbox_precheck", sandboxNode, credentialaudit.OutcomeSuccess, restoreStartedAt, nil, map[string]any{"has_script": false})
 	m.emitLog(task.ID, runIDPtr, "info", "沙箱节点连通性检查通过", "")
 
 	// ---- Step 1: 恢复备份到沙箱 ----
 	m.emitLog(task.ID, runIDPtr, "info", "正在恢复备份到沙箱节点...", "")
-	restoreErr := m.runDrillRestore(context.Background(), task, sandboxNode, restorePath, func(level, msg string) {
+	restoreCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "restore", map[string]any{"path_hash": hashDrillPath(restorePath)})
+	restoreErr := m.runDrillRestore(restoreCtx, task, sandboxNode, restorePath, func(level, msg string) {
 		if runIDPtr != nil {
 			m.emitLog(task.ID, runIDPtr, level, msg, "")
 		}
 	})
 	restoreFinishedAt := time.Now()
 	if restoreErr != nil {
+		if strings.Contains(restoreErr.Error(), "跨节点传输已禁用") {
+			writePhaseAudit("cross_node_transfer", sandboxNode, credentialaudit.OutcomeBlocked, restoreStartedAt, restoreErr, map[string]any{
+				"path_hash":      hashDrillPath(restorePath),
+				"source_node_id": task.NodeID,
+			})
+		}
+		writePhaseAudit("restore", sandboxNode, credentialaudit.OutcomeFailure, restoreStartedAt, restoreErr, map[string]any{"path_hash": hashDrillPath(restorePath)})
 		failDrill("restore", restoreErr, "drill_restore_failed", "恢复备份到沙箱失败")
 		drillCompleted = true
 		return
 	}
+	writePhaseAudit("restore", sandboxNode, credentialaudit.OutcomeSuccess, restoreStartedAt, nil, map[string]any{"path_hash": hashDrillPath(restorePath)})
 	updateEvidence(map[string]interface{}{
 		"restore_status":      "success",
 		"restore_finished_at": &restoreFinishedAt,
@@ -346,12 +374,16 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	// pre_verify
 	if strings.TrimSpace(policy.DrillPreVerify) != "" {
 		m.emitLog(task.ID, runIDPtr, "info", "执行 pre_verify 脚本", "")
-		verifyErr = m.runDrillScript(context.Background(), sandboxNode, policy.DrillPreVerify)
+		phaseStartedAt := time.Now()
+		phaseCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "pre_verify", map[string]any{"has_script": true})
+		verifyErr = m.runDrillScript(phaseCtx, sandboxNode, policy.DrillPreVerify)
 		if verifyErr != nil {
+			writePhaseAudit("pre_verify", sandboxNode, credentialaudit.OutcomeFailure, phaseStartedAt, verifyErr, map[string]any{"has_script": true})
 			m.emitLog(task.ID, runIDPtr, "error", "pre_verify 失败: "+util.SanitizeError(verifyErr), "")
 			verifyFailed = true
 			failedStep = "pre_verify"
 		} else {
+			writePhaseAudit("pre_verify", sandboxNode, credentialaudit.OutcomeSuccess, phaseStartedAt, nil, map[string]any{"has_script": true})
 			m.emitLog(task.ID, runIDPtr, "info", "pre_verify 成功", "")
 		}
 	}
@@ -359,12 +391,16 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	// verify（仅在 pre_verify 成功时执行）
 	if !verifyFailed && strings.TrimSpace(policy.DrillVerify) != "" {
 		m.emitLog(task.ID, runIDPtr, "info", "执行 verify 脚本", "")
-		verifyErr = m.runDrillScript(context.Background(), sandboxNode, policy.DrillVerify)
+		phaseStartedAt := time.Now()
+		phaseCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "verify", map[string]any{"has_script": true})
+		verifyErr = m.runDrillScript(phaseCtx, sandboxNode, policy.DrillVerify)
 		if verifyErr != nil {
+			writePhaseAudit("verify", sandboxNode, credentialaudit.OutcomeFailure, phaseStartedAt, verifyErr, map[string]any{"has_script": true})
 			m.emitLog(task.ID, runIDPtr, "error", "verify 失败: "+util.SanitizeError(verifyErr), "")
 			verifyFailed = true
 			failedStep = "verify"
 		} else {
+			writePhaseAudit("verify", sandboxNode, credentialaudit.OutcomeSuccess, phaseStartedAt, nil, map[string]any{"has_script": true})
 			m.emitLog(task.ID, runIDPtr, "info", "verify 成功", "")
 		}
 	}
@@ -390,12 +426,16 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	postVerifyError := ""
 	if strings.TrimSpace(policy.DrillPostVerify) != "" {
 		m.emitLog(task.ID, runIDPtr, "info", "执行 post_verify 脚本", "")
-		err := m.runDrillScript(context.Background(), sandboxNode, policy.DrillPostVerify)
+		phaseStartedAt := time.Now()
+		phaseCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "post_verify", map[string]any{"has_script": true})
+		err := m.runDrillScript(phaseCtx, sandboxNode, policy.DrillPostVerify)
 		if err != nil {
+			writePhaseAudit("post_verify", sandboxNode, credentialaudit.OutcomeFailure, phaseStartedAt, err, map[string]any{"has_script": true})
 			postVerifyStatus = "failed"
 			postVerifyError = util.SanitizeError(err)
 			m.emitLog(task.ID, runIDPtr, "error", "post_verify 失败: "+postVerifyError, "")
 		} else {
+			writePhaseAudit("post_verify", sandboxNode, credentialaudit.OutcomeSuccess, phaseStartedAt, nil, map[string]any{"has_script": true})
 			postVerifyStatus = "success"
 			m.emitLog(task.ID, runIDPtr, "info", "post_verify 成功", "")
 		}
@@ -424,15 +464,19 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		if err := validateDrillSandboxPath(restorePath); err != nil {
 			cleanupStatus = "failed"
 			cleanupError = util.SanitizeMessage("清理路径不在演习沙箱安全边界内: " + err.Error())
+			writePhaseAudit("cleanup", sandboxNode, credentialaudit.OutcomeBlocked, started, err, map[string]any{"path_hash": hashDrillPath(restorePath), "auto_cleanup": true})
 			m.emitLog(task.ID, runIDPtr, "error", cleanupError, "")
 		} else {
 			cleanupCmd := fmt.Sprintf("rm -rf %s", executor.ShellEscape(restorePath))
-			if err := m.runDrillScript(context.Background(), sandboxNode, cleanupCmd); err != nil {
+			cleanupCtx := m.drillAuditContext(context.Background(), policy, task, sandboxNode, drillRunID, "cleanup", map[string]any{"path_hash": hashDrillPath(restorePath), "auto_cleanup": true})
+			if err := m.runDrillScript(cleanupCtx, sandboxNode, cleanupCmd); err != nil {
 				cleanupStatus = "failed"
 				cleanupError = util.SanitizeError(err)
+				writePhaseAudit("cleanup", sandboxNode, credentialaudit.OutcomeFailure, started, err, map[string]any{"path_hash": hashDrillPath(restorePath), "auto_cleanup": true})
 				m.emitLog(task.ID, runIDPtr, "error", "清理失败: "+cleanupError, "")
 			} else {
 				cleanupStatus = "success"
+				writePhaseAudit("cleanup", sandboxNode, credentialaudit.OutcomeSuccess, started, nil, map[string]any{"path_hash": hashDrillPath(restorePath), "auto_cleanup": true})
 				m.emitLog(task.ID, runIDPtr, "info", "清理完成", "")
 			}
 		}
@@ -486,6 +530,83 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	m.emitLog(task.ID, runIDPtr, "info", fmt.Sprintf(
 		"恢复演练完成: status=%s, RTO=%.1fs, 沙箱=%s",
 		finalStatus, rtoSeconds, sandboxNode.Name), "")
+}
+
+func (m *Manager) drillAuditContext(ctx context.Context, policy *model.Policy, task model.Task, node model.Node, runID uint, phase string, metadata map[string]any) context.Context {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["phase"] = phase
+	metadata["sandbox_node_id"] = node.ID
+	metadata["trigger_type"] = "drill"
+	metadata["executor_type"] = strings.ToLower(strings.TrimSpace(task.ExecutorType))
+	event := credentialaudit.Event{
+		Username:  "system",
+		Role:      "system",
+		Action:    "task.credential.use",
+		Purpose:   sshutil.PurposeDrill,
+		NodeID:    credentialaudit.PtrUint(node.ID),
+		TaskID:    credentialaudit.PtrUint(task.ID),
+		TaskRunID: credentialaudit.PtrUint(runID),
+		Metadata:  metadata,
+	}
+	if policy != nil {
+		event.PolicyID = credentialaudit.PtrUint(policy.ID)
+	}
+	return credentialaudit.WithRuntimeContext(ctx, m.db, event)
+}
+
+func (m *Manager) writeDrillPhaseCredentialAudit(policy *model.Policy, task model.Task, node model.Node, runID uint, outcome string, err error, metadata map[string]any) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["trigger_type"] = "drill"
+	metadata["executor_type"] = strings.ToLower(strings.TrimSpace(task.ExecutorType))
+	event := credentialaudit.Event{
+		Username:         "system",
+		Role:             "system",
+		Action:           "drill.phase",
+		Purpose:          sshutil.PurposeDrill,
+		CredentialKind:   "node_credential",
+		CredentialSource: safeDrillCredentialSource(node),
+		SSHKeyID:         node.SSHKeyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		TaskID:           credentialaudit.PtrUint(task.ID),
+		TaskRunID:        credentialaudit.PtrUint(runID),
+		Outcome:          outcome,
+		Metadata:         metadata,
+	}
+	if policy != nil {
+		event.PolicyID = credentialaudit.PtrUint(policy.ID)
+	}
+	if err != nil {
+		event.ErrorMessage = err.Error()
+	}
+	if writeErr := credentialaudit.Write(m.db, event); writeErr != nil {
+		logger.Module("credential_audit").Warn().Err(writeErr).
+			Str("action", event.Action).
+			Str("purpose", event.Purpose).
+			Msg("恢复演练阶段凭据审计事件写入失败")
+	}
+}
+
+func safeDrillCredentialSource(node model.Node) string {
+	if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
+		return fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID)
+	}
+	switch strings.ToLower(strings.TrimSpace(node.AuthType)) {
+	case "password":
+		return "node.password"
+	case "key":
+		return "node.private_key"
+	default:
+		return "node.credential"
+	}
+}
+
+func hashDrillPath(path string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(path)))
+	return hex.EncodeToString(sum[:])
 }
 
 func drillDurationMs(startedAt, finishedAt time.Time) int64 {
@@ -568,7 +689,7 @@ func (m *Manager) restoreBackupToSandbox(ctx context.Context, srcTask model.Task
 // executeSyncRestore 在源节点上同步执行备份恢复。
 func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task, logf func(string, string)) error {
 	// 确保远程目标路径可用
-	if err := executor.EnsureRemoteTargetReady(ctx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+	if err := executor.EnsureRemoteTargetReadyForPurpose(ctx, restoreTask.Node, restoreTask.RsyncTarget, sshutil.PurposeDrill); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("恢复前检查已取消")
 		}
@@ -578,7 +699,7 @@ func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task
 	logf("info", "开始执行源节点临时恢复")
 
 	// 使用 RunSSHCommandOutput 执行 rsync 恢复（复用 runRemoteRestore 的核心逻辑）
-	client, err := executor.DialSSHForNode(ctx, restoreTask.Node)
+	client, err := executor.DialSSHForNodePurpose(ctx, restoreTask.Node, sshutil.PurposeDrill)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -620,7 +741,7 @@ func (m *Manager) transferFilesToSandbox(_ context.Context, srcNode model.Node, 
 
 // runDrillSSHScript 在指定节点上通过 SSH 执行一段脚本命令。
 func (m *Manager) runDrillSSHScript(ctx context.Context, node model.Node, script string) error {
-	client, err := executor.DialSSHForNode(ctx, node)
+	client, err := executor.DialSSHForNodePurpose(ctx, node, sshutil.PurposeDrill)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}

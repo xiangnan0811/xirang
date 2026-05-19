@@ -5,6 +5,7 @@ import { toast } from "@/components/ui/toast-sonner";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import {
@@ -22,6 +23,11 @@ const emptyDraft: SSHKeyDraft = {
   username: "root",
   keyType: "auto",
   privateKey: "",
+  disabled: false,
+  expiresAt: "",
+  allowedPurposes: "",
+  allowedNodeIds: "",
+  allowedNodeTags: "",
 };
 
 function toDraft(key: SSHKeyRecord): SSHKeyDraft {
@@ -31,6 +37,11 @@ function toDraft(key: SSHKeyRecord): SSHKeyDraft {
     username: key.username,
     keyType: key.keyType,
     privateKey: "",
+    disabled: key.disabled,
+    expiresAt: key.expiresAt ?? "",
+    allowedPurposes: key.allowedPurposes,
+    allowedNodeIds: key.allowedNodeIds,
+    allowedNodeTags: key.allowedNodeTags,
   };
 }
 
@@ -96,7 +107,7 @@ export function SSHKeyEditorDialog({
       open={open}
       onOpenChange={onOpenChange}
       size="sm"
-      icon={<KeyRound className="size-5 text-primary" />}
+      icon={<KeyRound className="size-5 text-primary" aria-hidden />}
       title={
         isEditing
           ? t("sshKeys.editKeyTitle", { name: draft.name })
@@ -171,6 +182,86 @@ export function SSHKeyEditorDialog({
         </p>
       </div>
 
+      <div className="rounded-lg border border-border bg-secondary/40 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <label htmlFor="ssh-key-edit-disabled" className="text-sm font-medium">
+              {t("sshKeys.scopeDisabled")}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("sshKeys.scopeDisabledHint")}
+            </p>
+          </div>
+          <Switch
+            id="ssh-key-edit-disabled"
+            checked={draft.disabled}
+            onCheckedChange={(checked) =>
+              setDraft((prev) => ({ ...prev, disabled: checked }))
+            }
+            disabled={saving}
+            aria-label={t("sshKeys.scopeDisabled")}
+          />
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="ssh-key-edit-expires-at" className="mb-1 block text-sm font-medium">
+              {t("sshKeys.scopeExpiresAt")}
+            </label>
+            <Input
+              id="ssh-key-edit-expires-at"
+              type="datetime-local"
+              value={draft.expiresAt}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, expiresAt: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="ssh-key-edit-purposes" className="mb-1 block text-sm font-medium">
+              {t("sshKeys.scopeAllowedPurposes")}
+            </label>
+            <Input
+              id="ssh-key-edit-purposes"
+              placeholder="terminal,task_command"
+              value={draft.allowedPurposes}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, allowedPurposes: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="ssh-key-edit-node-ids" className="mb-1 block text-sm font-medium">
+              {t("sshKeys.scopeAllowedNodeIds")}
+            </label>
+            <Input
+              id="ssh-key-edit-node-ids"
+              placeholder="1,2,3"
+              value={draft.allowedNodeIds}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, allowedNodeIds: event.target.value }))
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="ssh-key-edit-node-tags" className="mb-1 block text-sm font-medium">
+              {t("sshKeys.scopeAllowedNodeTags")}
+            </label>
+            <Input
+              id="ssh-key-edit-node-tags"
+              placeholder="prod,db"
+              value={draft.allowedNodeTags}
+              onChange={(event) =>
+                setDraft((prev) => ({ ...prev, allowedNodeTags: event.target.value }))
+              }
+            />
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("sshKeys.scopeHint")}
+        </p>
+      </div>
+
       <div>
         <div className="mb-1 flex items-center justify-between">
           <label
@@ -187,7 +278,7 @@ export function SSHKeyEditorDialog({
             onClick={() => fileInputRef.current?.click()}
             disabled={saving}
           >
-            <Upload className="size-3.5" />
+            <Upload className="size-3.5" aria-hidden />
             {t("sshKeys.uploadKeyFile")}
           </button>
           <input

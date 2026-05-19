@@ -161,6 +161,39 @@ warning is gone rather than hidden.
 - Keep responsive layouts explicit with grid/flex constraints. Do not rely on
   text overflow or dynamic content to size fixed controls.
 
+### Convention: SSH Key least-privilege scope UI
+
+**What**: SSH key inventory and edit surfaces should render least-privilege scope
+metadata as compact, explicit form fields and badges. The canonical domain fields
+are `disabled`, `expiresAt`, `allowedPurposes`, `allowedNodeIds`,
+`allowedNodeTags`, and response-derived `broadScope`.
+
+**Why**: Scope metadata is security-sensitive and advisory-to-enforcement: the
+backend enforces disabled/expiry/purpose/node/tag restrictions, while the
+frontend helps admins see broad or restricted keys without inventing separate
+client-side authorization rules.
+
+**Contracts**:
+
+- SSH key create/edit/batch-import UIs may expose disabled, expiry, allowed
+  purposes, allowed node IDs, and allowed node tags; empty scope inputs must be
+  described as compatibility defaults that allow all for that dimension.
+- Inventory table/grid badges should distinguish disabled, expiring/expiry-set,
+  broad-scope, and restricted keys with text plus badge tone. Do not rely on
+  color alone.
+- Scope controls must be labeled (`label htmlFor`, `aria-label`, or equivalent),
+  and decorative icons in scope-related buttons/badges must use `aria-hidden`.
+- The UI must not enrich scope cards with node hostnames, usernames plus hosts,
+  private keys, passwords, credential audit metadata, raw endpoints, or one-click
+  remediation actions. Mutations still go through the normal SSH key edit flow.
+- Components should consume mapped camelCase fields from `SSHKeyRecord`; do not
+  read raw `allowed_purposes`, `allowed_node_ids`, `allowed_node_tags`,
+  `expires_at`, or `broad_scope` directly.
+
+**Tests**: When changing the SSH key scope UI, cover at least one form path and
+one inventory badge path, including broad-scope and disabled states, plus the
+existing a11y label/icon expectations.
+
 ### Convention: Workbench Page Shells
 
 **What**: Top-level console routes should use `PageHero` for the page title,

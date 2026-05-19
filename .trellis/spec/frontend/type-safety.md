@@ -201,6 +201,66 @@ const firstStep = item.nextSteps[0]?.label;
 
 ---
 
+## Scenario: SSH Key Scope Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to managed SSH key least-privilege metadata.
+- Applies to `web/src/lib/api/ssh-keys-api.ts`, shared `SSHKeyRecord` / `NewSSHKeyInput` types in `web/src/types/domain.ts`, SSH key create/edit/batch-import dialogs, SSH key grid/table scope badges, demo mock data, and tests.
+
+### 2. Signatures
+
+- Raw SSH key response fields include `disabled`, `expires_at`, `allowed_purposes`, `allowed_node_ids`, `allowed_node_tags`, and response-only `broad_scope`.
+- Domain fields are `disabled`, `expiresAt`, `allowedPurposes`, `allowedNodeIds`, `allowedNodeTags`, and `broadScope`.
+- Request payload fields sent to the backend are `disabled`, `expires_at`, `allowed_purposes`, `allowed_node_ids`, and `allowed_node_tags`.
+
+### 3. Contracts
+
+- Keep raw snake_case SSH key response/request types private to `ssh-keys-api.ts`; components must consume only camelCase domain fields.
+- Map `expires_at` to a `datetime-local` compatible string for editor state when possible. Invalid but displayable values may be sliced safely; invalid create/update values should serialize to `null` rather than producing `Invalid Date` or `NaN`-like state.
+- Normalize numeric key/test IDs with finite-number fallbacks so invalid values do not enter React state as `NaN`.
+- Preserve unknown/invalid `key_type` as safe domain fallback `auto` through `parseSSHKeyType`.
+- Empty `allowedPurposes`, `allowedNodeIds`, or `allowedNodeTags` means broad compatibility. Components may show warning badges, but must not invent client-side enforcement rules beyond backend-provided `broadScope` and metadata.
+- SSH key create, update, and batch import must send scope metadata alongside key identity/material fields. Batch import examples must use obviously fake key material.
+- Components render scope badges/fields as advisory UI only. Do not show hostnames, usernames-plus-hosts, private keys, passwords, credential audit metadata, or remediation actions that mutate keys/nodes from a risk card.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `expires_at` is missing/null | Map to `expiresAt: undefined` or empty editor value. |
+| `expires_at` is invalid | Keep a safe display fallback; do not store `Invalid Date` or `NaN`. |
+| Raw `id` or test-result numeric fields are invalid | Fall back to `0` or another safe finite number. |
+| Raw `key_type` is unknown | Map to `auto`. |
+| `broad_scope` is missing | Map to `false` unless the backend explicitly reports broad scope. |
+| API request fails | Keep dialogs/pages usable, show the existing error path, and do not mark scope changes as saved. |
+
+### 5. Tests Required
+
+- API mapper tests must cover snake_case to camelCase mapping for all scope fields and private-key exclusion from records.
+- API mapper tests must cover invalid numeric IDs, unknown key types, nullable/invalid expiry, and create/update request serialization to snake_case.
+- UI tests should cover create/edit scope fields and scope badges in table/grid when those surfaces change.
+- Batch import tests or snapshots should include scope metadata and fake private-key examples.
+- `npm run check` must keep `SSHKeyScopeFields`, `SSHKeyRecord`, and `NewSSHKeyInput` users in sync.
+
+### 6. Wrong vs Correct
+
+Wrong:
+
+```ts
+const rows = await request<SSHKeyRecord[]>("/ssh-keys", { token });
+setKeys(rows); // raw snake_case data can leak into components
+```
+
+Correct:
+
+```ts
+const rows = await request<SSHKeyResponse[]>("/ssh-keys", { token });
+return rows.map(mapSSHKey);
+```
+
+---
+
 ## Scenario: Settings Security Risk Summary Mapping
 
 ### 1. Scope / Trigger
@@ -220,11 +280,12 @@ const firstStep = item.nextSteps[0]?.label;
 
 - Keep raw snake_case response types private to `settings-api.ts`.
 - Map `generated_at` to `generatedAt`, `total_risks` to `totalRisks`, and preserve item arrays as camelCase domain data before components render them.
-- Supported codes are `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, and `weak_security_defaults`; unknown codes must degrade to a safe known code rather than entering component state as arbitrary strings.
+- Supported codes are `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, `broad_scope_ssh_keys`, `disabled_ssh_keys_in_use`, `expired_ssh_keys_in_use`, `stale_ssh_keys`, `recent_credential_operations`, and `weak_security_defaults`; unknown codes must degrade to a safe known code rather than entering component state as arbitrary strings.
 - Supported severities are `info`, `warning`, and `critical`; unknown severities must degrade to `warning`, never to a success state.
 - Normalize numeric fields with finite-number fallbacks so invalid counts never become `NaN`.
 - `examples` must be an array of strings after mapping; invalid or missing examples become `[]`.
-- Components render backend-provided advisory text/examples as-is after mapping. Do not enrich them with hostnames, usernames, credentials, executor configs, raw endpoints, remediation links, or one-click actions.
+- Components render backend-provided advisory text/examples as-is after mapping. Do not enrich them with hostnames, usernames, credentials, executor configs, raw endpoints, credential-audit metadata, remediation links, or one-click actions.
+- P1 SSH-key and credential-operation risk codes are advisory only; Settings UI may show counts/examples but must not add mutation links/buttons that disable, delete, rotate, or re-scope keys from the risk summary.
 
 ### 4. Validation & Error Matrix
 
@@ -235,6 +296,7 @@ const firstStep = item.nextSteps[0]?.label;
 | `summary.total_risks`, `summary.categories`, or item `count` is invalid | Map to `0`, not `NaN`. |
 | Unknown `severity` | Map to `warning`. |
 | Unknown `code` | Map to a safe known code such as `weak_security_defaults`. |
+| P1 SSH-key/credential-operation codes are present | Preserve the supported code values through the mapper. |
 | `examples` includes non-string values | Convert displayable entries to strings and drop empty values. |
 | API request fails | Settings system tab should keep the rest of settings usable and avoid rendering stale risk details as confirmed current data. |
 
@@ -247,7 +309,7 @@ const firstStep = item.nextSteps[0]?.label;
 ### 6. Tests Required
 
 - API mapper tests must cover snake_case to camelCase mapping and invalid numeric fallback.
-- API mapper tests must cover unknown code/severity fallback and invalid examples handling.
+- API mapper tests must cover unknown code/severity fallback, invalid examples handling, and the P1 SSH-key/credential-operation codes.
 - Settings UI tests must verify advisory risk cards render counts/examples and do not expose remediation links/actions.
 - `npm run check` must keep risk code/severity unions and component props valid.
 

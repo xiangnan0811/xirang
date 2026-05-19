@@ -1,15 +1,22 @@
 package handlers
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -31,13 +38,29 @@ func openSSHKeyHandlerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func buildSSHKeyPrivateKeyForHandlerTest(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	if len(pemBytes) == 0 {
+		t.Fatalf("编码测试私钥失败")
+	}
+	return string(pemBytes)
+}
+
 func seedSSHKeyForVisibility(t *testing.T, db *gorm.DB, name string) model.SSHKey {
 	t.Helper()
 	key := model.SSHKey{
 		Name:        name,
 		Username:    "root",
 		KeyType:     "auto",
-		PrivateKey:  "FAKE_SSH_PRIVATE_KEY_" + name + "_FOR_TEST_ONLY",
+		PrivateKey:  buildSSHKeyPrivateKeyForHandlerTest(t),
 		Fingerprint: "SHA256:" + name,
 	}
 	if err := db.Create(&key).Error; err != nil {
@@ -61,6 +84,23 @@ func seedNodeWithSSHKey(t *testing.T, db *gorm.DB, name string, keyID uint) mode
 		t.Fatalf("创建节点 %s 失败: %v", name, err)
 	}
 	return node
+}
+
+func newSSHKeyHandlerRouter(db *gorm.DB, role string, userID uint) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, role)
+		c.Set(middleware.CtxUserID, userID)
+		c.Next()
+	})
+	handler := NewSSHKeyHandler(db)
+	r.GET("/ssh-keys", handler.List)
+	r.POST("/ssh-keys", handler.Create)
+	r.GET("/ssh-keys/export", handler.Export)
+	r.GET("/ssh-keys/:id", handler.Get)
+	r.PUT("/ssh-keys/:id", handler.Update)
+	return r
 }
 
 func newSSHKeyVisibilityRouter(db *gorm.DB, role string, userID uint) *gin.Engine {
@@ -105,6 +145,70 @@ func assertSSHKeyNames(t *testing.T, items []sshKeyResponseItem, want []string) 
 		if items[i].Name != want[i] {
 			t.Fatalf("SSH key 顺序/名称不符合预期，want=%v got=%+v", want, items)
 		}
+	}
+}
+
+func TestSSHKeyUpdatePreservesScopeMetadataWhenOmitted(t *testing.T) {
+	db := openSSHKeyHandlerTestDB(t)
+	secure.ResetForTesting()
+	future := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	key := seedSSHKeyForVisibility(t, db, "scoped-update-key")
+	key.Disabled = true
+	key.ExpiresAt = &future
+	key.AllowedPurposes = "terminal"
+	key.AllowedNodeIDs = "7"
+	key.AllowedNodeTags = "prod"
+	if err := db.Save(&key).Error; err != nil {
+		t.Fatalf("更新测试 SSH key scope 失败: %v", err)
+	}
+
+	body := `{"name":"scoped-update-key-renamed","username":"deploy","key_type":"auto"}`
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/ssh-keys/%d", key.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	newSSHKeyHandlerRouter(db, "admin", 1).ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("更新 SSH key 期望 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.SSHKey
+	if err := db.First(&updated, key.ID).Error; err != nil {
+		t.Fatalf("读取更新后 SSH key 失败: %v", err)
+	}
+	if !updated.Disabled || updated.ExpiresAt == nil || !updated.ExpiresAt.Equal(future) || updated.AllowedPurposes != "terminal" || updated.AllowedNodeIDs != "7" || updated.AllowedNodeTags != "prod" {
+		t.Fatalf("省略 scope 字段时不应清空限制，实际: disabled=%v expires=%v purposes=%q nodes=%q tags=%q", updated.Disabled, updated.ExpiresAt, updated.AllowedPurposes, updated.AllowedNodeIDs, updated.AllowedNodeTags)
+	}
+}
+
+func TestSSHKeyUpdateAllowsExplicitScopeClearing(t *testing.T) {
+	db := openSSHKeyHandlerTestDB(t)
+	secure.ResetForTesting()
+	future := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	key := seedSSHKeyForVisibility(t, db, "scoped-clear-key")
+	key.Disabled = true
+	key.ExpiresAt = &future
+	key.AllowedPurposes = "terminal"
+	key.AllowedNodeIDs = "7"
+	key.AllowedNodeTags = "prod"
+	if err := db.Save(&key).Error; err != nil {
+		t.Fatalf("更新测试 SSH key scope 失败: %v", err)
+	}
+
+	payload := []byte(`{"name":"scoped-clear-key","username":"root","key_type":"auto","disabled":false,"expires_at":null,"allowed_purposes":"","allowed_node_ids":"","allowed_node_tags":""}`)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/ssh-keys/%d", key.ID), bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	newSSHKeyHandlerRouter(db, "admin", 1).ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("清空 SSH key scope 期望 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.SSHKey
+	if err := db.First(&updated, key.ID).Error; err != nil {
+		t.Fatalf("读取更新后 SSH key 失败: %v", err)
+	}
+	if updated.Disabled || updated.ExpiresAt != nil || updated.AllowedPurposes != "" || updated.AllowedNodeIDs != "" || updated.AllowedNodeTags != "" {
+		t.Fatalf("显式空 scope 字段应允许清空限制，实际: disabled=%v expires=%v purposes=%q nodes=%q tags=%q", updated.Disabled, updated.ExpiresAt, updated.AllowedPurposes, updated.AllowedNodeIDs, updated.AllowedNodeTags)
 	}
 }
 

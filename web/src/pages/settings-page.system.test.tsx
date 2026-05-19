@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 3, categories: 4 },
+      summary: { totalRisks: 4, categories: 4 },
       items: [
         {
           code: "root_ssh_users",
@@ -53,6 +53,14 @@ describe("SystemTab security risk summary", () => {
           description: "root nodes",
           count: 2,
           examples: ["node-a", "node-b"],
+        },
+        {
+          code: "broad_scope_ssh_keys",
+          severity: "warning",
+          title: "Broad scope SSH keys",
+          description: "broad keys",
+          count: 1,
+          examples: ["ops-key"],
         },
         {
           code: "weak_security_defaults",
@@ -76,6 +84,8 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByRole("heading", { name: "Root SSH users" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.count:2")).toBeInTheDocument();
     expect(screen.getByText("node-a")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Broad scope SSH keys" })).toBeInTheDocument();
+    expect(screen.getByText("ops-key")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

@@ -247,7 +247,7 @@ func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, disk
 }
 
 func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetrics, error) {
-	authMethods, err := sshutil.BuildSSHAuth(node, p.db)
+	authMethods, _, err := sshutil.BuildSSHAuthForPurpose(node, p.db, sshutil.PurposeProbe)
 	if err != nil {
 		return nil, fmt.Errorf("构建 SSH 认证失败: %w", err)
 	}

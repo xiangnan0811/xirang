@@ -96,7 +96,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		return
 	}
 	defer sftpClient.Close() //nolint:errcheck
-	defer client.Close()    //nolint:errcheck
+	defer client.Close()     //nolint:errcheck
 
 	// 路径安全校验：通过 SFTP RealPath 解析后再做白名单比对，防御远程符号链接逃逸。
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
@@ -160,7 +160,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		return
 	}
 	defer sftpClient.Close() //nolint:errcheck
-	defer client.Close()    //nolint:errcheck
+	defer client.Close()     //nolint:errcheck
 
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
 	if err != nil {
@@ -276,7 +276,7 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 
 // dialSFTP 建立 SSH+SFTP 会话。
 func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Close() error }, *sftp.Client, error) {
-	auth, err := sshutil.BuildSSHAuth(node, db)
+	auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeFileBrowser)
 	if err != nil {
 		return nil, nil, err
 	}

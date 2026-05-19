@@ -21,7 +21,7 @@ type ProbeResult struct {
 
 // ProbeNode performs SSH connection test and disk probe on a node.
 func ProbeNode(node model.Node, db *gorm.DB) (ProbeResult, error) {
-	authMethods, err := BuildSSHAuth(node, db)
+	authMethods, _, err := BuildSSHAuthForPurpose(node, db, PurposeProbe)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("构建 SSH 认证失败: %w", err)
 	}

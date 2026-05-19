@@ -8,8 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
@@ -22,11 +25,40 @@ import (
 // user-facing condition; tripping it means a route is misconfigured.
 var errUnknownRole = errors.New("ownership filter: unknown or missing role")
 
+func writeCredentialAuditFromGin(c *gin.Context, db *gorm.DB, event credentialaudit.Event) {
+	if err := credentialaudit.Write(db, credentialaudit.FromGin(c, event)); err != nil {
+		logger.Module("credential_audit").Warn().Err(err).
+			Str("action", event.Action).
+			Str("purpose", event.Purpose).
+			Msg("凭据审计事件写入失败")
+	}
+}
+
+func credentialAuditOutcome(successCount, failureCount, blockedCount int) string {
+	switch {
+	case blockedCount > 0:
+		return credentialaudit.OutcomeBlocked
+	case failureCount > 0:
+		return credentialaudit.OutcomeFailure
+	case successCount > 0:
+		return credentialaudit.OutcomeSuccess
+	default:
+		return credentialaudit.OutcomeFailure
+	}
+}
+
+func sanitizedClientError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return util.SanitizeMessage(err.Error())
+}
+
 // ownershipNodeFilter 返回当前 operator 拥有的节点 ID 列表。
 // admin/viewer 返回 nil, false（无需过滤）。operator 返回 owned IDs, true。
 //
 // Fail-closed on unknown roles, matching middleware/ownership.go. The previous
-// "role == '' → admin" shortcut was removed after a security review: if any
+// "role == empty → admin" shortcut was removed after a security review: if any
 // future middleware misconfiguration leaves role unset, operators would silently
 // see every node's data. Tests must set role explicitly via c.Set(CtxRole, ...).
 func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
@@ -172,7 +204,6 @@ func applyPagination(query *gorm.DB, p paginationParams) *gorm.DB {
 	offset := (p.Page - 1) * p.PageSize
 	return query.Order(p.SortBy + " " + p.SortOrder).Offset(offset).Limit(p.PageSize)
 }
-
 
 var standardCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 

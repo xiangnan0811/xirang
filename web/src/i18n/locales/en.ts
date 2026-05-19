@@ -1455,6 +1455,17 @@ const en = {
     boundNodes: "Bound Nodes",
     securityWarning: "Security notice: keep your private key safe and avoid exposing it in insecure environments.",
     inUseWarning: "This key is in use by nodes. Please unbind before deleting.",
+    scopeDisabled: "Disable this SSH key",
+    scopeDisabledHint: "When disabled, SSH connections using this key are blocked.",
+    scopeExpiresAt: "Expires at",
+    scopeAllowedPurposes: "Allowed purposes",
+    scopeAllowedNodeIds: "Allowed node IDs",
+    scopeAllowedNodeTags: "Allowed node tags",
+    scopeHint: "Empty purposes, node IDs, or tags preserve compatibility and allow all. Tighten scopes gradually for least privilege.",
+    scopeDisabledBadge: "Disabled",
+    scopeExpiringBadge: "Expires",
+    scopeBroadBadge: "Broad scope",
+    scopeRestrictedBadge: "Restricted",
 
     // Page stats
     total: "Total",
@@ -1591,6 +1602,7 @@ const en = {
     colType: "Type",
     colFingerprint: "Fingerprint",
     colLastUsed: "Last Used",
+    colScope: "Scope",
     colNodes: "Nodes",
     colActions: "Actions",
     neverUsed: "Never used",
@@ -2347,6 +2359,26 @@ const en = {
           sudo_enabled_nodes: {
             title: "Sudo-enabled nodes",
             description: "Sudo-enabled nodes let non-root SSH users run high-privilege operations.",
+          },
+          broad_scope_ssh_keys: {
+            title: "Broad-scope SSH keys",
+            description: "Keys without purpose or node scope remain compatible, but should be tightened toward least privilege.",
+          },
+          disabled_ssh_keys_in_use: {
+            title: "Disabled SSH keys still referenced",
+            description: "Nodes still reference disabled SSH keys, so future connections will be blocked.",
+          },
+          expired_ssh_keys_in_use: {
+            title: "Expired SSH keys still referenced",
+            description: "Nodes still reference expired SSH keys, so future connections will be blocked.",
+          },
+          stale_ssh_keys: {
+            title: "Stale SSH keys",
+            description: "Long-unused or never-used SSH keys should be reviewed regularly.",
+          },
+          recent_credential_operations: {
+            title: "Recent high-risk credential operations",
+            description: "Recent SSH key exports, terminal sessions, or batch/task operations should be reviewed in audit records.",
           },
           weak_security_defaults: {
             title: "Weak security defaults",

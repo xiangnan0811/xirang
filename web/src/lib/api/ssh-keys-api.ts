@@ -1,4 +1,4 @@
-import type { NewSSHKeyInput, SSHKeyRecord } from "@/types/domain";
+import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
 import { formatTime, parseNumericId, request } from "./core";
 
 type SSHKeyResponse = {
@@ -8,20 +8,61 @@ type SSHKeyResponse = {
   key_type?: "auto" | "rsa" | "ed25519" | "ecdsa";
   public_key?: string;
   fingerprint: string;
+  disabled?: boolean;
+  expires_at?: string | null;
+  allowed_purposes?: string | null;
+  allowed_node_ids?: string | null;
+  allowed_node_tags?: string | null;
+  broad_scope?: boolean;
   created_at: string;
   last_used_at?: string | null;
 };
 
+function normalizeDateTimeLocal(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function toRfc3339(value: string | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
   return {
-    id: `key-${row.id}`,
-    name: row.name,
-    username: row.username,
-    keyType: row.key_type ?? "auto",
+    id: `key-${finiteNumber(row.id)}`,
+    name: String(row.name ?? ""),
+    username: String(row.username ?? ""),
+    keyType: parseSSHKeyType(String(row.key_type ?? "auto")),
     publicKey: row.public_key ?? "",
-    fingerprint: row.fingerprint,
+    fingerprint: String(row.fingerprint ?? ""),
+    disabled: Boolean(row.disabled),
+    expiresAt: normalizeDateTimeLocal(row.expires_at),
+    allowedPurposes: String(row.allowed_purposes ?? ""),
+    allowedNodeIds: String(row.allowed_node_ids ?? ""),
+    allowedNodeTags: String(row.allowed_node_tags ?? ""),
+    broadScope: Boolean(row.broad_scope),
     createdAt: formatTime(row.created_at),
     lastUsedAt: formatTime(row.last_used_at)
+  };
+}
+
+function toSSHKeyScopePayload(input: NewSSHKeyInput) {
+  return {
+    disabled: input.disabled,
+    expires_at: toRfc3339(input.expiresAt),
+    allowed_purposes: input.allowedPurposes,
+    allowed_node_ids: input.allowedNodeIds,
+    allowed_node_tags: input.allowedNodeTags,
   };
 }
 
@@ -73,7 +114,8 @@ export function createSSHKeysApi() {
           name: input.name,
           username: input.username,
           key_type: input.keyType,
-          private_key: privateKey
+          private_key: privateKey,
+          ...toSSHKeyScopePayload(input),
         }
       });
       return mapSSHKey(row);
@@ -89,6 +131,7 @@ export function createSSHKeysApi() {
           name: input.name,
           username: input.username,
           key_type: input.keyType,
+          ...toSSHKeyScopePayload(input),
           ...(privateKey ? { private_key: privateKey } : {})
         }
       });
@@ -122,12 +165,12 @@ export function createSSHKeysApi() {
         body: { node_ids: numericNodeIds },
       })) ?? [];
       return rows.map((r) => ({
-        nodeId: `node-${r.node_id}`,
-        name: r.name,
-        host: r.host,
-        port: r.port,
-        success: r.success,
-        latencyMs: r.latency_ms,
+        nodeId: `node-${finiteNumber(r.node_id)}`,
+        name: String(r.name ?? ""),
+        host: String(r.host ?? ""),
+        port: finiteNumber(r.port, 22),
+        success: Boolean(r.success),
+        latencyMs: finiteNumber(r.latency_ms),
         error: r.error,
       }));
     },
@@ -142,6 +185,7 @@ export function createSSHKeysApi() {
             username: k.username,
             key_type: k.keyType,
             private_key: k.privateKey,
+            ...toSSHKeyScopePayload(k),
           })),
         },
       })) ?? [];

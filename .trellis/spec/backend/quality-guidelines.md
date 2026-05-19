@@ -221,6 +221,75 @@ var rolePermissions = map[string]map[string]bool{
 }
 ```
 
+### Scenario: SSH Key least-privilege scope
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing managed SSH key metadata, SSH key create/update/export/test handlers, config import/export, or any backend code path that uses a managed SSH key to open an SSH/SFTP session.
+- Applies to `model.SSHKey`, `backend/internal/sshutil/scope.go`, `sshutil.BuildSSHAuth*ForPurpose`, executor SSH helpers, SSH key handlers, node SSH tests, terminal, probes, file browser, Docker volume discovery, node logs, task executors, snapshots, retention, integrity checks, drills, and node migration preflight.
+
+#### 2. Signatures
+
+- Model fields on `model.SSHKey`: `disabled`, `expires_at`, `allowed_purposes`, `allowed_node_ids`, and `allowed_node_tags`.
+- SSH key API request/response fields use the same snake_case names plus derived response-only `broad_scope`; private key material remains request-only and must never appear in normal responses.
+- Purpose-aware auth signatures:
+  - `sshutil.BuildSSHAuthForPurpose(node, db, purpose)`
+  - `sshutil.BuildSSHAuthWithKeyForPurpose(node, db, purpose)`
+  - `executor.DialSSHForNodePurpose(ctx, node, purpose)`
+- Known purpose strings are stable API/storage values: `ssh_key_test`, `ssh_key_export`, `node_test`, `terminal`, `task_command`, `batch_command`, `drill`, `probe`, `file_browser`, `docker_volumes`, `node_logs`, `task_backup`, `task_restore`, `task_hook`, `snapshot`, `snapshot_diff`, `integrity_check`, `retention`, and `node_migration`.
+- Config export/import must preserve scope metadata fields for SSH keys, independent of whether secret material is included.
+
+#### 3. Contracts
+
+- Existing installations must stay compatible: `disabled=false`, `expires_at=null`, and empty `allowed_purposes`, `allowed_node_ids`, or `allowed_node_tags` mean unrestricted for that dimension.
+- A disabled key or an expired key must be denied before private key material is used for the requested operation, including tests and exports.
+- If `allowed_purposes` is non-empty, the normalized current purpose must be present. Unknown purpose values must be rejected at SSH key create/update normalization boundaries.
+- If `allowed_node_ids` is non-empty, the target node ID must match exactly. If `allowed_node_tags` is non-empty, at least one normalized node tag must match exactly. When both node IDs and node tags are configured, both checks must pass.
+- Empty purpose or node/tag scope is intentionally broad for compatibility; expose it as advisory risk through `broad_scope` and Settings risk summary rather than silently blocking existing keys.
+- New managed-key SSH use sites must call a purpose-aware helper. Legacy no-purpose helpers are compatibility shims and should not be copied into new boundaries.
+- Scope enforcement applies to managed `ssh_keys` credentials. Inline node password/private-key credentials are still credential-audited but are not controlled by SSHKey scope metadata.
+- Denial errors returned to API clients must be concise and sanitized. Do not return private keys, passwords, usernames plus hosts, raw endpoints, executor config, command output, or stack/SQL/encryption details.
+- `GET /ssh-keys/export` exports only keys allowed for `ssh_key_export`; blocked keys contribute to audit metadata/counts but are omitted from export payloads.
+- Config export includes `disabled`, `expires_at`, `allowed_purposes`, `allowed_node_ids`, and `allowed_node_tags` for each SSH key. `private_key` remains gated by `include_secrets=true`.
+- Config import should preserve valid exported scope metadata and normalize purpose/node/tag lists through the shared SSH scope helpers rather than duplicating parser logic.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Key is disabled | Deny managed-key use before dialing/exporting; return sanitized client error. |
+| `expires_at` is in the past or equal to now | Deny managed-key use before dialing/exporting. |
+| Purpose list does not include the current purpose | Deny with a sanitized least-privilege error. |
+| Node ID scope is set and target node ID is absent or different | Deny with a sanitized least-privilege error. |
+| Tag scope is set and target node has no exact matching tag | Deny with a sanitized least-privilege error. |
+| Existing key has empty scopes | Allow operation and surface advisory broad-scope risk. |
+| Config export with `include_secrets=false` | Preserve scope metadata but omit private key material. |
+| Config import receives valid exported scope fields | Persist normalized scope metadata on created/updated keys. |
+
+#### 5. Tests Required
+
+- Scope helper tests for compatibility defaults, disabled/expired denial, purpose denial, node-ID denial, tag denial, list normalization, deduplication, and unknown-purpose rejection.
+- Handler tests for SSH key create/update patch semantics, explicit scope clearing, response `broad_scope`, private-key exclusion, export blocking, and credential-audit counts where applicable.
+- SSH use-boundary tests for at least one shared `sshutil` path and one task/executor path so future callers cannot bypass scope enforcement.
+- Config export/import tests proving valid scope metadata round-trips without exposing private keys when secrets are excluded.
+- Settings risk tests proving broad, disabled-in-use, expired-in-use, stale, and reused-key examples are sanitized and bounded.
+
+#### 6. Wrong vs Correct
+
+Wrong:
+
+```go
+auth, err := sshutil.BuildSSHAuth(node, db) // new managed-key use site has no purpose
+```
+
+Correct:
+
+```go
+auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeTerminal)
+```
+
+---
+
 ### Scenario: Settings Security Risk Summary
 
 #### 1. Scope / Trigger
@@ -251,15 +320,17 @@ type securityRiskItem struct {
 }
 ```
 
-- Current risk codes: `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, and `weak_security_defaults`.
+- Current risk codes: `root_ssh_users`, `reused_ssh_keys`, `sudo_enabled_nodes`, `broad_scope_ssh_keys`, `disabled_ssh_keys_in_use`, `expired_ssh_keys_in_use`, `stale_ssh_keys`, `recent_credential_operations`, and `weak_security_defaults`.
 
 #### 3. Contracts
 
 - Endpoint is read-only and admin-only. Do not expose it to operator/viewer roles unless a product decision changes the Settings security model.
 - The response is advisory-only. It must not mutate nodes, SSH keys, settings, credentials, known_hosts, or remote machines.
-- `items[].examples` must contain sanitized labels only: node names, SSH key names, or human-readable setting labels. Never include hostnames, ports, usernames plus hosts, private keys, passwords, tokens, proxy URLs, raw endpoints, executor configs, or command output.
+- `items[].examples` must contain sanitized labels only: node names, SSH key names, human-readable setting labels, or aggregate credential-action labels. Never include hostnames, ports, usernames plus hosts, private keys, passwords, tokens, proxy URLs, raw endpoints, executor configs, command output, terminal streams, or file contents.
 - Keep examples bounded (`maxSecurityRiskExamples` is the current cap) and return counts separately from examples.
 - Risk categories should be stable string codes so frontend mappers can normalize unknown values safely.
+- SSH key least-privilege categories are advisory summaries over managed key metadata: broad-scope keys (`broad_scope_ssh_keys`), disabled keys still referenced by nodes (`disabled_ssh_keys_in_use`), expired keys still referenced by nodes (`expired_ssh_keys_in_use`), and stale keys (`stale_ssh_keys`).
+- `recent_credential_operations` summarizes recent high-risk credential audit action counts only. Examples should be action labels plus counts, not raw event metadata.
 - If a risk has no findings, keep it in the response with `count=0`; use a non-success severity such as `info` only when the category is explicitly informational.
 
 #### 4. Validation & Error Matrix
@@ -271,20 +342,24 @@ type securityRiskItem struct {
 | Database query failure while computing a risk | `respondInternalError`; do not return partial unsafely computed data. |
 | Risk example source contains secret-shaped text or user-controlled labels | Sanitize with `util.SanitizeMessage` before returning. |
 | More than the example cap is found | Return the real `count` and only the bounded example list. |
+| SSH key scope metadata is broad for compatibility | Report advisory risk; do not mutate keys or block from this endpoint. |
+| Credential audit event rows contain metadata/error text | Summarize by stable action label/count only; do not echo raw metadata. |
 | Future risk category needs remediation | Add a separate explicit mutation endpoint; do not turn summary rows into one-click fixes. |
 
 #### 5. Good/Base/Bad Cases
 
 - Good: root-node risk returns `count=4` and examples like `prod-a`, `db-b`, `cache-c` after sanitization, with no host or credential fields.
 - Base: reused-key risk returns `count=1` and an example like `deploy-key（3 个节点）`; the key name is sanitized and no private/public key material is included.
-- Bad: returning `node.Host`, `node.Username`, `ssh_key.private_key`, `executor_config`, or a remediation button/link payload from the summary endpoint.
+- Base: recent credential-operation risk returns an example like `SSH Key 导出（2 次）`; it must not include event metadata, command text, terminal stream content, node host, or key material.
+- Bad: returning `node.Host`, `node.Username`, `ssh_key.private_key`, `executor_config`, credential audit `metadata`, or a remediation button/link payload from the summary endpoint.
 
 #### 6. Tests Required
 
 - Handler test for summary content: counts, stable risk codes, bounded/sanitized examples, and no raw secret-bearing fields in the response body.
 - Full-router RBAC test: admin succeeds; operator/viewer fail with 403 through the real middleware stack.
-- If new risk categories query models with encrypted fields, add tests proving decrypted secrets are not returned.
-- Frontend mapper/UI tests must cover snake_case mapping, invalid numeric fallback, unknown code/severity fallback, and advisory-only rendering.
+- If new risk categories query models with encrypted fields or credential audit metadata, add tests proving decrypted secrets, raw event metadata, terminal streams, command output, and host-sensitive fields are not returned.
+- SSH key least-privilege categories must have tests for counts, bounded examples, and zero-count category retention.
+- Frontend mapper/UI tests must cover snake_case mapping, invalid numeric fallback, unknown code/severity fallback, the P1 risk codes, and advisory-only rendering.
 
 #### 7. Wrong vs Correct
 
@@ -301,6 +376,76 @@ Correct:
 item.Examples = append(item.Examples, util.SanitizeMessage(node.Name))
 respondOK(c, securityRiskSummaryResponse{GeneratedAt: time.Now().UTC(), Items: items})
 ```
+
+### Scenario: Credential-use audit events
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing high-risk operations that use, test, export, or attempt credentials, or adding fields to `credential_audit_events`.
+- Applies to `backend/internal/credentialaudit`, `model.CredentialAuditEvent`, SSH key test/export, node connection test, terminal open/failure/close, task manual/restore/batch triggers, batch command creation, task runtime SSH credential use, and restore drill trigger/phase evidence.
+
+#### 2. Signatures
+
+- Table/model: `credential_audit_events` / `model.CredentialAuditEvent`.
+- Writer API: `credentialaudit.Write(db, credentialaudit.Event)`, `credentialaudit.FromGin(c, event)`, `credentialaudit.WithRuntimeContext(ctx, db, event)`, and `credentialaudit.WriteRuntime(ctx, event)`.
+- Outcome strings: `success`, `failure`, and `blocked`.
+- Common fields include `user_id`, `username`, `role`, `action`, `purpose`, `credential_kind`, `credential_source`, optional `ssh_key_id`, `node_id`, `task_id`, `task_run_id`, `policy_id`, `outcome`, sanitized `error_message`, sanitized JSON `metadata`, `client_ip`, `user_agent`, and `created_at`.
+- Current P1 action strings: `ssh_key.test_connection`, `ssh_key.export`, `node.credential.test_connection`, `terminal.open`, `terminal.failure`, `terminal.close`, `task.manual_trigger`, `task.restore_trigger`, `task.batch_trigger`, `batch_command.create`, `task.credential.use`, `drill.trigger`, and `drill.phase`.
+
+#### 3. Contracts
+
+- Credential-use audit is a domain event table, not a replacement for hash-chained HTTP `audit_logs`. It can be written for GET, WebSocket, and background/runtime flows where `AuditLogger` does not have enough domain context.
+- Events must identify who or what used which safe credential source for which purpose/resource, without storing raw passwords, private keys, TOTP/JWT/recovery codes, decrypted executor config, terminal input/output, file contents, raw command output, or full command text.
+- `credential_kind` and `credential_source` must be safe labels such as `ssh_key` / `ssh_key_id=<id>`, `password` / `node.password`, `node_private_key` / `node.private_key`, or a route-specific non-secret label. Never place secret values in either field.
+- `metadata` is for small, sanitized, bounded context such as counts, stage names, format/scope labels, latency, run IDs, or booleans. Keys or values containing `private`, `password`, `token`, `secret`, `credential`, `config`, `output`, `stream`, or `command` must be dropped rather than persisted.
+- Error messages must be run through the shared sanitizer and redact text after output markers such as `输出:`, `output:`, `stdout:`, or `stderr:`.
+- Audit writes should be best-effort from API handlers and runtime paths: log a warning with `logger.Module("credential_audit")` when the audit write fails, but do not expose the audit-storage failure to the end user or block the primary operation unless the product contract explicitly changes.
+- Runtime task/executor writes should use context propagation (`WithRuntimeContext` / `WriteRuntime`) so task, run, policy, node, purpose, and actor/system context stay correlated.
+- Settings risk summaries may aggregate high-risk credential-audit action counts, but must not echo raw event metadata or error messages.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Event omits `outcome` | Writer defaults it to `success`. |
+| Event metadata contains forbidden keys or values | Drop those entries before persisting. |
+| Error message contains remote output after an output marker | Persist only the prefix plus `[REDACTED_OUTPUT]`. |
+| Writer receives nil DB | Return nil/no-op for best-effort call sites. |
+| Runtime context is absent | `WriteRuntime` returns nil/no-op. |
+| JSON marshal of metadata fails | Persist `{}` rather than failing with raw metadata. |
+| Audit insert fails in a handler | Log warning; primary response follows the operation result. |
+
+#### 5. Tests Required
+
+- Writer tests must prove forbidden metadata keys/values are dropped, long or user-controlled fields are bounded, and output-bearing error messages are redacted.
+- Handler tests for P1 operations should assert an event is written with action, purpose, outcome, safe IDs/sources, and no raw secret material.
+- Runtime task/executor tests should assert `WriteRuntime` merges context with operation-specific fields and preserves task/run/node/policy correlation.
+- Terminal tests must assert open/failure/close events do not include terminal input or output.
+- Drill tests must assert phase events include policy/task/run/evidence context and sanitized phase errors.
+
+#### 6. Wrong vs Correct
+
+Wrong:
+
+```go
+credentialaudit.Write(db, credentialaudit.Event{
+    Action: "task.credential.use",
+    Metadata: map[string]any{"command": task.Command, "output": output},
+})
+```
+
+Correct:
+
+```go
+credentialaudit.WriteRuntime(ctx, credentialaudit.Event{
+    Action: "task.credential.use",
+    Purpose: sshutil.PurposeTaskCommand,
+    Outcome: credentialaudit.OutcomeSuccess,
+    Metadata: map[string]any{"stage": "dial", "latency_ms": latencyMs},
+})
+```
+
+---
 
 ### Test fixture credential naming
 

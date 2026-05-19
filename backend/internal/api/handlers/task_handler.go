@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/util"
 
@@ -455,11 +457,34 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	if !ok {
 		return
 	}
+	auditTask, hasAuditTask := h.loadTaskCredentialAuditContext(id)
+	auditPurpose := taskCredentialAuditPurpose(auditTask, hasAuditTask)
+	auditMetadata := taskCredentialAuditMetadata("manual", auditTask, hasAuditTask)
+	nodeID := taskCredentialAuditNodeID(auditTask, hasAuditTask)
+
 	runID, err := h.runner.TriggerManual(id)
 	if err != nil {
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:       "task.manual_trigger",
+			Purpose:      auditPurpose,
+			NodeID:       nodeID,
+			TaskID:       credentialaudit.PtrUint(id),
+			Outcome:      credentialaudit.OutcomeFailure,
+			ErrorMessage: err.Error(),
+			Metadata:     auditMetadata,
+		})
 		respondBadRequest(c, err.Error())
 		return
 	}
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:    "task.manual_trigger",
+		Purpose:   auditPurpose,
+		NodeID:    nodeID,
+		TaskID:    credentialaudit.PtrUint(id),
+		TaskRunID: credentialaudit.PtrUint(runID),
+		Outcome:   credentialaudit.OutcomeSuccess,
+		Metadata:  auditMetadata,
+	})
 	respondAccepted(c, gin.H{"message": "triggered", "run_id": runID})
 }
 
@@ -588,9 +613,30 @@ func (h *TaskHandler) Restore(c *gin.Context) {
 
 	runID, err := h.runner.TriggerRestore(id, req.TargetPath)
 	if err != nil {
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:       "task.restore_trigger",
+			Purpose:      sshutil.PurposeTaskRestore,
+			TaskID:       credentialaudit.PtrUint(id),
+			Outcome:      credentialaudit.OutcomeFailure,
+			ErrorMessage: err.Error(),
+			Metadata: map[string]any{
+				"custom_target": strings.TrimSpace(req.TargetPath) != "",
+			},
+		})
 		respondBadRequest(c, err.Error())
 		return
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:    "task.restore_trigger",
+		Purpose:   sshutil.PurposeTaskRestore,
+		TaskID:    credentialaudit.PtrUint(id),
+		TaskRunID: credentialaudit.PtrUint(runID),
+		Outcome:   credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"custom_target": strings.TrimSpace(req.TargetPath) != "",
+		},
+	})
 
 	respondOK(c, gin.H{
 		"message": "restore triggered",
@@ -641,26 +687,44 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 
 	results := make([]triggerResult, 0, len(req.TaskIDs))
 	successCount := 0
+	failureCount := 0
+	blockedCount := 0
 	for _, tid := range req.TaskIDs {
 		if needFilter {
 			var t model.Task
 			if lookupErr := h.db.Select("id", "node_id").First(&t, tid).Error; lookupErr != nil {
+				failureCount++
 				results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
 				continue
 			}
 			if _, ok := allowedNodeIDSet[t.NodeID]; !ok {
+				blockedCount++
 				results = append(results, triggerResult{TaskID: tid, Error: "无权操作该任务"})
 				continue
 			}
 		}
 		runID, err := h.runner.TriggerManual(tid)
 		if err != nil {
+			failureCount++
 			results = append(results, triggerResult{TaskID: tid, Error: err.Error()})
 			continue
 		}
 		results = append(results, triggerResult{TaskID: tid, RunID: runID})
 		successCount++
 	}
+
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:  "task.batch_trigger",
+		Purpose: sshutil.PurposeTaskCommand,
+		Outcome: credentialAuditOutcome(successCount, failureCount, blockedCount),
+		Metadata: map[string]any{
+			"task_count":    len(req.TaskIDs),
+			"success_count": successCount,
+			"failure_count": failureCount,
+			"blocked_count": blockedCount,
+			"purpose":       "mixed_task_trigger",
+		},
+	})
 
 	respondOK(c, gin.H{
 		"results":       results,
@@ -712,6 +776,58 @@ func (h *TaskHandler) Logs(c *gin.Context) {
 		return
 	}
 	respondOK(c, logs)
+}
+
+func (h *TaskHandler) loadTaskCredentialAuditContext(taskID uint) (model.Task, bool) {
+	if h == nil || h.db == nil || taskID == 0 {
+		return model.Task{}, false
+	}
+	var task model.Task
+	if err := h.db.Select("id", "node_id", "policy_id", "executor_type", "source").First(&task, taskID).Error; err != nil {
+		return model.Task{}, false
+	}
+	return task, true
+}
+
+func taskCredentialAuditNodeID(task model.Task, ok bool) *uint {
+	if !ok {
+		return nil
+	}
+	return credentialaudit.PtrUint(task.NodeID)
+}
+
+func taskCredentialAuditPurpose(task model.Task, ok bool) string {
+	if !ok {
+		return sshutil.PurposeTaskCommand
+	}
+	switch strings.TrimSpace(strings.ToLower(task.ExecutorType)) {
+	case "command":
+		if strings.TrimSpace(task.Source) == "batch" {
+			return sshutil.PurposeBatchCommand
+		}
+		return sshutil.PurposeTaskCommand
+	case "rsync", "restic", "rclone":
+		return sshutil.PurposeTaskBackup
+	default:
+		return sshutil.PurposeTaskCommand
+	}
+}
+
+func taskCredentialAuditMetadata(triggerType string, task model.Task, ok bool) map[string]any {
+	metadata := map[string]any{
+		"trigger_type": triggerType,
+	}
+	if !ok {
+		return metadata
+	}
+	metadata["executor_type"] = strings.TrimSpace(strings.ToLower(task.ExecutorType))
+	if strings.TrimSpace(task.Source) != "" {
+		metadata["source"] = strings.TrimSpace(task.Source)
+	}
+	if task.PolicyID != nil && *task.PolicyID != 0 {
+		metadata["policy_id"] = *task.PolicyID
+	}
+	return metadata
 }
 
 func trimTaskRequest(req *taskRequest) {

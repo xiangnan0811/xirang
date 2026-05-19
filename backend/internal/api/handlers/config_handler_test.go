@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
 
@@ -134,6 +135,72 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	}
 	if importedDependent.DependsOnTaskID == nil || *importedDependent.DependsOnTaskID != importedTask.ID {
 		t.Fatalf("导入后应恢复任务依赖关系，实际 depends_on_task_id=%v，期望 %d", importedDependent.DependsOnTaskID, importedTask.ID)
+	}
+}
+
+func TestConfigExportImportPreservesSSHKeyScopeMetadata(t *testing.T) {
+	sourceDB := openConfigHandlerTestDB(t)
+	if err := sourceDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {
+		t.Fatalf("初始化源数据库失败: %v", err)
+	}
+	future := time.Date(2026, 6, 1, 10, 30, 0, 0, time.UTC)
+	key := model.SSHKey{
+		Name:            "scoped-key",
+		Username:        "deploy",
+		KeyType:         "auto",
+		PrivateKey:      "",
+		Fingerprint:     "SHA256:scope",
+		Disabled:        true,
+		ExpiresAt:       &future,
+		AllowedPurposes: "terminal,task_command",
+		AllowedNodeIDs:  "1,2",
+		AllowedNodeTags: "prod,db",
+	}
+	if err := sourceDB.Create(&key).Error; err != nil {
+		t.Fatalf("创建 SSH key 失败: %v", err)
+	}
+
+	exportHandler := NewConfigHandler(sourceDB, nil)
+	exportRouter := gin.New()
+	exportRouter.GET("/config/export", exportHandler.Export)
+	exportResp := httptest.NewRecorder()
+	exportRouter.ServeHTTP(exportResp, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	if exportResp.Code != http.StatusOK {
+		t.Fatalf("导出接口期望 200，实际: %d，响应: %s", exportResp.Code, exportResp.Body.String())
+	}
+
+	var exportPayload struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(exportResp.Body.Bytes(), &exportPayload); err != nil {
+		t.Fatalf("解析导出响应失败: %v", err)
+	}
+	downloadedFile, err := json.Marshal(exportPayload.Data)
+	if err != nil {
+		t.Fatalf("序列化下载文件失败: %v", err)
+	}
+
+	targetDB := openConfigHandlerTestDB(t)
+	if err := targetDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {
+		t.Fatalf("初始化目标数据库失败: %v", err)
+	}
+	importHandler := NewConfigHandler(targetDB, nil)
+	importRouter := gin.New()
+	importRouter.POST("/config/import", importHandler.Import)
+	importResp := httptest.NewRecorder()
+	importReq := httptest.NewRequest(http.MethodPost, "/config/import?conflict=skip", strings.NewReader(string(downloadedFile)))
+	importReq.Header.Set("Content-Type", "application/json")
+	importRouter.ServeHTTP(importResp, importReq)
+	if importResp.Code != http.StatusOK {
+		t.Fatalf("导入接口期望 200，实际: %d，响应: %s", importResp.Code, importResp.Body.String())
+	}
+
+	var imported model.SSHKey
+	if err := targetDB.Where("name = ?", "scoped-key").First(&imported).Error; err != nil {
+		t.Fatalf("导入后应存在 SSH key，实际错误: %v", err)
+	}
+	if !imported.Disabled || imported.ExpiresAt == nil || !imported.ExpiresAt.Equal(future) || imported.AllowedPurposes != "terminal,task_command" || imported.AllowedNodeIDs != "1,2" || imported.AllowedNodeTags != "prod,db" {
+		t.Fatalf("SSH key scope 元数据未完整保留: disabled=%v expires=%v purposes=%q nodes=%q tags=%q", imported.Disabled, imported.ExpiresAt, imported.AllowedPurposes, imported.AllowedNodeIDs, imported.AllowedNodeTags)
 	}
 }
 

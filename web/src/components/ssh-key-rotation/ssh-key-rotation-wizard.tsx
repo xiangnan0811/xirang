@@ -105,6 +105,11 @@ export function SSHKeyRotationWizard({
         username: selectedKey.username,
         keyType: newKeyType,
         privateKey: newPrivateKey,
+        disabled: selectedKey.disabled,
+        expiresAt: selectedKey.expiresAt ?? "",
+        allowedPurposes: selectedKey.allowedPurposes,
+        allowedNodeIds: selectedKey.allowedNodeIds,
+        allowedNodeTags: selectedKey.allowedNodeTags,
       });
 
       setNewFingerprint(updatedKey.fingerprint);

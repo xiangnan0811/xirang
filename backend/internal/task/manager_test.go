@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	taskexec "xirang/backend/internal/task/executor"
 
 	"gorm.io/driver/sqlite"
@@ -71,6 +73,24 @@ type sampleExecutor struct {
 	called  int32
 }
 
+type contextAuditExecutor struct{}
+
+func (e *contextAuditExecutor) Run(ctx context.Context, task model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+	return 0, credentialaudit.WriteRuntime(ctx, credentialaudit.Event{
+		Action:           "task.credential.use",
+		Purpose:          sshutil.PurposeTaskBackup,
+		CredentialKind:   "ssh_key",
+		CredentialSource: "ssh_key_id=42",
+		SSHKeyID:         credentialaudit.PtrUint(42),
+		NodeID:           credentialaudit.PtrUint(task.NodeID),
+		Outcome:          credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"stage":   "test_boundary",
+			"command": "FAKE_COMMAND_FOR_TEST_ONLY",
+		},
+	})
+}
+
 func (e *sampleExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, progressf taskexec.ProgressFunc) (int, error) {
 	atomic.AddInt32(&e.called, 1)
 	for _, sample := range e.samples {
@@ -102,7 +122,7 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("获取底层连接失败: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
@@ -302,6 +322,33 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 	}
 	if run.TriggerType != "manual" {
 		t.Fatalf("TaskRun.TriggerType 期望 manual，实际 %s", run.TriggerType)
+	}
+}
+
+func TestRunTaskAttachesCredentialAuditRuntimeContext(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &contextAuditExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
+
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "task.credential.use").First(&event).Error; err != nil {
+		t.Fatalf("期望写入运行时凭据审计事件: %v", err)
+	}
+	if event.TaskID == nil || *event.TaskID != taskEntity.ID || event.TaskRunID == nil || *event.TaskRunID != runID || event.NodeID == nil || *event.NodeID != taskEntity.NodeID {
+		t.Fatalf("审计上下文未包含任务/执行/节点标识: %+v", event)
+	}
+	if event.Purpose != sshutil.PurposeTaskBackup || event.CredentialSource != "ssh_key_id=42" || event.Outcome != credentialaudit.OutcomeSuccess {
+		t.Fatalf("审计事件字段不符合预期: %+v", event)
+	}
+	if strings.Contains(event.Metadata, "FAKE_COMMAND_FOR_TEST_ONLY") || strings.Contains(event.Metadata, "command") {
+		t.Fatalf("审计 metadata 不应保存命令文本或 command 键: %s", event.Metadata)
+	}
+	if !strings.Contains(event.Metadata, "test_boundary") || !strings.Contains(event.Metadata, "manual") {
+		t.Fatalf("审计 metadata 应保留安全上下文字段: %s", event.Metadata)
 	}
 }
 

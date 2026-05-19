@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"xirang/backend/internal/bandwidth"
+	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -126,19 +128,25 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			return -1, fmt.Errorf("不支持的认证方式")
 		}
 
-		keyContent, keySource, keyResolveErr := resolveNodePrivateKey(task.Node)
+		keyContent, keySource, credential, keyResolveErr := resolveNodePrivateKeyForPurpose(task.Node, sshutil.PurposeTaskBackup)
 		if keyResolveErr != nil {
+			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeBlocked, "key_resolve", keyResolveErr)
 			return -1, keyResolveErr
 		}
 		if keyContent == "" {
-			return -1, fmt.Errorf("密钥认证未配置，请为节点设置密钥")
+			err := fmt.Errorf("密钥认证未配置，请为节点设置密钥")
+			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeBlocked, "key_resolve", err)
+			return -1, err
 		}
 
 		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
 		if err != nil {
 			_ = keySource // resolved from node or SSH key record
-			return -1, fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
+			auditErr := fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
+			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeFailure, "key_prepare", auditErr)
+			return -1, auditErr
 		}
+		writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeSuccess, "key_prepare", nil)
 
 		sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
 		strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
@@ -259,7 +267,7 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 // runRemoteRestore 在远程节点上执行 rsync 恢复操作。
 // 与标准备份不同，恢复需要在远程节点上执行 rsync source target（两个路径都是节点本地路径）。
 func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	client, err := DialSSHForNode(ctx, task.Node)
+	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
 		return -1, fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -512,24 +520,77 @@ func readIntEnvWithDefault(key string, defaultValue int) (int, error) {
 }
 
 func resolveNodePrivateKey(node model.Node) (string, string, error) {
+	content, source, _, err := resolveNodePrivateKeyForPurpose(node, "")
+	return content, source, err
+}
+
+func resolveNodePrivateKeyForPurpose(node model.Node, purpose string) (string, string, sshutil.ResolvedCredential, error) {
 	if node.SSHKey != nil {
 		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			if node.SSHKeyID != nil {
-				return key, fmt.Sprintf("ssh_key_id=%d", *node.SSHKeyID), nil
+			credential := resolvedCredentialFromSSHKey(node, node.SSHKey.ID)
+			if err := sshutil.ValidateSSHKeyScope(*node.SSHKey, node, purpose); err != nil {
+				return "", credential.Source, credential, err
 			}
-			return key, "ssh_key_ref", nil
+			return key, credential.Source, credential, nil
 		}
 	}
 
 	if node.SSHKeyID != nil {
 		keyID := *node.SSHKeyID
-		return "", fmt.Sprintf("ssh_key_id=%d", keyID), fmt.Errorf("节点绑定的密钥不存在，请检查密钥配置")
+		credential := sshutil.ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", keyID), KeyID: &keyID}
+		return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥不存在，请检查密钥配置")
 	}
 
 	if key := strings.TrimSpace(node.PrivateKey); key != "" {
-		return key, "node.private_key", nil
+		credential := sshutil.ResolvedCredential{Kind: "node_private_key", Source: "node.private_key"}
+		return key, credential.Source, credential, nil
 	}
-	return "", "", nil
+	return "", "", sshutil.ResolvedCredential{}, nil
+}
+
+func resolvedCredentialFromSSHKey(node model.Node, keyID uint) sshutil.ResolvedCredential {
+	resolvedID := keyID
+	if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
+		resolvedID = *node.SSHKeyID
+	}
+	if resolvedID == 0 {
+		return sshutil.ResolvedCredential{Kind: "ssh_key", Source: "ssh_key_ref"}
+	}
+	return sshutil.ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), KeyID: &resolvedID}
+}
+
+func writeRsyncCredentialAudit(ctx context.Context, node model.Node, credential sshutil.ResolvedCredential, outcome string, stage string, err error) {
+	if _, ok := credentialaudit.RuntimeEvent(ctx); !ok {
+		return
+	}
+	event := credentialaudit.Event{
+		Action:           "task.credential.use",
+		Purpose:          sshutil.PurposeTaskBackup,
+		CredentialKind:   credential.Kind,
+		CredentialSource: credential.Source,
+		SSHKeyID:         credential.KeyID,
+		NodeID:           credentialaudit.PtrUint(node.ID),
+		Outcome:          outcome,
+		Metadata: map[string]any{
+			"stage":     stage,
+			"auth_type": strings.ToLower(strings.TrimSpace(node.AuthType)),
+		},
+	}
+	if event.CredentialKind == "" {
+		event.CredentialKind = "unknown"
+	}
+	if event.CredentialSource == "" {
+		event.CredentialSource = "unknown"
+	}
+	if err != nil {
+		event.ErrorMessage = err.Error()
+	}
+	if writeErr := credentialaudit.WriteRuntime(ctx, event); writeErr != nil {
+		logger.Module("credential_audit").Warn().Err(writeErr).
+			Str("action", event.Action).
+			Str("purpose", event.Purpose).
+			Msg("rsync 凭据审计事件写入失败")
+	}
 }
 
 func AsExitError(err error, target **exec.ExitError) bool {
@@ -543,11 +604,15 @@ func AsExitError(err error, target **exec.ExitError) bool {
 
 // ensureRemoteTargetReady 通过 SSH 检查远程目标路径是否存在且有足够磁盘空间。
 func EnsureRemoteTargetReady(ctx context.Context, node model.Node, targetPath string) error {
+	return EnsureRemoteTargetReadyForPurpose(ctx, node, targetPath, sshutil.PurposeTaskRestore)
+}
+
+func EnsureRemoteTargetReadyForPurpose(ctx context.Context, node model.Node, targetPath string, purpose string) error {
 	if strings.TrimSpace(node.Host) == "" {
 		return fmt.Errorf("节点地址不能为空")
 	}
 
-	client, err := DialSSHForNode(ctx, node)
+	client, err := DialSSHForNodePurpose(ctx, node, purpose)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}

@@ -124,7 +124,7 @@ type nodeDoctorRunner struct {
 
 func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, error) {
 	r.checkAuthConfig()
-	authMethods, _, authErr := sshutil.BuildSSHAuthWithKey(r.node, r.db)
+	authMethods, _, _, authErr := sshutil.BuildSSHAuthWithKeyForPurpose(r.node, r.db, sshutil.PurposeNodeTest)
 	if authErr != nil {
 		r.add("ssh", doctorStatusFail, "SSH 认证配置无效", "检查节点认证方式、密码或绑定的 SSH Key。")
 		r.add("known_hosts", doctorStatusSkip, "未建立 SSH 连接，跳过主机密钥校验", "先修复认证配置后重新运行 Doctor。")

@@ -225,7 +225,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	} else if len(toolSet) > 0 {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
-		client, dialErr := executor.DialSSHForNode(ctx, targetNode)
+		client, dialErr := executor.DialSSHForNodePurpose(ctx, targetNode, sshutil.PurposeNodeMigration)
 		if dialErr != nil {
 			for tool := range toolSet {
 				checks = append(checks, PreflightCheckItem{
