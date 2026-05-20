@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend review findings against auth, middleware, handler, and test expectations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check denial/error responses remain sanitized and distinguishable."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check security-sensitive deny paths and test coverage expectations."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend review findings against API/component/routing conventions."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend mapper and wire/domain type safety findings."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check step-up proof state/storage findings."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check that cross-layer review covers backend/frontend/docs/release interactions."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1-least-privilege-audit/prd.md","reason":"Verify P1 core acceptance coverage."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1b-credential-audit-extended-surfaces/prd.md","reason":"Verify P1b audit coverage acceptance."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1c-credential-audit-ui-export/prd.md","reason":"Verify P1c UI/export acceptance."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1d-step-up-auth-high-risk/prd.md","reason":"Verify P1d step-up acceptance."}

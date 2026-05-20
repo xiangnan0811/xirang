@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend security review must follow auth, middleware, handler, migration, and test expectations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review P1/P1d denial responses and sanitized error contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review security-sensitive tests, deny paths, and secret-safe backend behavior."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend review must cover API wrappers, components, routes, and checks."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review P1c/P1d frontend mappers and wire/domain type safety."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Review session-scoped step-up proof state and clearing semantics."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"P1 review spans backend auth/audit, frontend UI/API, docs, CI, and release evidence."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1-least-privilege-audit/prd.md","reason":"Authoritative P1 core scope and acceptance criteria."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1b-credential-audit-extended-surfaces/prd.md","reason":"Authoritative P1b audit coverage scope and acceptance criteria."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1c-credential-audit-ui-export/prd.md","reason":"Authoritative P1c credential audit UI/export scope and acceptance criteria."}
+{"file":".trellis/tasks/archive/2026-05/05-19-security-p1d-step-up-auth-high-risk/prd.md","reason":"Authoritative P1d step-up auth scope and acceptance criteria."}
