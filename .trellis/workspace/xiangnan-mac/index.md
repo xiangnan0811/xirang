@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 48
+- **Total Sessions**: 49
 - **Last Active**: 2026-05-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1620 | Active |
+| `journal-1.md` | ~1653 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-05-20 | P2 credential hardening | `3715b77` | `security/p2-credential-hardening` |
 | 48 | 2026-05-20 | P1 overall security acceptance review | `a16ec1f` | `security/p1-overall-review` |
 | 47 | 2026-05-19 | P1 SSH key least-privilege audit | `f3dd34f` | `security/p1-least-privilege-audit` |
 | 46 | 2026-05-18 | Security baseline hardening | `394823e` | `security/baseline-hardening` |
