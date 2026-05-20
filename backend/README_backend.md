@@ -258,6 +258,7 @@ go run ./cmd/server
 | GET | /audit-logs/export | 🔒 导出 CSV |
 | GET | /credential-audit-events | 🔒 管理员凭据使用审计事件列表 |
 | GET | /credential-audit-events/export | 🔒 管理员导出凭据使用审计 CSV |
+| POST | /credential-access-grants/terminal | 🔒 申请并激活短时终端凭据使用授权（admin；需二次验证；绑定 node_id/action/purpose） |
 
 ### SLA 报告
 
@@ -311,7 +312,7 @@ go run ./cmd/server
 | 路径 | 说明 |
 |------|------|
 | /ws/logs | 实时日志推送（协议内认证） |
-| /ws/terminal | Web SSH 终端（协议内认证，需二次验证） |
+| /ws/terminal | Web SSH 终端（协议内认证，需 admin 主 token、二次验证 proof、匹配且未过期的终端临时授权） |
 
 ### 健康检查与监控
 
@@ -342,9 +343,9 @@ go run ./cmd/server
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000057_service_uptime`。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000060_credential_access_grants`。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, CredentialAuditEvent, CredentialAccessGrant, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
 
 敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 不参与 JSON 序列化以避免泄露执行器密钥。
 

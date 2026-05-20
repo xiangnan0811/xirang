@@ -101,6 +101,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	alertHandler := handlers.NewAlertHandler(dep.DB)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
 	credentialAuditHandler := handlers.NewCredentialAuditHandler(dep.DB)
+	credentialAccessGrantHandler := handlers.NewCredentialAccessGrantHandler(dep.DB, dep.JWTManager)
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager).WithJWTManager(dep.JWTManager)
 	fileHandler := handlers.NewFileHandler(dep.DB)
@@ -261,6 +262,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/audit-logs/export", middleware.RBAC("audit:read"), auditHandler.ExportCSV)
 	secured.GET("/credential-audit-events", middleware.RequireRole("admin"), credentialAuditHandler.List)
 	secured.GET("/credential-audit-events/export", middleware.RequireRole("admin"), credentialAuditHandler.ExportCSV)
+	secured.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTerminalGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)

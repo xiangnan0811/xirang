@@ -1618,3 +1618,36 @@ Reviewed P1/P1b/P1c/P1d security deliverables through v0.42.0, recorded delivery
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: P2 credential hardening
+
+**Date**: 2026-05-20
+**Task**: P2 credential hardening
+**Branch**: `security/p2-credential-hardening`
+
+### Summary
+
+Implemented terminal-first row-backed credential access grants with backend enforcement before SSH credential resolution, frontend grant prompt/retry, tests, docs, and Trellis spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3715b77` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

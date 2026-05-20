@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"P2 adds paired SQLite/PostgreSQL credential access grant migrations and UTC-safe timestamps."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Grant lifecycle and terminal WebSocket denials need sanitized, machine-readable backend error contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"P2 must preserve SSH credential scope enforcement, step-up composition, and credential audit sanitizer constraints."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Grant/terminal enforcement changes must avoid logging secrets, raw endpoints, terminal streams, or host-sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Terminal grant state must remain short-lived and avoid long-lived browser storage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend grant DTOs and API wrappers must map raw backend payloads into typed camelCase domain data."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Terminal grant prompt UI should reuse existing accessible dialog/form primitives and admin-console patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Reason/TOTP prompt and retry UI must keep labels, dialog title, focus, and icon accessibility intact."}
+{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies terminal WebSocket choke point, current P1 controls, and enforcement ordering before SSH credential resolution."}
+{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Justifies terminal-first row-backed JIT grants and documents deferred alternatives and trade-offs."}

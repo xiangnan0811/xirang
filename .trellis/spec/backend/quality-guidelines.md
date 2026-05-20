@@ -448,6 +448,78 @@ credentialaudit.WriteRuntime(ctx, credentialaudit.Event{
 
 ---
 
+### Scenario: Credential access grants
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing backend grants that authorize credential-use operations, or enforcing grants at a credential-use boundary.
+- Applies to `credential_access_grants`, grant lifecycle handlers, terminal WebSocket open, and future grant-covered operations such as SSH key export, sensitive config export/import, restore, snapshot restore, task trigger, and batch command creation.
+
+#### 2. Signatures
+
+- Table/model: `credential_access_grants` / `model.CredentialAccessGrant`.
+- Terminal grant route: `POST /api/v1/credential-access-grants/terminal` behind primary auth, `RequireRole("admin")`, and step-up proof validation.
+- Terminal WebSocket boundary: first-message primary token/admin validation, step-up proof validation, `node_id` parse, then grant check before node load, SSH auth resolution, or SSH dial.
+- Stable terminal grant tuple: `requester_user_id`, `requester_role`, `action="terminal.open"`, `purpose="terminal"`, `node_id`, `status`, and `expires_at`.
+
+#### 3. Contracts
+
+- Grants are row-backed authorization records, not bearer tokens. Do not issue a signed grant token or store grant material in client-controlled state.
+- Store only bounded safe fields: requester/approver IDs and safe labels, action, purpose, optional resource IDs, status, UTC expiry, TTL seconds, and sanitized reason text.
+- Never store secrets, tokens, step-up proofs, OTP/recovery values, commands, terminal streams, command output, file contents, exported payloads, raw SQL, endpoint/proxy values, or host-sensitive strings in grant rows, responses, audit events, or logs.
+- A grant is additive to existing controls. Primary auth, purpose-scoped token rejection, admin RBAC, ownership where applicable, step-up, and SSH key scope checks must still run.
+- Enforcement must happen before credential resolution when the gate protects both managed SSH keys and inline node password/private-key credentials.
+- Missing, expired, revoked, denied, wrong-user, wrong-role, wrong-operation, wrong-purpose, or wrong-resource grants must fail closed with a sanitized machine-readable denial.
+- Grant lifecycle and use/block paths should write credential/grant audit evidence with sanitizer-compatible metadata keys such as `stage`, `operation`, `status`, `ttl_seconds`, `node_id`, `grant_id`, and booleans/counts.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Missing active matching grant | Deny before node lookup/SSH auth; return machine-readable grant-required signal and write blocked audit evidence. |
+| Grant exists for another user or role | Deny; do not disclose the other grant. |
+| Grant exists for another action, purpose, or node | Deny; do not authorize a broader operation. |
+| Grant status is `revoked`, `denied`, or `expired` | Deny with sanitized status detail where safe. |
+| Grant `expires_at` is at or before `now.UTC()` | Deny and treat as expired. |
+| Reason contains password/token/key/output/command/host/endpoint/proxy-shaped text | Reject or sanitize before storage; never persist raw reason text. |
+| Audit/log write fails | Log a sanitized warning only; primary authorization result remains fail-closed for the protected operation. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: terminal open validates primary admin token and step-up proof, parses `node_id`, checks an active `(user, role, terminal.open, terminal, node_id)` grant, writes a safe use audit event, then loads the node and resolves SSH credentials.
+- Base: a grant request with a bounded reason and TTL creates an active self-grant after step-up in a single-admin/self-hosted deployment.
+- Bad: loading a node, decrypting inline credentials, resolving a managed SSH key, dialing SSH, or logging an SSH error before the grant check succeeds.
+
+#### 6. Tests Required
+
+- Migration tests or safety checks must cover paired SQLite/PostgreSQL grant migrations and rollback.
+- Handler tests must cover creation/self-activation, TTL bounds, reason rejection/sanitization, response DTOs, admin RBAC, and step-up composition.
+- Matching tests must cover expiry, revoked/denied statuses, wrong user, wrong role, wrong node, wrong action, and wrong purpose.
+- Terminal WebSocket tests must prove the grant gate runs after primary auth/step-up but before node load, credential resolution, and SSH dial.
+- Audit tests must assert grant request/activation/use/block metadata stays sanitizer-compatible and excludes raw secrets, terminal streams, commands, output, endpoint values, and host-sensitive strings.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+node := loadNode(nodeID)
+auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeTerminal)
+if err := requireGrant(userID, nodeID); err != nil { return err }
+```
+
+Correct:
+
+```go
+if err := enforceTerminalCredentialGrant(c.Request.Context(), db, claims, nodeID); err != nil {
+    return err
+}
+node := loadNode(nodeID)
+auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeTerminal)
+```
+
+---
+
 ### Test fixture credential naming
 
 Test fixtures that simulate secrets/credentials (passwords, tokens, keys,

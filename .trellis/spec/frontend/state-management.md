@@ -68,6 +68,71 @@ Keep state local when:
 
 ---
 
+## Scenario: Terminal credential grant prompt state
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend flows that request temporary credential-use grants before opening a terminal or another high-risk credential operation.
+- Applies to `web/src/components/web-terminal.tsx`, `web/src/lib/api/credential-access-grants-api.ts`, auth step-up context, terminal WebSocket close handling, and future grant prompts.
+
+### 2. Signatures
+
+- Terminal grant API call: `requestTerminalCredentialGrant(token, { nodeId, reason, ttlSeconds }, stepUpProof)`.
+- WebSocket denial signal: close reason payload with machine-readable `code="CREDENTIAL_GRANT_REQUIRED"` and sanitized detail/status fields.
+- Local UI state: dialog open/submitting/error, bounded reason draft, and a retry trigger for the current terminal connection.
+
+### 3. Contracts
+
+- Grant rows live on the backend. The frontend must not store grant IDs, grant material, reason text, or grant-required status in `localStorage` or `sessionStorage`.
+- Keep terminal grant prompt state component-local unless a later feature adds a dedicated grant management surface.
+- Reuse `ensureStepUpProof()` for the proof needed by the grant request. Do not ask for or store TOTP codes in the terminal component itself.
+- A grant-required WebSocket close must not be treated as login/session expiry and must not unmount the terminal dialog before the reason prompt can complete.
+- User-visible denial details must be sanitized and bounded before rendering. Do not display raw WebSocket close text if it can contain host, endpoint, SSH, command, or terminal-output details.
+- Retrying terminal open after grant creation should use the existing connection flow and should clear only transient prompt state, not auth/session state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| WebSocket closes with `CREDENTIAL_GRANT_REQUIRED` | Keep terminal UI mounted, open reason dialog, and show sanitized message. |
+| Reason is empty or too long | Block submission locally with accessible validation text. |
+| Grant request needs step-up | Call `ensureStepUpProof()` and send the proof through the API wrapper, not browser storage. |
+| Grant request fails with sanitized backend error | Keep dialog open and render the sanitized message. |
+| Grant request succeeds | Close dialog, clear reason draft, and retry terminal open once through normal connection code. |
+| User cancels prompt | Clear local reason/error state; do not write browser storage or retry. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: terminal receives a grant-required close, opens a labeled reason dialog, obtains a step-up proof from auth context, requests the grant, then reconnects without storing grant data.
+- Base: an expired/revoked grant produces a safe message and lets the admin request a fresh grant.
+- Bad: writing `grant_id`, `reason`, or `node_id` grant state to `localStorage`; calling `onDisconnect` immediately for a grant-required close so the parent dialog unmounts.
+
+### 6. Tests Required
+
+- Component tests must cover grant-required close handling, prompt opening, reason validation, successful grant request, retry, and no parent disconnect on grant-required close.
+- Storage-safety tests must assert no grant ID/reason/status is written to `localStorage` or `sessionStorage`.
+- Error tests must cover sanitized close details and failed grant request rendering.
+- `npm run check` must cover typecheck, lint/a11y rules, Vitest, and build after changing the terminal prompt flow.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+sessionStorage.setItem("terminal-grant-reason", reason);
+onDisconnect?.();
+```
+
+Correct:
+
+```ts
+setGrantReasonDraft(reason);
+setGrantPromptOpen(true);
+// Keep the parent terminal dialog mounted until the grant flow resolves.
+```
+
+---
+
 ## Common Mistakes
 
 - Do not promote every page filter or dialog flag into context.

@@ -2356,6 +2356,17 @@ const zh = {
     reconnected: "会话已重连，原 SSH 会话已失效，请重新登录。",
     giveUp: "已达最大重连次数，请关闭终端后重新打开。",
     stepUpFailed: "二次验证失败。",
+    ariaLabel: "Web 终端交互区域",
+    grantRequired: "需要终端临时授权",
+    grantTitle: "需要终端临时授权",
+    grantDescription: "终端会话会使用节点 SSH 凭据。请填写本次访问原因，通过二次验证后系统会创建短时授权并自动重试连接。",
+    grantReasonLabel: "授权原因",
+    grantReasonPlaceholder: "例如：处理告警、执行例行维护",
+    grantReasonHint: "最多 {{max}} 个字符。请勿填写密码、密钥、令牌、命令输出或主机敏感信息。",
+    grantReasonRequired: "请填写授权原因。",
+    grantReasonTooLong: "授权原因不能超过 {{max}} 个字符。",
+    grantRequestFailed: "终端授权申请失败，请稍后重试。",
+    grantSubmit: "申请并重试",
   },
 
   // ── tree component ──

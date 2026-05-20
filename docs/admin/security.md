@@ -72,6 +72,12 @@ INTEGRATION_BLOCK_PRIVATE_ENDPOINTS=true
 
 用户可在个人设置中启用 TOTP 两步验证，兼容 Google Authenticator 等应用。
 
+## 终端临时授权
+
+Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`terminal.open` 操作、`terminal` 用途和目标节点的短时授权。授权由管理员在终端弹窗中填写原因并通过二次验证后自助创建，默认有效期很短，到期、撤销、拒绝或资源不匹配都不会放行。
+
+授权记录和凭据审计只保存用户、角色、操作、用途、节点 ID、状态、TTL 等安全字段。Xirang 不记录终端输入/输出、命令文本、文件内容、私钥、密码、令牌、主机地址或代理端点；终端录屏/回放不属于当前内置能力。
+
 ## 敏感字段保护
 
 Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。

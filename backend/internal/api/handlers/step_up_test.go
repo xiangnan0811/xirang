@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -36,6 +37,7 @@ func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.CredentialAuditEvent{},
+		&model.CredentialAccessGrant{},
 		&model.AuditLog{},
 		&model.Node{},
 		&model.NodeOwner{},
@@ -423,6 +425,23 @@ func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
 	admin := seedStepUpUser(t, db, "terminal-admin", "admin")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	adminProof := generateStepUpProof(t, manager, admin)
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     admin.ID,
+		RequesterUsername:   admin.Username,
+		RequesterRole:       admin.Role,
+		Action:              CredentialGrantActionTerminalOpen,
+		Purpose:             sshutil.PurposeTerminal,
+		NodeID:              credentialaudit.PtrUint(2),
+		Reason:              "维护",
+		Status:              CredentialGrantStatusActive,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建 terminal grant fixture 失败: %v", err)
+	}
 
 	handler := NewTerminalHandler(db, manager, func(*http.Request) bool { return true })
 	router := gin.New()
@@ -465,13 +484,21 @@ func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
 	if validProofErr.Code != websocket.CloseInvalidFramePayloadData || !strings.Contains(validProofErr.Text, "缺少 node_id") {
 		t.Fatalf("有效 step-up proof 应通过 step-up gate 后再失败于 node_id 校验，实际: %+v", validProofErr)
 	}
+	missingGrantErr := dialAndAuth(t, wsURL+"?node_id=1", adminProof)
+	if missingGrantErr.Code != websocket.ClosePolicyViolation || !strings.Contains(missingGrantErr.Text, credentialGrantRequiredCode) {
+		t.Fatalf("缺少 JIT grant 应在节点/SSH 凭据解析前返回机器可读 close reason，实际: %+v", missingGrantErr)
+	}
+	matchingGrantErr := dialAndAuth(t, wsURL+"?node_id=2", adminProof)
+	if matchingGrantErr.Code != websocket.CloseInvalidFramePayloadData || !strings.Contains(matchingGrantErr.Text, "节点不存在") {
+		t.Fatalf("匹配 JIT grant 应放行到节点查询，实际: %+v", matchingGrantErr)
+	}
 
 	events := loadCredentialAuditEvents(t, db, "terminal.open")
-	if len(events) != 3 {
-		t.Fatalf("终端 step-up 应写入 3 条凭据审计事件，实际: %+v", events)
+	if len(events) != 7 {
+		t.Fatalf("终端 step-up/grant 应写入 7 条凭据审计事件，实际: %+v", events)
 	}
-	if events[0].Outcome != credentialaudit.OutcomeBlocked || events[1].Outcome != credentialaudit.OutcomeBlocked || events[2].Outcome != credentialaudit.OutcomeSuccess {
-		t.Fatalf("终端 step-up 审计 outcome 不符合预期: %+v", events)
+	if events[0].Outcome != credentialaudit.OutcomeBlocked || events[1].Outcome != credentialaudit.OutcomeBlocked || events[2].Outcome != credentialaudit.OutcomeSuccess || events[3].Outcome != credentialaudit.OutcomeSuccess || events[4].Outcome != credentialaudit.OutcomeBlocked || events[5].Outcome != credentialaudit.OutcomeSuccess || events[6].Outcome != credentialaudit.OutcomeSuccess {
+		t.Fatalf("终端 step-up/grant 审计 outcome 不符合预期: %+v", events)
 	}
 	for _, event := range events {
 		assertNoForbiddenAuditMetadata(t, event.Metadata)

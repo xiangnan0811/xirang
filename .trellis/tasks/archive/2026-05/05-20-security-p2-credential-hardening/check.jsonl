@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check paired migrations, cross-engine schema parity, and UTC timestamp safety for grant records."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check grant-required/expired/revoked denial shapes are sanitized and do not leak internals or trigger session-expiry handling."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check SSH scope, step-up, credential audit, and secret-safety requirements remain additive and fail closed."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check new logs/audit paths avoid credentials, tokens, endpoint values, terminal streams, command output, and sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check frontend does not persist grant material in localStorage or other long-lived browser state."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check API/domain types and mappers avoid raw snake_case objects and unsafe casts."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check frontend behavior uses typed API wrappers, tests, i18n strings, and existing UI patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check grant dialog/prompt labels, DialogTitle, focus behavior, and decorative icon aria-hidden requirements."}
+{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check terminal enforcement remains before node load, credential resolution, and SSH dial across inline and managed credentials."}
+{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Check implementation stays within terminal-first JIT grant MVP and does not drift into CA/Vault/session-recording scope."}

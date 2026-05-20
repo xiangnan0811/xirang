@@ -443,6 +443,33 @@ type CredentialAuditEvent struct {
 	CreatedAt        time.Time `gorm:"index" json:"created_at"`
 }
 
+// CredentialAccessGrant stores a short-lived, operation-bound JIT grant for
+// high-risk credential-use boundaries. It must only contain safe actor/resource
+// identifiers, bounded sanitized reason text, lifecycle state, and timestamps.
+type CredentialAccessGrant struct {
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	RequesterUserID     uint       `gorm:"not null;index" json:"requester_user_id"`
+	RequesterUsername   string     `gorm:"size:64;not null;default:''" json:"requester_username"`
+	RequesterRole       string     `gorm:"size:32;not null;default:''" json:"requester_role"`
+	Action              string     `gorm:"size:64;not null;index:idx_credential_access_grants_operation" json:"action"`
+	Purpose             string     `gorm:"size:64;not null;index:idx_credential_access_grants_operation" json:"purpose"`
+	NodeID              *uint      `gorm:"index;index:idx_credential_access_grants_operation" json:"node_id,omitempty"`
+	TaskID              *uint      `gorm:"index" json:"task_id,omitempty"`
+	PolicyID            *uint      `gorm:"index" json:"policy_id,omitempty"`
+	Reason              string     `gorm:"type:text;not null;default:''" json:"reason"`
+	Status              string     `gorm:"size:16;not null;index" json:"status"`
+	RequestedTTLSeconds int        `gorm:"not null;default:0" json:"requested_ttl_seconds"`
+	RequestedAt         time.Time  `gorm:"not null;index" json:"requested_at"`
+	ApprovedAt          *time.Time `json:"approved_at,omitempty"`
+	ApproverUserID      *uint      `gorm:"index" json:"approver_user_id,omitempty"`
+	ApproverUsername    string     `gorm:"size:64;not null;default:''" json:"approver_username"`
+	ExpiresAt           time.Time  `gorm:"not null;index" json:"expires_at"`
+	RevokedAt           *time.Time `json:"revoked_at,omitempty"`
+	RevokedByUserID     *uint      `gorm:"index" json:"revoked_by_user_id,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
 type TaskLog struct {
 	ID        uint      `gorm:"primaryKey;index:idx_tasklog_task_cursor,priority:2,sort:desc" json:"id"`
 	TaskID    uint      `gorm:"not null;index;index:idx_tasklog_task_cursor,priority:1" json:"task_id"`

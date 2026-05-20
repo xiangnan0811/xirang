@@ -170,7 +170,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return payload as T;
 }
 
-export function isStepUpRequiredError(error: unknown): error is ApiError {
+function hasEnvelopeErrorCode(error: unknown, code: string): error is ApiError {
   if (!(error instanceof ApiError) || error.status !== 403) {
     return false;
   }
@@ -179,7 +179,15 @@ export function isStepUpRequiredError(error: unknown): error is ApiError {
     return false;
   }
   const data = (detail as { data?: unknown }).data;
-  return Boolean(data && typeof data === "object" && (data as { error_code?: unknown }).error_code === "STEP_UP_REQUIRED");
+  return Boolean(data && typeof data === "object" && (data as { error_code?: unknown }).error_code === code);
+}
+
+export function isStepUpRequiredError(error: unknown): error is ApiError {
+  return hasEnvelopeErrorCode(error, "STEP_UP_REQUIRED");
+}
+
+export function isCredentialGrantRequiredError(error: unknown): error is ApiError {
+  return hasEnvelopeErrorCode(error, "CREDENTIAL_GRANT_REQUIRED");
 }
 
 export async function fetchWithFallback(url: string, options: RequestInit): Promise<Response> {
