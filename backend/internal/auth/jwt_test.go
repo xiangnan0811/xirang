@@ -67,10 +67,10 @@ func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *t
 	if claims.IssuedAt == nil || claims.ExpiresAt == nil {
 		t.Fatalf("step-up proof 应包含 iat/exp")
 	}
-	if !claims.ExpiresAt.Time.Equal(expiresAt.Truncate(time.Second)) {
+	if !claims.ExpiresAt.Equal(expiresAt.Truncate(time.Second)) {
 		t.Fatalf("返回的 expiresAt 应与 claims exp 一致，claims=%s returned=%s", claims.ExpiresAt.Time, expiresAt)
 	}
-	ttl := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
+	ttl := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
 	if ttl != StepUpProofTTL {
 		t.Fatalf("step-up proof TTL 应为 %s，实际 %s", StepUpProofTTL, ttl)
 	}

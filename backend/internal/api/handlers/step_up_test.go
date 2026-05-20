@@ -437,7 +437,7 @@ func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("建立测试 WebSocket 失败: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		payload, err := json.Marshal(map[string]string{"type": "auth", "token": adminToken, "step_up_proof": proof})
 		if err != nil {
 			t.Fatalf("序列化 WebSocket auth payload 失败: %v", err)
