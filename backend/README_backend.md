@@ -255,6 +255,8 @@ go run ./cmd/server
 |------|------|------|
 | GET | /audit-logs | 🔒 日志列表 |
 | GET | /audit-logs/export | 🔒 导出 CSV |
+| GET | /credential-audit-events | 🔒 管理员凭据使用审计事件列表 |
+| GET | /credential-audit-events/export | 🔒 管理员导出凭据使用审计 CSV |
 
 ### SLA 报告
 

@@ -13,4 +13,10 @@ describe("getVisibleNavItems", () => {
     expect(getVisibleNavItems("operator").some((item) => item.path === "/app/automation-rules")).toBe(false);
     expect(getVisibleNavItems("viewer").some((item) => item.path === "/app/automation-rules")).toBe(false);
   });
+
+  it("keeps credential audit navigation admin-only", () => {
+    expect(getVisibleNavItems("admin").some((item) => item.path === "/app/credential-audit")).toBe(true);
+    expect(getVisibleNavItems("operator").some((item) => item.path === "/app/credential-audit")).toBe(false);
+    expect(getVisibleNavItems("viewer").some((item) => item.path === "/app/credential-audit")).toBe(false);
+  });
 });

@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-19-security-p1c-credential-audit-ui-export/prd.md","reason":"Check final implementation against requirements and acceptance criteria"}
+{"file":".trellis/tasks/05-19-security-p1c-credential-audit-ui-export/research/code-surfaces.md","reason":"Check implementation follows researched contracts and target files"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend implementation preserves credential audit safety contract"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check no sensitive values are logged"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check no sensitive output is exposed to clients"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend mapper/domain safety and security UI constraints"}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check frontend filters/buttons/dialogs remain accessible"}

@@ -115,6 +115,14 @@ export const navItems: NavItem[] = [
     mobileTab: false
   },
   {
+    titleKey: "nav.credentialAudit",
+    path: "/app/credential-audit",
+    icon: Shield,
+    group: "observe",
+    mobileTab: false,
+    adminOnly: true
+  },
+  {
     titleKey: "nav.reports",
     path: "/app/reports",
     icon: FileText,

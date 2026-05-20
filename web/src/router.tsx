@@ -5,6 +5,7 @@ import { LoginPage } from "@/pages/login-page";
 import {
   AuditPage,
   AutomationRulesPage,
+  CredentialAuditPage,
   BackupsPage,
   CredentialsPage,
   DashboardDetailPage,
@@ -97,6 +98,10 @@ export const AppRouter = createBrowserRouter([
       {
         path: "audit",
         element: <LazyPage><AuditPage /></LazyPage>
+      },
+      {
+        path: "credential-audit",
+        element: <LazyPage><CredentialAuditPage /></LazyPage>
       },
       {
         path: "reports",
