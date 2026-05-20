@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { useAuth } from "@/context/auth-context.hooks";
 import { ReconnectingSocket } from "@/lib/ws/reconnecting-socket";
 
 // Terminal color palette is intentionally decoupled from the Xirang site
@@ -48,6 +49,7 @@ type WebTerminalProps = {
 
 const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
   const { t } = useTranslation();
+  const { ensureStepUpProof, clearStepUpProof } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,14 +63,27 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     let socket: ReconnectingSocket | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let sendResize: (() => void) | null = null;
+    let stepUpProof = "";
 
     // 将所有初始化延迟到下一个事件循环，跳过 React StrictMode 的首次 mount→cleanup 循环。
     // StrictMode 的 cleanup 会同步执行并 clearTimeout，因此首次 mount 不会创建任何资源。
     // 这避免了 terminal.open() 抢占焦点→StrictMode dispose→焦点逃逸→Radix Dialog 关闭的问题。
     const timerId = setTimeout(() => {
-      if (!active || !containerRef.current) return;
+      void (async () => {
+        try {
+          stepUpProof = await ensureStepUpProof();
+        } catch (error) {
+          if (active) {
+            const message = error instanceof Error ? error.message : t("terminal.stepUpFailed");
+            terminal?.write(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
+            onDisconnect?.();
+          }
+          return;
+        }
 
-      terminal = new Terminal({
+        if (!active || !containerRef.current) return;
+
+        terminal = new Terminal({
         cursorBlink: true,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         fontSize: 14,
@@ -89,7 +104,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         // SSH PTY 是状态化连接，重连后旧 session 已失效；这里不发心跳避免被旧 session 误识别
         heartbeatIntervalMs: 0,
         onOpen: (ws) => {
-          ws.send(JSON.stringify({ type: "auth", token }));
+          ws.send(JSON.stringify({ type: "auth", token, step_up_proof: stepUpProof }));
         },
         onMessage: (event) => {
           if (event.data instanceof ArrayBuffer) {
@@ -104,6 +119,10 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
           terminal?.write(`\r\n\x1b[33m${t("terminal.reconnected")}\x1b[0m\r\n`);
         },
         onClose: (event) => {
+          if (event.code === 1008) {
+            clearStepUpProof();
+            socket?.close(1008, "step-up-required");
+          }
           const detail = event.reason
             ? ` (${event.code}: ${event.reason})`
             : ` (code: ${event.code})`;
@@ -152,7 +171,8 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         resizeObserver.observe(containerRef.current);
       }
 
-      window.addEventListener("resize", sendResize);
+        window.addEventListener("resize", sendResize);
+      })();
     }, 0);
 
     return () => {
@@ -166,7 +186,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
       terminal?.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId, token]);
+  }, [nodeId, token, ensureStepUpProof, clearStepUpProof]);
 
   return (
     <div

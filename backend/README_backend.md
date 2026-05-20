@@ -40,6 +40,7 @@ go run ./cmd/server
 | POST | /auth/2fa/setup | 🔒 配置 TOTP |
 | POST | /auth/2fa/verify | 🔒 验证 TOTP |
 | POST | /auth/2fa/disable | 🔒 关闭 TOTP |
+| POST | /auth/step-up | 🔒 高风险操作二次验证 |
 | GET | /users | 🔒 用户列表 |
 | POST | /users | 🔒 创建用户 |
 | PUT | /users/:id | 🔒 更新用户 |
@@ -94,7 +95,7 @@ go run ./cmd/server
 | POST | /ssh-keys | 🔒 创建密钥 |
 | POST | /ssh-keys/batch | 🔒 批量创建（最多 50 条） |
 | POST | /ssh-keys/batch-delete | 🔒 批量删除（跳过使用中） |
-| GET | /ssh-keys/export | 🔒 导出（authorized_keys/json/csv） |
+| GET | /ssh-keys/export | 🔒 导出（authorized_keys/json/csv，需二次验证） |
 | GET | /ssh-keys/:id | 🔒 密钥详情 |
 | PUT | /ssh-keys/:id | 🔒 更新密钥 |
 | DELETE | /ssh-keys/:id | 🔒 删除密钥 |
@@ -124,13 +125,13 @@ go run ./cmd/server
 | PUT | /tasks/:id | 🔒 更新任务 |
 | DELETE | /tasks/:id | 🔒 删除任务 |
 | GET | /tasks/:id/runs | 🔒 执行历史 |
-| POST | /tasks/batch-trigger | 🔒 批量触发 |
-| POST | /tasks/:id/trigger | 🔒 手动触发 |
+| POST | /tasks/batch-trigger | 🔒 批量触发（需二次验证） |
+| POST | /tasks/:id/trigger | 🔒 手动触发（需二次验证） |
 | POST | /tasks/:id/cancel | 🔒 取消执行 |
 | POST | /tasks/:id/pause | 🔒 暂停调度 |
 | POST | /tasks/:id/resume | 🔒 恢复调度 |
 | POST | /tasks/:id/skip-next | 🔒 跳过下次 |
-| POST | /tasks/:id/restore | 🔒 从备份恢复 |
+| POST | /tasks/:id/restore | 🔒 从备份恢复（需二次验证） |
 | GET | /tasks/:id/backup-files | 🔒 备份文件列表 |
 | GET | /task-runs/:id | 🔒 执行详情 |
 | GET | /task-runs/:id/logs | 🔒 执行日志 |
@@ -139,7 +140,7 @@ go run ./cmd/server
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | /batch-commands | 🔒 创建批量命令 |
+| POST | /batch-commands | 🔒 创建批量命令（需二次验证） |
 | GET | /batch-commands/:batch_id | 🔒 查询状态 |
 | DELETE | /batch-commands/:batch_id | 🔒 取消/删除 |
 
@@ -276,7 +277,7 @@ go run ./cmd/server
 |------|------|------|
 | GET | /tasks/:id/snapshots | 🔒 快照列表 |
 | GET | /tasks/:id/snapshots/:sid/files | 🔒 快照文件 |
-| POST | /tasks/:id/snapshots/:sid/restore | 🔒 从快照恢复 |
+| POST | /tasks/:id/snapshots/:sid/restore | 🔒 从快照恢复（需二次验证） |
 | GET | /tasks/:id/snapshots/diff | 🔒 快照对比 |
 | GET | /tasks/:id/snapshots/search | 🔒 搜索快照文件 |
 
@@ -290,7 +291,7 @@ go run ./cmd/server
 | GET | /settings/security-risk-summary | 🔒 安全风险摘要（admin；只读计数与脱敏示例） |
 | GET | /settings/logs | 🔒 节点日志保留默认天数（admin） |
 | PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
-| GET | /config/export | 🔒 导出配置 |
+| GET | /config/export | 🔒 导出配置（include_secrets=true 时需二次验证） |
 | POST | /config/import | 🔒 导入配置 |
 | GET | /hook-templates | 🔒 钩子模板列表 |
 
@@ -310,7 +311,7 @@ go run ./cmd/server
 | 路径 | 说明 |
 |------|------|
 | /ws/logs | 实时日志推送（协议内认证） |
-| /ws/terminal | Web SSH 终端（协议内认证） |
+| /ws/terminal | Web SSH 终端（协议内认证，需二次验证） |
 
 ### 健康检查与监控
 

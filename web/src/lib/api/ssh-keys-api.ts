@@ -1,5 +1,5 @@
 import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
-import { formatTime, parseNumericId, request } from "./core";
+import { ApiError, formatTime, parseNumericId, request } from "./core";
 
 type SSHKeyResponse = {
   id: number;
@@ -97,6 +97,28 @@ export type BatchCreateResult = {
   status: "created" | "skipped" | "error";
   error?: string;
 };
+
+export async function fetchSSHKeyExportFile(url: string, token: string, stepUpProof?: string): Promise<Response> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (stepUpProof) {
+    headers["X-Xirang-Step-Up"] = stepUpProof;
+  }
+  const response = await fetch(url, { headers });
+  if (response.ok) {
+    return response;
+  }
+
+  let detail: unknown;
+  try {
+    detail = await response.clone().json();
+  } catch {
+    detail = undefined;
+  }
+  const message = detail && typeof detail === "object" && "message" in detail
+    ? String((detail as { message?: unknown }).message ?? "")
+    : `HTTP ${response.status}`;
+  throw new ApiError(response.status, message || `HTTP ${response.status}`, detail);
+}
 
 export function createSSHKeysApi() {
   return {

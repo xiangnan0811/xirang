@@ -240,10 +240,11 @@ export function createTasksApi() {
       return rows.map((row) => mapTaskLog(row));
     },
 
-    async triggerTask(token: string, taskId: number): Promise<{ runId?: number }> {
+    async triggerTask(token: string, taskId: number, stepUpProof?: string): Promise<{ runId?: number }> {
       const payload = await request<{ message?: string; run_id?: number }>(`/tasks/${taskId}/trigger`, {
         method: "POST",
-        token
+        token,
+        stepUpProof
       });
       return { runId: payload.run_id };
     },
@@ -255,19 +256,21 @@ export function createTasksApi() {
       });
     },
 
-    async restoreTask(token: string, taskId: number, targetPath?: string): Promise<{ runId?: number }> {
+    async restoreTask(token: string, taskId: number, targetPath?: string, stepUpProof?: string): Promise<{ runId?: number }> {
       const payload = await request<{ message?: string; run_id?: number }>(`/tasks/${taskId}/restore`, {
         method: "POST",
         token,
+        stepUpProof,
         body: targetPath ? { target_path: targetPath } : {}
       });
       return { runId: payload.run_id };
     },
 
-    async batchTriggerTasks(token: string, taskIds: number[]): Promise<{ total: number; successCount: number }> {
+    async batchTriggerTasks(token: string, taskIds: number[], stepUpProof?: string): Promise<{ total: number; successCount: number }> {
       const payload = await request<{ total?: number; success_count?: number }>("/tasks/batch-trigger", {
         method: "POST",
         token,
+        stepUpProof,
         body: { task_ids: taskIds }
       });
       return { total: payload.total ?? 0, successCount: payload.success_count ?? 0 };

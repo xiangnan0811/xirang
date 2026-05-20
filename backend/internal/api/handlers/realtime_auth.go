@@ -25,8 +25,8 @@ func authorizeRealtimeToken(token string, jwtManager *auth.JWTManager, db *gorm.
 	if err != nil {
 		return nil, fmt.Errorf("token 无效或过期")
 	}
-	if claims.Purpose == "2fa_pending" {
-		return nil, fmt.Errorf("需要完成两步验证")
+	if strings.TrimSpace(claims.Purpose) != "" {
+		return nil, fmt.Errorf("认证令牌用途不匹配")
 	}
 
 	if db != nil {

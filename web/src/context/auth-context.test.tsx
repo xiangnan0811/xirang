@@ -1,19 +1,25 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { AuthProvider } from "./auth-context";
 import { useAuth } from "./auth-context.hooks";
+import { saveStepUpProof } from "@/lib/step-up-storage";
 
 function AuthProbe() {
-  const { token, username, isAuthenticated, login, logout } = useAuth();
+  const { token, username, isAuthenticated, login, logout, setTotpEnabled, ensureStepUpProof } = useAuth();
+  const [stepUpProof, setStepUpProof] = useState("pending");
 
   return (
     <div>
       <span data-testid="token">{token ?? "null"}</span>
       <span data-testid="username">{username ?? "null"}</span>
       <span data-testid="authenticated">{String(isAuthenticated)}</span>
-      <button type="button" onClick={() => login("token-123", "alice")}>登录</button>
+      <span data-testid="step-up-proof">{stepUpProof}</span>
+      <button type="button" onClick={() => login("token-123", "alice", "admin", 1, true)}>登录</button>
       <button type="button" onClick={() => logout()}>退出</button>
+      <button type="button" onClick={() => setTotpEnabled(false)}>关闭两步验证</button>
+      <button type="button" onClick={() => void ensureStepUpProof().then(setStepUpProof)}>请求二次验证</button>
     </div>
   );
 }
@@ -73,5 +79,45 @@ describe("AuthProvider", () => {
     expect(sessionStorage.getItem("xirang-username")).toBeNull();
     expect(localStorage.getItem("xirang-auth-token")).toBeNull();
     expect(localStorage.getItem("xirang-username")).toBeNull();
+  });
+
+  it("登录、退出和关闭两步验证会清理 session 级 step-up proof", async () => {
+    const user = userEvent.setup();
+    saveStepUpProof("proof-before-login", Date.now() + 60_000);
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>
+    );
+
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+
+    saveStepUpProof("proof-before-disable", Date.now() + 60_000);
+    await user.click(screen.getByRole("button", { name: "关闭两步验证" }));
+    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+
+    saveStepUpProof("proof-before-logout", Date.now() + 60_000);
+    await user.click(screen.getByRole("button", { name: "退出" }));
+    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+  });
+
+  it("ensureStepUpProof 会复用未过期 proof", async () => {
+    saveStepUpProof("cached-proof", Date.now() + 60_000);
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>
+    );
+
+    await act(async () => {
+      screen.getByRole("button", { name: "请求二次验证" }).click();
+    });
+
+    expect(screen.getByTestId("step-up-proof").textContent).toBe("cached-proof");
+    expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("cached-proof");
+    expect(screen.queryByText("需要二次验证")).toBeNull();
   });
 });

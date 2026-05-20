@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
@@ -30,8 +31,9 @@ type TaskRunner interface {
 }
 
 type TaskHandler struct {
-	db     *gorm.DB
-	runner TaskRunner
+	db         *gorm.DB
+	runner     TaskRunner
+	jwtManager *auth.JWTManager
 }
 
 type taskRefValidationError struct {
@@ -44,6 +46,11 @@ func (e *taskRefValidationError) Error() string {
 
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
 	return &TaskHandler{db: db, runner: runner}
+}
+
+func (h *TaskHandler) WithJWTManager(jwtManager *auth.JWTManager) *TaskHandler {
+	h.jwtManager = jwtManager
+	return h
 }
 
 type taskRequest struct {
@@ -686,23 +693,32 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	}
 
 	results := make([]triggerResult, 0, len(req.TaskIDs))
+	tasksToTrigger := make([]uint, 0, len(req.TaskIDs))
 	successCount := 0
 	failureCount := 0
 	blockedCount := 0
 	for _, tid := range req.TaskIDs {
+		var t model.Task
+		if lookupErr := h.db.Select("id", "node_id").First(&t, tid).Error; lookupErr != nil {
+			failureCount++
+			results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
+			continue
+		}
 		if needFilter {
-			var t model.Task
-			if lookupErr := h.db.Select("id", "node_id").First(&t, tid).Error; lookupErr != nil {
-				failureCount++
-				results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
-				continue
-			}
 			if _, ok := allowedNodeIDSet[t.NodeID]; !ok {
 				blockedCount++
 				results = append(results, triggerResult{TaskID: tid, Error: "无权操作该任务"})
 				continue
 			}
 		}
+		tasksToTrigger = append(tasksToTrigger, tid)
+	}
+
+	if len(tasksToTrigger) > 0 && !EnforceStepUp(c, h.db, h.jwtManager, "task.batch_trigger", sshutil.PurposeTaskCommand, "task_bulk_run") {
+		return
+	}
+
+	for _, tid := range tasksToTrigger {
 		runID, err := h.runner.TriggerManual(tid)
 		if err != nil {
 			failureCount++
@@ -711,6 +727,15 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		}
 		results = append(results, triggerResult{TaskID: tid, RunID: runID})
 		successCount++
+	}
+
+	if len(tasksToTrigger) == 0 {
+		respondOK(c, gin.H{
+			"results":       results,
+			"total":         len(req.TaskIDs),
+			"success_count": successCount,
+		})
+		return
 	}
 
 	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{

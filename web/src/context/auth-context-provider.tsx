@@ -1,14 +1,23 @@
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
+  type FormEvent,
   type PropsWithChildren
 } from "react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   AuthContext,
   type AuthContextValue,
   type AuthRole,
 } from "@/context/auth-context.shared";
+import i18n from "@/i18n";
+import { apiClient } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/core";
+import { clearStepUpProof as clearStoredStepUpProof, readStepUpProof, saveStepUpProof } from "@/lib/step-up-storage";
 
 const AUTH_TOKEN_KEY = "xirang-auth-token";
 const AUTH_USERNAME_KEY = "xirang-username";
@@ -22,6 +31,11 @@ type StoredAuthState = {
   role: AuthRole | null;
   userId: number | null;
   totpEnabled: boolean;
+};
+
+type PendingStepUpRequest = {
+  resolve: (proof: string) => void;
+  reject: (error: Error) => void;
 };
 
 function getSessionStorage() {
@@ -127,6 +141,11 @@ function readStoredAuthState(): StoredAuthState {
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
+  const pendingStepUpRef = useRef<PendingStepUpRequest | null>(null);
+  const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
+  const [stepUpCode, setStepUpCode] = useState("");
+  const [stepUpError, setStepUpError] = useState<string | null>(null);
+  const [stepUpSubmitting, setStepUpSubmitting] = useState(false);
 
   const login = useCallback((
     nextToken: string,
@@ -137,6 +156,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   ) => {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
+    clearStoredStepUpProof();
     const validUserId = typeof nextUserID === "number" && Number.isFinite(nextUserID) && nextUserID > 0
       ? nextUserID
       : null;
@@ -178,6 +198,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     safeRemoveItem(sessionStorageRef, AUTH_ROLE_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_USER_ID_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY);
+    clearStoredStepUpProof();
     safeRemoveItem(localStorageRef, AUTH_TOKEN_KEY);
     safeRemoveItem(localStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(localStorageRef, AUTH_ROLE_KEY);
@@ -189,8 +210,80 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const setTotpEnabled = useCallback((enabled: boolean) => {
     const sessionStorageRef = getSessionStorage();
     safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(enabled));
+    if (!enabled) {
+      clearStoredStepUpProof();
+    }
     setAuthState((prev) => ({ ...prev, totpEnabled: enabled }));
   }, []);
+
+  const clearStepUpProof = useCallback(() => {
+    clearStoredStepUpProof();
+  }, []);
+
+  const ensureStepUpProof = useCallback(async (): Promise<string> => {
+    const cached = readStepUpProof();
+    if (cached) {
+      return cached.proof;
+    }
+    if (!token) {
+      throw new Error(i18n.t("stepUp.loginRequired"));
+    }
+    if (!totpEnabled) {
+      throw new Error(i18n.t("stepUp.totpRequired"));
+    }
+    if (pendingStepUpRef.current) {
+      pendingStepUpRef.current.reject(new Error(i18n.t("stepUp.alreadyOpen")));
+      pendingStepUpRef.current = null;
+    }
+    setStepUpCode("");
+    setStepUpError(null);
+    setStepUpDialogOpen(true);
+    return new Promise<string>((resolve, reject) => {
+      pendingStepUpRef.current = { resolve, reject };
+    });
+  }, [token, totpEnabled]);
+
+  const closeStepUpDialog = useCallback(() => {
+    if (stepUpSubmitting) {
+      return;
+    }
+    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.cancelled")));
+    pendingStepUpRef.current = null;
+    setStepUpDialogOpen(false);
+    setStepUpCode("");
+    setStepUpError(null);
+  }, [stepUpSubmitting]);
+
+  const handleStepUpSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !pendingStepUpRef.current) {
+      return;
+    }
+    const code = stepUpCode.trim();
+    if (!code) {
+      setStepUpError(i18n.t("stepUp.codeRequired"));
+      return;
+    }
+    setStepUpSubmitting(true);
+    setStepUpError(null);
+    try {
+      const response = await apiClient.requestStepUpProof(token, code);
+      const expiresAt = Date.parse(response.expires_at);
+      const ttlMillis = Number(response.proof_ttl_seconds || 0) * 1000;
+      const fallbackExpiresAt = ttlMillis > 0 ? Date.now() + ttlMillis : Date.now();
+      const proofExpiresAt = Number.isFinite(expiresAt) ? expiresAt : fallbackExpiresAt;
+      saveStepUpProof(response.proof, proofExpiresAt);
+      pendingStepUpRef.current.resolve(response.proof);
+      pendingStepUpRef.current = null;
+      setStepUpDialogOpen(false);
+      setStepUpCode("");
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : i18n.t("stepUp.verifyFailed");
+      setStepUpError(message || i18n.t("stepUp.verifyFailed"));
+    } finally {
+      setStepUpSubmitting(false);
+    }
+  }, [stepUpCode, token]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -202,10 +295,60 @@ export function AuthProvider({ children }: PropsWithChildren) {
       isAuthenticated: Boolean(token),
       login,
       logout,
-      setTotpEnabled
+      setTotpEnabled,
+      ensureStepUpProof,
+      clearStepUpProof
     }),
-    [login, logout, role, token, userId, username, totpEnabled, setTotpEnabled]
+    [login, logout, role, token, userId, username, totpEnabled, setTotpEnabled, ensureStepUpProof, clearStepUpProof]
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      <Dialog open={stepUpDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          closeStepUpDialog();
+        }
+      }}>
+        <DialogContent size="sm">
+          <form onSubmit={handleStepUpSubmit}>
+            <DialogHeader>
+              <DialogTitle>{i18n.t("stepUp.title")}</DialogTitle>
+              <DialogDescription>{i18n.t("stepUp.description")}</DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="step-up-code">
+                  {i18n.t("stepUp.codeLabel")}
+                </label>
+                <Input
+                  id="step-up-code"
+                  value={stepUpCode}
+                  onChange={(event) => setStepUpCode(event.target.value)}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="one-time-code"
+                  placeholder={i18n.t("stepUp.codePlaceholder")}
+                  disabled={stepUpSubmitting}
+                />
+              </div>
+              {stepUpError ? (
+                <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+                  {stepUpError}
+                </p>
+              ) : null}
+            </DialogBody>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeStepUpDialog} disabled={stepUpSubmitting}>
+                {i18n.t("common.cancel")}
+              </Button>
+              <Button type="submit" loading={stepUpSubmitting}>
+                {i18n.t("stepUp.verify")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </AuthContext.Provider>
+  );
 }

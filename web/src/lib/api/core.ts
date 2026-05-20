@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { clearStepUpProof } from "@/lib/step-up-storage";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const DEV_DIRECT_API_BASE_URL = import.meta.env.VITE_DEV_API_DIRECT_URL ?? "http://127.0.0.1:8080/api/v1";
@@ -19,6 +20,7 @@ export type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string;
+  stepUpProof?: string;
   signal?: AbortSignal;
 };
 
@@ -52,6 +54,9 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
   }
   if (options.token) {
     headers["Authorization"] = `Bearer ${options.token}`;
+  }
+  if (options.stepUpProof) {
+    headers["X-Xirang-Step-Up"] = options.stepUpProof;
   }
   return fetch(`${baseUrl}${path}`, {
     method,
@@ -132,6 +137,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       sessionStorage.removeItem("xirang-role");
       sessionStorage.removeItem("xirang-user-id");
       sessionStorage.removeItem("xirang-totp-enabled");
+      clearStepUpProof();
     } catch { /* ignore */ }
     if (typeof window !== "undefined") {
       window.location.href = buildLoginRedirectPath(window.location);
@@ -162,6 +168,18 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   return payload as T;
+}
+
+export function isStepUpRequiredError(error: unknown): error is ApiError {
+  if (!(error instanceof ApiError) || error.status !== 403) {
+    return false;
+  }
+  const detail = error.detail;
+  if (!detail || typeof detail !== "object") {
+    return false;
+  }
+  const data = (detail as { data?: unknown }).data;
+  return Boolean(data && typeof data === "object" && (data as { error_code?: unknown }).error_code === "STEP_UP_REQUIRED");
 }
 
 export async function fetchWithFallback(url: string, options: RequestInit): Promise<Response> {

@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend pre-development checklist for auth, middleware, handlers, tests, and migrations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Step-up-required and invalid-proof responses must use safe envelopes without leaking sensitive details."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"High-risk auth/RBAC/ownership changes require denial tests and secret-safe handling."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend pre-development checklist for route/component/API changes and checks."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Step-up API wrappers must keep raw wire types private and map to typed domain data."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Step-up proof storage must remain session-scoped and expire safely."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Step-up prompt UI should follow existing dialog/component conventions."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Feature spans backend auth, high-risk handlers, credential audit, frontend API wrappers, and UI retry flows."}
+{"file":".trellis/tasks/05-19-security-p1d-step-up-auth-high-risk/research/code-surfaces.md","reason":"Maps existing JWT/TOTP, high-risk routes, credential-audit writers, and frontend surfaces for P1d."}

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -25,12 +26,18 @@ type BatchTaskRunner interface {
 
 // BatchHandler 处理批量命令执行相关请求。
 type BatchHandler struct {
-	db      *gorm.DB
-	manager BatchTaskRunner
+	db         *gorm.DB
+	manager    BatchTaskRunner
+	jwtManager *auth.JWTManager
 }
 
 func NewBatchHandler(db *gorm.DB, manager BatchTaskRunner) *BatchHandler {
 	return &BatchHandler{db: db, manager: manager}
+}
+
+func (h *BatchHandler) WithJWTManager(jwtManager *auth.JWTManager) *BatchHandler {
+	h.jwtManager = jwtManager
+	return h
 }
 
 // Create godoc
@@ -101,6 +108,10 @@ func (h *BatchHandler) Create(c *gin.Context) {
 			return
 		}
 		nodes = append(nodes, batchNode{ID: node.ID, Name: node.Name})
+	}
+
+	if !EnforceStepUp(c, h.db, h.jwtManager, "batch_command.create", sshutil.PurposeBatchCommand, "batch_run") {
+		return
 	}
 
 	var taskIDs []uint

@@ -20,6 +20,12 @@ export interface TOTPLoginResponse {
   };
 }
 
+export interface StepUpProofResponse {
+  proof: string;
+  expires_at: string;
+  proof_ttl_seconds: number;
+}
+
 export function createTOTPApi() {
   return {
     async totpSetup(token: string): Promise<TOTPSetupResponse> {
@@ -49,6 +55,14 @@ export function createTOTPApi() {
       return request<TOTPLoginResponse>("/auth/2fa/login", {
         method: "POST",
         body: { login_token: loginToken, totp_code: totpCode },
+      });
+    },
+
+    async requestStepUpProof(token: string, code: string): Promise<StepUpProofResponse> {
+      return request<StepUpProofResponse>("/auth/step-up", {
+        method: "POST",
+        token,
+        body: { code },
       });
     },
   };

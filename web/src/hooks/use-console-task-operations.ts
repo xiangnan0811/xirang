@@ -4,6 +4,7 @@ import { apiClient } from "@/lib/api/client";
 import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { buildDemoTask } from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
@@ -44,6 +45,7 @@ export function useTaskOperations({
   handleWriteApiError
 }: UseTaskOperationsParams) {
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
+  const withStepUp = useStepUpAction();
 
   const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
     const result = await exec(i18n.t("tasks.actions.createTask"), (t) => apiClient.createTask(t, input));
@@ -104,7 +106,7 @@ export function useTaskOperations({
 
   const triggerTask = useCallback(async (taskID: number) => {
     const result = await exec(i18n.t("tasks.actions.triggerTask"), async (t) => {
-      await apiClient.triggerTask(t, taskID);
+      await withStepUp((proof) => apiClient.triggerTask(t, taskID, proof));
       return apiClient.getTask(t, taskID).catch(() => null);
     });
     if (result && !result.ok) return;
@@ -125,7 +127,7 @@ export function useTaskOperations({
           : task
       )
     );
-  }, [exec, markTasksMutated, setTasks]);
+  }, [exec, markTasksMutated, setTasks, withStepUp]);
 
   const cancelTask = useCallback(async (taskID: number) => {
     const result = await exec(i18n.t("tasks.actions.cancelTask"), async (t) => {

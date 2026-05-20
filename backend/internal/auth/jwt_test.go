@@ -39,6 +39,43 @@ func TestJWTManagerRevokeToken(t *testing.T) {
 	}
 }
 
+func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
+
+	proof, expiresAt, err := manager.GenerateStepUpToken(user)
+	if err != nil {
+		t.Fatalf("生成 step-up proof 失败: %v", err)
+	}
+	if proof == "" {
+		t.Fatalf("step-up proof 不应为空")
+	}
+
+	claims, err := manager.ParseToken(proof)
+	if err != nil {
+		t.Fatalf("解析 step-up proof 失败: %v", err)
+	}
+	if claims.Purpose != PurposeStepUp {
+		t.Fatalf("期望 purpose=%q，实际 %q", PurposeStepUp, claims.Purpose)
+	}
+	if claims.UserID != user.ID || claims.Username != user.Username || claims.Role != user.Role || claims.TokenVersion != user.TokenVersion {
+		t.Fatalf("step-up claims 未包含当前用户身份、角色和 token version: %+v", claims)
+	}
+	if claims.ID == "" {
+		t.Fatalf("step-up proof 应包含 jti")
+	}
+	if claims.IssuedAt == nil || claims.ExpiresAt == nil {
+		t.Fatalf("step-up proof 应包含 iat/exp")
+	}
+	if !claims.ExpiresAt.Equal(expiresAt.Truncate(time.Second)) {
+		t.Fatalf("返回的 expiresAt 应与 claims exp 一致，claims=%s returned=%s", claims.ExpiresAt.Time, expiresAt)
+	}
+	ttl := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
+	if ttl != StepUpProofTTL {
+		t.Fatalf("step-up proof TTL 应为 %s，实际 %s", StepUpProofTTL, ttl)
+	}
+}
+
 func TestJWTManagerRevokeTokenPersistsAndReloads(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
 	if err != nil {
