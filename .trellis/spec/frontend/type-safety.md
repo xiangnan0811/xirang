@@ -201,6 +201,69 @@ const firstStep = item.nextSteps[0]?.label;
 
 ---
 
+## Scenario: Credential Access Grant Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing frontend access to credential access grant request/response DTOs.
+- Applies to `web/src/lib/api/credential-access-grants-api.ts`, `web/src/types/domain.ts`, API client exports, and UI that renders grant status, expiry, node binding, or denial details.
+
+### 2. Signatures
+
+- Raw API endpoint: `POST /credential-access-grants/terminal` through `request<T>()`.
+- Raw request fields: `node_id`, `reason`, and optional `ttl_seconds`; step-up proof is sent through the existing request option/header, not in the JSON body.
+- Raw response fields include `id`, `requester_user_id`, `requester_username`, `requester_role`, `action`, `purpose`, `node_id`, `reason`, `status`, `requested_ttl_seconds`, `expires_at`, optional `approver_user_id`, optional `approver_username`, `created_at`, and `updated_at`.
+- Domain type: `CredentialAccessGrant` with camelCase fields such as `requesterUserId`, `nodeId`, `requestedTtlSeconds`, `expiresAt`, and `createdAt`.
+
+### 3. Contracts
+
+- Keep raw snake_case grant types private to the API module; components consume only camelCase domain fields.
+- Normalize all numeric IDs/TTLs with finite-number fallbacks so invalid wire values never enter React state as `NaN`.
+- Preserve grant status/action/purpose strings from the backend as constrained unions where practical; unknown status should degrade to a safe non-authorizing value such as `expired` or `denied`.
+- Treat `reason` from the API as already sanitized backend text, but keep it bounded in mappers/UI and never enrich it with hostnames, usernames-plus-hosts, endpoints, credentials, command text, or terminal output.
+- Grant-required error detection must use machine-readable error codes such as `CREDENTIAL_GRANT_REQUIRED`; do not infer grant state from localized message text.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Response has missing or invalid numeric fields | Map to finite safe fallbacks, never `NaN`. |
+| Optional approver fields are null/missing | Map to `undefined` or `null` consistently; do not invent an approver. |
+| Unknown `status` value | Degrade to a safe non-active status and keep UI non-authorizing. |
+| Raw `expires_at` / `created_at` is missing or malformed | Keep the raw string if displayable or fallback to an empty string; do not store `Invalid Date`. |
+| API throws `CREDENTIAL_GRANT_REQUIRED` or related denial code | Keep it as an API/control-flow error, not as auth session expiry. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: mapper receives `requested_ttl_seconds` and exposes `requestedTtlSeconds`; terminal UI uses typed API method and renders sanitized backend message.
+- Base: missing optional approver maps to no approver display while the grant remains usable according to backend status/expiry.
+- Bad: passing raw `node_id`/`expires_at` objects into components, using localized message text to detect grant-required, or storing grant DTOs in browser storage.
+
+### 6. Tests Required
+
+- API mapper tests must cover snake_case to camelCase mapping for all grant fields.
+- API mapper tests must cover invalid numeric fields, nullable approver fields, malformed time fields, and unknown status fallback.
+- Core error tests or component tests must cover machine-readable grant-required detection separately from login/session expiry handling.
+- UI tests must prove grant DTOs and reason drafts are not persisted to browser storage.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const grant = await request<CredentialAccessGrant>("/credential-access-grants/terminal", { token });
+if (error.message.includes("grant")) openGrantDialog();
+```
+
+Correct:
+
+```ts
+const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/terminal", { token });
+return mapCredentialAccessGrant(raw);
+```
+
+---
+
 ## Scenario: SSH Key Scope Mapping
 
 ### 1. Scope / Trigger

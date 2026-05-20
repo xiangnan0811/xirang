@@ -87,6 +87,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/credential-audit-events/export") {
 		t.Fatalf("未注册凭据审计事件导出接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/terminal") {
+		t.Fatalf("未注册终端凭据临时授权接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/alerts/:id/retry-delivery") {
 		t.Fatalf("未注册告警投递重发接口")
 	}
@@ -155,6 +158,80 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	router.ServeHTTP(adminResp, adminReq)
 	if adminResp.Code != http.StatusOK {
 		t.Fatalf("admin 应能访问安全风险摘要接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+
+func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_GRANT_ROUTE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 2)
+	proofs := make(map[string]string, 2)
+	for _, role := range []string{"admin", "viewer"} {
+		user := model.User{
+			Username:     "grant-route-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+			TOTPEnabled:  true,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		proof, _, err := jwtManager.GenerateStepUpToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s step-up proof 失败: %v", role, err)
+		}
+		tokens[role] = token
+		proofs[role] = proof
+	}
+	node := model.Node{Name: "grant-route-node", Host: "10.0.0.51", Port: 22, Username: "root", AuthType: "password", BackupDir: "grant-route-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	body := fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":600}`, node.ID)
+
+	viewerReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/terminal", strings.NewReader(body))
+	viewerReq.Header.Set("Content-Type", "application/json")
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerReq.Header.Set("X-Xirang-Step-Up", proofs["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 应被终端授权接口 RBAC 拒绝，实际状态码: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	adminNoProofReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/terminal", strings.NewReader(body))
+	adminNoProofReq.Header.Set("Content-Type", "application/json")
+	adminNoProofReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminNoProofResp := httptest.NewRecorder()
+	router.ServeHTTP(adminNoProofResp, adminNoProofReq)
+	if adminNoProofResp.Code != http.StatusForbidden || !strings.Contains(adminNoProofResp.Body.String(), "STEP_UP_REQUIRED") {
+		t.Fatalf("admin 缺少 step-up proof 应被拒绝并返回机器可读字段，实际: %d，body=%s", adminNoProofResp.Code, adminNoProofResp.Body.String())
+	}
+
+	adminReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/terminal", strings.NewReader(body))
+	adminReq.Header.Set("Content-Type", "application/json")
+	adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminReq.Header.Set("X-Xirang-Step-Up", proofs["admin"])
+	adminResp := httptest.NewRecorder()
+	router.ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusCreated {
+		t.Fatalf("admin 带 step-up proof 应能申请终端授权，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
 	}
 }
 

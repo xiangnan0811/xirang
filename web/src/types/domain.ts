@@ -599,6 +599,30 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
+export interface CredentialAccessGrant {
+  id: number;
+  requesterUserId: number;
+  requesterUsername: string;
+  requesterRole: string;
+  action: string;
+  purpose: string;
+  nodeId?: number;
+  taskId?: number;
+  policyId?: number;
+  reason: string;
+  status: string;
+  requestedTtlSeconds: number;
+  requestedAt: string;
+  approvedAt?: string;
+  approverUserId?: number;
+  approverUsername?: string;
+  expiresAt: string;
+  revokedAt?: string;
+  revokedByUserId?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CredentialAuditEventRecord {
   id: number;
   userId: number;

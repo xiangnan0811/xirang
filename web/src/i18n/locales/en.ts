@@ -2356,6 +2356,17 @@ const en = {
     reconnected: "Session reconnected. The previous SSH session is invalid; please sign in again.",
     giveUp: "Maximum reconnection attempts reached. Please close this terminal and reopen.",
     stepUpFailed: "Additional verification failed.",
+    ariaLabel: "Web terminal interaction area",
+    grantRequired: "Terminal temporary grant required",
+    grantTitle: "Terminal temporary grant required",
+    grantDescription: "Terminal sessions use node SSH credentials. Enter the reason for this access; after additional verification, Xirang will create a short-lived grant and retry the connection.",
+    grantReasonLabel: "Grant reason",
+    grantReasonPlaceholder: "For example: investigate an alert or perform scheduled maintenance",
+    grantReasonHint: "Up to {{max}} characters. Do not include passwords, keys, tokens, command output, or host-sensitive details.",
+    grantReasonRequired: "Enter a grant reason.",
+    grantReasonTooLong: "Grant reason must be at most {{max}} characters.",
+    grantRequestFailed: "Failed to request terminal grant. Please try again.",
+    grantSubmit: "Request and retry",
   },
 
   // ── tree component ──

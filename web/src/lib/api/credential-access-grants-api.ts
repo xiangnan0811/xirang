@@ -1,0 +1,89 @@
+import type { CredentialAccessGrant } from "@/types/domain";
+import { request } from "./core";
+
+interface CredentialAccessGrantResponse {
+  id?: unknown;
+  requester_user_id?: unknown;
+  requester_username?: unknown;
+  requester_role?: unknown;
+  action?: unknown;
+  purpose?: unknown;
+  node_id?: unknown;
+  task_id?: unknown;
+  policy_id?: unknown;
+  reason?: unknown;
+  status?: unknown;
+  requested_ttl_seconds?: unknown;
+  requested_at?: unknown;
+  approved_at?: unknown;
+  approver_user_id?: unknown;
+  approver_username?: unknown;
+  expires_at?: unknown;
+  revoked_at?: unknown;
+  revoked_by_user_id?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function positiveNumberOrUndefined(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | null | undefined): CredentialAccessGrant {
+  const row = raw ?? {};
+  return {
+    id: finiteNumber(row.id),
+    requesterUserId: finiteNumber(row.requester_user_id),
+    requesterUsername: stringValue(row.requester_username),
+    requesterRole: stringValue(row.requester_role),
+    action: stringValue(row.action),
+    purpose: stringValue(row.purpose),
+    nodeId: positiveNumberOrUndefined(row.node_id),
+    taskId: positiveNumberOrUndefined(row.task_id),
+    policyId: positiveNumberOrUndefined(row.policy_id),
+    reason: stringValue(row.reason),
+    status: stringValue(row.status),
+    requestedTtlSeconds: finiteNumber(row.requested_ttl_seconds),
+    requestedAt: stringValue(row.requested_at),
+    approvedAt: stringValue(row.approved_at) || undefined,
+    approverUserId: positiveNumberOrUndefined(row.approver_user_id),
+    approverUsername: stringValue(row.approver_username) || undefined,
+    expiresAt: stringValue(row.expires_at),
+    revokedAt: stringValue(row.revoked_at) || undefined,
+    revokedByUserId: positiveNumberOrUndefined(row.revoked_by_user_id),
+    createdAt: stringValue(row.created_at),
+    updatedAt: stringValue(row.updated_at),
+  };
+}
+
+export function createCredentialAccessGrantsApi() {
+  return {
+    async requestTerminalCredentialGrant(
+      token: string,
+      input: { nodeId: number; reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant> {
+      const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/terminal", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          node_id: input.nodeId,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return mapCredentialAccessGrant(raw);
+    },
+  };
+}

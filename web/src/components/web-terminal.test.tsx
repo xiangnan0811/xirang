@@ -1,8 +1,10 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiClient } from "@/lib/api/client";
 import WebTerminal from "./web-terminal";
 
-const { ensureStepUpProofMock, clearStepUpProofMock, socketInstances } = vi.hoisted(() => {
+const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGrantMock, socketInstances } = vi.hoisted(() => {
   const instances: Array<{
     options: {
       url: string;
@@ -21,6 +23,7 @@ const { ensureStepUpProofMock, clearStepUpProofMock, socketInstances } = vi.hois
   return {
     ensureStepUpProofMock: vi.fn(),
     clearStepUpProofMock: vi.fn(),
+    requestTerminalCredentialGrantMock: vi.fn(),
     socketInstances: instances,
   };
 });
@@ -30,6 +33,12 @@ vi.mock("@/context/auth-context.hooks", () => ({
     ensureStepUpProof: ensureStepUpProofMock,
     clearStepUpProof: clearStepUpProofMock,
   }),
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    requestTerminalCredentialGrant: requestTerminalCredentialGrantMock,
+  },
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -81,8 +90,12 @@ describe("WebTerminal", () => {
   beforeEach(() => {
     ensureStepUpProofMock.mockReset();
     clearStepUpProofMock.mockReset();
+    requestTerminalCredentialGrantMock.mockReset();
     socketInstances.length = 0;
+    sessionStorage.clear();
+    localStorage.clear();
     ensureStepUpProofMock.mockResolvedValue("proof-1");
+    requestTerminalCredentialGrantMock.mockResolvedValue({ id: 1, status: "active" });
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { protocol: "https:", host: "ops.example.test" },
@@ -126,5 +139,77 @@ describe("WebTerminal", () => {
 
     expect(clearStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(socketInstances[0].closed).toBe(true);
+  });
+
+  it("grant-required close 会打开授权原因弹窗、申请授权并重试终端连接", async () => {
+    const user = userEvent.setup();
+    const onDisconnect = vi.fn();
+    render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => expect(socketInstances).toHaveLength(1));
+    clearStepUpProofMock.mockClear();
+    act(() => {
+      socketInstances[0].options.onClose?.({ code: 1008, reason: "CREDENTIAL_GRANT_REQUIRED:required" });
+    });
+
+    expect(clearStepUpProofMock).not.toHaveBeenCalled();
+    expect(socketInstances[0].closed).toBe(true);
+    expect(onDisconnect).not.toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "需要终端临时授权" })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("授权原因"), "处理告警");
+    await user.click(screen.getByRole("button", { name: "申请并重试" }));
+
+    await waitFor(() => expect(requestTerminalCredentialGrantMock).toHaveBeenCalledTimes(1));
+    expect(apiClient.requestTerminalCredentialGrant).toHaveBeenCalledWith(
+      "token-1",
+      { nodeId: 7, reason: "处理告警", requestedTtlSeconds: 600 },
+      "proof-1",
+    );
+    await waitFor(() => expect(socketInstances).toHaveLength(2));
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify({ ...localStorage })).not.toContain("CREDENTIAL_GRANT_REQUIRED");
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain("CREDENTIAL_GRANT_REQUIRED");
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("处理告警");
+  });
+
+  it("grant-required close 会清洗展示的 close reason 详情", async () => {
+    render(<WebTerminal nodeId={7} token="token-1" />);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => expect(socketInstances).toHaveLength(1));
+    act(() => {
+      socketInstances[0].options.onClose?.({ code: 1008, reason: "CREDENTIAL_GRANT_REQUIRED:expired<script>" });
+    });
+
+    const dialog = await screen.findByRole("dialog", { name: "需要终端临时授权" });
+    expect(dialog).toHaveTextContent("需要终端临时授权 (expiredscript)");
+    expect(dialog).not.toHaveTextContent("<script>");
+  });
+
+  it("grant-required close 后提交空原因会显示校验错误且不申请授权", async () => {
+    const user = userEvent.setup();
+    render(<WebTerminal nodeId={7} token="token-1" />);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => expect(socketInstances).toHaveLength(1));
+    act(() => {
+      socketInstances[0].options.onClose?.({ code: 1008, reason: "CREDENTIAL_GRANT_REQUIRED:expired" });
+    });
+
+    await user.click(await screen.findByRole("button", { name: "申请并重试" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请填写授权原因。");
+    expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
   });
 });
