@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.0](https://github.com/xiangnan0811/xirang/compare/v0.42.0...v0.43.0) (2026-05-20)
+
+
+### ✨ Features
+
+* **security:** add terminal credential access grants ([ec8e13a](https://github.com/xiangnan0811/xirang/commit/ec8e13ad960bda63dddc74dd4191a3383c6f68f7))
+
 ## [0.42.0](https://github.com/xiangnan0811/xirang/compare/v0.41.0...v0.42.0) (2026-05-20)
 
 
