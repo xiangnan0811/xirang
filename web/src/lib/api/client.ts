@@ -1,6 +1,7 @@
 import { createAlertsApi } from "./alerts-api";
 import { createAuditApi } from "./audit-api";
 import { createAuthApi } from "./auth-api";
+import { createCredentialAuditApi } from "./credential-audit-api";
 import { createBatchApi } from "./batch-api";
 import { createIntegrationsApi } from "./integrations-api";
 import { createNodeMetricsApi } from "./node-metrics-api";
@@ -45,6 +46,7 @@ export const apiClient = {
   ...createIntegrationsApi(),
   ...createAlertsApi(),
   ...createAuditApi(),
+  ...createCredentialAuditApi(),
   ...createUsersApi(),
   ...createTOTPApi(),
   ...createSnapshotsApi(),

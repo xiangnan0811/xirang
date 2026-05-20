@@ -568,6 +568,58 @@ export interface AuditLogRecord {
   createdAt: string;
 }
 
+export type CredentialAuditOutcome = "success" | "failure" | "blocked" | "unknown";
+
+export type CredentialAuditAction =
+  | "ssh_key.test_connection"
+  | "ssh_key.export"
+  | "node.credential.test_connection"
+  | "terminal.open"
+  | "terminal.failure"
+  | "terminal.close"
+  | "task.manual_trigger"
+  | "task.restore_trigger"
+  | "task.batch_trigger"
+  | "batch_command.create"
+  | "task.credential.use"
+  | "drill.trigger"
+  | "drill.phase"
+  | "file_browser.list"
+  | "file_browser.preview"
+  | "docker_volumes.discover"
+  | "config.export"
+  | "node.doctor.run"
+  | "node_migration.preflight"
+  | "probe.ssh"
+  | "probe.metrics"
+  | "node_logs.collect"
+  | "other";
+
+export type CredentialAuditMetadataValue = string | number | boolean | string[];
+
+export interface CredentialAuditEventRecord {
+  id: number;
+  userId: number;
+  username: string;
+  role: string;
+  action: CredentialAuditAction;
+  rawAction: string;
+  purpose: string;
+  credentialKind: string;
+  credentialSource: string;
+  sshKeyId?: number;
+  nodeId?: number;
+  taskId?: number;
+  taskRunId?: number;
+  policyId?: number;
+  outcome: CredentialAuditOutcome;
+  errorMessage: string;
+  metadata: Record<string, CredentialAuditMetadataValue>;
+  clientIP: string;
+  userAgent: string;
+  createdAt: string;
+}
+
 export interface StaleNode {
   nodeId: number;
   nodeName: string;

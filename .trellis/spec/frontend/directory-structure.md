@@ -44,8 +44,8 @@ web/src/
 ## Module Organization
 
 - Put route-level screens in `web/src/pages/` and wire routes in
-  `web/src/router.tsx`. Examples: `overview-page.tsx`, `tasks-page.tsx`, and
-  `settings-page.tsx`.
+  `web/src/router.tsx`. Examples: `overview-page.tsx`, `tasks-page.tsx`,
+  `credential-audit-page.tsx`, and `settings-page.tsx`.
 - Keep `web/src/router.tsx` responsible for route object construction only.
   Put lazy page component exports and the shared lazy page fallback in
   `web/src/router-pages.tsx` so the router module does not mix component exports

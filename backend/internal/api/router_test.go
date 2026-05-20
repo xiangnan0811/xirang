@@ -81,6 +81,12 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/audit-logs/export") {
 		t.Fatalf("未注册审计导出接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/credential-audit-events") {
+		t.Fatalf("未注册凭据审计事件列表接口")
+	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/credential-audit-events/export") {
+		t.Fatalf("未注册凭据审计事件导出接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/alerts/:id/retry-delivery") {
 		t.Fatalf("未注册告警投递重发接口")
 	}
@@ -149,6 +155,73 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	router.ServeHTTP(adminResp, adminReq)
 	if adminResp.Code != http.StatusOK {
 		t.Fatalf("admin 应能访问安全风险摘要接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+
+func TestCredentialAuditEventsRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_CREDENTIAL_AUDIT_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	tokens := make(map[string]string, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username:     "credential-audit-rbac-" + role,
+			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+	}
+
+	if err := db.Create(&model.CredentialAuditEvent{
+		UserID:           1,
+		Username:         "admin",
+		Role:             "admin",
+		Action:           "ssh_key.export",
+		Purpose:          "ssh_key_export",
+		CredentialKind:   "ssh_key",
+		CredentialSource: "ssh_key_id=1",
+		Outcome:          "success",
+		Metadata:         `{"format":"json"}`,
+		CreatedAt:        time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatalf("创建凭据审计事件失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	for _, path := range []string{"/api/v1/credential-audit-events", "/api/v1/credential-audit-events/export"} {
+		for _, role := range []string{"operator", "viewer"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer "+tokens[role])
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusForbidden {
+				t.Fatalf("%s 应被凭据审计 RBAC 拒绝访问 %s，实际状态码: %d，body=%s", role, path, resp.Code, resp.Body.String())
+			}
+		}
+
+		adminReq := httptest.NewRequest(http.MethodGet, path, nil)
+		adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+		adminResp := httptest.NewRecorder()
+		router.ServeHTTP(adminResp, adminReq)
+		if adminResp.Code != http.StatusOK {
+			t.Fatalf("admin 应能访问 %s，实际状态码: %d，body=%s", path, adminResp.Code, adminResp.Body.String())
+		}
 	}
 }
 

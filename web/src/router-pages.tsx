@@ -29,6 +29,9 @@ export const TasksPage = lazy(() =>
 export const AuditPage = lazy(() =>
   import("@/pages/audit-page").then((m) => ({ default: m.AuditPage }))
 );
+export const CredentialAuditPage = lazy(() =>
+  import("@/pages/credential-audit-page").then((m) => ({ default: m.CredentialAuditPage }))
+);
 export const ReportsPage = lazy(() =>
   import("@/pages/reports-page").then((m) => ({ default: m.ReportsPage }))
 );

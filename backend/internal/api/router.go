@@ -99,6 +99,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
 	alertHandler := handlers.NewAlertHandler(dep.DB)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
+	credentialAuditHandler := handlers.NewCredentialAuditHandler(dep.DB)
 	userHandler := handlers.NewUserHandler(dep.AuthService)
 	batchHandler := handlers.NewBatchHandler(dep.DB, dep.TaskManager)
 	fileHandler := handlers.NewFileHandler(dep.DB)
@@ -256,6 +257,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/alerts/:id/retry-failed-deliveries", middleware.RBAC("alerts:write"), alertHandler.RetryFailedDeliveries)
 	secured.GET("/audit-logs", middleware.RBAC("audit:read"), auditHandler.List)
 	secured.GET("/audit-logs/export", middleware.RBAC("audit:read"), auditHandler.ExportCSV)
+	secured.GET("/credential-audit-events", middleware.RequireRole("admin"), credentialAuditHandler.List)
+	secured.GET("/credential-audit-events/export", middleware.RequireRole("admin"), credentialAuditHandler.ExportCSV)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)

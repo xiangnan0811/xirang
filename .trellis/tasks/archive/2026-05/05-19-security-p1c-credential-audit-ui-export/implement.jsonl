@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-19-security-p1c-credential-audit-ui-export/prd.md","reason":"P1c requirements, acceptance criteria, scope boundaries, and implementation approach"}
+{"file":".trellis/tasks/05-19-security-p1c-credential-audit-ui-export/research/code-surfaces.md","reason":"Mapped backend/frontend code surfaces, endpoint/filter contract, safety constraints, and test targets"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Durable credential audit safety contract and action strings"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Backend no-secret/no-output logging constraints"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend client error secrecy constraints"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API boundary and credential/security UI safety constraints"}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Frontend accessibility constraints for filters/buttons/dialogs"}
