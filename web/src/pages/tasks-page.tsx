@@ -14,6 +14,7 @@ import { useClientPagination } from "@/hooks/use-client-pagination";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -93,6 +94,7 @@ export function TasksPage() {
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const { token: authToken } = useAuth();
+  const withStepUp = useStepUpAction();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
@@ -371,7 +373,7 @@ export function TasksPage() {
     });
     if (!ok) return;
     try {
-      const result = await apiClient.batchTriggerTasks(authToken!, selectedTaskIds);
+      const result = await withStepUp((proof) => apiClient.batchTriggerTasks(authToken!, selectedTaskIds, proof));
       setSelectedTaskIds([]);
       toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
       void refreshTasks();

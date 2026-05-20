@@ -13,7 +13,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
-import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { createSSHKeysApi, fetchSSHKeyExportFile } from "@/lib/api/ssh-keys-api";
+import { isStepUpRequiredError } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import type { SSHKeyRecord } from "@/types/domain";
 
@@ -95,6 +97,7 @@ export function SSHKeyExportDialog({
   const [format, setFormat] = useState<ExportFormat>("authorized_keys");
   const [scope, setScope] = useState<ExportScope>("all");
   const [downloading, setDownloading] = useState(false);
+  const withStepUp = useStepUpAction();
 
   // 根据 scope 筛选出预览使用的密钥列表
   const filteredKeys = useMemo(() => {
@@ -136,13 +139,16 @@ export function SSHKeyExportDialog({
       const ids = scope === "selected" ? selectedKeyIds : undefined;
       const url = apiClient.getExportUrl(format, apiScope, ids);
 
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
+      const response = await withStepUp(async (proof) => {
+        try {
+          return await fetchSSHKeyExportFile(url, token, proof);
+        } catch (error) {
+          if (isStepUpRequiredError(error)) {
+            throw error;
+          }
+          throw error;
+        }
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
 
       const blob = await response.blob();
       const a = document.createElement("a");

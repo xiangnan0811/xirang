@@ -50,11 +50,13 @@ export function createBatchApi() {
       nodeIds: number[],
       command: string,
       name?: string,
-      retain?: boolean
+      retain?: boolean,
+      stepUpProof?: string
     ): Promise<BatchResult> {
       const payload = await request<BatchCreateResponse>("/batch-commands", {
         method: "POST",
         token,
+        stepUpProof,
         body: { node_ids: nodeIds, command, name, retain: retain ?? false },
       });
       return {

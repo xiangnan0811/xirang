@@ -33,9 +33,9 @@ function summarizeImportResult(data: ConfigImportBreakdown): { imported: number;
 
 export function createConfigApi() {
   return {
-    async exportConfig(token: string, includeSecrets = false): Promise<ConfigExportPayload> {
+    async exportConfig(token: string, includeSecrets = false, stepUpProof?: string): Promise<ConfigExportPayload> {
       const query = includeSecrets ? "?include_secrets=true" : "";
-      return request<ConfigExportPayload>(`/config/export${query}`, { token });
+      return request<ConfigExportPayload>(`/config/export${query}`, { token, stepUpProof });
     },
 
     async importConfig(token: string, data: Record<string, unknown>, conflict: "skip" | "overwrite" = "skip"): Promise<{ imported: number; skipped: number }> {

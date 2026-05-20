@@ -1827,6 +1827,21 @@ const en = {
     backToHistory: "Back to history",
   },
 
+  // ── Step-up authentication ──
+  stepUp: {
+    title: "Additional verification required",
+    description: "Enter a current authenticator code to continue this high-risk operation.",
+    codeLabel: "Authenticator code",
+    codePlaceholder: "Enter 6-digit code",
+    verify: "Verify",
+    loginRequired: "Please sign in again before continuing.",
+    totpRequired: "Two-factor authentication must be enabled before this operation.",
+    alreadyOpen: "Another verification prompt was replaced by this request.",
+    cancelled: "Verification was cancelled.",
+    codeRequired: "Enter the verification code.",
+    verifyFailed: "Verification failed",
+  },
+
   // ── TOTP dialogs ──
   totp: {
     setupStepScan: "Scan the QR code with Google Authenticator or another TOTP app.",
@@ -2340,6 +2355,7 @@ const en = {
     wsError: "WebSocket connection error",
     reconnected: "Session reconnected. The previous SSH session is invalid; please sign in again.",
     giveUp: "Maximum reconnection attempts reached. Please close this terminal and reopen.",
+    stepUpFailed: "Additional verification failed.",
   },
 
   // ── tree component ──

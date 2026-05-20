@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FormDialog } from "@/components/ui/form-dialog";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
 
 type RestoreConfirmDialogProps = {
@@ -29,16 +30,18 @@ export function RestoreConfirmDialog({
   const [targetPath, setTargetPath] = useState(rsyncSource ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const withStepUp = useStepUpAction();
 
   const handleSubmit = useCallback(async () => {
     setSaving(true);
     setError("");
     try {
-      const result = await apiClient.restoreTask(
+      const result = await withStepUp((proof) => apiClient.restoreTask(
         token,
         taskId,
-        targetPath.trim() || undefined
-      );
+        targetPath.trim() || undefined,
+        proof
+      ));
       onOpenChange(false);
       if (result.runId) onSuccess?.(result.runId);
     } catch (err) {
@@ -47,7 +50,7 @@ export function RestoreConfirmDialog({
       setSaving(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [token, taskId, targetPath, onOpenChange, onSuccess]);
+  }, [token, taskId, targetPath, onOpenChange, onSuccess, withStepUp]);
 
   return (
     <FormDialog

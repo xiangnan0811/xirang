@@ -51,8 +51,9 @@ func NewTerminalHandler(db *gorm.DB, jwtManager *auth.JWTManager, checkOrigin fu
 }
 
 type terminalAuthMessage struct {
-	Type  string `json:"type"`
-	Token string `json:"token"`
+	Type        string `json:"type"`
+	Token       string `json:"token"`
+	StepUpProof string `json:"step_up_proof"`
 }
 
 type terminalResizeMessage struct {
@@ -209,6 +210,20 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = conn.Close()
 		return
 	}
+	proofState := "required"
+	if authMsg.StepUpProof != "" {
+		proofState = "failed"
+	}
+	if _, err := validateStepUpProof(h.db, h.jwtManager, authMsg.StepUpProof, claims.UserID, claims.Role); err != nil {
+		writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{Action: "terminal.open", Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeBlocked, proofState)
+		h.writeTerminalAuditEntry(c, claims, "step-up-required", http.StatusForbidden)
+		freePending()
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "需要二次验证"))
+		_ = conn.Close()
+		return
+	}
+	writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{Action: "terminal.open", Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeSuccess, "satisfied")
 
 	// 解析 node_id 参数
 	rawNodeID := c.Query("node_id")

@@ -46,6 +46,34 @@ describe("config api", () => {
     });
   });
 
+  it("includeSecrets 导出会附加 step-up proof header", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: { version: "1.0", data: {} },
+      }))
+    );
+
+    await api.exportConfig("token-1", true, "proof-1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/config/export?include_secrets=true");
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer token-1",
+      "X-Xirang-Step-Up": "proof-1",
+    });
+  });
+
+  it("普通导出不附加 step-up proof header", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ version: "1.0", data: {} })));
+
+    await api.exportConfig("token-1");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("X-Xirang-Step-Up");
+  });
+
   it("importConfig 可兼容后端分项统计响应并汇总 imported", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({

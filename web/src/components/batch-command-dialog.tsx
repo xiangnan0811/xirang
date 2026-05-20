@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react";
 import { FormDialog } from "@/components/ui/form-dialog";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
 
@@ -19,23 +20,6 @@ type BatchCommandDialogProps = {
   onSuccess?: (result: BatchCommandResult) => void;
 };
 
-const TEMPLATES_KEY = "xirang:batch-cmd-templates";
-
-function loadTemplates(): string[] {
-  try {
-    const raw = localStorage.getItem(TEMPLATES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTemplate(cmd: string) {
-  const templates = loadTemplates().filter((t) => t !== cmd);
-  templates.unshift(cmd);
-  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates.slice(0, 10)));
-}
-
 export function BatchCommandDialog({
   open,
   onOpenChange,
@@ -51,7 +35,7 @@ export function BatchCommandDialog({
   const [retain, setRetain] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [templates] = useState(loadTemplates);
+  const withStepUp = useStepUpAction();
 
   useEffect(() => {
     if (open) {
@@ -91,14 +75,14 @@ export function BatchCommandDialog({
     setSaving(true);
     setError("");
     try {
-      const result = await apiClient.createBatchCommand(
+      const result = await withStepUp((proof) => apiClient.createBatchCommand(
         token,
         selectedNodeIds,
         command.trim(),
         name.trim() || undefined,
-        retain
-      );
-      saveTemplate(command.trim());
+        retain,
+        proof
+      ));
       onOpenChange(false);
       onSuccess?.({ batchId: result.batchId, retain: result.retain });
     } catch (err) {
@@ -106,7 +90,7 @@ export function BatchCommandDialog({
     } finally {
       setSaving(false);
     }
-  }, [selectedNodeIds, command, name, retain, token, onOpenChange, onSuccess, t]);
+  }, [selectedNodeIds, command, name, retain, token, onOpenChange, onSuccess, t, withStepUp]);
 
   return (
     <FormDialog
@@ -175,20 +159,6 @@ export function BatchCommandDialog({
 
       <div>
         <label className="mb-1.5 block text-sm font-medium">{t("batchCommand.command")}</label>
-        {templates.length > 0 && (
-          <div className="mb-1.5 flex flex-wrap gap-1">
-            {templates.slice(0, 5).map((tpl) => (
-              <button
-                key={tpl}
-                type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-                onClick={() => setCommand(tpl)}
-              >
-                {tpl.length > 30 ? tpl.slice(0, 30) + "..." : tpl}
-              </button>
-            ))}
-          </div>
-        )}
         <textarea
           className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
           rows={3}

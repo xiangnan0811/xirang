@@ -33,12 +33,14 @@ const actionOptions = [
   "ssh_key.test_connection",
   "ssh_key.export",
   "node.credential.test_connection",
+  "auth.step_up",
   "terminal.open",
   "terminal.failure",
   "terminal.close",
   "task.manual_trigger",
   "task.restore_trigger",
   "task.batch_trigger",
+  "snapshot.restore",
   "batch_command.create",
   "task.credential.use",
   "drill.trigger",
@@ -320,6 +322,8 @@ export function CredentialAuditPage() {
               <option value="password">password</option>
               <option value="node_private_key">node_private_key</option>
               <option value="system_setting">system_setting</option>
+              <option value="step_up">step_up</option>
+              <option value="snapshot">snapshot</option>
               <option value="unknown">unknown</option>
             </Select>
             <Input

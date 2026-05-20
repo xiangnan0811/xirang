@@ -1,1 +1,9 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/index.md","reason":"Backend quality checklist for reviewing auth/middleware/handler/test changes."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review step-up-required/invalid-proof errors for safe envelopes and no secret leakage."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review RBAC/ownership preservation, security denial tests, and secret-safe audit behavior."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend quality checklist for prompt/API/state changes."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review typed step-up API wrappers and private wire mappings."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Review session-scoped proof storage, expiry, and logout clearing behavior."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review dialog accessibility and reuse of existing UI conventions."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review end-to-end consistency across backend enforcement and frontend retry flows."}
+{"file":".trellis/tasks/05-19-security-p1d-step-up-auth-high-risk/research/code-surfaces.md","reason":"Ground review in mapped P1d high-risk route and UI surfaces."}

@@ -16,6 +16,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const (
+	Purpose2FAPending = "2fa_pending"
+	PurposeStepUp     = "step_up"
+	StepUpProofTTL    = 5 * time.Minute
+)
+
 type Claims struct {
 	UserID       uint   `json:"uid"`
 	Username     string `json:"username"`
@@ -76,7 +82,7 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 		UserID:       user.ID,
 		Username:     user.Username,
 		Role:         user.Role,
-		Purpose:      "2fa_pending",
+		Purpose:      Purpose2FAPending,
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,
@@ -87,6 +93,34 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(m.secret)
+}
+
+func (m *JWTManager) GenerateStepUpToken(user model.User) (string, time.Time, error) {
+	now := time.Now()
+	expiresAt := now.Add(StepUpProofTTL)
+	tokenID, err := generateTokenID()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	claims := Claims{
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		Purpose:      PurposeStepUp,
+		TokenVersion: user.TokenVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Subject:   fmt.Sprintf("%d", user.ID),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(m.secret)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signed, expiresAt, nil
 }
 
 func (m *JWTManager) GenerateToken(user model.User) (string, error) {

@@ -1827,6 +1827,21 @@ const zh = {
     backToHistory: "返回执行历史",
   },
 
+  // ── Step-up authentication ──
+  stepUp: {
+    title: "需要二次验证",
+    description: "此操作风险较高，请输入当前验证器验证码后继续。",
+    codeLabel: "验证器验证码",
+    codePlaceholder: "请输入 6 位验证码",
+    verify: "验证",
+    loginRequired: "请重新登录后继续。",
+    totpRequired: "执行此操作前需要先启用两步验证。",
+    alreadyOpen: "已有验证请求被新的操作替换。",
+    cancelled: "已取消二次验证。",
+    codeRequired: "请输入验证码。",
+    verifyFailed: "验证失败",
+  },
+
   // ── TOTP dialogs ──
   totp: {
     setupStepScan: "使用 Google Authenticator 或其他 TOTP 应用扫描二维码。",
@@ -2340,6 +2355,7 @@ const zh = {
     wsError: "WebSocket 连接错误",
     reconnected: "会话已重连，原 SSH 会话已失效，请重新登录。",
     giveUp: "已达最大重连次数，请关闭终端后重新打开。",
+    stepUpFailed: "二次验证失败。",
   },
 
   // ── tree component ──

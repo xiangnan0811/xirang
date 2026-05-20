@@ -81,6 +81,10 @@ vi.mock("@/lib/api/client", () => ({
   },
 }));
 
+vi.mock("@/hooks/use-step-up-action", () => ({
+  useStepUpAction: () => async <T,>(action: (proof?: string) => Promise<T>) => action(),
+}));
+
 function createNode(id: number, name: string): NodeRecord {
   return {
     id,

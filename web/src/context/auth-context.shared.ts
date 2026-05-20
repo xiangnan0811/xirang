@@ -26,6 +26,8 @@ export type AuthContextValue = {
   ) => void;
   logout: () => void;
   setTotpEnabled: (enabled: boolean) => void;
+  ensureStepUpProof: () => Promise<string>;
+  clearStepUpProof: () => void;
 };
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

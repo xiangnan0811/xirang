@@ -38,8 +38,8 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if claims.Purpose == "2fa_pending" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "需要完成两步验证"})
+		if strings.TrimSpace(claims.Purpose) != "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证令牌用途不匹配"})
 			c.Abort()
 			return
 		}

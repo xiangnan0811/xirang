@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
@@ -370,6 +371,55 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 	respondOK(c, gin.H{"recovery_codes": recoveryCodes})
 }
 
+type stepUpRequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+type stepUpResponse struct {
+	Proof           string    `json:"proof"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	ProofTTLSeconds int       `json:"proof_ttl_seconds"`
+}
+
+func (h *AuthHandler) StepUp(c *gin.Context) {
+	if h.db == nil || h.jwtManager == nil {
+		respondInternalError(c, fmt.Errorf("step-up 服务未初始化"))
+		return
+	}
+	var req stepUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	userID := c.GetUint(middleware.CtxUserID)
+	if userID == 0 {
+		respondUnauthorized(c, "未登录")
+		return
+	}
+	var user model.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		respondUnauthorized(c, "用户不存在")
+		return
+	}
+	if !user.TOTPEnabled || strings.TrimSpace(user.TOTPSecret) == "" {
+		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeBlocked, "unavailable")
+		respondForbidden(c, "请先启用两步验证")
+		return
+	}
+	if !auth.ValidateTOTP(user.TOTPSecret, req.Code) {
+		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeFailure, "failed")
+		respondForbidden(c, "二次验证失败")
+		return
+	}
+	proof, expiresAt, err := h.jwtManager.GenerateStepUpToken(user)
+	if err != nil {
+		respondInternalError(c, fmt.Errorf("生成 step-up proof 失败: %w", err))
+		return
+	}
+	writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeSuccess, "issued")
+	respondOK(c, stepUpResponse{Proof: proof, ExpiresAt: expiresAt.UTC(), ProofTTLSeconds: stepUpProofTTLSeconds})
+}
+
 type totpDisableRequest struct {
 	Password string `json:"password" binding:"required"`
 	TOTPCode string `json:"totp_code" binding:"required"`
@@ -454,7 +504,7 @@ func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 		respondUnauthorized(c, "登录令牌无效或已过期")
 		return
 	}
-	if claims.Purpose != "2fa_pending" {
+	if claims.Purpose != auth.Purpose2FAPending {
 		respondUnauthorized(c, "登录令牌无效")
 		return
 	}

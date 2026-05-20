@@ -40,10 +40,11 @@ export function createSnapshotsApi() {
       return (await request<ResticEntry[]>(`/tasks/${taskId}/snapshots/${snapshotId}/files?${query}`, { token })) ?? [];
     },
 
-    async restoreSnapshot(token: string, taskId: number, snapshotId: string, includes: string[], targetPath: string): Promise<void> {
+    async restoreSnapshot(token: string, taskId: number, snapshotId: string, includes: string[], targetPath: string, stepUpProof?: string): Promise<void> {
       await request<unknown>(`/tasks/${taskId}/snapshots/${snapshotId}/restore`, {
         method: "POST",
         token,
+        stepUpProof,
         body: { includes, targetPath },
       });
     },

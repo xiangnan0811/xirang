@@ -4,7 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 
 	"github.com/gin-gonic/gin"
@@ -134,6 +136,36 @@ type restoreRequest struct {
 	TargetPath string   `json:"targetPath" binding:"required"`
 }
 
+func snapshotRestoreAuditMetadata(stage, snapshotID string, includeCount int, targetSet bool) map[string]any {
+	shortID := strings.TrimSpace(snapshotID)
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	return map[string]any{
+		"stage":          stage,
+		"include_count":  includeCount,
+		"target_set":     targetSet,
+		"snapshot_short": shortID,
+	}
+}
+
+func (h *SnapshotHandler) writeSnapshotRestoreAudit(c *gin.Context, taskID uint, nodeID *uint, outcome, stage, snapshotID string, includeCount int, targetSet bool, err error) {
+	event := credentialaudit.Event{
+		Action:           "snapshot.restore",
+		Purpose:          sshutil.PurposeSnapshot,
+		CredentialKind:   "snapshot",
+		CredentialSource: "restic_snapshot",
+		TaskID:           credentialaudit.PtrUint(taskID),
+		NodeID:           nodeID,
+		Outcome:          outcome,
+		Metadata:         snapshotRestoreAuditMetadata(stage, snapshotID, includeCount, targetSet),
+	}
+	if err != nil {
+		event.ErrorMessage = credentialAuditSafeError(stage, err)
+	}
+	writeCredentialAuditFromGin(c, h.db, event)
+}
+
 // Restore godoc
 // @Summary      恢复快照文件
 // @Description  从指定 restic 快照恢复选定的文件到目标路径
@@ -167,6 +199,7 @@ func (h *SnapshotHandler) Restore(c *gin.Context) {
 	}
 
 	if !validateRestoreTargetPath(req.TargetPath) {
+		h.writeSnapshotRestoreAudit(c, taskID, nil, credentialaudit.OutcomeBlocked, "target", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", nil)
 		respondBadRequest(c, "恢复目标路径不安全，不允许恢复到系统目录")
 		return
 	}
@@ -176,15 +209,19 @@ func (h *SnapshotHandler) Restore(c *gin.Context) {
 		respondNotFound(c, "任务不存在")
 		return
 	}
+	nodeID := credentialaudit.PtrUint(task.NodeID)
 	if task.ExecutorType != "restic" {
+		h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeBlocked, "executor", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", nil)
 		respondBadRequest(c, "仅 restic 类型任务支持快照恢复")
 		return
 	}
 
 	exec := &executor.ResticExecutor{}
 	if err := exec.RestoreFiles(c.Request.Context(), task, snapshotID, req.Includes, req.TargetPath); err != nil {
+		h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeFailure, "restore", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", err)
 		respondInternalError(c, err)
 		return
 	}
+	h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeSuccess, "restore", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", nil)
 	respondMessage(c, "恢复成功")
 }

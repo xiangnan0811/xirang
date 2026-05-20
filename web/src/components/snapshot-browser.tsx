@@ -3,6 +3,7 @@ import { ArrowLeft, Download, File, Folder, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
 import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
@@ -31,6 +32,7 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
   const [restoring, setRestoring] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState("/tmp/xirang-restore");
   const autoNavigated = useRef(false);
+  const withStepUp = useStepUpAction();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -90,13 +92,14 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
     if (!selectedSnapshot || selectedPaths.size === 0) return;
     setRestoring(true);
     try {
-      await apiClient.restoreSnapshot(
+      await withStepUp((proof) => apiClient.restoreSnapshot(
         token,
         taskId,
         selectedSnapshot.id,
         Array.from(selectedPaths),
-        restoreTarget
-      );
+        restoreTarget,
+        proof
+      ));
       toast.success(t('snapshots.restoreSuccess', { count: selectedPaths.size, target: restoreTarget }));
       setSelectedPaths(new Set());
     } catch (err) {

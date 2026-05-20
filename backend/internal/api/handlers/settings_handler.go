@@ -468,6 +468,7 @@ func (h *SettingsHandler) recentCredentialOperationRiskItem() (securityRiskItem,
 func highRiskCredentialAuditActions() []string {
 	return []string{
 		"ssh_key.export",
+		"auth.step_up",
 		"file_browser.list",
 		"file_browser.preview",
 		"docker_volumes.discover",
@@ -482,6 +483,7 @@ func highRiskCredentialAuditActions() []string {
 		"task.manual_trigger",
 		"task.restore_trigger",
 		"task.batch_trigger",
+		"snapshot.restore",
 		"task.credential.use",
 		"batch_command.create",
 		"drill.trigger",
@@ -493,6 +495,8 @@ func credentialActionLabel(action string) string {
 	switch action {
 	case "ssh_key.export":
 		return "SSH Key 导出"
+	case "auth.step_up":
+		return "二次验证"
 	case "file_browser.list":
 		return "节点文件列表浏览"
 	case "file_browser.preview":
@@ -521,6 +525,8 @@ func credentialActionLabel(action string) string {
 		return "恢复任务触发"
 	case "task.batch_trigger":
 		return "批量任务触发"
+	case "snapshot.restore":
+		return "快照恢复"
 	case "task.credential.use":
 		return "任务运行凭据使用"
 	case "batch_command.create":
