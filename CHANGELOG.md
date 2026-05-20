@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.0](https://github.com/xiangnan0811/xirang/compare/v0.41.0...v0.42.0) (2026-05-20)
+
+
+### ✨ Features
+
+* **security:** add step-up auth for high-risk operations ([55faa35](https://github.com/xiangnan0811/xirang/commit/55faa354ba3fcf05d96fd9807d6baab8179b6627))
+
 ## [0.41.0](https://github.com/xiangnan0811/xirang/compare/v0.40.0...v0.41.0) (2026-05-20)
 
 
