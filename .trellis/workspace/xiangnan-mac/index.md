@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 47
-- **Last Active**: 2026-05-19
+- **Total Sessions**: 48
+- **Last Active**: 2026-05-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1587 | Active |
+| `journal-1.md` | ~1620 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 48 | 2026-05-20 | P1 overall security acceptance review | `a16ec1f` | `security/p1-overall-review` |
 | 47 | 2026-05-19 | P1 SSH key least-privilege audit | `f3dd34f` | `security/p1-least-privilege-audit` |
 | 46 | 2026-05-18 | Security baseline hardening | `394823e` | `security/baseline-hardening` |
 | 45 | 2026-05-18 | Trust Ops roadmap closure | `6312f7f`, `66afbc2`, `33e2b77`, `a9989b7`, `05811ac`, `8a08987` | `chore/archive-trust-ops-roadmap` |
