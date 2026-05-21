@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.2](https://github.com/xiangnan0811/xirang/compare/v0.43.1...v0.43.2) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **trellis:** fill archived path repair journal ([82df5b0](https://github.com/xiangnan0811/xirang/commit/82df5b0bc088d4fb00d1fb0de47e73347072eee9))
+
 ## [0.43.1](https://github.com/xiangnan0811/xirang/compare/v0.43.0...v0.43.1) (2026-05-21)
 
 
