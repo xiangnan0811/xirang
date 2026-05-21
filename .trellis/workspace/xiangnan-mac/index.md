@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 51
+- **Total Sessions**: 52
 - **Last Active**: 2026-05-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1722 | Active |
+| `journal-1.md` | ~1755 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 52 | 2026-05-21 | Fix Docker rsync CVE release blocker | `3c8a7ce` | `fix/docker-rsync-cve-2026` |
 | 51 | 2026-05-21 | Fix Trellis journal placeholders | `0364f83` | `fix/trellis-journal-placeholders` |
 | 50 | 2026-05-21 | Fix archived P2 Trellis context paths | `7de8e9b` | `fix/p2-archive-context-paths` |
 | 49 | 2026-05-20 | P2 credential hardening | `3715b77` | `security/p2-credential-hardening` |
