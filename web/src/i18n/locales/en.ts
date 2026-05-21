@@ -1959,6 +1959,14 @@ const en = {
     snapshotLabel: "Snapshot {{id}}",
     restoreCount: "Restore {{count}} items",
     restoreSuccess: "Restore successful",
+    grantTitle: "Snapshot restore temporary authorization required",
+    grantDescription: "Snapshot restore writes to the restore target. Enter a reason for this restore; after step-up, Xirang creates a short-lived task-scoped grant.",
+    grantReasonLabel: "Authorization reason",
+    grantReasonPlaceholder: "Example: recover removed files",
+    grantReasonHint: "Used only for this grant, up to {{max}} characters. Do not enter file contents, target paths, host details, or keys.",
+    grantReasonRequired: "Please enter an authorization reason.",
+    grantReasonTooLong: "Authorization reason must be {{max}} characters or fewer.",
+    grantSubmit: "Authorize and restore",
   },
 
   // ── snapshot search ──

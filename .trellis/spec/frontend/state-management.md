@@ -84,8 +84,9 @@ Keep state local when:
 ### 3. Contracts
 
 - Grant rows live on the backend. The frontend must not store grant IDs, grant material, reason text, or grant-required status in `localStorage` or `sessionStorage`.
-- Keep terminal grant prompt state component-local unless a later feature adds a dedicated grant management surface.
-- Reuse `ensureStepUpProof()` for the proof needed by the grant request. Do not ask for or store TOTP codes in the terminal component itself.
+- Keep high-risk credential operation prompt state component-local unless a later feature adds a dedicated grant management surface.
+- Reuse `ensureStepUpProof()` for the proof needed by the grant request. Do not ask for or store TOTP codes in operation components.
+- For one-shot operations where the proof is only needed for the immediate grant/action pair, request a non-persistent proof and do not reuse cached proof material.
 - A grant-required WebSocket close must not be treated as login/session expiry and must not unmount the terminal dialog before the reason prompt can complete.
 - User-visible denial details must be sanitized and bounded before rendering. Do not display raw WebSocket close text if it can contain host, endpoint, SSH, command, or terminal-output details.
 - Retrying terminal open after grant creation should use the existing connection flow and should clear only transient prompt state, not auth/session state.

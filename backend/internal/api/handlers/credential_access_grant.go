@@ -29,11 +29,12 @@ const (
 	CredentialGrantStatusExpired   = "expired"
 	CredentialGrantStatusRevoked   = "revoked"
 
-	CredentialGrantActionTerminalOpen  = "terminal.open"
-	CredentialGrantActionConfigImport  = "config.import"
-	CredentialGrantActionConfigExport  = "config.export"
-	CredentialGrantPurposeConfigImport = "config_import"
-	CredentialGrantPurposeConfigExport = "config_export"
+	CredentialGrantActionTerminalOpen    = "terminal.open"
+	CredentialGrantActionConfigImport    = "config.import"
+	CredentialGrantActionConfigExport    = "config.export"
+	CredentialGrantActionSnapshotRestore = "snapshot.restore"
+	CredentialGrantPurposeConfigImport   = "config_import"
+	CredentialGrantPurposeConfigExport   = "config_export"
 
 	credentialGrantKind   = "jit_grant"
 	credentialGrantSource = "credential_access_grant"
@@ -70,6 +71,12 @@ type configImportCredentialGrantRequest struct {
 }
 
 type configExportCredentialGrantRequest struct {
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type snapshotRestoreCredentialGrantRequest struct {
+	TaskID              uint   `json:"task_id" binding:"required"`
 	Reason              string `json:"reason" binding:"required"`
 	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
 }
@@ -189,6 +196,48 @@ func (h *CredentialAccessGrantHandler) RequestConfigExportGrant(c *gin.Context) 
 	respondCreated(c, toCredentialGrantDTO(grant))
 }
 
+func (h *CredentialAccessGrantHandler) RequestSnapshotRestoreGrant(c *gin.Context) {
+	var req snapshotRestoreCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	if req.TaskID == 0 {
+		respondBadRequest(c, "任务 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore")
+	if !ok {
+		return
+	}
+
+	var task model.Task
+	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type").First(&task, req.TaskID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		respondInternalError(c, err)
+		return
+	}
+	if task.ExecutorType != "restic" {
+		respondBadRequest(c, "仅 restic 类型任务支持快照恢复授权")
+		return
+	}
+
+	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
+		Action:              CredentialGrantActionSnapshotRestore,
+		Purpose:             sshutil.PurposeSnapshot,
+		TaskID:              credentialaudit.PtrUint(req.TaskID),
+		Reason:              reason,
+		RequestedTTLSeconds: int(ttl.Seconds()),
+	})
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTO(grant))
+}
+
 type credentialGrantCreateInput struct {
 	Action              string
 	Purpose             string
@@ -277,7 +326,22 @@ func RequireConfigExportCredentialGrantIf(db *gorm.DB, predicate func(*gin.Conte
 	return requireSystemCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionConfigExport, Purpose: CredentialGrantPurposeConfigExport}, predicate)
 }
 
+func RequireSnapshotRestoreCredentialGrant(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		taskID, ok := parseID(c, "id")
+		if !ok {
+			c.Abort()
+			return
+		}
+		requireCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionSnapshotRestore, Purpose: sshutil.PurposeSnapshot, TaskID: credentialaudit.PtrUint(taskID)}, nil)(c)
+	}
+}
+
 func requireSystemCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate func(*gin.Context) bool) gin.HandlerFunc {
+	return requireCredentialGrant(db, match, predicate)
+}
+
+func requireCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate func(*gin.Context) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if predicate != nil && !predicate(c) {
 			c.Next()
@@ -502,6 +566,12 @@ func writeCredentialGrantAuditWithClaims(c *gin.Context, db *gorm.DB, claims *au
 	if grant.NodeID != nil {
 		metadata["node_id"] = derefUint(grant.NodeID)
 	}
+	if grant.TaskID != nil {
+		metadata["task_id"] = derefUint(grant.TaskID)
+	}
+	if grant.PolicyID != nil {
+		metadata["policy_id"] = derefUint(grant.PolicyID)
+	}
 	event := credentialaudit.Event{
 		Action:           grant.Action,
 		Purpose:          grant.Purpose,
@@ -529,6 +599,12 @@ func writeCredentialGrantBlockedAudit(c *gin.Context, db *gorm.DB, claims *auth.
 	}
 	if match.NodeID != nil {
 		metadata["node_id"] = *match.NodeID
+	}
+	if match.TaskID != nil {
+		metadata["task_id"] = *match.TaskID
+	}
+	if match.PolicyID != nil {
+		metadata["policy_id"] = *match.PolicyID
 	}
 	event := credentialaudit.Event{
 		Action:           match.Action,
@@ -590,6 +666,8 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "settings_import"
 	case action == CredentialGrantActionConfigExport && purpose == CredentialGrantPurposeConfigExport:
 		return "settings_export_sensitive"
+	case action == CredentialGrantActionSnapshotRestore && purpose == sshutil.PurposeSnapshot:
+		return "snapshot_restore"
 	default:
 		return "grant"
 	}

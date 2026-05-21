@@ -36,6 +36,7 @@ type StoredAuthState = {
 type PendingStepUpRequest = {
   resolve: (proof: string) => void;
   reject: (error: Error) => void;
+  persist: boolean;
 };
 
 function getSessionStorage() {
@@ -220,10 +221,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
     clearStoredStepUpProof();
   }, []);
 
-  const ensureStepUpProof = useCallback(async (): Promise<string> => {
-    const cached = readStepUpProof();
-    if (cached) {
-      return cached.proof;
+  const ensureStepUpProof = useCallback(async (options: { persist?: boolean; reuseCached?: boolean } = {}): Promise<string> => {
+    const persist = options.persist ?? true;
+    const reuseCached = options.reuseCached ?? persist;
+    if (reuseCached) {
+      const cached = readStepUpProof();
+      if (cached) {
+        return cached.proof;
+      }
+    }
+    if (!persist) {
+      clearStoredStepUpProof();
     }
     if (!token) {
       throw new Error(i18n.t("stepUp.loginRequired"));
@@ -239,7 +247,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setStepUpError(null);
     setStepUpDialogOpen(true);
     return new Promise<string>((resolve, reject) => {
-      pendingStepUpRef.current = { resolve, reject };
+      pendingStepUpRef.current = { resolve, reject, persist };
     });
   }, [token, totpEnabled]);
 
@@ -268,11 +276,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setStepUpError(null);
     try {
       const response = await apiClient.requestStepUpProof(token, code);
-      const expiresAt = Date.parse(response.expires_at);
-      const ttlMillis = Number(response.proof_ttl_seconds || 0) * 1000;
-      const fallbackExpiresAt = ttlMillis > 0 ? Date.now() + ttlMillis : Date.now();
-      const proofExpiresAt = Number.isFinite(expiresAt) ? expiresAt : fallbackExpiresAt;
-      saveStepUpProof(response.proof, proofExpiresAt);
+      const shouldPersistProof = pendingStepUpRef.current.persist;
+      if (shouldPersistProof) {
+        const expiresAt = Date.parse(response.expires_at);
+        const ttlMillis = Number(response.proof_ttl_seconds || 0) * 1000;
+        const fallbackExpiresAt = ttlMillis > 0 ? Date.now() + ttlMillis : Date.now();
+        const proofExpiresAt = Number.isFinite(expiresAt) ? expiresAt : fallbackExpiresAt;
+        saveStepUpProof(response.proof, proofExpiresAt);
+      }
       pendingStepUpRef.current.resolve(response.proof);
       pendingStepUpRef.current = null;
       setStepUpDialogOpen(false);

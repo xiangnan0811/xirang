@@ -95,6 +95,20 @@ describe("credential access grants api", () => {
     expect(grant.status).toBe("active");
   });
 
+  it("preserves snapshot restore grant tuple and task binding", () => {
+    const grant = mapCredentialAccessGrant({
+      action: "snapshot.restore",
+      purpose: "snapshot",
+      task_id: "101",
+      status: "active",
+    });
+
+    expect(grant.action).toBe("snapshot.restore");
+    expect(grant.purpose).toBe("snapshot");
+    expect(grant.taskId).toBe(101);
+    expect(grant.status).toBe("active");
+  });
+
   it("falls back safely for unknown action, purpose, and status", () => {
     const grant = mapCredentialAccessGrant({
       action: "ssh_key.export",
@@ -175,6 +189,43 @@ describe("credential access grants api", () => {
       },
     });
     expect(grant).toMatchObject({ id: 23, nodeId: undefined, action: "config.export", purpose: "config_export", status: "active" });
+  });
+
+  it("requests a snapshot restore grant with task, reason, ttl, bearer token, and step-up proof", async () => {
+    requestMock.mockResolvedValueOnce({
+      id: 24,
+      requester_user_id: 7,
+      requester_username: "admin",
+      requester_role: "admin",
+      action: "snapshot.restore",
+      purpose: "snapshot",
+      task_id: 101,
+      reason: "Routine restore",
+      status: "active",
+      requested_ttl_seconds: 600,
+      requested_at: "2026-05-20T00:00:00Z",
+      expires_at: "2026-05-20T00:10:00Z",
+      created_at: "2026-05-20T00:00:00Z",
+      updated_at: "2026-05-20T00:00:00Z",
+    });
+
+    const grant = await createCredentialAccessGrantsApi().requestSnapshotRestoreCredentialGrant(
+      "auth-marker",
+      { taskId: 101, reason: "Routine restore", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/snapshot-restore", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        task_id: 101,
+        reason: "Routine restore",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(grant).toMatchObject({ id: 24, taskId: 101, nodeId: undefined, action: "snapshot.restore", purpose: "snapshot", status: "active" });
   });
 
   it("requests a terminal grant with node, reason, ttl, bearer token, and step-up proof", async () => {
