@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.43.5](https://github.com/xiangnan0811/xirang/compare/v0.43.4...v0.43.5) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **security:** gate config import with JIT grants ([348c616](https://github.com/xiangnan0811/xirang/commit/348c6169594c8e4ed66b1564b06786a85dcb9b0d))
+* **trellis:** fill follow-up journal placeholders ([5db6b21](https://github.com/xiangnan0811/xirang/commit/5db6b21857a94bc27bad50f97e3582942ec8b85c))
+
 ## [0.43.4](https://github.com/xiangnan0811/xirang/compare/v0.43.3...v0.43.4) (2026-05-21)
 
 
