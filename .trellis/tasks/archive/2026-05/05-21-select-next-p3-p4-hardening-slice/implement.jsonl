@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"CredentialAccessGrant contract, additive authorization, fail-closed behavior, and high-risk operation guidance."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Consistent machine-readable denial envelopes and safe error responses."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Sanitized audit/logging constraints for credential-adjacent operations."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend grant prompt state must remain local and avoid browser storage persistence."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Credential grant API/domain changes must preserve typed frontend contracts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Snapshot restore grant prompt should reuse existing UI patterns with minimal scope."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Reason prompt/dialog must remain accessible and keyboard-operable."}
+{"file":".trellis/tasks/05-21-select-next-p3-p4-hardening-slice/prd.md","reason":"Current decision record selecting snapshot restore task-scoped JIT grant as next slice."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Original P3/P4 roadmap and remaining candidate taxonomy."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-control-plane-follow-up-hardening/prd.md","reason":"Prior completed sensitive config export slice and deferred candidate rationale."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-control-plane-follow-up-hardening/research/remaining-control-plane-surfaces.md","reason":"Candidate comparison identifying snapshot restore as strongest bounded follow-up."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Existing REST grant pattern for high-risk config import and audit-only telemetry boundary."}
