@@ -1810,17 +1810,22 @@ Filled Session 51/52/53 Trellis journal placeholders with concrete changes, comm
 
 ### Main Changes
 
-(Add details)
+- Updated `.trellis/workspace/xiangnan-mac/journal-1.md` Session 51, Session 52, and Session 53 to replace template placeholders with concrete Main Changes, Git Commit titles, and Testing evidence.
+- Added and completed the focused Trellis repair task under `.trellis/tasks/05-21-fix-trellis-journal-followup-placeholders/`, then archived it after validation.
+- Kept the change limited to Trellis journal/task metadata without runtime code, Dockerfile, workflow, release metadata, or application changes.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `24ad1f9` | (see git log) |
+| `24ad1f9` | fix(trellis): fill follow-up journal placeholders |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/05-21-fix-trellis-journal-followup-placeholders` — implement.jsonl 2 entries and check.jsonl 2 entries passed before archival.
+- [OK] Relevant archived Trellis tasks for Session 51/52/53 passed `task.py validate`.
+- [OK] Placeholder check confirmed no target placeholders remained in Session 51-53 before commit.
+- [OK] `git diff --check` completed with no output.
 
 ### Status
 
@@ -1843,17 +1848,21 @@ Updated the archived follow-up journal repair task context entries to reference 
 
 ### Main Changes
 
-(Add details)
+- Updated `.trellis/tasks/archive/2026-05/05-21-fix-trellis-journal-followup-placeholders/implement.jsonl` and `check.jsonl` so PRD references point at the archived task path.
+- Restored replayability for the archived follow-up journal repair task after task archival moved the PRD.
+- Kept the fix limited to Trellis context metadata.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `5fd2376` | (see git log) |
+| `5fd2376` | fix(trellis): repair follow-up archive context paths |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-trellis-journal-followup-placeholders` — implement.jsonl 2 entries and check.jsonl 2 entries passed.
+- [OK] Related archived Trellis tasks for P2 path repair, journal placeholder repair, Docker publish context, Docker rsync CVE release blocker, and Docker CVE context repair passed `task.py validate`.
+- [OK] `git diff --check` completed with no output.
 
 ### Status
 
