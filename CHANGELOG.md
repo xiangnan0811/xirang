@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.6](https://github.com/xiangnan0811/xirang/compare/v0.43.5...v0.43.6) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **security:** gate sensitive config export with JIT grants ([cea7d9b](https://github.com/xiangnan0811/xirang/commit/cea7d9bb26e5e80182e88b46595a228ddeed24bb))
+
 ## [0.43.5](https://github.com/xiangnan0811/xirang/compare/v0.43.4...v0.43.5) (2026-05-21)
 
 
