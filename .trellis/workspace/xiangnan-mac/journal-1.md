@@ -1915,3 +1915,36 @@ Implemented the first P3 security slice by extending row-backed JIT credential g
 ### Next Steps
 
 - None - task complete
+
+
+## Session 57: Gate sensitive config export with JIT grants
+
+**Date**: 2026-05-21
+**Task**: Gate sensitive config export with JIT grants
+**Branch**: `security/p3-control-plane-followups`
+
+### Summary
+
+Added config.export/config_export JIT grant enforcement for sensitive config export, with backend/frontend coverage and user-facing security docs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a372c8b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

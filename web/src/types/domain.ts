@@ -600,8 +600,8 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
-export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "unknown";
-export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "unknown";
+export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "unknown";
+export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "unknown";
 export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked";
 
 export interface CredentialAccessGrant {

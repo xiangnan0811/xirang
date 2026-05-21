@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 56
+- **Total Sessions**: 57
 - **Last Active**: 2026-05-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1906 | Active |
+| `journal-1.md` | ~1950 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 57 | 2026-05-21 | Gate sensitive config export with JIT grants | `a372c8b` | `security/p3-control-plane-followups` |
 | 56 | 2026-05-21 | P3 config import grant and telemetry | `f07b767` | `security/p3-p4-security-roadmap` |
 | 55 | 2026-05-21 | Repair follow-up archive context paths | `5fd2376` | `fix/trellis-journal-followup-placeholders` |
 | 54 | 2026-05-21 | Fix Trellis journal follow-up placeholders | `24ad1f9` | `fix/trellis-journal-followup-placeholders` |

@@ -83,6 +83,18 @@ describe("credential access grants api", () => {
     expect(grant.reason).toBe("");
   });
 
+  it("preserves config export grant tuple values", () => {
+    const grant = mapCredentialAccessGrant({
+      action: "config.export",
+      purpose: "config_export",
+      status: "active",
+    });
+
+    expect(grant.action).toBe("config.export");
+    expect(grant.purpose).toBe("config_export");
+    expect(grant.status).toBe("active");
+  });
+
   it("falls back safely for unknown action, purpose, and status", () => {
     const grant = mapCredentialAccessGrant({
       action: "ssh_key.export",
@@ -128,6 +140,41 @@ describe("credential access grants api", () => {
       },
     });
     expect(grant).toMatchObject({ id: 22, nodeId: undefined, action: "config.import", purpose: "config_import", status: "active" });
+  });
+
+  it("requests a config export grant with reason, ttl, bearer token, and step-up proof", async () => {
+    requestMock.mockResolvedValueOnce({
+      id: 23,
+      requester_user_id: 7,
+      requester_username: "admin",
+      requester_role: "admin",
+      action: "config.export",
+      purpose: "config_export",
+      reason: "Routine export",
+      status: "active",
+      requested_ttl_seconds: 600,
+      requested_at: "2026-05-20T00:00:00Z",
+      expires_at: "2026-05-20T00:10:00Z",
+      created_at: "2026-05-20T00:00:00Z",
+      updated_at: "2026-05-20T00:00:00Z",
+    });
+
+    const grant = await createCredentialAccessGrantsApi().requestConfigExportCredentialGrant(
+      "auth-marker",
+      { reason: "Routine export", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/config-export", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        reason: "Routine export",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(grant).toMatchObject({ id: 23, nodeId: undefined, action: "config.export", purpose: "config_export", status: "active" });
   });
 
   it("requests a terminal grant with node, reason, ttl, bearer token, and step-up proof", async () => {

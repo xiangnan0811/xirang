@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const stepUpTestJWTSecret = "FAKE_JWT_SECRET_FOR_TEST_ONLY"
+const stepUpTestJWTSecret = "jwt-marker-for-tests"
 
 func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -41,6 +41,7 @@ func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.AuditLog{},
 		&model.Node{},
 		&model.NodeOwner{},
+		&model.Policy{},
 		&model.Task{},
 		&model.SSHKey{},
 		&model.SystemSetting{},
@@ -60,7 +61,7 @@ func seedStepUpUser(t *testing.T, db *gorm.DB, username, role string) model.User
 	user := model.User{
 		Username:     username,
 		Role:         role,
-		PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
+		PasswordHash: "hash-redacted",
 		TOTPEnabled:  true,
 		TOTPSecret:   secret,
 	}

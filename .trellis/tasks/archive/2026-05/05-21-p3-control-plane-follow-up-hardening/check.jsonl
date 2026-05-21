@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify backend changes preserve grant, audit, config export/import, and secret-safety contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify denial responses remain sanitized and do not cause session-expiry confusion."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no logs/audit/test/docs expose secrets, payloads, host-sensitive strings, command/output, or endpoints."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify frontend grant prompt/export state is local-only and browser-storage safe."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify frontend mappers/types cover config export grants with safe unknown fallbacks."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify UI uses existing dialog/button/card primitives without unnecessary abstractions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify sensitive export grant dialog has title, labels, descriptions, accessible errors, and decorative icon hiding."}
+{"file":".trellis/tasks/05-21-p3-control-plane-follow-up-hardening/prd.md","reason":"Check implementation satisfies all acceptance criteria and stays in scope."}
+{"file":".trellis/tasks/05-21-p3-control-plane-follow-up-hardening/research/remaining-control-plane-surfaces.md","reason":"Check selected scope still matches the risk/locality comparison."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Check implementation remains compatible with the first P3 config-import grant slice."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check no P4 architecture work or broad policy engine was introduced."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"Check P2 row-backed grant model assumptions still hold."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check prior surface inventory and deferred candidates are still handled intentionally."}
