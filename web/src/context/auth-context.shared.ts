@@ -10,6 +10,11 @@ export type StoredAuthState = {
   totpEnabled: boolean;
 };
 
+export type StepUpProofOptions = {
+  persist?: boolean;
+  reuseCached?: boolean;
+};
+
 export type AuthContextValue = {
   token: string | null;
   username: string | null;
@@ -26,7 +31,7 @@ export type AuthContextValue = {
   ) => void;
   logout: () => void;
   setTotpEnabled: (enabled: boolean) => void;
-  ensureStepUpProof: () => Promise<string>;
+  ensureStepUpProof: (options?: StepUpProofOptions) => Promise<string>;
   clearStepUpProof: () => void;
 };
 

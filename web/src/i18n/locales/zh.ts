@@ -1959,6 +1959,14 @@ const zh = {
     snapshotLabel: "快照 {{id}}",
     restoreCount: "恢复 {{count}} 项",
     restoreSuccess: "恢复成功",
+    grantTitle: "需要快照恢复临时授权",
+    grantDescription: "快照恢复会写入恢复目标。请填写本次恢复原因，通过二次验证后系统会创建任务级短时授权。",
+    grantReasonLabel: "授权原因",
+    grantReasonPlaceholder: "例如：恢复误删文件",
+    grantReasonHint: "仅用于本次授权，最多 {{max}} 个字符；请勿填写文件内容、目标路径、主机信息或密钥。",
+    grantReasonRequired: "请填写授权原因。",
+    grantReasonTooLong: "授权原因不能超过 {{max}} 个字符。",
+    grantSubmit: "申请授权并恢复",
   },
 
   // ── snapshot search ──

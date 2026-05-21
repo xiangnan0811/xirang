@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify proposed slice respects grant contract, fail-closed behavior, and security boundaries."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify denial responses use existing safe envelopes and do not leak sensitive data."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify audit/log metadata remains sanitized and excludes credential-adjacent material."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify frontend grant/reason/proof/restore state stays out of persistent browser storage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify frontend action/purpose/API additions remain typed and mapper fallbacks are safe."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify UI scope stays minimal and follows existing component patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify dialogs/forms are accessible and keyboard-operable."}
+{"file":".trellis/tasks/05-21-select-next-p3-p4-hardening-slice/prd.md","reason":"Validate implementation/checks against the selected snapshot restore JIT grant scope."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Ensure selection remains aligned with roadmap boundaries and P3/P4 split."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-control-plane-follow-up-hardening/prd.md","reason":"Ensure no regression from completed sensitive config export grant patterns."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-control-plane-follow-up-hardening/research/remaining-control-plane-surfaces.md","reason":"Check remaining candidate tradeoffs and confirm snapshot restore assumptions."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Check consistency with the first REST JIT grant slice and sanitized audit constraints."}

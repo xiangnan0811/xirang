@@ -265,6 +265,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTerminalGrant)
 	secured.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigImportGrant)
 	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)
+	secured.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestSnapshotRestoreGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
@@ -310,7 +311,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListSnapshots)
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
-	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, "snapshot.restore", sshutil.PurposeSnapshot, "snapshot_restore"), snapshotHandler.Restore)
+	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), handlers.RequireSnapshotRestoreCredentialGrant(dep.DB), snapshotHandler.Restore)
 	secured.GET("/tasks/:id/snapshots/diff", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotDiffHandler.Diff)
 	secured.GET("/tasks/:id/snapshots/search", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotSearchHandler.Search)
 
