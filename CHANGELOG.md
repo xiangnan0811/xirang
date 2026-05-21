@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.3](https://github.com/xiangnan0811/xirang/compare/v0.43.2...v0.43.3) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **docker:** update runtime base for rsync CVE ([61b9112](https://github.com/xiangnan0811/xirang/commit/61b9112bcad96a541a23d720377d0be6757935ee))
+
 ## [0.43.2](https://github.com/xiangnan0811/xirang/compare/v0.43.1...v0.43.2) (2026-05-21)
 
 
