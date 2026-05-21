@@ -1829,3 +1829,36 @@ Filled Session 51/52/53 Trellis journal placeholders with concrete changes, comm
 ### Next Steps
 
 - None - task complete
+
+
+## Session 55: Repair follow-up archive context paths
+
+**Date**: 2026-05-21
+**Task**: Repair follow-up archive context paths
+**Branch**: `fix/trellis-journal-followup-placeholders`
+
+### Summary
+
+Updated the archived follow-up journal repair task context entries to reference the archived PRD path and revalidated related Trellis tasks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5fd2376` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 54
+- **Total Sessions**: 55
 - **Last Active**: 2026-05-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1831 | Active |
+| `journal-1.md` | ~1864 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 55 | 2026-05-21 | Repair follow-up archive context paths | `5fd2376` | `fix/trellis-journal-followup-placeholders` |
 | 54 | 2026-05-21 | Fix Trellis journal follow-up placeholders | `24ad1f9` | `fix/trellis-journal-followup-placeholders` |
 | 53 | 2026-05-21 | Fix Docker CVE task context paths | `f5efe9c` | `fix/docker-rsync-cve-task-context` |
 | 52 | 2026-05-21 | Fix Docker rsync CVE release blocker | `3c8a7ce` | `fix/docker-rsync-cve-2026` |
