@@ -79,7 +79,7 @@
    需要保持 Node 24 兼容；升级 release、publish、deploy 相关 action 时，
    维护者应核对目标 tag 的 `action.yml` / `action.yaml` runtime，并同步更新
    SHA pin 与旁注版本号，不要用临时 Node 20 opt-out 作为常态方案。
-8. 监控 `Publish Docker Images` 直到成功；失败时优先修复自动链路，只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
+8. 监控 `Publish Docker Images` 直到成功。若 Trivy 因基础镜像或系统包 HIGH/CRITICAL CVE 阻断发布，应升级运行时基础镜像或包来源并重新走 PR/release 流程；不要降低 severity、添加 ignore 或绕过扫描。只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
 9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
 ## PR 后监控要求

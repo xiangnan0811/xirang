@@ -1720,3 +1720,36 @@ Filled the archived P2 context-path repair journal entry with actual changes, co
 ### Next Steps
 
 - None - task complete
+
+
+## Session 52: Fix Docker rsync CVE release blocker
+
+**Date**: 2026-05-21
+**Task**: Fix Docker rsync CVE release blocker
+**Branch**: `fix/docker-rsync-cve-2026`
+
+### Summary
+
+Updated the all-in-one runtime base to nginx 1.29 Alpine so Docker release images install fixed rsync 3.4.3-r0, kept Trivy gates strict, and repaired related archived Trellis Docker-publish context paths.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3c8a7ce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
