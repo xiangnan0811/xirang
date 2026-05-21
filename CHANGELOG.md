@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.4](https://github.com/xiangnan0811/xirang/compare/v0.43.3...v0.43.4) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **trellis:** repair Docker CVE task context paths ([f98dc31](https://github.com/xiangnan0811/xirang/commit/f98dc318b716e5b068c6f4146efb4535b4868fc9))
+
 ## [0.43.3](https://github.com/xiangnan0811/xirang/compare/v0.43.2...v0.43.3) (2026-05-21)
 
 
