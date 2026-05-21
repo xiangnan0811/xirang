@@ -1687,3 +1687,36 @@ Repaired archived P2 implement/check context paths so task.py validate succeeds 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 51: Fix Trellis journal placeholders
+
+**Date**: 2026-05-21
+**Task**: Fix Trellis journal placeholders
+**Branch**: `fix/trellis-journal-placeholders`
+
+### Summary
+
+Filled the archived P2 context-path repair journal entry with actual changes, commit metadata, and validation evidence.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0364f83` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
