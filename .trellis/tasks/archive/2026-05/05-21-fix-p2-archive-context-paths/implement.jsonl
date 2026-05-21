@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Use existing Trellis task quality expectations while repairing archival metadata without runtime security changes."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Keep awareness of the P2 archived context files whose frontend state-management research references must remain replayable."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Validate the archived P2 research path used by the repaired context entries."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Validate the archived P2 research path used by the repaired context entries."}
