@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Use existing quality and auditability expectations while making a metadata-only Trellis journal fix."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Keep awareness of the archived P2 context references whose validation evidence is being journaled."}
+{"file":".trellis/tasks/archive/2026-05/05-21-fix-p2-archive-context-paths/prd.md","reason":"Use the archived repair task goal and acceptance criteria to fill accurate journal details."}

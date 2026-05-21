@@ -1665,13 +1665,49 @@ Repaired archived P2 implement/check context paths so task.py validate succeeds 
 
 ### Main Changes
 
+- Updated archived P2 `implement.jsonl` and `check.jsonl` research references from the pre-archive task path to the archived task path.
+- Restored replayability for `.trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening` without runtime code changes.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7de8e9b` | fix(trellis): repair archived P2 context paths |
+
+### Testing
+
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening` — implement.jsonl 10 entries and check.jsonl 10 entries passed.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-p2-archive-context-paths` — implement.jsonl 4 entries and check.jsonl 4 entries passed.
+- [OK] `git diff --check` completed with no output.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 51: Fix Trellis journal placeholders
+
+**Date**: 2026-05-21
+**Task**: Fix Trellis journal placeholders
+**Branch**: `fix/trellis-journal-placeholders`
+
+### Summary
+
+Filled the archived P2 context-path repair journal entry with actual changes, commit metadata, and validation evidence.
+
+### Main Changes
+
 (Add details)
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `7de8e9b` | (see git log) |
+| `0364f83` | (see git log) |
 
 ### Testing
 
