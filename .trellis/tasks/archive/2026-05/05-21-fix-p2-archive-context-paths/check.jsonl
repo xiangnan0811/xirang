@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check the metadata-only fix preserves Trellis validation and security context replay expectations."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check the repaired archived context still points to persisted P2 frontend/security planning references."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Ensure archived P2 code-surface research exists at the repaired path."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Ensure archived P2 security-product research exists at the repaired path."}

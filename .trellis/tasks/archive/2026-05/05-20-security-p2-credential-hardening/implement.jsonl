@@ -6,5 +6,5 @@
 {"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend grant DTOs and API wrappers must map raw backend payloads into typed camelCase domain data."}
 {"file":".trellis/spec/frontend/component-guidelines.md","reason":"Terminal grant prompt UI should reuse existing accessible dialog/form primitives and admin-console patterns."}
 {"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Reason/TOTP prompt and retry UI must keep labels, dialog title, focus, and icon accessibility intact."}
-{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies terminal WebSocket choke point, current P1 controls, and enforcement ordering before SSH credential resolution."}
-{"file":".trellis/tasks/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Justifies terminal-first row-backed JIT grants and documents deferred alternatives and trade-offs."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies terminal WebSocket choke point, current P1 controls, and enforcement ordering before SSH credential resolution."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Justifies terminal-first row-backed JIT grants and documents deferred alternatives and trade-offs."}
