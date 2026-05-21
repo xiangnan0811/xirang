@@ -1701,17 +1701,20 @@ Filled the archived P2 context-path repair journal entry with actual changes, co
 
 ### Main Changes
 
-(Add details)
+- Updated `.trellis/workspace/xiangnan-mac/journal-1.md` Session 50 to replace template placeholders with concrete Main Changes, Git Commit title, and Testing evidence.
+- Kept the repair limited to Trellis journal metadata and preserved the archived P2 task content/runtime code.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `0364f83` | (see git log) |
+| `0364f83` | fix(trellis): fill archived path repair journal |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening` — implement.jsonl 10 entries and check.jsonl 10 entries passed.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-p2-archive-context-paths` — implement.jsonl 4 entries and check.jsonl 4 entries passed.
+- [OK] `git diff --check` completed with no output.
 
 ### Status
 
@@ -1734,17 +1737,21 @@ Updated the all-in-one runtime base to nginx 1.29 Alpine so Docker release image
 
 ### Main Changes
 
-(Add details)
+- Updated `deploy/allinone/Dockerfile` to use the current Alpine-backed `nginx:1.29-alpine` runtime base so `apk add rsync` resolves to the fixed rsync package.
+- Updated `docs/maintainers/release.md` with release-maintainer guidance for Trivy CVE publish failures: fix the runtime base or package source through the PR/release flow rather than weakening scans.
+- Repaired archived Docker-publish Trellis context references under `.trellis/tasks/archive/2026-05/05-13-publish-images-native-platforms/` and recorded the release-blocker task metadata.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `3c8a7ce` | (see git log) |
+| `3c8a7ce` | fix(docker): update runtime base for rsync CVE |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `docker manifest inspect nginx:1.29-alpine` confirmed the runtime base supports `linux/amd64` and `linux/arm64/v8`.
+- [OK] `docker run --rm --platform linux/arm64 nginx:1.29-alpine sh -c 'cat /etc/alpine-release; apk update >/dev/null; apk policy rsync'` showed Alpine 3.23.4 with rsync 3.4.3-r0 available.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-docker-rsync-cve-release-blocker` — implement.jsonl 2 entries and check.jsonl 2 entries passed.
 
 ### Status
 
@@ -1767,17 +1774,20 @@ Updated archived Docker rsync CVE task context entries to use archived PRD paths
 
 ### Main Changes
 
-(Add details)
+- Updated `.trellis/tasks/archive/2026-05/05-21-fix-docker-rsync-cve-release-blocker/implement.jsonl` and `check.jsonl` so PRD references point at the archived task path.
+- Added the focused Trellis repair task metadata under `.trellis/tasks/05-21-fix-docker-rsync-cve-task-context/` without changing Dockerfile, release workflow, application code, or docs.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `f5efe9c` | (see git log) |
+| `f5efe9c` | fix(trellis): repair Docker CVE task context paths |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-docker-rsync-cve-release-blocker` — implement.jsonl 2 entries and check.jsonl 2 entries passed.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/archive/2026-05/05-21-fix-docker-rsync-cve-task-context` — implement.jsonl 2 entries and check.jsonl 2 entries passed.
+- [OK] `git diff --check` completed with no output.
 
 ### Status
 
