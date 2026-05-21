@@ -2322,6 +2322,16 @@ const zh = {
     importConfirm: "确定要导入配置吗？现有冲突项将被跳过。",
     importSuccess: "导入成功：导入 {{imported}} 项，跳过 {{skipped}} 项",
     importFailed: "导入失败",
+    invalidImportFile: "导入文件必须是 JSON 对象",
+    importPayloadMissing: "导入内容已失效，请重新选择文件。",
+    grantTitle: "需要配置导入临时授权",
+    grantDescription: "配置导入可能变更节点、密钥、策略、任务和系统设置。请填写本次导入原因，通过二次验证后系统会创建短时授权并继续导入。",
+    grantReasonLabel: "授权原因",
+    grantReasonPlaceholder: "例如：恢复配置或执行变更窗口内的导入",
+    grantReasonHint: "最多 {{max}} 个字符；不要填写密码、令牌、主机、端点或导入内容。",
+    grantReasonRequired: "请填写授权原因。",
+    grantReasonTooLong: "授权原因不能超过 {{max}} 个字符。",
+    grantSubmit: "申请授权并导入",
   },
 
   // ── batch result dialog ──

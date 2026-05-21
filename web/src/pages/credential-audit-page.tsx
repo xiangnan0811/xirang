@@ -49,6 +49,7 @@ const actionOptions = [
   "file_browser.preview",
   "docker_volumes.discover",
   "config.export",
+  "config.import",
   "node.doctor.run",
   "node_migration.preflight",
   "probe.ssh",

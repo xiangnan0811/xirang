@@ -473,6 +473,7 @@ func highRiskCredentialAuditActions() []string {
 		"file_browser.preview",
 		"docker_volumes.discover",
 		"config.export",
+		"config.import",
 		"node.doctor.run",
 		"node_migration.preflight",
 		"probe.ssh",
@@ -505,6 +506,8 @@ func credentialActionLabel(action string) string {
 		return "Docker 卷发现"
 	case "config.export":
 		return "配置导出"
+	case "config.import":
+		return "配置导入"
 	case "node.doctor.run":
 		return "节点 Doctor 诊断"
 	case "node_migration.preflight":

@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"P3 must preserve P1/P2 credential audit, SSH scope, step-up, and credential access grant fail-closed contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Any P3 grant/audit schema or migration follow-up must preserve SQLite/PostgreSQL parity and UTC-safe timestamps."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Config-import grant denials and batch-trigger telemetry errors must use sanitized machine-readable backend error contracts."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"P3 config import and grant/audit paths must not log secrets, raw payloads, executor config, command output, endpoints, or host-sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend grant prompt state must remain short-lived and avoid long-lived browser storage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"P3 frontend grant/config import API wrappers must map backend payloads into typed camelCase domain data without unsafe raw objects."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Config import grant prompt should reuse existing dialog/form patterns and remain consistent with terminal grant UI."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Grant prompt labels, focus, DialogTitle, and validation messages must remain accessible."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"First P3 slice extends P2 row-backed JIT grants beyond terminal while preserving explicit P2 follow-up boundaries."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies config import as secret-bearing but not step-up-gated and notes batch-trigger no-op audit telemetry gap."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Supports P3/P4 split: broaden JIT grants before SSH CA, Vault/KMS, or terminal recording."}
+{"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Documents accepted P1 baseline and batch-trigger all-blocked/no-op telemetry observation."}
+{"file":".trellis/tasks/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Defines the P3/P4 scope and first P3 executable slice for implementation."}

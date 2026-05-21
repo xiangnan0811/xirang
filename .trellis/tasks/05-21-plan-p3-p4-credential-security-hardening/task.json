@@ -1,0 +1,28 @@
+{
+  "id": "plan-p3-p4-credential-security-hardening",
+  "name": "plan-p3-p4-credential-security-hardening",
+  "title": "Plan P3 P4 credential security hardening",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xiangnan-mac",
+  "assignee": "xiangnan-mac",
+  "createdAt": "2026-05-21",
+  "completedAt": null,
+  "branch": "security/p3-p4-security-roadmap",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-21-p3-config-import-grant-batch-telemetry"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

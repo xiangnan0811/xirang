@@ -590,6 +590,7 @@ export type CredentialAuditAction =
   | "file_browser.preview"
   | "docker_volumes.discover"
   | "config.export"
+  | "config.import"
   | "node.doctor.run"
   | "node_migration.preflight"
   | "probe.ssh"
@@ -599,18 +600,22 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
+export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "unknown";
+export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "unknown";
+export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked";
+
 export interface CredentialAccessGrant {
   id: number;
   requesterUserId: number;
   requesterUsername: string;
   requesterRole: string;
-  action: string;
-  purpose: string;
+  action: CredentialAccessGrantAction;
+  purpose: CredentialAccessGrantPurpose;
   nodeId?: number;
   taskId?: number;
   policyId?: number;
   reason: string;
-  status: string;
+  status: CredentialAccessGrantStatus;
   requestedTtlSeconds: number;
   requestedAt: string;
   approvedAt?: string;

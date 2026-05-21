@@ -259,6 +259,7 @@ go run ./cmd/server
 | GET | /credential-audit-events | 🔒 管理员凭据使用审计事件列表 |
 | GET | /credential-audit-events/export | 🔒 管理员导出凭据使用审计 CSV |
 | POST | /credential-access-grants/terminal | 🔒 申请并激活短时终端凭据使用授权（admin；需二次验证；绑定 node_id/action/purpose） |
+| POST | /credential-access-grants/config-import | 🔒 申请并激活短时配置导入授权（admin；需二次验证；绑定 config.import/config_import） |
 
 ### SLA 报告
 

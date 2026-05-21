@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"P3 must preserve SSH scope, step-up, credential audit, credential grant, and secret-safety backend contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Any grant/audit schema changes must preserve SQLite/PostgreSQL parity and UTC timestamp safety."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Config import grant denials must be sanitized and machine-readable without session-expiry confusion."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Config import and batch-trigger telemetry must avoid logging secrets, payloads, command output, endpoints, and host-sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend config-import grant prompt state must be short-lived and avoid long-lived browser storage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend config import/grant API wrappers must map backend DTOs into typed camelCase domain data."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Config import grant prompt should reuse existing dialog/form primitives and admin console patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Reason/TOTP prompt and retry UI must keep labels, dialog title, focus, and validation accessibility intact."}
+{"file":".trellis/tasks/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Defines P3/P4 split and first P3 executable slice scope."}
+{"file":".trellis/tasks/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Implementation task requirements, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"P3 extends P2 row-backed JIT grant model beyond terminal without drifting into P4 architecture work."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies config import as secret-bearing/not step-up-gated and batch-trigger no-op telemetry as an open risk."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Supports using JIT grant expansion before SSH CA, Vault/KMS, terminal recording, or command approval."}
+{"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Provides accepted P1 baseline and batch-trigger no-op observation severity."}

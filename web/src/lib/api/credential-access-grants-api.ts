@@ -1,4 +1,4 @@
-import type { CredentialAccessGrant } from "@/types/domain";
+import type { CredentialAccessGrant, CredentialAccessGrantAction, CredentialAccessGrantPurpose, CredentialAccessGrantStatus } from "@/types/domain";
 import { request } from "./core";
 
 interface CredentialAccessGrantResponse {
@@ -39,6 +39,31 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+function mapGrantAction(value: unknown): CredentialAccessGrantAction {
+  const raw = stringValue(value);
+  return raw === "terminal.open" || raw === "config.import" ? raw : "unknown";
+}
+
+function mapGrantPurpose(value: unknown): CredentialAccessGrantPurpose {
+  const raw = stringValue(value);
+  return raw === "terminal" || raw === "config_import" ? raw : "unknown";
+}
+
+function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
+  const raw = stringValue(value);
+  switch (raw) {
+    case "requested":
+    case "approved":
+    case "active":
+    case "denied":
+    case "expired":
+    case "revoked":
+      return raw;
+    default:
+      return "expired";
+  }
+}
+
 export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | null | undefined): CredentialAccessGrant {
   const row = raw ?? {};
   return {
@@ -46,13 +71,13 @@ export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | nu
     requesterUserId: finiteNumber(row.requester_user_id),
     requesterUsername: stringValue(row.requester_username),
     requesterRole: stringValue(row.requester_role),
-    action: stringValue(row.action),
-    purpose: stringValue(row.purpose),
+    action: mapGrantAction(row.action),
+    purpose: mapGrantPurpose(row.purpose),
     nodeId: positiveNumberOrUndefined(row.node_id),
     taskId: positiveNumberOrUndefined(row.task_id),
     policyId: positiveNumberOrUndefined(row.policy_id),
     reason: stringValue(row.reason),
-    status: stringValue(row.status),
+    status: mapGrantStatus(row.status),
     requestedTtlSeconds: finiteNumber(row.requested_ttl_seconds),
     requestedAt: stringValue(row.requested_at),
     approvedAt: stringValue(row.approved_at) || undefined,
@@ -79,6 +104,23 @@ export function createCredentialAccessGrantsApi() {
         stepUpProof,
         body: {
           node_id: input.nodeId,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return mapCredentialAccessGrant(raw);
+    },
+
+    async requestConfigImportCredentialGrant(
+      token: string,
+      input: { reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant> {
+      const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/config-import", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
           reason: input.reason,
           requested_ttl_seconds: input.requestedTtlSeconds,
         },
