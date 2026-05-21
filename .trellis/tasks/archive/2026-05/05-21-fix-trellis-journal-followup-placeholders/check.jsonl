@@ -1,0 +1,2 @@
+{"file":".trellis/workflow.md","reason":"Check the repair preserves Trellis journal/validation workflow and finish requirements."}
+{"file":".trellis/tasks/archive/2026-05/05-21-fix-trellis-journal-followup-placeholders/prd.md","reason":"Check acceptance criteria: no placeholders, related task validation, whitespace check, and no unrelated changes."}
