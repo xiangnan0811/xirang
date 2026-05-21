@@ -1651,3 +1651,36 @@ Implemented terminal-first row-backed credential access grants with backend enfo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 50: Fix archived P2 Trellis context paths
+
+**Date**: 2026-05-21
+**Task**: Fix archived P2 Trellis context paths
+**Branch**: `fix/p2-archive-context-paths`
+
+### Summary
+
+Repaired archived P2 implement/check context paths so task.py validate succeeds after archival.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7de8e9b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
