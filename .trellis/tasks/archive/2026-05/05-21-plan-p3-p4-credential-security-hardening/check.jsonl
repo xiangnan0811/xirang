@@ -10,4 +10,4 @@
 {"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check first P3 slice addresses known gaps without scope drift."}
 {"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Check SSH CA/Vault/recording are correctly deferred to P4-level architecture work."}
 {"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Check unfinished-item analysis preserves accepted P1 baseline and observation severity."}
-{"file":".trellis/tasks/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check the planning task has concrete P3/P4 scope, acceptance criteria, and first P3 executable slice."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check the planning task has concrete P3/P4 scope, acceptance criteria, and first P3 executable slice."}

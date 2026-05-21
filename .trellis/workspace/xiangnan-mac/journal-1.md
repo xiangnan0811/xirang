@@ -1885,17 +1885,28 @@ Implemented the first P3 security slice by extending row-backed JIT credential g
 
 ### Main Changes
 
-(Add details)
+- Extended the row-backed JIT `CredentialAccessGrant` flow from terminal-only enforcement to system-scoped config import grants.
+- Added additive `POST /config/import` enforcement requiring admin auth, TOTP step-up proof, and an active matching `config.import` / `config_import` grant before import mutation.
+- Added sanitized config import grant/use/import audit evidence and all-blocked batch-trigger no-op credential audit telemetry with bounded count/status metadata only.
+- Updated the frontend config import flow to request reason + step-up + grant before import, keep grant/import state out of browser storage, and show sanitized retry errors.
+- Added backend/frontend tests, i18n strings, audit filtering support, and concise maintainer/admin docs for the new high-risk grant behavior.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `f07b767` | (see git log) |
+| `f07b767` | fix(security): gate config import with JIT grants |
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/05-21-p3-config-import-grant-batch-telemetry`
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/05-21-plan-p3-p4-credential-security-hardening`
+- [OK] `TMPDIR=/tmp GOTMPDIR=/tmp go -C backend test ./internal/api/handlers -run 'Test(ConfigImport|CredentialAccessGrant|BatchTriggerNoOp)' -count=1`
+- [OK] `TMPDIR=/tmp GOTMPDIR=/tmp go -C backend test ./... -count=1`
+- [OK] `TMPDIR=/tmp npm --prefix web run test -- --run src/components/config-export-import.test.tsx src/lib/api/config-api.test.ts src/lib/api/credential-access-grants-api.test.ts`
+- [OK] `TMPDIR=/tmp npm --prefix web run check`
+- [OK] `git diff --check`
+- [OK] Added-line scan found no new forbidden secret/host sample strings in the P3 diff.
 
 ### Status
 

@@ -10,4 +10,4 @@
 {"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Identifies config import as secret-bearing but not step-up-gated and notes batch-trigger no-op audit telemetry gap."}
 {"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Supports P3/P4 split: broaden JIT grants before SSH CA, Vault/KMS, or terminal recording."}
 {"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Documents accepted P1 baseline and batch-trigger all-blocked/no-op telemetry observation."}
-{"file":".trellis/tasks/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Defines the P3/P4 scope and first P3 executable slice for implementation."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Defines the P3/P4 scope and first P3 executable slice for implementation."}
