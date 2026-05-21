@@ -1948,3 +1948,36 @@ Added config.export/config_export JIT grant enforcement for sensitive config exp
 ### Next Steps
 
 - None - task complete
+
+
+## Session 58: Snapshot restore JIT grant
+
+**Date**: 2026-05-22
+**Task**: Snapshot restore JIT grant
+**Branch**: `security/select-next-p3-p4-hardening-slice`
+
+### Summary
+
+Selected and implemented the next P3 hardening slice by requiring task-scoped snapshot.restore credential grants for snapshot restore, adding one-time non-persistent step-up proof support, tests, docs, and spec guidance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `032bbf7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
