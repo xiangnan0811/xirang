@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check P3 grant enforcement, credential audit, config export/import, and secret-safety backend contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check grant-required and step-up-required denial shapes stay sanitized and machine-readable."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check logs/audit evidence avoid secrets, payloads, commands, endpoints, hosts, and exported material."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check frontend grant prompt state remains local and avoids browser storage for grant/export material."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend API/domain mapping for typed grant DTOs and safe fallbacks."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check sensitive export prompt uses existing UI/component patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check grant dialog/input/error labels, DialogTitle, and focus/accessibility requirements."}
+{"file":".trellis/tasks/05-21-p3-control-plane-follow-up-hardening/prd.md","reason":"Implement the selected sensitive config export JIT grant slice and acceptance criteria."}
+{"file":".trellis/tasks/05-21-p3-control-plane-follow-up-hardening/research/remaining-control-plane-surfaces.md","reason":"Use research comparison to keep implementation bounded to sensitive config export and defer other candidates."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Reuse the established config-import grant pattern and avoid regressing first P3 slice behavior."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check P3/P4 boundaries and avoid architecture work outside this slice."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"Check P2 grant model, follow-up surfaces, and additive-control constraints."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check prior high-risk surface inventory and ensure this slice addresses the next bounded gap."}
