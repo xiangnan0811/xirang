@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.1](https://github.com/xiangnan0811/xirang/compare/v0.43.0...v0.43.1) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **trellis:** repair archived P2 context paths ([21ed73f](https://github.com/xiangnan0811/xirang/commit/21ed73f33f1b0bfd5b0c393913005c664e51bf25))
+
 ## [0.43.0](https://github.com/xiangnan0811/xirang/compare/v0.42.0...v0.43.0) (2026-05-20)
 
 
