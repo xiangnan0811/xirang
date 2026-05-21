@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check P3 enforcement remains additive, fail-closed, and secret-safe."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check migration/schema parity and UTC safety if grant/audit storage changes."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check denial/error shapes are sanitized, machine-readable, and do not leak internals."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check logs/audit paths avoid secrets, payloads, commands, endpoints, and host-sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check frontend does not persist grant material or secret-bearing import state in long-lived storage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend API/domain mapping is typed and avoids raw backend objects."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check UI prompt follows existing component/dialog patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check grant prompt labels, focus, DialogTitle, and validation messages."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check implementation stays within planned first P3 slice and keeps P4 out of scope."}
+{"file":".trellis/tasks/archive/2026-05/05-21-p3-config-import-grant-batch-telemetry/prd.md","reason":"Check acceptance criteria and scope for config import grant and batch-trigger telemetry."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"Check implementation preserves P2 grant model and follow-up boundaries."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check known gaps are addressed without adding unrelated surfaces."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Check implementation does not drift into SSH CA/Vault/recording/command-approval scope."}
+{"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Check batch-trigger no-op telemetry is treated as audit completeness, not execution bypass."}

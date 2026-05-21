@@ -50,6 +50,13 @@ func credentialAuditOutcome(successCount, failureCount, blockedCount int) string
 	}
 }
 
+func credentialAuditNoExecutionOutcome(failureCount, blockedCount int) string {
+	if blockedCount > 0 || failureCount == 0 {
+		return credentialaudit.OutcomeBlocked
+	}
+	return credentialaudit.OutcomeFailure
+}
+
 func sanitizedClientError(err error) string {
 	if err == nil {
 		return ""

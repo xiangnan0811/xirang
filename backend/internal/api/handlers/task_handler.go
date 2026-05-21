@@ -730,6 +730,20 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	}
 
 	if len(tasksToTrigger) == 0 {
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action:  "task.batch_trigger",
+			Purpose: sshutil.PurposeTaskCommand,
+			Outcome: credentialAuditNoExecutionOutcome(failureCount, blockedCount),
+			Metadata: map[string]any{
+				"stage":           "no_op",
+				"requested_count": len(req.TaskIDs),
+				"eligible_count":  0,
+				"executed_count":  0,
+				"failure_count":   failureCount,
+				"blocked_count":   blockedCount,
+				"no_op":           true,
+			},
+		})
 		respondOK(c, gin.H{
 			"results":       results,
 			"total":         len(req.TaskIDs),

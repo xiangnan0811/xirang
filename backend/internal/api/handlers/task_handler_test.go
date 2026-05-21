@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
@@ -281,6 +282,79 @@ func TestTaskListDefaultsToLatestCreatedTasksFirst(t *testing.T) {
 		if gotNames[i] != wantNames[i] {
 			t.Fatalf("默认排序不符合预期，实际顺序: %v", gotNames)
 		}
+	}
+}
+
+func TestBatchTriggerNoOpWritesCredentialAuditTelemetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	operator := model.User{Username: "batch-operator", Role: "operator", PasswordHash: "hash-redacted"}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+	node := model.Node{Name: "batch-unowned-node", Host: "redacted", Username: "batch-user", AuthType: "key", BackupDir: "batch-unowned-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	taskEntity := model.Task{Name: "batch-unowned-task", NodeID: node.ID, ExecutorType: "rsync", RsyncSource: "redacted-source", RsyncTarget: "redacted-target", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	runner := &mockTaskRunner{triggerManualRunID: 99}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, operator.ID)
+		c.Set(middleware.CtxUsername, operator.Username)
+		c.Set(middleware.CtxRole, operator.Role)
+		c.Next()
+	})
+	r.POST("/tasks/batch-trigger", handler.BatchTrigger)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/batch-trigger", strings.NewReader(fmt.Sprintf(`{"task_ids":[%d]}`, taskEntity.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("全量过滤的 batch trigger 仍应返回 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if len(runner.syncCalls) != 0 || len(runner.removeCalls) != 0 {
+		t.Fatalf("batch trigger no-op 不应触发调度副作用，sync=%d remove=%d", len(runner.syncCalls), len(runner.removeCalls))
+	}
+
+	var payload struct {
+		Data struct {
+			Total        int `json:"total"`
+			SuccessCount int `json:"success_count"`
+			Results      []struct {
+				TaskID uint   `json:"task_id"`
+				Error  string `json:"error"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析 batch trigger 响应失败: %v", err)
+	}
+	if payload.Data.Total != 1 || payload.Data.SuccessCount != 0 || len(payload.Data.Results) != 1 || payload.Data.Results[0].TaskID != taskEntity.ID || payload.Data.Results[0].Error == "" {
+		t.Fatalf("batch trigger no-op 响应形状不符合预期: %+v", payload.Data)
+	}
+
+	events := loadCredentialAuditEvents(t, db, "task.batch_trigger")
+	if len(events) != 1 {
+		t.Fatalf("batch trigger no-op 应写 1 条凭据审计事件，实际: %+v", events)
+	}
+	event := events[0]
+	if event.UserID != operator.ID || event.Username != operator.Username || event.Role != operator.Role || event.Outcome != credentialaudit.OutcomeBlocked {
+		t.Fatalf("batch trigger no-op 审计 actor/outcome 不符合预期: %+v", event)
+	}
+	metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+	if metadata["stage"] != "no_op" || metadata["requested_count"].(float64) != 1 || metadata["eligible_count"].(float64) != 0 || metadata["executed_count"].(float64) != 0 || metadata["blocked_count"].(float64) != 1 || metadata["no_op"] != true {
+		t.Fatalf("batch trigger no-op 审计 metadata 不符合预期: %#v", metadata)
 	}
 }
 

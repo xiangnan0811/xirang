@@ -1,0 +1,13 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check P3 planning keeps credential grant enforcement additive, fail-closed, and secret-safe."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check any proposed schema/migration follow-up preserves cross-engine parity and UTC safety."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check planned denial/audit behavior stays sanitized and machine-readable."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check planned config import and grant telemetry avoids logging secrets or host-sensitive evidence."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check planned frontend grant prompt avoids localStorage/sessionStorage persistence of grant material."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check planned API/domain typing stays mapped and safe."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check planned prompt UI reuses existing accessible dialog/form primitives."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check planned prompt UI accessibility requirements are explicit."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/prd.md","reason":"Check P3/P4 split aligns with P2 follow-up roadmap and out-of-scope boundaries."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/code-surfaces.md","reason":"Check first P3 slice addresses known gaps without scope drift."}
+{"file":".trellis/tasks/archive/2026-05/05-20-security-p2-credential-hardening/research/security-product-patterns.md","reason":"Check SSH CA/Vault/recording are correctly deferred to P4-level architecture work."}
+{"file":".trellis/tasks/archive/2026-05/05-20-p1-overall-security-review-before-p2/final-review-report.md","reason":"Check unfinished-item analysis preserves accepted P1 baseline and observation severity."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Check the planning task has concrete P3/P4 scope, acceptance criteria, and first P3 executable slice."}

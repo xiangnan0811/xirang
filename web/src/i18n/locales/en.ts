@@ -2322,6 +2322,16 @@ const en = {
     importConfirm: "Import configuration? Conflicting items will be skipped.",
     importSuccess: "Imported {{imported}} items, skipped {{skipped}}",
     importFailed: "Import failed",
+    invalidImportFile: "Import file must be a JSON object",
+    importPayloadMissing: "The import content is no longer available. Please choose the file again.",
+    grantTitle: "Config import temporary grant required",
+    grantDescription: "Config import can change nodes, keys, policies, tasks, and system settings. Enter the reason for this import; after additional verification, Xirang will create a short-lived grant and continue the import.",
+    grantReasonLabel: "Grant reason",
+    grantReasonPlaceholder: "For example: restore configuration or import during a change window",
+    grantReasonHint: "Up to {{max}} characters. Do not enter passwords, tokens, hosts, endpoints, or import content.",
+    grantReasonRequired: "Please enter a grant reason.",
+    grantReasonTooLong: "Grant reason cannot exceed {{max}} characters.",
+    grantSubmit: "Grant and import",
   },
 
   // ── batch result dialog ──

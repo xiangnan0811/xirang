@@ -674,6 +674,22 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return
 	}
 
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:           "config.import",
+		Purpose:          "config_import",
+		CredentialKind:   "system_import",
+		CredentialSource: "settings.import",
+		Outcome:          credentialaudit.OutcomeSuccess,
+		Metadata: map[string]any{
+			"stage":          "success",
+			"node_count":     importedNodes,
+			"key_count":      importedKeys,
+			"policy_count":   importedPolicies,
+			"task_count":     importedTasks,
+			"settings_count": importedSettings,
+		},
+	})
+
 	respondOK(c, gin.H{
 		"nodes":           importedNodes,
 		"ssh_keys":        importedKeys,

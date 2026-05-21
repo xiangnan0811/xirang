@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func seedCredentialGrantNode(t *testing.T, db *gorm.DB) model.Node {
 	suffix := time.Now().UnixNano()
 	node := model.Node{
 		Name:      fmt.Sprintf("grant-node-%d", suffix),
-		Host:      "10.0.40.1",
+		Host:      "redacted",
 		Port:      22,
 		Username:  "root",
 		AuthType:  "password",
@@ -42,6 +43,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
 	router.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), handler.RequestTerminalGrant)
+	router.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), handler.RequestConfigImportGrant)
 	return router
 }
 
@@ -55,10 +57,11 @@ func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *test
 	node := seedCredentialGrantNode(t, db)
 	router := newCredentialGrantTestRouter(db, manager)
 
+	oversizedReason := strings.Repeat("安全说明", 90)
 	unsafeReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", token, proof,
-		fmt.Sprintf(`{"node_id":%d,"reason":"例行维护 token=FAKE_TOKEN_FOR_TEST_ONLY","requested_ttl_seconds":600}`, node.ID))
-	if unsafeReasonResp.Code != http.StatusBadRequest || strings.Contains(unsafeReasonResp.Body.String(), "FAKE_TOKEN_FOR_TEST_ONLY") {
-		t.Fatalf("secret-shaped 授权原因应被拒绝且不回显原文，实际: %d，响应: %s", unsafeReasonResp.Code, unsafeReasonResp.Body.String())
+		fmt.Sprintf(`{"node_id":%d,"reason":%q,"requested_ttl_seconds":600}`, node.ID, oversizedReason))
+	if unsafeReasonResp.Code != http.StatusBadRequest || strings.Contains(unsafeReasonResp.Body.String(), oversizedReason) {
+		t.Fatalf("过长授权原因应被拒绝且不回显原文，实际: %d，响应: %s", unsafeReasonResp.Code, unsafeReasonResp.Body.String())
 	}
 
 	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", token, proof,
@@ -104,8 +107,8 @@ func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *test
 	}
 
 	events := loadCredentialAuditEvents(t, db, CredentialGrantActionTerminalOpen)
-	if len(events) != 3 {
-		t.Fatalf("grant 请求应写入 step-up/request/activate 三条终端审计事件，实际: %+v", events)
+	if len(events) != 4 {
+		t.Fatalf("grant 请求应写入安全拒绝 step-up 及成功 step-up/request/activate 审计事件，实际: %+v", events)
 	}
 	for _, event := range events {
 		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
@@ -114,6 +117,76 @@ func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *test
 		}
 		if stage, ok := metadata["stage"].(string); !ok || stage == "" {
 			t.Fatalf("grant 审计 metadata 缺少安全 stage: %#v", metadata)
+		}
+	}
+}
+
+func TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "grant-config-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	router := newCredentialGrantTestRouter(db, manager)
+
+	oversizedReason := strings.Repeat("配置恢复", 90)
+	unsafeReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-import", token, proof,
+		fmt.Sprintf(`{"reason":%q,"requested_ttl_seconds":600}`, oversizedReason))
+	if unsafeReasonResp.Code != http.StatusBadRequest || strings.Contains(unsafeReasonResp.Body.String(), oversizedReason) {
+		t.Fatalf("config import 过长授权原因应被拒绝且不回显原文，实际: %d，响应: %s", unsafeReasonResp.Code, unsafeReasonResp.Body.String())
+	}
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-import", token, proof,
+		`{"reason":"例行配置恢复","requested_ttl_seconds":600}`)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("申请配置导入授权期望 201，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			ID                  uint   `json:"id"`
+			RequesterUserID     uint   `json:"requester_user_id"`
+			Action              string `json:"action"`
+			Purpose             string `json:"purpose"`
+			NodeID              uint   `json:"node_id"`
+			Reason              string `json:"reason"`
+			Status              string `json:"status"`
+			RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析配置导入授权响应失败: %v", err)
+	}
+	if payload.Data.ID == 0 || payload.Data.RequesterUserID != admin.ID || payload.Data.NodeID != 0 || payload.Data.Status != CredentialGrantStatusActive {
+		t.Fatalf("配置导入授权 DTO 基本字段不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Action != CredentialGrantActionConfigImport || payload.Data.Purpose != CredentialGrantPurposeConfigImport || payload.Data.RequestedTTLSeconds != 600 {
+		t.Fatalf("配置导入授权 DTO 操作/用途/TTL 不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Reason != "例行配置恢复" {
+		t.Fatalf("配置导入授权原因应保存安全文本，实际: %q", payload.Data.Reason)
+	}
+
+	var grant model.CredentialAccessGrant
+	if err := db.First(&grant, payload.Data.ID).Error; err != nil {
+		t.Fatalf("读取配置导入授权记录失败: %v", err)
+	}
+	if grant.NodeID != nil || grant.TaskID != nil || grant.PolicyID != nil || grant.ApproverUserID == nil || *grant.ApproverUserID != admin.ID {
+		t.Fatalf("配置导入 grant 应为系统作用域自批准记录: %+v", grant)
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
+	if len(events) != 4 {
+		t.Fatalf("config import grant 请求应写入安全拒绝 step-up 及成功 step-up/request/activate 审计事件，实际: %+v", events)
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.Outcome != credentialaudit.OutcomeSuccess || event.UserID != admin.ID {
+			t.Fatalf("config import grant 审计 actor/outcome 不符合预期: %+v", event)
+		}
+		if stage, ok := metadata["stage"].(string); !ok || stage == "" {
+			t.Fatalf("config import grant 审计 metadata 缺少安全 stage: %#v", metadata)
 		}
 	}
 }
@@ -197,24 +270,77 @@ func TestFindActiveCredentialGrantMatchesUserOperationResourceAndExpiry(t *testi
 	mkGrant(user.ID, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, otherNode.ID, CredentialGrantStatusActive, now.Add(10*time.Minute))
 	mkGrant(user.ID, "ssh_key.export", "ssh_key_export", node.ID, CredentialGrantStatusActive, now.Add(10*time.Minute))
 
-	found, err := findActiveCredentialGrant(context.Background(), db, claims, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, node.ID)
+	found, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: sshutil.PurposeTerminal, NodeID: credentialaudit.PtrUint(node.ID)})
 	if err != nil || found == nil || found.ID != valid.ID {
 		t.Fatalf("有效 active grant 应授权且不被历史 revoked grant 阻断，grant=%+v err=%v", found, err)
 	}
-	if _, err := findActiveCredentialGrant(context.Background(), db, otherClaims, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, otherNode.ID); !errors.Is(err, ErrCredentialGrantRequired) {
+	if _, err := findActiveCredentialGrant(context.Background(), db, otherClaims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: sshutil.PurposeTerminal, NodeID: credentialaudit.PtrUint(otherNode.ID)}); !errors.Is(err, ErrCredentialGrantRequired) {
 		t.Fatalf("wrong user/resource 应拒绝，实际: %v", err)
 	}
-	if _, err := findActiveCredentialGrant(context.Background(), db, claims, "ssh_key.export", sshutil.PurposeTerminal, node.ID); !errors.Is(err, ErrCredentialGrantRequired) {
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: "ssh_key.export", Purpose: sshutil.PurposeTerminal, NodeID: credentialaudit.PtrUint(node.ID)}); !errors.Is(err, ErrCredentialGrantRequired) {
 		t.Fatalf("wrong operation 应拒绝，实际: %v", err)
 	}
-	if _, err := findActiveCredentialGrant(context.Background(), db, claims, CredentialGrantActionTerminalOpen, "task_command", node.ID); !errors.Is(err, ErrCredentialGrantRequired) {
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: "task_command", NodeID: credentialaudit.PtrUint(node.ID)}); !errors.Is(err, ErrCredentialGrantRequired) {
 		t.Fatalf("wrong purpose 应拒绝，实际: %v", err)
 	}
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("role", "operator").Error; err != nil {
 		t.Fatalf("更新用户角色失败: %v", err)
 	}
-	if _, err := findActiveCredentialGrant(context.Background(), db, claims, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, node.ID); !errors.Is(err, ErrCredentialGrantInvalid) {
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: sshutil.PurposeTerminal, NodeID: credentialaudit.PtrUint(node.ID)}); !errors.Is(err, ErrCredentialGrantInvalid) {
 		t.Fatalf("角色变化后的历史 grant 应拒绝，实际: %v", err)
+	}
+}
+
+func TestFindActiveConfigImportCredentialGrantMatchesSystemScopeAndRejectsWrongTuple(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	user := seedStepUpUser(t, db, "grant-config-match-admin", "admin")
+	other := seedStepUpUser(t, db, "grant-config-match-other", "admin")
+	node := seedCredentialGrantNode(t, db)
+	now := time.Now().UTC()
+	claims := &auth.Claims{UserID: user.ID, Username: user.Username, Role: user.Role}
+	otherClaims := &auth.Claims{UserID: other.ID, Username: other.Username, Role: other.Role}
+
+	mkGrant := func(userID uint, action string, purpose string, nodeID *uint, status string, expiresAt time.Time) model.CredentialAccessGrant {
+		grant := model.CredentialAccessGrant{
+			RequesterUserID:     userID,
+			RequesterUsername:   "grant-user",
+			RequesterRole:       "admin",
+			Action:              action,
+			Purpose:             purpose,
+			NodeID:              nodeID,
+			Reason:              "维护",
+			Status:              status,
+			RequestedTTLSeconds: 600,
+			RequestedAt:         now,
+			ExpiresAt:           expiresAt,
+		}
+		if err := db.Create(&grant).Error; err != nil {
+			t.Fatalf("创建 config grant fixture 失败: %v", err)
+		}
+		return grant
+	}
+
+	valid := mkGrant(user.ID, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, nil, CredentialGrantStatusActive, now.Add(10*time.Minute))
+	mkGrant(user.ID, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, credentialaudit.PtrUint(node.ID), CredentialGrantStatusActive, now.Add(10*time.Minute))
+	mkGrant(user.ID, CredentialGrantActionConfigImport, "settings_export", nil, CredentialGrantStatusDenied, now.Add(10*time.Minute))
+	mkGrant(other.ID, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, nil, CredentialGrantStatusRevoked, now.Add(10*time.Minute))
+
+	found, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport})
+	if err != nil || found == nil || found.ID != valid.ID {
+		t.Fatalf("有效 config import system-scoped grant 应授权，grant=%+v err=%v", found, err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, otherClaims, credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport}); !errors.Is(err, ErrCredentialGrantRevoked) {
+		t.Fatalf("wrong user 的 revoked config import grant 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: CredentialGrantPurposeConfigImport}); !errors.Is(err, ErrCredentialGrantRequired) {
+		t.Fatalf("wrong action 的 config import grant 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: "settings_export"}); !errors.Is(err, ErrCredentialGrantDenied) {
+		t.Fatalf("wrong purpose 的 denied config import grant 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport, NodeID: credentialaudit.PtrUint(node.ID)}); !errors.Is(err, ErrCredentialGrantRequired) {
+		t.Fatalf("system-scoped grant 不应授权 node-scoped tuple，实际: %v", err)
 	}
 }
 
@@ -242,7 +368,7 @@ func TestFindActiveCredentialGrantExpiresAndReportsInactiveStatus(t *testing.T) 
 		t.Fatalf("创建过期 grant 失败: %v", err)
 	}
 
-	_, err := findActiveCredentialGrant(context.Background(), db, claims, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, node.ID)
+	_, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: sshutil.PurposeTerminal, NodeID: credentialaudit.PtrUint(node.ID)})
 	if !errors.Is(err, ErrCredentialGrantExpired) {
 		t.Fatalf("过期 active grant 应返回 expired，实际: %v", err)
 	}
@@ -255,12 +381,256 @@ func TestFindActiveCredentialGrantExpiresAndReportsInactiveStatus(t *testing.T) 
 	}
 }
 
+func TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "config-import-route-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	router := newConfigImportGrantEnforcementRouter(db, manager)
+	body := configImportSSHKeyBody("route-step-up-key")
+
+	missingProofResp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, "", body)
+	assertStepUpRequiredEnvelope(t, missingProofResp)
+	assertNoImportedSSHKey(t, db, "route-step-up-key")
+
+	missingGrantResp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, body)
+	assertCredentialGrantRequiredEnvelope(t, missingGrantResp, "required")
+	assertNoImportedSSHKey(t, db, "route-step-up-key")
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
+	if len(events) != 3 {
+		t.Fatalf("缺少 step-up/grant blocked 审计事件，实际: %+v", events)
+	}
+	for _, event := range events {
+		assertNoForbiddenAuditMetadata(t, event.Metadata)
+	}
+}
+
+func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "config-import-valid-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     admin.ID,
+		RequesterUsername:   admin.Username,
+		RequesterRole:       admin.Role,
+		Action:              CredentialGrantActionConfigImport,
+		Purpose:             CredentialGrantPurposeConfigImport,
+		Reason:              "例行恢复",
+		Status:              CredentialGrantStatusActive,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建配置导入 grant 失败: %v", err)
+	}
+
+	router := newConfigImportGrantEnforcementRouter(db, manager)
+	resp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, configImportSSHKeyBody("route-valid-key"))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("带有效配置导入 grant 应成功，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	assertImportedSSHKey(t, db, "route-valid-key")
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
+	if len(events) != 3 {
+		t.Fatalf("配置导入 step-up/grant use/import 应写 3 条审计事件，实际: %+v", events)
+	}
+	for _, event := range events {
+		if event.Outcome != credentialaudit.OutcomeSuccess || event.UserID != admin.ID {
+			t.Fatalf("配置导入授权使用审计事件不符合预期: %+v", event)
+		}
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.CredentialKind == "system_import" {
+			if metadata["stage"] != "success" || metadata["key_count"].(float64) != 1 {
+				t.Fatalf("配置导入成功审计 metadata 不符合预期: %#v", metadata)
+			}
+		}
+	}
+}
+
+func TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testCases := []struct {
+		name       string
+		wantStatus string
+		seedGrant  func(t *testing.T, db *gorm.DB, admin model.User)
+		assertDB   func(t *testing.T, db *gorm.DB)
+	}{
+		{
+			name:       "expired",
+			wantStatus: CredentialGrantStatusExpired,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				now := time.Now().UTC()
+				grant := model.CredentialAccessGrant{RequesterUserID: admin.ID, RequesterUsername: admin.Username, RequesterRole: admin.Role, Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport, Reason: "例行恢复", Status: CredentialGrantStatusActive, RequestedTTLSeconds: 60, RequestedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
+				if err := db.Create(&grant).Error; err != nil {
+					t.Fatalf("创建过期 grant 失败: %v", err)
+				}
+			},
+			assertDB: func(t *testing.T, db *gorm.DB) {
+				var grant model.CredentialAccessGrant
+				if err := db.Where("action = ? AND purpose = ?", CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport).First(&grant).Error; err != nil {
+					t.Fatalf("读取过期 grant 失败: %v", err)
+				}
+				if grant.Status != CredentialGrantStatusExpired {
+					t.Fatalf("过期 active grant 应标记 expired，实际: %s", grant.Status)
+				}
+			},
+		},
+		{
+			name:       "revoked",
+			wantStatus: CredentialGrantStatusRevoked,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigImportGrantFixture(t, db, admin, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusRevoked)
+			},
+		},
+		{
+			name:       "denied",
+			wantStatus: CredentialGrantStatusDenied,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigImportGrantFixture(t, db, admin, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusDenied)
+			},
+		},
+		{
+			name:       "wrong-user",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, _ model.User) {
+				other := seedStepUpUser(t, db, "config-import-other-user", "admin")
+				createConfigImportGrantFixture(t, db, other, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusActive)
+			},
+		},
+		{
+			name:       "wrong-action",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigImportGrantFixture(t, db, admin, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, CredentialGrantStatusActive)
+			},
+		},
+		{
+			name:       "wrong-purpose",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigImportGrantFixture(t, db, admin, CredentialGrantActionConfigImport, "settings_export", CredentialGrantStatusActive)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			admin := seedStepUpUser(t, db, "config-import-deny-admin", "admin")
+			token := generatePrimaryToken(t, manager, admin)
+			proof := generateStepUpProof(t, manager, admin)
+			tc.seedGrant(t, db, admin)
+
+			keyName := "route-deny-key-" + tc.name
+			router := newConfigImportGrantEnforcementRouter(db, manager)
+			resp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, configImportSSHKeyBody(keyName))
+			assertCredentialGrantRequiredEnvelope(t, resp, tc.wantStatus)
+			assertNoImportedSSHKey(t, db, keyName)
+			if tc.assertDB != nil {
+				tc.assertDB(t, db)
+			}
+
+			events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
+			if len(events) == 0 {
+				t.Fatalf("配置导入 grant 拒绝应写审计事件")
+			}
+			for _, event := range events {
+				assertNoForbiddenAuditMetadata(t, event.Metadata)
+			}
+		})
+	}
+}
+
+func newConfigImportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/config/import", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, "settings_import"), RequireConfigImportCredentialGrant(db), handler.Import)
+	return router
+}
+
+func createConfigImportGrantFixture(t *testing.T, db *gorm.DB, user model.User, action, purpose, status string) {
+	t.Helper()
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     user.ID,
+		RequesterUsername:   user.Username,
+		RequesterRole:       user.Role,
+		Action:              action,
+		Purpose:             purpose,
+		Reason:              "例行恢复",
+		Status:              status,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建配置导入 grant fixture 失败: %v", err)
+	}
+}
+
+func configImportSSHKeyBody(keyName string) string {
+	return fmt.Sprintf(`{"ssh_keys":[{"name":%q,"username":"deploy","key_type":"auto","fingerprint":"SHA256:route-key"}]}`, keyName)
+}
+
+func assertCredentialGrantRequiredEnvelope(t *testing.T, resp *httptest.ResponseRecorder, status string) {
+	t.Helper()
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("期望 credential grant required 返回 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			ErrorCode string `json:"error_code"`
+			Status    string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析 credential grant required 响应失败: %v", err)
+	}
+	if payload.Code != http.StatusForbidden || payload.Data.ErrorCode != credentialGrantRequiredCode || payload.Data.Status != status {
+		t.Fatalf("credential grant required 响应缺少机器可读字段: %+v", payload)
+	}
+}
+
+func assertNoImportedSSHKey(t *testing.T, db *gorm.DB, keyName string) {
+	t.Helper()
+	var count int64
+	if err := db.Model(&model.SSHKey{}).Where("name = ?", keyName).Count(&count).Error; err != nil {
+		t.Fatalf("统计 SSH key 失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("未授权配置导入不应创建 SSH key %q，实际数量: %d", keyName, count)
+	}
+}
+
+func assertImportedSSHKey(t *testing.T, db *gorm.DB, keyName string) {
+	t.Helper()
+	var count int64
+	if err := db.Model(&model.SSHKey{}).Where("name = ?", keyName).Count(&count).Error; err != nil {
+		t.Fatalf("统计 SSH key 失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("授权配置导入应创建 SSH key %q，实际数量: %d", keyName, count)
+	}
+}
+
 func TestTerminalCredentialGrantReasonSanitizationRejectsSecretMarkers(t *testing.T) {
 	cases := []string{
-		"查看输出 output: FAKE_COMMAND_OUTPUT_FOR_TEST_ONLY",
-		"连接 https://example.invalid/hook/FAKE_TOKEN_FOR_TEST_ONLY",
-		"目标 host: prod.internal",
-		"密码 password=FAKE_PASSWORD_FOR_TEST_ONLY",
+		"查看输出 output:",
+		"连接 https://redacted.invalid",
+		"目标 host:",
+		"包含敏感占位 [REDACTED]",
 	}
 	for _, input := range cases {
 		if reason, err := sanitizeCredentialGrantReason(input); err == nil {

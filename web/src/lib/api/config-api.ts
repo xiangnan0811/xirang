@@ -38,11 +38,17 @@ export function createConfigApi() {
       return request<ConfigExportPayload>(`/config/export${query}`, { token, stepUpProof });
     },
 
-    async importConfig(token: string, data: Record<string, unknown>, conflict: "skip" | "overwrite" = "skip"): Promise<{ imported: number; skipped: number }> {
+    async importConfig(
+      token: string,
+      data: Record<string, unknown>,
+      conflict: "skip" | "overwrite" = "skip",
+      stepUpProof?: string,
+    ): Promise<{ imported: number; skipped: number }> {
       const query = `?conflict=${conflict}`;
       const payload = await request<ConfigImportBreakdown>(`/config/import${query}`, {
         method: "POST",
         token,
+        stepUpProof,
         body: data,
       });
       return summarizeImportResult(payload);

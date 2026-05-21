@@ -83,6 +83,53 @@ describe("credential access grants api", () => {
     expect(grant.reason).toBe("");
   });
 
+  it("falls back safely for unknown action, purpose, and status", () => {
+    const grant = mapCredentialAccessGrant({
+      action: "ssh_key.export",
+      purpose: "ssh_key_export",
+      status: "unexpected",
+    });
+
+    expect(grant.action).toBe("unknown");
+    expect(grant.purpose).toBe("unknown");
+    expect(grant.status).toBe("expired");
+  });
+
+  it("requests a config import grant with reason, ttl, bearer token, and step-up proof", async () => {
+    requestMock.mockResolvedValueOnce({
+      id: 22,
+      requester_user_id: 7,
+      requester_username: "admin",
+      requester_role: "admin",
+      action: "config.import",
+      purpose: "config_import",
+      reason: "Routine restore",
+      status: "active",
+      requested_ttl_seconds: 600,
+      requested_at: "2026-05-20T00:00:00Z",
+      expires_at: "2026-05-20T00:10:00Z",
+      created_at: "2026-05-20T00:00:00Z",
+      updated_at: "2026-05-20T00:00:00Z",
+    });
+
+    const grant = await createCredentialAccessGrantsApi().requestConfigImportCredentialGrant(
+      "auth-marker",
+      { reason: "Routine restore", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/config-import", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        reason: "Routine restore",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(grant).toMatchObject({ id: 22, nodeId: undefined, action: "config.import", purpose: "config_import", status: "active" });
+  });
+
   it("requests a terminal grant with node, reason, ttl, bearer token, and step-up proof", async () => {
     requestMock.mockResolvedValueOnce({
       id: 12,
@@ -102,15 +149,15 @@ describe("credential access grants api", () => {
     });
 
     const grant = await createCredentialAccessGrantsApi().requestTerminalCredentialGrant(
-      "FAKE_TOKEN_FOR_TEST_ONLY",
+      "auth-marker",
       { nodeId: 5, reason: "Routine maintenance", requestedTtlSeconds: 600 },
-      "FAKE_STEP_UP_PROOF_FOR_TEST_ONLY",
+      "step-up-marker",
     );
 
     expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/terminal", {
       method: "POST",
-      token: "FAKE_TOKEN_FOR_TEST_ONLY",
-      stepUpProof: "FAKE_STEP_UP_PROOF_FOR_TEST_ONLY",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
       body: {
         node_id: 5,
         reason: "Routine maintenance",
