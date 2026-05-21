@@ -37,7 +37,7 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
         go build -trimpath -ldflags='-s -w' -o /out/supercronic
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 
 # 升级基础镜像已安装包到最新补丁版本（解 libxml2 / musl / zlib 等 HIGH CVE）
 # 再安装运行期依赖：rsync/openssh-client（任务执行）、sqlite（备份 WAL 一致性）、bash（脚本）、curl（健康检查）、tzdata（时区数据）
