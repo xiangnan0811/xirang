@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.7](https://github.com/xiangnan0811/xirang/compare/v0.43.6...v0.43.7) (2026-05-21)
+
+
+### 🐛 Bug Fixes
+
+* **security:** gate snapshot restore with JIT grants ([#217](https://github.com/xiangnan0811/xirang/issues/217)) ([ef8a0a7](https://github.com/xiangnan0811/xirang/commit/ef8a0a7cf1ffeedf8ba6b7b8399622098175fa09))
+
 ## [0.43.6](https://github.com/xiangnan0811/xirang/compare/v0.43.5...v0.43.6) (2026-05-21)
 
 
