@@ -1753,3 +1753,36 @@ Updated the all-in-one runtime base to nginx 1.29 Alpine so Docker release image
 ### Next Steps
 
 - None - task complete
+
+
+## Session 53: Fix Docker CVE task context paths
+
+**Date**: 2026-05-21
+**Task**: Fix Docker CVE task context paths
+**Branch**: `fix/docker-rsync-cve-task-context`
+
+### Summary
+
+Updated archived Docker rsync CVE task context entries to use archived PRD paths and restored Trellis validation for the task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f5efe9c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
