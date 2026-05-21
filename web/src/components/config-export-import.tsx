@@ -1,5 +1,5 @@
 import { type FormEvent, useRef, useState } from "react";
-import { Download, Upload, Loader2 } from "lucide-react";
+import { Download, Upload, Loader2, ShieldAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,32 +10,40 @@ import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 
-const CONFIG_IMPORT_GRANT_MAX_REASON_LENGTH = 240;
-const CONFIG_IMPORT_GRANT_TTL_SECONDS = 600;
+const CONFIG_GRANT_MAX_REASON_LENGTH = 240;
+const CONFIG_GRANT_TTL_SECONDS = 600;
+
+type ConfigGrantMode = "import" | "sensitive-export";
 
 export function ConfigExportImport() {
   const { t } = useTranslation();
   const { token, role, ensureStepUpProof } = useAuth();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [sensitiveExporting, setSensitiveExporting] = useState(false);
   const [grantDialogOpen, setGrantDialogOpen] = useState(false);
+  const [grantMode, setGrantMode] = useState<ConfigGrantMode>("import");
   const [grantReason, setGrantReason] = useState("");
   const [grantError, setGrantError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!token || role !== "admin") return null;
 
+  const downloadConfigPayload = (data: unknown, suffix = "config") => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `xirang-${suffix}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleExport = async () => {
     setExporting(true);
     try {
       const data = await apiClient.exportConfig(token);
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `xirang-config-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadConfigPayload(data, "config");
       toast.success(t('configExport.exportSuccess'));
     } catch (err) {
       toast.error(getErrorMessage(err, t('configExport.exportFailed')));
@@ -55,6 +63,13 @@ export function ConfigExportImport() {
     fileInputRef.current?.click();
   };
 
+  const handleSensitiveExportClick = () => {
+    setGrantMode("sensitive-export");
+    setGrantReason("");
+    setGrantError(null);
+    setGrantDialogOpen(true);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -62,13 +77,16 @@ export function ConfigExportImport() {
       resetGrantPromptState();
       return;
     }
+    setGrantMode("import");
     setGrantReason("");
     setGrantError(null);
     setGrantDialogOpen(true);
   };
 
+  const grantSubmitting = importing || sensitiveExporting;
+
   const handleGrantDialogChange = (open: boolean) => {
-    if (importing) return;
+    if (grantSubmitting) return;
     if (!open) {
       resetGrantPromptState();
       return;
@@ -98,18 +116,7 @@ export function ConfigExportImport() {
     return parsed as Record<string, unknown>;
   };
 
-  const handleImportGrantSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const reason = grantReason.trim();
-    if (!reason) {
-      setGrantError(t('configExport.grantReasonRequired'));
-      return;
-    }
-    if (Array.from(reason).length > CONFIG_IMPORT_GRANT_MAX_REASON_LENGTH) {
-      setGrantError(t('configExport.grantReasonTooLong', { max: CONFIG_IMPORT_GRANT_MAX_REASON_LENGTH }));
-      return;
-    }
-
+  const handleImportGrantSubmit = async (reason: string) => {
     setImporting(true);
     setGrantError(null);
     try {
@@ -118,7 +125,7 @@ export function ConfigExportImport() {
       const proof = await ensureStepUpProof();
       await apiClient.requestConfigImportCredentialGrant(token, {
         reason,
-        requestedTtlSeconds: CONFIG_IMPORT_GRANT_TTL_SECONDS,
+        requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,
       }, proof);
       const pendingImport = await parseImportFile(file);
       const result = await apiClient.importConfig(token, pendingImport, "skip", proof);
@@ -129,6 +136,44 @@ export function ConfigExportImport() {
     } finally {
       setImporting(false);
     }
+  };
+
+  const handleSensitiveExportGrantSubmit = async (reason: string) => {
+    setSensitiveExporting(true);
+    setGrantError(null);
+    try {
+      const proof = await ensureStepUpProof();
+      await apiClient.requestConfigExportCredentialGrant(token, {
+        reason,
+        requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,
+      }, proof);
+      const data = await apiClient.exportConfig(token, true, proof);
+      downloadConfigPayload(data, "config-with-sensitive");
+      toast.success(t('configExport.sensitiveExportSuccess'));
+      resetGrantPromptState();
+    } catch (err) {
+      setGrantError(getErrorMessage(err, t('configExport.sensitiveExportFailed')));
+    } finally {
+      setSensitiveExporting(false);
+    }
+  };
+
+  const handleGrantSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const reason = grantReason.trim();
+    if (!reason) {
+      setGrantError(t('configExport.grantReasonRequired'));
+      return;
+    }
+    if (Array.from(reason).length > CONFIG_GRANT_MAX_REASON_LENGTH) {
+      setGrantError(t('configExport.grantReasonTooLong', { max: CONFIG_GRANT_MAX_REASON_LENGTH }));
+      return;
+    }
+    if (grantMode === "sensitive-export") {
+      await handleSensitiveExportGrantSubmit(reason);
+      return;
+    }
+    await handleImportGrantSubmit(reason);
   };
 
   return (
@@ -142,12 +187,16 @@ export function ConfigExportImport() {
           <p className="text-xs text-muted-foreground mb-3">
             {t('configExport.desc')}
           </p>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting}>
               {exporting ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <Download className="mr-1 size-3.5" aria-hidden />}
               {t('configExport.exportConfig')}
             </Button>
-            <Button size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
+            <Button size="sm" variant="outline" onClick={handleSensitiveExportClick} disabled={sensitiveExporting}>
+              {sensitiveExporting ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
+              {t('configExport.exportSensitiveConfig')}
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleImportClick} disabled={grantSubmitting}>
               {importing ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <Upload className="mr-1 size-3.5" aria-hidden />}
               {t('configExport.importConfig')}
             </Button>
@@ -158,10 +207,10 @@ export function ConfigExportImport() {
 
       <Dialog open={grantDialogOpen} onOpenChange={handleGrantDialogChange}>
         <DialogContent size="sm">
-          <form onSubmit={handleImportGrantSubmit}>
+          <form onSubmit={handleGrantSubmit}>
             <DialogHeader>
-              <DialogTitle>{t('configExport.grantTitle')}</DialogTitle>
-              <DialogDescription>{t('configExport.grantDescription')}</DialogDescription>
+              <DialogTitle>{t(grantMode === "sensitive-export" ? 'configExport.sensitiveGrantTitle' : 'configExport.grantTitle')}</DialogTitle>
+              <DialogDescription>{t(grantMode === "sensitive-export" ? 'configExport.sensitiveGrantDescription' : 'configExport.grantDescription')}</DialogDescription>
             </DialogHeader>
             <DialogBody className="space-y-3">
               <div className="space-y-1.5">
@@ -172,14 +221,14 @@ export function ConfigExportImport() {
                   id="config-import-grant-reason"
                   value={grantReason}
                   onChange={(event) => setGrantReason(event.target.value)}
-                  maxLength={CONFIG_IMPORT_GRANT_MAX_REASON_LENGTH}
+                  maxLength={CONFIG_GRANT_MAX_REASON_LENGTH}
                   placeholder={t('configExport.grantReasonPlaceholder')}
-                  disabled={importing}
+                  disabled={grantSubmitting}
                   aria-describedby="config-import-grant-reason-hint"
                   aria-invalid={grantError ? true : undefined}
                 />
                 <p id="config-import-grant-reason-hint" className="text-xs text-muted-foreground">
-                  {t('configExport.grantReasonHint', { max: CONFIG_IMPORT_GRANT_MAX_REASON_LENGTH })}
+                  {t('configExport.grantReasonHint', { max: CONFIG_GRANT_MAX_REASON_LENGTH })}
                 </p>
               </div>
               {grantError ? (
@@ -189,11 +238,11 @@ export function ConfigExportImport() {
               ) : null}
             </DialogBody>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={resetGrantPromptState} disabled={importing}>
+              <Button type="button" variant="outline" onClick={resetGrantPromptState} disabled={grantSubmitting}>
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" loading={importing}>
-                {t('configExport.grantSubmit')}
+              <Button type="submit" loading={grantSubmitting}>
+                {t(grantMode === "sensitive-export" ? 'configExport.sensitiveGrantSubmit' : 'configExport.grantSubmit')}
               </Button>
             </DialogFooter>
           </form>

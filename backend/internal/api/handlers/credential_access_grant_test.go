@@ -44,6 +44,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router.Use(middleware.AuthMiddleware(manager, db))
 	router.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), handler.RequestTerminalGrant)
 	router.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), handler.RequestConfigImportGrant)
+	router.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), handler.RequestConfigExportGrant)
 	return router
 }
 
@@ -187,6 +188,92 @@ func TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit
 		}
 		if stage, ok := metadata["stage"].(string); !ok || stage == "" {
 			t.Fatalf("config import grant 审计 metadata 缺少安全 stage: %#v", metadata)
+		}
+	}
+}
+
+func TestConfigExportCredentialGrantRequestCreatesSystemScopedGrantWithValidationAndSafeAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "grant-config-export-admin", "admin")
+	operator := seedStepUpUser(t, db, "grant-config-export-operator", "operator")
+	adminToken := generatePrimaryToken(t, manager, admin)
+	operatorToken := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, admin)
+	router := newCredentialGrantTestRouter(db, manager)
+
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", operatorToken, generateStepUpProof(t, manager, operator),
+		`{"reason":"例行导出","requested_ttl_seconds":600}`)
+	if operatorResp.Code != http.StatusForbidden {
+		t.Fatalf("operator 不应申请配置导出授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
+	}
+
+	missingProofResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", adminToken, "",
+		`{"reason":"例行导出","requested_ttl_seconds":600}`)
+	assertStepUpRequiredEnvelope(t, missingProofResp)
+
+	emptyReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", adminToken, proof,
+		`{"reason":"   ","requested_ttl_seconds":600}`)
+	if emptyReasonResp.Code != http.StatusBadRequest || !strings.Contains(emptyReasonResp.Body.String(), "授权原因不能为空") {
+		t.Fatalf("空配置导出授权原因应返回 400，实际: %d，响应: %s", emptyReasonResp.Code, emptyReasonResp.Body.String())
+	}
+
+	shortTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", adminToken, proof,
+		`{"reason":"例行导出","requested_ttl_seconds":30}`)
+	if shortTTLResp.Code != http.StatusBadRequest || !strings.Contains(shortTTLResp.Body.String(), "授权时长不能少于") {
+		t.Fatalf("配置导出授权过短 TTL 应返回 400，实际: %d，响应: %s", shortTTLResp.Code, shortTTLResp.Body.String())
+	}
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", adminToken, proof,
+		`{"reason":"例行导出","requested_ttl_seconds":600}`)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("申请配置导出授权期望 201，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			ID                  uint   `json:"id"`
+			RequesterUserID     uint   `json:"requester_user_id"`
+			Action              string `json:"action"`
+			Purpose             string `json:"purpose"`
+			NodeID              uint   `json:"node_id"`
+			TaskID              uint   `json:"task_id"`
+			PolicyID            uint   `json:"policy_id"`
+			Reason              string `json:"reason"`
+			Status              string `json:"status"`
+			RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析配置导出授权响应失败: %v", err)
+	}
+	if payload.Data.ID == 0 || payload.Data.RequesterUserID != admin.ID || payload.Data.NodeID != 0 || payload.Data.TaskID != 0 || payload.Data.PolicyID != 0 || payload.Data.Status != CredentialGrantStatusActive {
+		t.Fatalf("配置导出授权 DTO 基本字段不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Action != CredentialGrantActionConfigExport || payload.Data.Purpose != CredentialGrantPurposeConfigExport || payload.Data.RequestedTTLSeconds != 600 {
+		t.Fatalf("配置导出授权 DTO 操作/用途/TTL 不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Reason != "例行导出" {
+		t.Fatalf("配置导出授权原因应保存安全文本，实际: %q", payload.Data.Reason)
+	}
+
+	var grant model.CredentialAccessGrant
+	if err := db.First(&grant, payload.Data.ID).Error; err != nil {
+		t.Fatalf("读取配置导出授权记录失败: %v", err)
+	}
+	if grant.NodeID != nil || grant.TaskID != nil || grant.PolicyID != nil || grant.ApproverUserID == nil || *grant.ApproverUserID != admin.ID {
+		t.Fatalf("配置导出 grant 应为系统作用域自批准记录: %+v", grant)
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigExport)
+	if len(events) == 0 {
+		t.Fatalf("配置导出 grant 请求应写入审计事件")
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if stage, ok := metadata["stage"].(string); !ok || stage == "" {
+			t.Fatalf("配置导出 grant 审计 metadata 缺少安全 stage: %#v", metadata)
 		}
 	}
 }
@@ -389,15 +476,15 @@ func TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation(t *test
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProof(t, manager, admin)
 	router := newConfigImportGrantEnforcementRouter(db, manager)
-	body := configImportSSHKeyBody("route-step-up-key")
+	body := configImportSSHKeyBody("step-up-entry")
 
 	missingProofResp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, "", body)
 	assertStepUpRequiredEnvelope(t, missingProofResp)
-	assertNoImportedSSHKey(t, db, "route-step-up-key")
+	assertNoImportedSSHKey(t, db, "step-up-entry")
 
 	missingGrantResp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, body)
 	assertCredentialGrantRequiredEnvelope(t, missingGrantResp, "required")
-	assertNoImportedSSHKey(t, db, "route-step-up-key")
+	assertNoImportedSSHKey(t, db, "step-up-entry")
 
 	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
 	if len(events) != 3 {
@@ -433,11 +520,11 @@ func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
 	}
 
 	router := newConfigImportGrantEnforcementRouter(db, manager)
-	resp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, configImportSSHKeyBody("route-valid-key"))
+	resp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, configImportSSHKeyBody("valid-entry"))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("带有效配置导入 grant 应成功，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
-	assertImportedSSHKey(t, db, "route-valid-key")
+	assertImportedSSHKey(t, db, "valid-entry")
 
 	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigImport)
 	if len(events) != 3 {
@@ -453,6 +540,222 @@ func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
 				t.Fatalf("配置导入成功审计 metadata 不符合预期: %#v", metadata)
 			}
 		}
+	}
+}
+
+func TestConfigExportRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "config-export-before-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	called := false
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+		return c.Query("include_secrets") == "true"
+	}), RequireConfigExportCredentialGrantIf(db, func(c *gin.Context) bool {
+		return c.Query("include_secrets") == "true"
+	}), func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+
+	resp := performStepUpRequest(t, router, http.MethodGet, "/config/export?include_secrets=true", token, proof, "")
+	assertCredentialGrantRequiredEnvelope(t, resp, "required")
+	if called {
+		t.Fatalf("缺少配置导出授权时不应进入导出 handler")
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigExport)
+	if len(events) != 2 {
+		t.Fatalf("敏感导出拒绝应仅写 step-up 和 blocked grant 审计事件，实际: %+v", events)
+	}
+	if events[0].Outcome != credentialaudit.OutcomeSuccess || events[1].Outcome != credentialaudit.OutcomeBlocked {
+		t.Fatalf("敏感导出拒绝审计 outcome 不符合预期: %+v", events)
+	}
+	for _, event := range events {
+		assertNoForbiddenAuditMetadata(t, event.Metadata)
+	}
+}
+
+func TestConfigExportRouteUsesActiveSystemGrantAndKeepsSafeExportUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "config-export-valid-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     admin.ID,
+		RequesterUsername:   admin.Username,
+		RequesterRole:       admin.Role,
+		Action:              CredentialGrantActionConfigExport,
+		Purpose:             CredentialGrantPurposeConfigExport,
+		Reason:              "例行导出",
+		Status:              CredentialGrantStatusActive,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建配置导出 grant 失败: %v", err)
+	}
+
+	router := newConfigExportGrantEnforcementRouter(db, manager)
+	safeResp := performStepUpRequest(t, router, http.MethodGet, "/config/export", token, "", "")
+	if safeResp.Code != http.StatusOK {
+		t.Fatalf("普通配置导出不应要求 step-up 或 grant，实际: %d，响应: %s", safeResp.Code, safeResp.Body.String())
+	}
+	var grantAuditCount int64
+	if err := db.Model(&model.CredentialAuditEvent{}).Where("action = ? AND credential_kind = ?", CredentialGrantActionConfigExport, credentialGrantKind).Count(&grantAuditCount).Error; err != nil {
+		t.Fatalf("统计 grant audit 失败: %v", err)
+	}
+	if grantAuditCount != 0 {
+		t.Fatalf("普通配置导出不应写配置导出 grant 使用/阻断审计，实际数量: %d", grantAuditCount)
+	}
+	if err := db.Where("action = ?", CredentialGrantActionConfigExport).Delete(&model.CredentialAuditEvent{}).Error; err != nil {
+		t.Fatalf("清理普通导出审计事件失败: %v", err)
+	}
+
+	sensitiveResp := performStepUpRequest(t, router, http.MethodGet, "/config/export?include_secrets=true", token, proof, "")
+	if sensitiveResp.Code != http.StatusOK {
+		t.Fatalf("带有效配置导出 grant 应允许敏感导出，实际: %d，响应: %s", sensitiveResp.Code, sensitiveResp.Body.String())
+	}
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigExport)
+	if len(events) != 3 {
+		t.Fatalf("敏感配置导出应写 step-up/grant use/export 成功审计事件，实际: %+v", events)
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.CredentialKind == credentialGrantKind {
+			if event.Outcome != credentialaudit.OutcomeSuccess || metadata["stage"] != "use" || metadata["status"] != "active" {
+				t.Fatalf("配置导出 grant use 审计不符合预期: event=%+v metadata=%#v", event, metadata)
+			}
+		}
+		if event.CredentialKind == "config_export" {
+			if event.Outcome != credentialaudit.OutcomeSuccess || metadata["stage"] != "success" || metadata["with_sensitive"] != true {
+				t.Fatalf("配置导出成功审计不符合预期: event=%+v metadata=%#v", event, metadata)
+			}
+		}
+	}
+}
+
+func TestConfigExportRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testCases := []struct {
+		name       string
+		wantStatus string
+		seedGrant  func(t *testing.T, db *gorm.DB, admin model.User)
+		assertDB   func(t *testing.T, db *gorm.DB)
+	}{
+		{
+			name:       "expired",
+			wantStatus: CredentialGrantStatusExpired,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				now := time.Now().UTC()
+				grant := model.CredentialAccessGrant{RequesterUserID: admin.ID, RequesterUsername: admin.Username, RequesterRole: admin.Role, Action: CredentialGrantActionConfigExport, Purpose: CredentialGrantPurposeConfigExport, Reason: "例行导出", Status: CredentialGrantStatusActive, RequestedTTLSeconds: 60, RequestedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
+				if err := db.Create(&grant).Error; err != nil {
+					t.Fatalf("创建过期配置导出 grant 失败: %v", err)
+				}
+			},
+			assertDB: func(t *testing.T, db *gorm.DB) {
+				var grant model.CredentialAccessGrant
+				if err := db.Where("action = ? AND purpose = ?", CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport).First(&grant).Error; err != nil {
+					t.Fatalf("读取过期配置导出 grant 失败: %v", err)
+				}
+				if grant.Status != CredentialGrantStatusExpired {
+					t.Fatalf("过期 active 配置导出 grant 应标记 expired，实际: %s", grant.Status)
+				}
+			},
+		},
+		{
+			name:       "revoked",
+			wantStatus: CredentialGrantStatusRevoked,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, CredentialGrantStatusRevoked, nil, "admin")
+			},
+		},
+		{
+			name:       "denied",
+			wantStatus: CredentialGrantStatusDenied,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, CredentialGrantStatusDenied, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-user",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, _ model.User) {
+				other := seedStepUpUser(t, db, "config-export-other-user", "admin")
+				createConfigExportGrantFixture(t, db, other, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, CredentialGrantStatusActive, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-role",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, CredentialGrantStatusActive, nil, "operator")
+			},
+		},
+		{
+			name:       "wrong-action-terminal",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				node := seedCredentialGrantNode(t, db)
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, CredentialGrantStatusActive, credentialaudit.PtrUint(node.ID), "admin")
+			},
+		},
+		{
+			name:       "wrong-action-import",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusActive, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-purpose",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigImport, CredentialGrantStatusActive, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-resource",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User) {
+				nodeID := uint(1)
+				createConfigExportGrantFixture(t, db, admin, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, CredentialGrantStatusActive, &nodeID, "admin")
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			admin := seedStepUpUser(t, db, "config-export-deny-admin", "admin")
+			token := generatePrimaryToken(t, manager, admin)
+			proof := generateStepUpProof(t, manager, admin)
+			tc.seedGrant(t, db, admin)
+
+			router := newConfigExportGrantEnforcementRouter(db, manager)
+			resp := performStepUpRequest(t, router, http.MethodGet, "/config/export?include_secrets=true", token, proof, "")
+			assertCredentialGrantRequiredEnvelope(t, resp, tc.wantStatus)
+			if tc.assertDB != nil {
+				tc.assertDB(t, db)
+			}
+
+			events := loadCredentialAuditEvents(t, db, CredentialGrantActionConfigExport)
+			if len(events) == 0 {
+				t.Fatalf("配置导出 grant 拒绝应写审计事件")
+			}
+			for _, event := range events {
+				assertNoForbiddenAuditMetadata(t, event.Metadata)
+			}
+		})
 	}
 }
 
@@ -531,7 +834,7 @@ func TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples(t *testin
 			proof := generateStepUpProof(t, manager, admin)
 			tc.seedGrant(t, db, admin)
 
-			keyName := "route-deny-key-" + tc.name
+			keyName := "deny-entry-" + tc.name
 			router := newConfigImportGrantEnforcementRouter(db, manager)
 			resp := performStepUpRequest(t, router, http.MethodPost, "/config/import", token, proof, configImportSSHKeyBody(keyName))
 			assertCredentialGrantRequiredEnvelope(t, resp, tc.wantStatus)
@@ -559,6 +862,42 @@ func newConfigImportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager
 	return router
 }
 
+func newConfigExportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+		return c.Query("include_secrets") == "true"
+	}), RequireConfigExportCredentialGrantIf(db, func(c *gin.Context) bool {
+		return c.Query("include_secrets") == "true"
+	}), handler.Export)
+	return router
+}
+
+func createConfigExportGrantFixture(t *testing.T, db *gorm.DB, user model.User, action, purpose, status string, nodeID *uint, requesterRole string) {
+	t.Helper()
+	if requesterRole == "" {
+		requesterRole = user.Role
+	}
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     user.ID,
+		RequesterUsername:   user.Username,
+		RequesterRole:       requesterRole,
+		Action:              action,
+		Purpose:             purpose,
+		NodeID:              nodeID,
+		Reason:              "例行导出",
+		Status:              status,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建配置导出 grant fixture 失败: %v", err)
+	}
+}
+
 func createConfigImportGrantFixture(t *testing.T, db *gorm.DB, user model.User, action, purpose, status string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -580,7 +919,7 @@ func createConfigImportGrantFixture(t *testing.T, db *gorm.DB, user model.User, 
 }
 
 func configImportSSHKeyBody(keyName string) string {
-	return fmt.Sprintf(`{"ssh_keys":[{"name":%q,"username":"deploy","key_type":"auto","fingerprint":"SHA256:route-key"}]}`, keyName)
+	return fmt.Sprintf(`{"ssh_keys":[{"name":%q,"username":"fixture-user","key_type":"auto","fingerprint":"fp-redacted"}]}`, keyName)
 }
 
 func assertCredentialGrantRequiredEnvelope(t *testing.T, resp *httptest.ResponseRecorder, status string) {

@@ -260,6 +260,7 @@ go run ./cmd/server
 | GET | /credential-audit-events/export | 🔒 管理员导出凭据使用审计 CSV |
 | POST | /credential-access-grants/terminal | 🔒 申请并激活短时终端凭据使用授权（admin；需二次验证；绑定 node_id/action/purpose） |
 | POST | /credential-access-grants/config-import | 🔒 申请并激活短时配置导入授权（admin；需二次验证；绑定 config.import/config_import） |
+| POST | /credential-access-grants/config-export | 🔒 申请并激活短时敏感配置导出授权（admin；需二次验证；绑定 config.export/config_export） |
 
 ### SLA 报告
 
@@ -293,7 +294,7 @@ go run ./cmd/server
 | GET | /settings/security-risk-summary | 🔒 安全风险摘要（admin；只读计数与脱敏示例） |
 | GET | /settings/logs | 🔒 节点日志保留默认天数（admin） |
 | PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
-| GET | /config/export | 🔒 导出配置（include_secrets=true 时需二次验证） |
+| GET | /config/export | 🔒 导出配置（include_secrets=true 时需二次验证和 config.export/config_export 临时授权） |
 | POST | /config/import | 🔒 导入配置 |
 | GET | /hook-templates | 🔒 钩子模板列表 |
 

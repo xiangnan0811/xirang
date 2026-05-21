@@ -41,12 +41,12 @@ function stringValue(value: unknown): string {
 
 function mapGrantAction(value: unknown): CredentialAccessGrantAction {
   const raw = stringValue(value);
-  return raw === "terminal.open" || raw === "config.import" ? raw : "unknown";
+  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" ? raw : "unknown";
 }
 
 function mapGrantPurpose(value: unknown): CredentialAccessGrantPurpose {
   const raw = stringValue(value);
-  return raw === "terminal" || raw === "config_import" ? raw : "unknown";
+  return raw === "terminal" || raw === "config_import" || raw === "config_export" ? raw : "unknown";
 }
 
 function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
@@ -117,6 +117,23 @@ export function createCredentialAccessGrantsApi() {
       stepUpProof?: string,
     ): Promise<CredentialAccessGrant> {
       const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/config-import", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return mapCredentialAccessGrant(raw);
+    },
+
+    async requestConfigExportCredentialGrant(
+      token: string,
+      input: { reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant> {
+      const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/config-export", {
         method: "POST",
         token,
         stepUpProof,

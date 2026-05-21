@@ -31,7 +31,9 @@ const (
 
 	CredentialGrantActionTerminalOpen  = "terminal.open"
 	CredentialGrantActionConfigImport  = "config.import"
+	CredentialGrantActionConfigExport  = "config.export"
 	CredentialGrantPurposeConfigImport = "config_import"
+	CredentialGrantPurposeConfigExport = "config_export"
 
 	credentialGrantKind   = "jit_grant"
 	credentialGrantSource = "credential_access_grant"
@@ -63,6 +65,11 @@ type terminalCredentialGrantRequest struct {
 }
 
 type configImportCredentialGrantRequest struct {
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type configExportCredentialGrantRequest struct {
 	Reason              string `json:"reason" binding:"required"`
 	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
 }
@@ -160,6 +167,28 @@ func (h *CredentialAccessGrantHandler) RequestConfigImportGrant(c *gin.Context) 
 	respondCreated(c, toCredentialGrantDTO(grant))
 }
 
+func (h *CredentialAccessGrantHandler) RequestConfigExportGrant(c *gin.Context) {
+	var req configExportCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive")
+	if !ok {
+		return
+	}
+	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
+		Action:              CredentialGrantActionConfigExport,
+		Purpose:             CredentialGrantPurposeConfigExport,
+		Reason:              reason,
+		RequestedTTLSeconds: int(ttl.Seconds()),
+	})
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTO(grant))
+}
+
 type credentialGrantCreateInput struct {
 	Action              string
 	Purpose             string
@@ -241,9 +270,20 @@ func EnforceTerminalCredentialGrantForWebSocket(c *gin.Context, db *gorm.DB, cla
 }
 
 func RequireConfigImportCredentialGrant(db *gorm.DB) gin.HandlerFunc {
+	return requireSystemCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport}, nil)
+}
+
+func RequireConfigExportCredentialGrantIf(db *gorm.DB, predicate func(*gin.Context) bool) gin.HandlerFunc {
+	return requireSystemCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionConfigExport, Purpose: CredentialGrantPurposeConfigExport}, predicate)
+}
+
+func requireSystemCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate func(*gin.Context) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if predicate != nil && !predicate(c) {
+			c.Next()
+			return
+		}
 		claims := claimsFromGinContext(c)
-		match := credentialGrantMatch{Action: CredentialGrantActionConfigImport, Purpose: CredentialGrantPurposeConfigImport}
 		grant, err := findActiveCredentialGrant(c.Request.Context(), db, claims, match)
 		if err != nil {
 			if isCredentialGrantDenialError(err) {
@@ -548,6 +588,8 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "terminal"
 	case action == CredentialGrantActionConfigImport && purpose == CredentialGrantPurposeConfigImport:
 		return "settings_import"
+	case action == CredentialGrantActionConfigExport && purpose == CredentialGrantPurposeConfigExport:
+		return "settings_export_sensitive"
 	default:
 		return "grant"
 	}

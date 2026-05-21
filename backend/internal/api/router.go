@@ -264,6 +264,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/credential-audit-events/export", middleware.RequireRole("admin"), credentialAuditHandler.ExportCSV)
 	secured.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTerminalGrant)
 	secured.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigImportGrant)
+	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
@@ -318,7 +319,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
 	secured.DELETE("/settings/:key", middleware.RequireRole("admin"), settingsHandler.Delete)
 
-	secured.GET("/config/export", middleware.RequireRole("admin"), handlers.RequireStepUpIf(dep.DB, dep.JWTManager, "config.export", "config_export", "settings_export_sensitive", func(c *gin.Context) bool {
+	secured.GET("/config/export", middleware.RequireRole("admin"), handlers.RequireStepUpIf(dep.DB, dep.JWTManager, handlers.CredentialGrantActionConfigExport, handlers.CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+		return c.Query("include_secrets") == "true"
+	}), handlers.RequireConfigExportCredentialGrantIf(dep.DB, func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), configHandler.Export)
 	secured.POST("/config/import", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionConfigImport, handlers.CredentialGrantPurposeConfigImport, "settings_import"), handlers.RequireConfigImportCredentialGrant(dep.DB), configHandler.Import)
