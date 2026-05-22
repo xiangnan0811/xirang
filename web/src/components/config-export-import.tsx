@@ -122,7 +122,7 @@ export function ConfigExportImport() {
     try {
       const file = getSelectedImportFile();
       await parseImportFile(file);
-      const proof = await ensureStepUpProof();
+      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
       await apiClient.requestConfigImportCredentialGrant(token, {
         reason,
         requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,
@@ -142,7 +142,7 @@ export function ConfigExportImport() {
     setSensitiveExporting(true);
     setGrantError(null);
     try {
-      const proof = await ensureStepUpProof();
+      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
       await apiClient.requestConfigExportCredentialGrant(token, {
         reason,
         requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,

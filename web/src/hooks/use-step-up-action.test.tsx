@@ -66,4 +66,17 @@ describe("useStepUpAction", () => {
     expect(clearStepUpProof).toHaveBeenCalledTimes(1);
     expect(action).toHaveBeenNthCalledWith(2, "proof-2");
   });
+
+  it("支持为一次性操作请求非持久化 proof", async () => {
+    ensureStepUpProof.mockResolvedValueOnce("proof-one-shot");
+    const action = vi.fn()
+      .mockRejectedValueOnce(createStepUpRequiredError())
+      .mockResolvedValueOnce("ok");
+
+    const { result } = renderHook(() => useStepUpAction({ persist: false, reuseCached: false }), { wrapper });
+    await expect(result.current(action)).resolves.toBe("ok");
+
+    expect(ensureStepUpProof).toHaveBeenCalledWith({ persist: false, reuseCached: false });
+    expect(action).toHaveBeenNthCalledWith(2, "proof-one-shot");
+  });
 });

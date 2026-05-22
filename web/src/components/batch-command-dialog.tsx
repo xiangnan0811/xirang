@@ -35,7 +35,7 @@ export function BatchCommandDialog({
   const [retain, setRetain] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const withStepUp = useStepUpAction();
+  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
 
   useEffect(() => {
     if (open) {

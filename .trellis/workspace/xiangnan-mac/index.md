@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 61
+- **Total Sessions**: 62
 - **Last Active**: 2026-05-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~106 | Active |
+| `journal-2.md` | ~139 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 62 | 2026-05-22 | P3 comprehensive security review | `122b8c7` | `security/p3-comprehensive-review` |
 | 61 | 2026-05-22 | P3 grant semantics for owned resources | `75c9950` | `security/p3-grant-semantics` |
 | 60 | 2026-05-22 | P3 minimal grant status list | `6af44b5` | `security/p3-minimal-grant-status-list` |
 | 59 | 2026-05-22 | Gate task restore with JIT grants | `66d1e35` | `security/select-next-p3-p4-hardening-slice-2` |

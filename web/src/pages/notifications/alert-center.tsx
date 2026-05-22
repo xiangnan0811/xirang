@@ -15,6 +15,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast-sonner";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
@@ -47,6 +48,7 @@ export function AlertCenter({
 }: AlertCenterProps) {
   const { t } = useTranslation();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
 
   // --- 筛选状态 ---
   const {
@@ -317,9 +319,17 @@ export function AlertCenter({
       toast.error(t("notifications.noAlertTask"));
       return;
     }
+    const taskId = alert.taskId;
     try {
-      await apiClient.triggerTask(token, alert.taskId);
-      toast.success(t("notifications.retryTriggered", { id: alert.taskId }));
+      await withStepUp(async (proof) => {
+        await apiClient.requestTaskManualTriggerCredentialGrant(token, {
+          taskId,
+          reason: t("tasks.manualTriggerGrantReason", { id: taskId }),
+          requestedTtlSeconds: 600,
+        }, proof);
+        return apiClient.triggerTask(token, taskId, proof);
+      });
+      toast.success(t("notifications.retryTriggered", { id: taskId }));
       void fetchAlerts(page);
       onAlertMutated?.();
     } catch (err) {

@@ -94,7 +94,7 @@ export function TasksPage() {
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const { token: authToken } = useAuth();
-  const withStepUp = useStepUpAction();
+  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);

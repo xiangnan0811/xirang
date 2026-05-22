@@ -35,6 +35,9 @@ const actionOptions = [
   "config.export",
   "snapshot.restore",
   "task.restore_trigger",
+  "task.manual_trigger",
+  "task.batch_trigger",
+  "batch_command.create",
 ];
 
 const purposeOptions = [
@@ -43,6 +46,8 @@ const purposeOptions = [
   "config_export",
   "snapshot",
   "task_restore",
+  "task_command",
+  "batch_command",
 ];
 
 const statusOptions: CredentialAccessGrantStatus[] = ["requested", "approved", "active", "denied", "expired", "revoked"];

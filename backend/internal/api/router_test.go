@@ -94,6 +94,18 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/terminal") {
 		t.Fatalf("未注册终端凭据临时授权接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/config-import") {
+		t.Fatalf("未注册配置导入凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/config-export") {
+		t.Fatalf("未注册配置导出凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/snapshot-restore") {
+		t.Fatalf("未注册快照恢复凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/task-restore") {
+		t.Fatalf("未注册任务恢复凭据临时授权接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/task-manual-trigger") {
 		t.Fatalf("未注册任务手动触发凭据临时授权接口")
 	}

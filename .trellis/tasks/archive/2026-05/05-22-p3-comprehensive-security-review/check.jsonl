@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-22-p3-comprehensive-security-review/prd.md","reason":"Acceptance criteria and Definition of Done for the comprehensive P3 review slice."}
+{"file":".trellis/tasks/05-22-p3-comprehensive-security-review/research/p3-code-gap-audit.md","reason":"Review checklist for route coverage, grant list filters, one-shot proof behavior, no-op batch trigger semantics, and visibility policy."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security regression checklist for credential grant rows, responses, audits, logs, and pre-credential-use enforcement ordering."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Storage-safety and one-shot step-up proof verification checklist for changed frontend flows."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API/domain mapper and bounded status/error handling verification checklist."}

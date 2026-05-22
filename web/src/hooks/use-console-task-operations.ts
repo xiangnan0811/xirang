@@ -45,7 +45,7 @@ export function useTaskOperations({
   handleWriteApiError
 }: UseTaskOperationsParams) {
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
-  const withStepUp = useStepUpAction();
+  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
 
   const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
     const result = await exec(i18n.t("tasks.actions.createTask"), (t) => apiClient.createTask(t, input));
