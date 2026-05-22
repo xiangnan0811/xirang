@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/prd.md","reason":"Check implementation against requirements and acceptance criteria for executor SSH provider adoption."}
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/research/current-credential-gaps.md","reason":"Verify the identified executor credential-resolution gap is closed without introducing new fallback behavior."}
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/research/session-recording-feasibility.md","reason":"Verify larger terminal recording and command approval work stayed out of scope."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check credential audit metadata, SSH key purpose scope, and grant-related sensitive-data constraints."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check errors remain safe and do not expose secret material, command output, terminal streams, raw SQL, endpoints, or stack details."}

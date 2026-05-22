@@ -520,38 +520,7 @@ func readIntEnvWithDefault(key string, defaultValue int) (int, error) {
 }
 
 func resolveNodePrivateKeyForPurpose(node model.Node, purpose string) (string, string, sshutil.ResolvedCredential, error) {
-	if node.SSHKey != nil {
-		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			credential := resolvedCredentialFromSSHKey(node, node.SSHKey.ID)
-			if err := sshutil.ValidateSSHKeyScope(*node.SSHKey, node, purpose); err != nil {
-				return "", credential.Source, credential, err
-			}
-			return key, credential.Source, credential, nil
-		}
-	}
-
-	if node.SSHKeyID != nil {
-		keyID := *node.SSHKeyID
-		credential := sshutil.ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", keyID), KeyID: &keyID}
-		return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥不存在，请检查密钥配置")
-	}
-
-	if key := strings.TrimSpace(node.PrivateKey); key != "" {
-		credential := sshutil.ResolvedCredential{Kind: "node_private_key", Source: "node.private_key"}
-		return key, credential.Source, credential, nil
-	}
-	return "", "", sshutil.ResolvedCredential{}, nil
-}
-
-func resolvedCredentialFromSSHKey(node model.Node, keyID uint) sshutil.ResolvedCredential {
-	resolvedID := keyID
-	if node.SSHKeyID != nil && *node.SSHKeyID != 0 {
-		resolvedID = *node.SSHKeyID
-	}
-	if resolvedID == 0 {
-		return sshutil.ResolvedCredential{Kind: "ssh_key", Source: "ssh_key_ref"}
-	}
-	return sshutil.ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), KeyID: &resolvedID}
+	return sshutil.ResolveKeyContentForPurpose(node, nil, purpose)
 }
 
 func writeRsyncCredentialAudit(ctx context.Context, node model.Node, credential sshutil.ResolvedCredential, outcome string, stage string, err error) {
@@ -571,6 +540,9 @@ func writeRsyncCredentialAudit(ctx context.Context, node model.Node, credential 
 			"auth_type": strings.ToLower(strings.TrimSpace(node.AuthType)),
 		},
 	}
+	if strings.TrimSpace(credential.Provider) != "" {
+		event.Metadata["provider"] = credential.Provider
+	}
 	if event.CredentialKind == "" {
 		event.CredentialKind = "unknown"
 	}
@@ -578,7 +550,7 @@ func writeRsyncCredentialAudit(ctx context.Context, node model.Node, credential 
 		event.CredentialSource = "unknown"
 	}
 	if err != nil {
-		event.ErrorMessage = err.Error()
+		event.ErrorMessage = runtimeCredentialAuditSafeError(stage, err)
 	}
 	if writeErr := credentialaudit.WriteRuntime(ctx, event); writeErr != nil {
 		logger.Module("credential_audit").Warn().Err(writeErr).

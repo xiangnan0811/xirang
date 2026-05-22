@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/prd.md","reason":"Defines the selected P4 slice, scope boundaries, acceptance criteria, and executor-specific implementation approach."}
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/research/remaining-p4-roadmap.md","reason":"Ranks executor SSH local-provider adoption against remaining P4 candidates and defers larger roadmap items."}
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/research/current-credential-gaps.md","reason":"Identifies executor-side duplicated SSH credential resolution as the highest-value remaining direct credential gap."}
+{"file":".trellis/tasks/05-22-p4-next-hardening-slice/research/session-recording-feasibility.md","reason":"Explains why terminal recording and command approval are not included in this implementation slice."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Contains SSH key least-privilege scope, credential audit, grant, and sensitive metadata requirements that executor changes must preserve."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines backend error response exclusions for command output, terminal streams, secret material, raw SQL, endpoints, and stack details."}

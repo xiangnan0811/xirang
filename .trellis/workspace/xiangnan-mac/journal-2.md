@@ -170,3 +170,36 @@ Added a local credential provider seam for SSH auth resolution with safe provide
 ### Next Steps
 
 - None - task complete
+
+
+## Session 64: P4 executor SSH local provider adoption
+
+**Date**: 2026-05-22
+**Task**: P4 executor SSH local provider adoption
+**Branch**: `security/p4-next-hardening-slice`
+
+### Summary
+
+Selected and delivered the next P4 hardening slice by routing executor SSH credential resolution through the local provider seam, preserving fail-closed managed-key behavior and safe credential audit metadata.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cee580a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

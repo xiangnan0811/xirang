@@ -173,6 +173,7 @@ func TestRsyncExecutorUsesStrictHostKeyCheckingWhenAutoAcceptDisabled(t *testing
 func TestRsyncExecutorRejectsStaleNodePrivateKeyWhenSSHKeyIDPresent(t *testing.T) {
 	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
 	keyID := uint(42)
+	stalePrivateKey := "FAKE_STALE_PRIVATE_KEY_FOR_TEST_ONLY"
 
 	task := model.Task{
 		ExecutorType: "rsync",
@@ -184,7 +185,7 @@ func TestRsyncExecutorRejectsStaleNodePrivateKeyWhenSSHKeyIDPresent(t *testing.T
 			Username:   "root",
 			AuthType:   "key",
 			SSHKeyID:   &keyID,
-			PrivateKey: "not-a-private-key",
+			PrivateKey: stalePrivateKey,
 		},
 	}
 
@@ -195,7 +196,7 @@ func TestRsyncExecutorRejectsStaleNodePrivateKeyWhenSSHKeyIDPresent(t *testing.T
 	if !strings.Contains(err.Error(), "节点绑定的密钥不存在") {
 		t.Fatalf("期望错误信息提示密钥不存在，实际: %v", err)
 	}
-	if strings.Contains(err.Error(), "私钥格式无效") {
+	if strings.Contains(err.Error(), "私钥格式无效") || strings.Contains(err.Error(), stalePrivateKey) {
 		t.Fatalf("不应回退使用 node.private_key 触发私钥格式错误，实际: %v", err)
 	}
 	if exitCode != -1 {
@@ -293,7 +294,7 @@ func TestPreparePrivateKeyForSSHNormalizesEscapedNewlines(t *testing.T) {
 }
 
 func TestPreparePrivateKeyForSSHRejectsInvalidContent(t *testing.T) {
-	_, _, err := sshutil.ValidateAndPreparePrivateKey("not-a-private-key", sshutil.SSHKeyTypeAuto)
+	_, _, err := sshutil.ValidateAndPreparePrivateKey("FAKE_INVALID_PRIVATE_KEY_FOR_TEST_ONLY", sshutil.SSHKeyTypeAuto)
 	if err == nil {
 		t.Fatalf("期望非法私钥报错")
 	}
