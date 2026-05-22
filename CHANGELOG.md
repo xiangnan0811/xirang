@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.12](https://github.com/xiangnan0811/xirang/compare/v0.43.11...v0.43.12) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** add local credential provider seam ([3df0a29](https://github.com/xiangnan0811/xirang/commit/3df0a299e411d7ebbb1d17158668669e2440a77d))
+
 ## [0.43.11](https://github.com/xiangnan0811/xirang/compare/v0.43.10...v0.43.11) (2026-05-22)
 
 
