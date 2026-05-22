@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { CredentialAuditPage } from "./credential-audit-page";
@@ -123,19 +123,19 @@ describe("CredentialAuditPage", () => {
     });
 
     getCredentialAuditEventsMock.mockClear();
-    await user.type(screen.getByPlaceholderText("按用户名过滤"), "  admin  ");
+    fireEvent.change(screen.getByPlaceholderText("按用户名过滤"), { target: { value: "  admin  " } });
     await user.selectOptions(screen.getByLabelText("按角色过滤凭据审计事件"), "admin");
-    await user.type(screen.getByPlaceholderText("用户 ID"), "1");
+    fireEvent.change(screen.getByPlaceholderText("用户 ID"), { target: { value: "1" } });
     await user.selectOptions(screen.getByLabelText("按凭据审计动作过滤"), "ssh_key.export");
-    await user.type(screen.getByPlaceholderText("按用途过滤"), "ssh_key_export");
+    fireEvent.change(screen.getByPlaceholderText("按用途过滤"), { target: { value: "ssh_key_export" } });
     await user.selectOptions(screen.getByLabelText("按凭据类型过滤凭据审计事件"), "ssh_key");
-    await user.type(screen.getByPlaceholderText("按凭据来源过滤"), "ssh_key_id=9");
+    fireEvent.change(screen.getByPlaceholderText("按凭据来源过滤"), { target: { value: "ssh_key_id=9" } });
     await user.selectOptions(screen.getByLabelText("按凭据审计结果过滤"), "success");
-    await user.type(screen.getByPlaceholderText("节点 ID"), "10");
-    await user.type(screen.getByPlaceholderText("SSH Key ID"), "9");
-    await user.type(screen.getByPlaceholderText("任务 ID"), "30");
-    await user.type(screen.getByPlaceholderText("任务运行 ID"), "40");
-    await user.type(screen.getByPlaceholderText("策略 ID"), "50");
+    fireEvent.change(screen.getByPlaceholderText("节点 ID"), { target: { value: "10" } });
+    fireEvent.change(screen.getByPlaceholderText("SSH Key ID"), { target: { value: "9" } });
+    fireEvent.change(screen.getByPlaceholderText("任务 ID"), { target: { value: "30" } });
+    fireEvent.change(screen.getByPlaceholderText("任务运行 ID"), { target: { value: "40" } });
+    fireEvent.change(screen.getByPlaceholderText("策略 ID"), { target: { value: "50" } });
 
     await waitFor(() => {
       expect(getCredentialAuditEventsMock).toHaveBeenCalled();

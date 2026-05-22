@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
@@ -82,7 +82,7 @@ describe("RestoreConfirmDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    await user.type(screen.getByLabelText("授权原因"), "测".repeat(241));
+    fireEvent.change(screen.getByLabelText("授权原因"), { target: { value: "测".repeat(241) } });
     await user.click(screen.getByRole("button", { name: "申请授权并恢复" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("授权原因不能超过 240 个字符。");
@@ -95,9 +95,8 @@ describe("RestoreConfirmDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    await user.clear(screen.getByLabelText("恢复目标路径"));
-    await user.type(screen.getByLabelText("恢复目标路径"), "/restore-target");
-    await user.type(screen.getByLabelText("授权原因"), "恢复误删目录");
+    fireEvent.change(screen.getByLabelText("恢复目标路径"), { target: { value: "/restore-target" } });
+    fireEvent.change(screen.getByLabelText("授权原因"), { target: { value: "恢复误删目录" } });
     await user.click(screen.getByRole("button", { name: "申请授权并恢复" }));
 
     await waitFor(() => expect(requestTaskRestoreCredentialGrantMock).toHaveBeenCalledTimes(1));

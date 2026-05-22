@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ServiceMonitorsPage } from "./service-monitors-page";
 import type { ServiceMonitor } from "@/types/domain";
@@ -151,14 +151,11 @@ describe("ServiceMonitorsPage", () => {
     render(<ServiceMonitorsPage />);
 
     await user.click(await screen.findByRole("button", { name: "新建监控" }));
-    await user.type(screen.getByLabelText("名称*"), "Website");
-    await user.type(screen.getByLabelText("探测目标*"), "https://example.com/health");
-    await user.clear(screen.getByLabelText("探测间隔"));
-    await user.type(screen.getByLabelText("探测间隔"), "1");
-    await user.clear(screen.getByLabelText("超时"));
-    await user.type(screen.getByLabelText("超时"), "999");
-    await user.clear(screen.getByLabelText("预期状态码"));
-    await user.type(screen.getByLabelText("预期状态码"), "42");
+    fireEvent.change(screen.getByLabelText("名称*"), { target: { value: "Website" } });
+    fireEvent.change(screen.getByLabelText("探测目标*"), { target: { value: "https://example.com/health" } });
+    fireEvent.change(screen.getByLabelText("探测间隔"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("超时"), { target: { value: "999" } });
+    fireEvent.change(screen.getByLabelText("预期状态码"), { target: { value: "42" } });
     await user.click(screen.getByRole("button", { name: "新增" }));
 
     await waitFor(() => expect(apiMock.create).toHaveBeenCalledTimes(1));
