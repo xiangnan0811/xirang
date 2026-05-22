@@ -191,7 +191,7 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     expect(await screen.findByText("健康事件时间线")).toBeInTheDocument();
-    expect(screen.getByText("任务 · daily-backup / node-a")).toBeInTheDocument();
+    expect(await screen.findByText("任务 · daily-backup / node-a")).toBeInTheDocument();
     expect(screen.getByText("rsync exited with code 23")).toBeInTheDocument();
     expect(screen.getByText("告警")).toBeInTheDocument();
     expect(screen.getByText("任务失败")).toBeInTheDocument();
