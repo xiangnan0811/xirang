@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const stepUpTestJWTSecret = "jwt-marker-for-tests"
+const stepUpTestJWTSecret = "step-up-test-signing-marker"
 
 func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -43,6 +43,7 @@ func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.NodeOwner{},
 		&model.Policy{},
 		&model.Task{},
+		&model.TaskRun{},
 		&model.SSHKey{},
 		&model.SystemSetting{},
 	); err != nil {

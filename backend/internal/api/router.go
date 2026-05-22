@@ -266,6 +266,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigImportGrant)
 	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)
 	secured.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestSnapshotRestoreGrant)
+	secured.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTaskRestoreGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
@@ -289,7 +290,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/:id/pause", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Pause)
 	secured.POST("/tasks/:id/resume", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Resume)
 	secured.POST("/tasks/:id/skip-next", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.SkipNext)
-	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, "task.restore_trigger", sshutil.PurposeTaskRestore, "task_restore"), taskHandler.Restore)
+	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), handlers.RequireTaskRestoreCredentialGrant(dep.DB), taskHandler.Restore)
 	secured.GET("/tasks/:id/backup-files", middleware.RequireRole("admin"), fileHandler.ListTaskBackupFiles)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)

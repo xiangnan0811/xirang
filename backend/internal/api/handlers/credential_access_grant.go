@@ -33,6 +33,7 @@ const (
 	CredentialGrantActionConfigImport    = "config.import"
 	CredentialGrantActionConfigExport    = "config.export"
 	CredentialGrantActionSnapshotRestore = "snapshot.restore"
+	CredentialGrantActionTaskRestore     = "task.restore_trigger"
 	CredentialGrantPurposeConfigImport   = "config_import"
 	CredentialGrantPurposeConfigExport   = "config_export"
 
@@ -76,6 +77,12 @@ type configExportCredentialGrantRequest struct {
 }
 
 type snapshotRestoreCredentialGrantRequest struct {
+	TaskID              uint   `json:"task_id" binding:"required"`
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type taskRestoreCredentialGrantRequest struct {
 	TaskID              uint   `json:"task_id" binding:"required"`
 	Reason              string `json:"reason" binding:"required"`
 	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
@@ -238,6 +245,66 @@ func (h *CredentialAccessGrantHandler) RequestSnapshotRestoreGrant(c *gin.Contex
 	respondCreated(c, toCredentialGrantDTO(grant))
 }
 
+func (h *CredentialAccessGrantHandler) RequestTaskRestoreGrant(c *gin.Context) {
+	var req taskRestoreCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	if req.TaskID == 0 {
+		respondBadRequest(c, "任务 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore")
+	if !ok {
+		return
+	}
+	if ok := h.validateTaskRestoreGrantEligibility(c, req.TaskID); !ok {
+		return
+	}
+
+	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
+		Action:              CredentialGrantActionTaskRestore,
+		Purpose:             sshutil.PurposeTaskRestore,
+		TaskID:              credentialaudit.PtrUint(req.TaskID),
+		Reason:              reason,
+		RequestedTTLSeconds: int(ttl.Seconds()),
+	})
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTO(grant))
+}
+
+func (h *CredentialAccessGrantHandler) validateTaskRestoreGrantEligibility(c *gin.Context, taskID uint) bool {
+	var task model.Task
+	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type").First(&task, taskID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "任务不存在")
+			return false
+		}
+		respondInternalError(c, err)
+		return false
+	}
+	switch task.ExecutorType {
+	case "rsync", "restic", "rclone":
+	default:
+		respondBadRequest(c, fmt.Sprintf("该执行器类型（%s）不支持备份恢复", task.ExecutorType))
+		return false
+	}
+
+	var successCount int64
+	if err := h.db.WithContext(c.Request.Context()).Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount).Error; err != nil {
+		respondInternalError(c, err)
+		return false
+	}
+	if successCount == 0 {
+		respondBadRequest(c, "该任务没有成功的执行记录，无法恢复")
+		return false
+	}
+	return true
+}
+
 type credentialGrantCreateInput struct {
 	Action              string
 	Purpose             string
@@ -334,6 +401,17 @@ func RequireSnapshotRestoreCredentialGrant(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		requireCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionSnapshotRestore, Purpose: sshutil.PurposeSnapshot, TaskID: credentialaudit.PtrUint(taskID)}, nil)(c)
+	}
+}
+
+func RequireTaskRestoreCredentialGrant(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		taskID, ok := parseID(c, "id")
+		if !ok {
+			c.Abort()
+			return
+		}
+		requireCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskID)}, nil)(c)
 	}
 }
 
@@ -668,6 +746,8 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "settings_export_sensitive"
 	case action == CredentialGrantActionSnapshotRestore && purpose == sshutil.PurposeSnapshot:
 		return "snapshot_restore"
+	case action == CredentialGrantActionTaskRestore && purpose == sshutil.PurposeTaskRestore:
+		return "task_restore"
 	default:
 		return "grant"
 	}

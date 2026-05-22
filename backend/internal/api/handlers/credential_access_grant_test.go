@@ -53,6 +53,14 @@ func seedCredentialGrantTask(t *testing.T, db *gorm.DB, executorType string) mod
 	return taskEntity
 }
 
+func seedSuccessfulCredentialGrantTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
+	t.Helper()
+	run := model.TaskRun{TaskID: taskID, TriggerType: "manual", Status: "success"}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建授权测试成功执行记录失败: %v", err)
+	}
+}
+
 func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
 	handler := NewCredentialAccessGrantHandler(db, manager)
 	router := gin.New()
@@ -61,6 +69,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), handler.RequestConfigImportGrant)
 	router.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), handler.RequestConfigExportGrant)
 	router.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), handler.RequestSnapshotRestoreGrant)
+	router.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), handler.RequestTaskRestoreGrant)
 	return router
 }
 
@@ -394,6 +403,115 @@ func TestSnapshotRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidati
 	}
 }
 
+func TestTaskRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAndSafeAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "grant-task-restore-admin", "admin")
+	operator := seedStepUpUser(t, db, "grant-task-restore-operator", "operator")
+	adminToken := generatePrimaryToken(t, manager, admin)
+	operatorToken := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, admin)
+	taskEntity := seedCredentialGrantTask(t, db, "rsync")
+	seedSuccessfulCredentialGrantTaskRun(t, db, taskEntity.ID)
+	unsupportedTask := seedCredentialGrantTask(t, db, "command")
+	seedSuccessfulCredentialGrantTaskRun(t, db, unsupportedTask.ID)
+	noSuccessTask := seedCredentialGrantTask(t, db, "restic")
+	router := newCredentialGrantTestRouter(db, manager)
+
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", operatorToken, generateStepUpProof(t, manager, operator),
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, taskEntity.ID))
+	if operatorResp.Code != http.StatusForbidden {
+		t.Fatalf("operator 不应申请任务恢复授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
+	}
+
+	missingProofResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, "",
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, taskEntity.ID))
+	assertStepUpRequiredEnvelope(t, missingProofResp)
+
+	emptyReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		fmt.Sprintf(`{"task_id":%d,"reason":"   ","requested_ttl_seconds":600}`, taskEntity.ID))
+	if emptyReasonResp.Code != http.StatusBadRequest || !strings.Contains(emptyReasonResp.Body.String(), "授权原因不能为空") {
+		t.Fatalf("空任务恢复授权原因应返回 400，实际: %d，响应: %s", emptyReasonResp.Code, emptyReasonResp.Body.String())
+	}
+
+	shortTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":30}`, taskEntity.ID))
+	if shortTTLResp.Code != http.StatusBadRequest || !strings.Contains(shortTTLResp.Body.String(), "授权时长不能少于") {
+		t.Fatalf("任务恢复授权过短 TTL 应返回 400，实际: %d，响应: %s", shortTTLResp.Code, shortTTLResp.Body.String())
+	}
+
+	missingTaskResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		`{"task_id":999999,"reason":"例行恢复","requested_ttl_seconds":600}`)
+	if missingTaskResp.Code != http.StatusNotFound {
+		t.Fatalf("不存在任务应返回 404，实际: %d，响应: %s", missingTaskResp.Code, missingTaskResp.Body.String())
+	}
+
+	unsupportedResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, unsupportedTask.ID))
+	if unsupportedResp.Code != http.StatusBadRequest || !strings.Contains(unsupportedResp.Body.String(), "不支持备份恢复") {
+		t.Fatalf("不支持恢复的任务不应创建任务恢复授权，实际: %d，响应: %s", unsupportedResp.Code, unsupportedResp.Body.String())
+	}
+
+	noSuccessResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, noSuccessTask.ID))
+	if noSuccessResp.Code != http.StatusBadRequest || !strings.Contains(noSuccessResp.Body.String(), "没有成功的执行记录") {
+		t.Fatalf("没有成功执行记录的任务不应创建任务恢复授权，实际: %d，响应: %s", noSuccessResp.Code, noSuccessResp.Body.String())
+	}
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", adminToken, proof,
+		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, taskEntity.ID))
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("申请任务恢复授权期望 201，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			ID                  uint   `json:"id"`
+			RequesterUserID     uint   `json:"requester_user_id"`
+			Action              string `json:"action"`
+			Purpose             string `json:"purpose"`
+			NodeID              uint   `json:"node_id"`
+			TaskID              uint   `json:"task_id"`
+			PolicyID            uint   `json:"policy_id"`
+			Reason              string `json:"reason"`
+			Status              string `json:"status"`
+			RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析任务恢复授权响应失败: %v", err)
+	}
+	if payload.Data.ID == 0 || payload.Data.RequesterUserID != admin.ID || payload.Data.NodeID != 0 || payload.Data.TaskID != taskEntity.ID || payload.Data.PolicyID != 0 || payload.Data.Status != CredentialGrantStatusActive {
+		t.Fatalf("任务恢复授权 DTO 基本字段不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Action != CredentialGrantActionTaskRestore || payload.Data.Purpose != sshutil.PurposeTaskRestore || payload.Data.RequestedTTLSeconds != 600 {
+		t.Fatalf("任务恢复授权 DTO 操作/用途/TTL 不符合预期: %+v", payload.Data)
+	}
+	if payload.Data.Reason != "例行恢复" {
+		t.Fatalf("任务恢复授权原因应保存安全文本，实际: %q", payload.Data.Reason)
+	}
+
+	var grant model.CredentialAccessGrant
+	if err := db.First(&grant, payload.Data.ID).Error; err != nil {
+		t.Fatalf("读取任务恢复授权记录失败: %v", err)
+	}
+	if grant.NodeID != nil || grant.TaskID == nil || *grant.TaskID != taskEntity.ID || grant.PolicyID != nil || grant.ApproverUserID == nil || *grant.ApproverUserID != admin.ID {
+		t.Fatalf("任务恢复 grant 应为任务作用域自批准记录: %+v", grant)
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionTaskRestore)
+	if len(events) == 0 {
+		t.Fatalf("任务恢复 grant 请求应写入审计事件")
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if stage, ok := metadata["stage"].(string); !ok || stage == "" {
+			t.Fatalf("任务恢复 grant 审计 metadata 缺少安全 stage: %#v", metadata)
+		}
+	}
+}
+
 func TestCredentialAccessGrantRequestRequiresAdminAndStepUpAndValidReason(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
@@ -612,6 +730,50 @@ func TestFindActiveSnapshotRestoreCredentialGrantMatchesTaskScopeAndRejectsWrong
 	}
 }
 
+func TestFindActiveTaskRestoreCredentialGrantMatchesTaskScopeAndRejectsWrongTuple(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	user := seedStepUpUser(t, db, "grant-task-restore-match-admin", "admin")
+	other := seedStepUpUser(t, db, "grant-task-restore-match-other", "admin")
+	taskEntity := seedCredentialGrantTask(t, db, "rsync")
+	otherTask := seedCredentialGrantTask(t, db, "restic")
+	node := seedCredentialGrantNode(t, db)
+	policy := model.Policy{Name: "grant-policy"}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建授权测试策略失败: %v", err)
+	}
+	now := time.Now().UTC()
+	claims := &auth.Claims{UserID: user.ID, Username: user.Username, Role: user.Role}
+	otherClaims := &auth.Claims{UserID: other.ID, Username: other.Username, Role: other.Role}
+
+	valid := createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(otherTask.ID), nil, nil, "admin")
+	createTaskRestoreGrantFixture(t, db, other, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusRevoked, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusActive, nil, nil, nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskBackup, CredentialGrantStatusDenied, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), credentialaudit.PtrUint(node.ID), nil, "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, credentialaudit.PtrUint(policy.ID), "admin")
+	createTaskRestoreGrantFixture(t, db, user, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "operator")
+
+	found, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskEntity.ID)})
+	if err != nil || found == nil || found.ID != valid.ID || found.ExpiresAt.Before(now) {
+		t.Fatalf("有效任务恢复 task-scoped grant 应授权，grant=%+v err=%v", found, err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(otherTask.ID + 1000)}); !errors.Is(err, ErrCredentialGrantRequired) {
+		t.Fatalf("wrong task 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, otherClaims, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskEntity.ID)}); !errors.Is(err, ErrCredentialGrantRevoked) {
+		t.Fatalf("wrong user 的 revoked 任务恢复 grant 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTerminalOpen, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskEntity.ID)}); !errors.Is(err, ErrCredentialGrantRequired) {
+		t.Fatalf("wrong action 应拒绝，实际: %v", err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskBackup, TaskID: credentialaudit.PtrUint(taskEntity.ID)}); !errors.Is(err, ErrCredentialGrantDenied) {
+		t.Fatalf("wrong purpose 的 denied 任务恢复 grant 应拒绝，实际: %v", err)
+	}
+}
+
 func TestFindActiveCredentialGrantExpiresAndReportsInactiveStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
@@ -689,6 +851,46 @@ func TestSnapshotRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	}
 }
 
+func TestTaskRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "task-restore-route-before-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	taskEntity := seedCredentialGrantTask(t, db, "rsync")
+	called := false
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+
+	missingProofResp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/restore", taskEntity.ID), token, "", "")
+	assertStepUpRequiredEnvelope(t, missingProofResp)
+	if called {
+		t.Fatalf("缺少 step-up proof 时不应进入任务恢复 handler")
+	}
+
+	missingGrantResp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/restore", taskEntity.ID), token, proof, `{"target_path":"/tmp/xirang-restore"}`)
+	assertCredentialGrantRequiredEnvelope(t, missingGrantResp, "required")
+	if called {
+		t.Fatalf("缺少任务恢复授权时不应进入恢复 handler")
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionTaskRestore)
+	if len(events) != 3 {
+		t.Fatalf("任务恢复拒绝应写 step-up 和 blocked grant 审计事件，实际: %+v", events)
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.CredentialKind == credentialGrantKind && (metadata["stage"] != "grant_check" || metadata["status"] != "required" || metadata["task_id"] != float64(taskEntity.ID)) {
+			t.Fatalf("blocked audit metadata 不符合预期: %#v", metadata)
+		}
+	}
+}
+
 func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
@@ -743,6 +945,174 @@ func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 		if event.CredentialKind == credentialGrantKind && (metadata["stage"] != "use" || metadata["status"] != "active" || metadata["task_id"].(float64) != float64(taskEntity.ID)) {
 			t.Fatalf("快照恢复 grant use 审计 metadata 不符合预期: %#v", metadata)
 		}
+	}
+}
+
+func TestTaskRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "task-restore-route-valid-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	taskEntity := seedCredentialGrantTask(t, db, "rsync")
+	grant := createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "admin")
+
+	router := newTaskRestoreGrantEnforcementRouter(db, manager)
+	resp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/restore", taskEntity.ID), token, proof, `{"target_path":"/tmp/xirang-restore"}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("带有效任务恢复 grant 应放行，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionTaskRestore)
+	if len(events) != 2 {
+		t.Fatalf("任务恢复成功放行应写 step-up/grant use 审计事件，实际: %+v", events)
+	}
+	if events[0].Outcome != credentialaudit.OutcomeSuccess || events[1].Outcome != credentialaudit.OutcomeSuccess || events[1].TaskID == nil || *events[1].TaskID != taskEntity.ID {
+		t.Fatalf("任务恢复 grant use 审计事件不符合预期: %+v", events)
+	}
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.CredentialKind == credentialGrantKind {
+			if metadata["stage"] != "use" || metadata["status"] != "active" || metadata["grant_id"].(float64) != float64(grant.ID) || metadata["task_id"].(float64) != float64(taskEntity.ID) {
+				t.Fatalf("任务恢复 grant use 审计 metadata 不符合预期: %#v", metadata)
+			}
+		}
+	}
+}
+
+func TestTaskRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testCases := []struct {
+		name       string
+		wantStatus string
+		seedGrant  func(t *testing.T, db *gorm.DB, admin model.User, taskID uint)
+		assertDB   func(t *testing.T, db *gorm.DB)
+	}{
+		{
+			name:       "expired",
+			wantStatus: CredentialGrantStatusExpired,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				now := time.Now().UTC()
+				grant := model.CredentialAccessGrant{RequesterUserID: admin.ID, RequesterUsername: admin.Username, RequesterRole: admin.Role, Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskID), Reason: "例行恢复", Status: CredentialGrantStatusActive, RequestedTTLSeconds: 60, RequestedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
+				if err := db.Create(&grant).Error; err != nil {
+					t.Fatalf("创建过期任务恢复 grant 失败: %v", err)
+				}
+			},
+			assertDB: func(t *testing.T, db *gorm.DB) {
+				var grant model.CredentialAccessGrant
+				if err := db.Where("action = ? AND purpose = ?", CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore).First(&grant).Error; err != nil {
+					t.Fatalf("读取过期任务恢复 grant 失败: %v", err)
+				}
+				if grant.Status != CredentialGrantStatusExpired {
+					t.Fatalf("过期 active 任务恢复 grant 应标记 expired，实际: %s", grant.Status)
+				}
+			},
+		},
+		{
+			name:       "revoked",
+			wantStatus: CredentialGrantStatusRevoked,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusRevoked, credentialaudit.PtrUint(taskID), nil, nil, "admin")
+			},
+		},
+		{
+			name:       "denied",
+			wantStatus: CredentialGrantStatusDenied,
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusDenied, credentialaudit.PtrUint(taskID), nil, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-user",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, _ model.User, taskID uint) {
+				other := seedStepUpUser(t, db, "task-restore-other-user", "admin")
+				createTaskRestoreGrantFixture(t, db, other, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID), nil, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-role",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID), nil, nil, "operator")
+			},
+		},
+		{
+			name:       "wrong-task",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID+1000), nil, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-action-terminal",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, _ uint) {
+				node := seedCredentialGrantNode(t, db)
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-action-config",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, _ uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, CredentialGrantStatusActive, nil, nil, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-purpose",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskBackup, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID), nil, nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-node-scope",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				node := seedCredentialGrantNode(t, db)
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID), credentialaudit.PtrUint(node.ID), nil, "admin")
+			},
+		},
+		{
+			name:       "wrong-policy-scope",
+			wantStatus: "required",
+			seedGrant: func(t *testing.T, db *gorm.DB, admin model.User, taskID uint) {
+				policy := model.Policy{Name: "task-restore-deny-policy"}
+				if err := db.Create(&policy).Error; err != nil {
+					t.Fatalf("创建任务恢复拒绝测试策略失败: %v", err)
+				}
+				createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskID), nil, credentialaudit.PtrUint(policy.ID), "admin")
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			admin := seedStepUpUser(t, db, "task-restore-deny-admin", "admin")
+			token := generatePrimaryToken(t, manager, admin)
+			proof := generateStepUpProof(t, manager, admin)
+			taskEntity := seedCredentialGrantTask(t, db, "rsync")
+			tc.seedGrant(t, db, admin, taskEntity.ID)
+
+			router := newTaskRestoreGrantEnforcementRouter(db, manager)
+			resp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/restore", taskEntity.ID), token, proof, `{"target_path":"/tmp/xirang-restore"}`)
+			assertCredentialGrantRequiredEnvelope(t, resp, tc.wantStatus)
+			if tc.assertDB != nil {
+				tc.assertDB(t, db)
+			}
+
+			events := loadCredentialAuditEvents(t, db, CredentialGrantActionTaskRestore)
+			if len(events) == 0 {
+				t.Fatalf("任务恢复 grant 拒绝应写审计事件")
+			}
+			for _, event := range events {
+				assertNoForbiddenAuditMetadata(t, event.Metadata)
+			}
+		})
 	}
 }
 
@@ -1286,6 +1656,15 @@ func newSnapshotRestoreGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTMana
 	return router
 }
 
+func newTaskRestoreGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
+		respondMessage(c, "恢复成功")
+	})
+	return router
+}
+
 func newConfigImportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
 	handler := NewConfigHandler(db, nil)
 	router := gin.New()
@@ -1328,6 +1707,33 @@ func createSnapshotRestoreGrantFixture(t *testing.T, db *gorm.DB, user model.Use
 	if err := db.Create(&grant).Error; err != nil {
 		t.Fatalf("创建快照恢复 grant fixture 失败: %v", err)
 	}
+}
+
+func createTaskRestoreGrantFixture(t *testing.T, db *gorm.DB, user model.User, action, purpose, status string, taskID *uint, nodeID *uint, policyID *uint, requesterRole string) model.CredentialAccessGrant {
+	t.Helper()
+	if requesterRole == "" {
+		requesterRole = user.Role
+	}
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:     user.ID,
+		RequesterUsername:   user.Username,
+		RequesterRole:       requesterRole,
+		Action:              action,
+		Purpose:             purpose,
+		NodeID:              nodeID,
+		TaskID:              taskID,
+		PolicyID:            policyID,
+		Reason:              "例行恢复",
+		Status:              status,
+		RequestedTTLSeconds: 600,
+		RequestedAt:         now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建任务恢复 grant fixture 失败: %v", err)
+	}
+	return grant
 }
 
 func createConfigExportGrantFixture(t *testing.T, db *gorm.DB, user model.User, action, purpose, status string, nodeID *uint, requesterRole string) {
