@@ -38,3 +38,36 @@ Implemented task-scoped credential access grants for task restore triggers, incl
 ### Next Steps
 
 - None - task complete
+
+
+## Session 60: P3 minimal grant status list
+
+**Date**: 2026-05-22
+**Task**: P3 minimal grant status list
+**Branch**: `security/p3-minimal-grant-status-list`
+
+### Summary
+
+Added admin-only read-only credential grant status/list API and UI with sanitized metadata, filters, pagination, route docs, and verification coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6af44b5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

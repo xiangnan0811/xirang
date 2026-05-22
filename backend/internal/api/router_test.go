@@ -87,6 +87,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/credential-audit-events/export") {
 		t.Fatalf("未注册凭据审计事件导出接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/credential-access-grants") {
+		t.Fatalf("未注册凭据临时授权列表接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/terminal") {
 		t.Fatalf("未注册终端凭据临时授权接口")
 	}
@@ -125,12 +128,12 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_SETTINGS_RISK_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("settings-risk-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
 		user := model.User{
 			Username:     "settings-risk-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 		}
 		if err := db.Create(&user).Error; err != nil {
@@ -173,13 +176,13 @@ func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_GRANT_ROUTE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("grant-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 2)
 	proofs := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
 		user := model.User{
 			Username:     "grant-route-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 			TOTPEnabled:  true,
 		}
@@ -235,6 +238,71 @@ func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
 	}
 }
 
+func TestCredentialAccessGrantListRouteRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("grant-list-route-signing-marker", time.Hour)
+	tokens := make(map[string]string, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username:     "grant-list-rbac-" + role,
+			PasswordHash: "hash-redacted",
+			Role:         role,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+	}
+
+	if err := db.Create(&model.CredentialAccessGrant{
+		RequesterUserID:     1,
+		RequesterUsername:   "admin",
+		RequesterRole:       "admin",
+		Action:              "config.import",
+		Purpose:             "config_import",
+		Reason:              "例行导入",
+		Status:              "active",
+		RequestedTTLSeconds: 600,
+		RequestedAt:         time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(10 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("创建凭据临时授权失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	for _, role := range []string{"operator", "viewer"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/credential-access-grants", nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[role])
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("%s 应被凭据临时授权列表 RBAC 拒绝，实际状态码: %d，body=%s", role, resp.Code, resp.Body.String())
+		}
+	}
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/credential-access-grants", nil)
+	adminReq.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	adminResp := httptest.NewRecorder()
+	router.ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusOK {
+		t.Fatalf("admin 应能访问凭据临时授权列表，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+
 func TestCredentialAuditEventsRouteRBAC(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -247,12 +315,12 @@ func TestCredentialAuditEventsRouteRBAC(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_CREDENTIAL_AUDIT_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("credential-audit-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{
 			Username:     "credential-audit-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 		}
 		if err := db.Create(&user).Error; err != nil {
@@ -314,12 +382,12 @@ func TestBackupConfidenceRouteRBAC(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_BACKUP_CONFIDENCE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("backup-confidence-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
 		user := model.User{
 			Username:     "backup-confidence-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 		}
 		if err := db.Create(&user).Error; err != nil {
@@ -361,13 +429,13 @@ func TestNodeDoctorRouteRBAC(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_NODE_DOCTOR_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("node-doctor-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 3)
 	userIDs := make(map[string]uint, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{
 			Username:     "node-doctor-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 		}
 		if err := db.Create(&user).Error; err != nil {
@@ -445,12 +513,12 @@ func TestAlertBulkResolveRouteRBAC(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	jwtManager := auth.NewJWTManager("FAKE_ALERT_BULK_RESOLVE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager := auth.NewJWTManager("alert-bulk-resolve-route-signing-marker", time.Hour)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{
 			Username:     "alert-bulk-rbac-" + role,
-			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+			PasswordHash: "hash-redacted",
 			Role:         role,
 		}
 		if err := db.Create(&user).Error; err != nil {

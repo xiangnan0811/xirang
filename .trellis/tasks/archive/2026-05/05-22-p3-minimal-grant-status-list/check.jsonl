@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/prd.md","reason":"Acceptance criteria and definition of done for verifying the grant status/list slice."}
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/research/backend-grant-status-list.md","reason":"Backend verification checklist for route/RBAC, filters, pagination, DTO safety, and existing audit-list parity."}
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/research/frontend-grant-status-list.md","reason":"Frontend verification checklist for API mapping, admin UI behavior, route/navigation, accessibility, and storage safety."}
+{"file":".trellis/tasks/archive/2026-05/05-22-p3-grant-semantics-planning/prd.md","reason":"Confirms this check must not drift into operator-owned, multi-resource, approval-workflow, or P4 architecture scope."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Required backend security checks for grant safe fields, fail-closed controls, and exclusion of secret/control-plane material."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Required frontend checks for typed mapping, unknown fallback behavior, and no browser storage of grant DTOs or reasons."}

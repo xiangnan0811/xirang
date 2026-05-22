@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCredentialAccessGrantsApi, mapCredentialAccessGrant } from "./credential-access-grants-api";
+import { buildCredentialAccessGrantQuery, createCredentialAccessGrantsApi, mapCredentialAccessGrant } from "./credential-access-grants-api";
+import { formatTime } from "@/lib/date-utils";
 import { request } from "./core";
 
 vi.mock("./core", async () => {
@@ -55,24 +56,27 @@ describe("credential access grants api", () => {
       reason: "Routine maintenance",
       status: "active",
       requestedTtlSeconds: 600,
-      requestedAt: "2026-05-20T00:00:00Z",
-      approvedAt: "2026-05-20T00:00:01Z",
+      requestedAt: formatTime("2026-05-20T00:00:00Z"),
+      approvedAt: formatTime("2026-05-20T00:00:01Z"),
       approverUserId: 7,
       approverUsername: "admin",
-      expiresAt: "2026-05-20T00:10:00Z",
+      expiresAt: formatTime("2026-05-20T00:10:00Z"),
       revokedAt: undefined,
       revokedByUserId: undefined,
-      createdAt: "2026-05-20T00:00:00Z",
-      updatedAt: "2026-05-20T00:00:00Z",
+      createdAt: formatTime("2026-05-20T00:00:00Z"),
+      updatedAt: formatTime("2026-05-20T00:00:00Z"),
     });
   });
 
-  it("falls back safely for invalid numeric fields", () => {
+  it("falls back safely for invalid numeric fields and nullable timestamps", () => {
     const grant = mapCredentialAccessGrant({
       id: "bad-id",
       requester_user_id: "bad-user",
       node_id: "bad-node",
       requested_ttl_seconds: "bad-ttl",
+      requested_at: "not-a-date",
+      approved_at: null,
+      revoked_at: null,
       reason: null,
     });
 
@@ -80,6 +84,9 @@ describe("credential access grants api", () => {
     expect(grant.requesterUserId).toBe(0);
     expect(grant.nodeId).toBeUndefined();
     expect(grant.requestedTtlSeconds).toBe(0);
+    expect(grant.requestedAt).toBe("not-a-date");
+    expect(grant.approvedAt).toBeUndefined();
+    expect(grant.revokedAt).toBeUndefined();
     expect(grant.reason).toBe("");
   });
 
@@ -133,6 +140,86 @@ describe("credential access grants api", () => {
     expect(grant.action).toBe("unknown");
     expect(grant.purpose).toBe("unknown");
     expect(grant.status).toBe("expired");
+  });
+
+  it("serializes list filters for credential access grants", () => {
+    const query = buildCredentialAccessGrantQuery({
+      requesterUserId: 7,
+      requesterUsername: "  admin  ",
+      requesterRole: "admin",
+      action: "task.restore_trigger",
+      purpose: "task_restore",
+      status: "revoked",
+      nodeId: 11,
+      taskId: 22,
+      policyId: 33,
+      from: "2026-05-20T00:00:00Z",
+      to: "2026-05-21T00:00:00Z",
+      page: 2,
+      pageSize: 30,
+      sortBy: "created_at",
+      sortOrder: "desc",
+    });
+
+    expect(query.toString()).toBe(
+      "requester_username=admin&requester_role=admin&action=task.restore_trigger&purpose=task_restore&status=revoked&from=2026-05-20T00%3A00%3A00Z&to=2026-05-21T00%3A00%3A00Z&sort_by=created_at&sort_order=desc&requester_user_id=7&node_id=11&task_id=22&policy_id=33&page=2&page_size=30",
+    );
+  });
+
+  it("lists credential access grants through the paginated endpoint", async () => {
+    requestMock.mockResolvedValueOnce({
+      code: 0,
+      message: "ok",
+      data: [
+        {
+          id: 31,
+          requester_user_id: 7,
+          requester_username: "admin",
+          requester_role: "admin",
+          action: "task.restore_trigger",
+          purpose: "task_restore",
+          task_id: 102,
+          reason: "Routine restore",
+          status: "revoked",
+          requested_ttl_seconds: 600,
+          requested_at: "2026-05-20T00:00:00Z",
+          expires_at: "2026-05-20T00:10:00Z",
+          created_at: "2026-05-20T00:00:00Z",
+          updated_at: "2026-05-20T00:00:00Z",
+        },
+      ],
+      total: 1,
+      page: 2,
+      page_size: 30,
+    });
+
+    const result = await createCredentialAccessGrantsApi().listCredentialAccessGrants("auth-marker", {
+      status: "revoked",
+      page: 2,
+      pageSize: 30,
+      sortBy: "created_at",
+      sortOrder: "desc",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      "/credential-access-grants?status=revoked&sort_by=created_at&sort_order=desc&page=2&page_size=30",
+      { token: "auth-marker" },
+    );
+    expect(result).toMatchObject({
+      total: 1,
+      page: 2,
+      pageSize: 30,
+      items: [
+        {
+          id: 31,
+          requesterUserId: 7,
+          action: "task.restore_trigger",
+          purpose: "task_restore",
+          taskId: 102,
+          status: "revoked",
+        },
+      ],
+    });
   });
 
   it("requests a config import grant with reason, ttl, bearer token, and step-up proof", async () => {

@@ -258,6 +258,7 @@ go run ./cmd/server
 | GET | /audit-logs/export | 🔒 导出 CSV |
 | GET | /credential-audit-events | 🔒 管理员凭据使用审计事件列表 |
 | GET | /credential-audit-events/export | 🔒 管理员导出凭据使用审计 CSV |
+| GET | /credential-access-grants | 🔒 管理员只读查看短时凭据授权状态列表（安全元数据；支持分页、筛选、排序） |
 | POST | /credential-access-grants/terminal | 🔒 申请并激活短时终端凭据使用授权（admin；需二次验证；绑定 node_id/action/purpose） |
 | POST | /credential-access-grants/config-import | 🔒 申请并激活短时配置导入授权（admin；需二次验证；绑定 config.import/config_import） |
 | POST | /credential-access-grants/config-export | 🔒 申请并激活短时敏感配置导出授权（admin；需二次验证；绑定 config.export/config_export） |

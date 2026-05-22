@@ -1,5 +1,24 @@
 import type { CredentialAccessGrant, CredentialAccessGrantAction, CredentialAccessGrantPurpose, CredentialAccessGrantStatus } from "@/types/domain";
-import { request } from "./core";
+import { formatTime } from "@/lib/date-utils";
+import { request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+
+export type CredentialAccessGrantListOptions = {
+  requesterUserId?: number;
+  requesterUsername?: string;
+  requesterRole?: string;
+  action?: string;
+  purpose?: string;
+  status?: CredentialAccessGrantStatus | string;
+  nodeId?: number;
+  taskId?: number;
+  policyId?: number;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "id" | "created_at" | "updated_at" | "requested_at" | "expires_at" | "status" | "action" | "purpose" | "requester_username" | "requester_role";
+  sortOrder?: "asc" | "desc";
+};
 
 interface CredentialAccessGrantResponse {
   id?: unknown;
@@ -64,6 +83,48 @@ function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
   }
 }
 
+function displayTime(value: unknown): string {
+  const raw = stringValue(value);
+  return raw ? formatTime(raw) : "";
+}
+
+export function buildCredentialAccessGrantQuery(options?: CredentialAccessGrantListOptions): URLSearchParams {
+  const query = new URLSearchParams();
+  const stringFields: Array<[keyof CredentialAccessGrantListOptions, string]> = [
+    ["requesterUsername", "requester_username"],
+    ["requesterRole", "requester_role"],
+    ["action", "action"],
+    ["purpose", "purpose"],
+    ["status", "status"],
+    ["from", "from"],
+    ["to", "to"],
+    ["sortBy", "sort_by"],
+    ["sortOrder", "sort_order"],
+  ];
+  for (const [field, param] of stringFields) {
+    const value = options?.[field];
+    if (typeof value === "string" && value.trim()) {
+      query.set(param, value.trim());
+    }
+  }
+
+  const numericFields: Array<[keyof CredentialAccessGrantListOptions, string]> = [
+    ["requesterUserId", "requester_user_id"],
+    ["nodeId", "node_id"],
+    ["taskId", "task_id"],
+    ["policyId", "policy_id"],
+    ["page", "page"],
+    ["pageSize", "page_size"],
+  ];
+  for (const [field, param] of numericFields) {
+    const value = options?.[field];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      query.set(param, String(value));
+    }
+  }
+  return query;
+}
+
 export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | null | undefined): CredentialAccessGrant {
   const row = raw ?? {};
   return {
@@ -79,20 +140,39 @@ export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | nu
     reason: stringValue(row.reason),
     status: mapGrantStatus(row.status),
     requestedTtlSeconds: finiteNumber(row.requested_ttl_seconds),
-    requestedAt: stringValue(row.requested_at),
-    approvedAt: stringValue(row.approved_at) || undefined,
+    requestedAt: displayTime(row.requested_at),
+    approvedAt: displayTime(row.approved_at) || undefined,
     approverUserId: positiveNumberOrUndefined(row.approver_user_id),
     approverUsername: stringValue(row.approver_username) || undefined,
-    expiresAt: stringValue(row.expires_at),
-    revokedAt: stringValue(row.revoked_at) || undefined,
+    expiresAt: displayTime(row.expires_at),
+    revokedAt: displayTime(row.revoked_at) || undefined,
     revokedByUserId: positiveNumberOrUndefined(row.revoked_by_user_id),
-    createdAt: stringValue(row.created_at),
-    updatedAt: stringValue(row.updated_at),
+    createdAt: displayTime(row.created_at),
+    updatedAt: displayTime(row.updated_at),
   };
 }
 
 export function createCredentialAccessGrantsApi() {
   return {
+    async listCredentialAccessGrants(
+      token: string,
+      options?: CredentialAccessGrantListOptions,
+    ): Promise<{ items: CredentialAccessGrant[]; total: number; page: number; pageSize: number }> {
+      const query = buildCredentialAccessGrantQuery(options);
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const payload = await request<PaginatedEnvelope<CredentialAccessGrantResponse[]>>(
+        `/credential-access-grants${suffix}`,
+        { token },
+      );
+      const result = unwrapPaginated(payload);
+      return {
+        items: result.items.map((row) => mapCredentialAccessGrant(row)),
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+      };
+    },
+
     async requestTerminalCredentialGrant(
       token: string,
       input: { nodeId: number; reason: string; requestedTtlSeconds?: number },

@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/prd.md","reason":"Defines the MVP requirements, safe-field boundary, backend/frontend approach, and out-of-scope decisions for the grant status/list implementation."}
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/research/backend-grant-status-list.md","reason":"Summarizes existing backend grant model/DTO, route/RBAC, pagination/filter patterns, and safe grant fields to expose."}
+{"file":".trellis/tasks/05-22-p3-minimal-grant-status-list/research/frontend-grant-status-list.md","reason":"Summarizes existing frontend grant API mapping, admin list page patterns, route/navigation conventions, and storage-safety requirements."}
+{"file":".trellis/tasks/archive/2026-05/05-22-p3-grant-semantics-planning/prd.md","reason":"Captures the prior decision to implement a minimal read-only admin grant status/list before operator-owned or multi-resource grants."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Provides backend credential access grant contracts, safe-field restrictions, RBAC/step-up expectations, and audit-safety requirements."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Provides frontend credential grant DTO mapping contracts, safe fallbacks, and browser storage constraints."}

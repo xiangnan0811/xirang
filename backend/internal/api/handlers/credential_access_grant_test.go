@@ -65,12 +65,143 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	handler := NewCredentialAccessGrantHandler(db, manager)
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
+	router.GET("/credential-access-grants", middleware.RequireRole("admin"), handler.List)
 	router.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), handler.RequestTerminalGrant)
 	router.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), handler.RequestConfigImportGrant)
 	router.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), handler.RequestConfigExportGrant)
 	router.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), handler.RequestSnapshotRestoreGrant)
 	router.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), handler.RequestTaskRestoreGrant)
 	return router
+}
+
+func TestCredentialAccessGrantListFiltersPaginationSortsAndSanitizes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "grant-list-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	router := newCredentialGrantTestRouter(db, manager)
+
+	nodeID := uint(101)
+	taskID := uint(202)
+	policyID := uint(303)
+	base := time.Date(2026, 5, 22, 8, 0, 0, 0, time.UTC)
+	rows := []model.CredentialAccessGrant{
+		{
+			RequesterUserID:     admin.ID,
+			RequesterUsername:   "grant-list-admin",
+			RequesterRole:       "admin",
+			Action:              CredentialGrantActionTerminalOpen,
+			Purpose:             sshutil.PurposeTerminal,
+			NodeID:              &nodeID,
+			Reason:              "token: hidden host: internal",
+			Status:              CredentialGrantStatusActive,
+			RequestedTTLSeconds: 600,
+			RequestedAt:         base.Add(-1 * time.Hour),
+			ExpiresAt:           base.Add(10 * time.Minute),
+			CreatedAt:           base,
+			UpdatedAt:           base,
+		},
+		{
+			RequesterUserID:     admin.ID,
+			RequesterUsername:   "grant-list-admin",
+			RequesterRole:       "admin",
+			Action:              CredentialGrantActionTaskRestore,
+			Purpose:             sshutil.PurposeTaskRestore,
+			TaskID:              &taskID,
+			PolicyID:            &policyID,
+			Reason:              "例行恢复",
+			Status:              CredentialGrantStatusRevoked,
+			RequestedTTLSeconds: 300,
+			RequestedAt:         base.Add(1 * time.Hour),
+			ExpiresAt:           base.Add(2 * time.Hour),
+			CreatedAt:           base.Add(1 * time.Hour),
+			UpdatedAt:           base.Add(90 * time.Minute),
+		},
+		{
+			RequesterUserID:     admin.ID,
+			RequesterUsername:   "other-admin",
+			RequesterRole:       "admin",
+			Action:              CredentialGrantActionConfigImport,
+			Purpose:             CredentialGrantPurposeConfigImport,
+			Reason:              "例行导入",
+			Status:              CredentialGrantStatusDenied,
+			RequestedTTLSeconds: 300,
+			RequestedAt:         base.Add(2 * time.Hour),
+			ExpiresAt:           base.Add(3 * time.Hour),
+			CreatedAt:           base.Add(2 * time.Hour),
+			UpdatedAt:           base.Add(2 * time.Hour),
+		},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatalf("创建 grant 列表 fixture 失败: %v", err)
+	}
+
+	resp := performStepUpRequest(t, router, http.MethodGet, "/credential-access-grants?status=revoked&action=task.restore_trigger&purpose=task_restore&requester_user_id="+fmt.Sprint(admin.ID)+"&requester_username=grant-list-admin&requester_role=admin&task_id=202&policy_id=303&from=2026-05-22T08:30:00Z&to=2026-05-22T09:30:00Z&page=1&page_size=1&sort_by=created_at&sort_order=asc", token, "", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("grant 列表过滤请求期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload struct {
+		Total    int `json:"total"`
+		Page     int `json:"page"`
+		PageSize int `json:"page_size"`
+		Data     []struct {
+			ID                  uint   `json:"id"`
+			RequesterUserID     uint   `json:"requester_user_id"`
+			RequesterUsername   string `json:"requester_username"`
+			RequesterRole       string `json:"requester_role"`
+			Action              string `json:"action"`
+			Purpose             string `json:"purpose"`
+			TaskID              uint   `json:"task_id"`
+			PolicyID            uint   `json:"policy_id"`
+			Reason              string `json:"reason"`
+			Status              string `json:"status"`
+			RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+			CreatedAt           string `json:"created_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析 grant 列表响应失败: %v", err)
+	}
+	if payload.Total != 1 || payload.Page != 1 || payload.PageSize != 1 || len(payload.Data) != 1 {
+		t.Fatalf("grant 列表分页统计不符合预期: %+v", payload)
+	}
+	row := payload.Data[0]
+	if row.Action != CredentialGrantActionTaskRestore || row.Purpose != sshutil.PurposeTaskRestore || row.Status != CredentialGrantStatusRevoked || row.TaskID != taskID || row.PolicyID != policyID {
+		t.Fatalf("grant 列表过滤结果不符合预期: %+v", row)
+	}
+	if row.RequesterUserID != admin.ID || row.RequesterUsername != "grant-list-admin" || row.RequesterRole != "admin" || row.RequestedTTLSeconds != 300 || row.Reason != "例行恢复" {
+		t.Fatalf("grant 列表 DTO 字段不符合预期: %+v", row)
+	}
+
+	unsafeResp := performStepUpRequest(t, router, http.MethodGet, "/credential-access-grants?node_id=101", token, "", "")
+	if unsafeResp.Code != http.StatusOK {
+		t.Fatalf("grant 列表旧数据清洗请求期望 200，实际: %d，响应: %s", unsafeResp.Code, unsafeResp.Body.String())
+	}
+	body := unsafeResp.Body.String()
+	for _, forbidden := range []string{"hidden", "internal", "token:", "host:"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("grant 列表不应回显旧数据敏感片段 %q，响应: %s", forbidden, body)
+		}
+	}
+
+	defaultResp := performStepUpRequest(t, router, http.MethodGet, "/credential-access-grants?sort_by=not_allowed&page_size=1", token, "", "")
+	if defaultResp.Code != http.StatusOK {
+		t.Fatalf("grant 列表默认排序请求期望 200，实际: %d，响应: %s", defaultResp.Code, defaultResp.Body.String())
+	}
+	var defaultPayload struct {
+		Data []struct {
+			ID     uint   `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(defaultResp.Body.Bytes(), &defaultPayload); err != nil {
+		t.Fatalf("解析 grant 默认排序响应失败: %v", err)
+	}
+	if len(defaultPayload.Data) != 1 || defaultPayload.Data[0].Status != CredentialGrantStatusDenied {
+		t.Fatalf("不安全 sort_by 应回退 created_at desc 并返回最近授权，实际: %+v", defaultPayload.Data)
+	}
 }
 
 func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *testing.T) {
