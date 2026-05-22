@@ -600,8 +600,8 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
-export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "unknown";
-export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "snapshot" | "unknown";
+export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "task.restore_trigger" | "unknown";
+export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "snapshot" | "task_restore" | "unknown";
 export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked";
 
 export interface CredentialAccessGrant {

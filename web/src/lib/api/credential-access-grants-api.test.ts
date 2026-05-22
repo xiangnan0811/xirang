@@ -109,6 +109,20 @@ describe("credential access grants api", () => {
     expect(grant.status).toBe("active");
   });
 
+  it("preserves task restore grant tuple and task binding", () => {
+    const grant = mapCredentialAccessGrant({
+      action: "task.restore_trigger",
+      purpose: "task_restore",
+      task_id: "102",
+      status: "active",
+    });
+
+    expect(grant.action).toBe("task.restore_trigger");
+    expect(grant.purpose).toBe("task_restore");
+    expect(grant.taskId).toBe(102);
+    expect(grant.status).toBe("active");
+  });
+
   it("falls back safely for unknown action, purpose, and status", () => {
     const grant = mapCredentialAccessGrant({
       action: "ssh_key.export",
@@ -226,6 +240,43 @@ describe("credential access grants api", () => {
       },
     });
     expect(grant).toMatchObject({ id: 24, taskId: 101, nodeId: undefined, action: "snapshot.restore", purpose: "snapshot", status: "active" });
+  });
+
+  it("requests a task restore grant with task, reason, ttl, bearer token, and step-up proof", async () => {
+    requestMock.mockResolvedValueOnce({
+      id: 25,
+      requester_user_id: 7,
+      requester_username: "admin",
+      requester_role: "admin",
+      action: "task.restore_trigger",
+      purpose: "task_restore",
+      task_id: 102,
+      reason: "Routine restore",
+      status: "active",
+      requested_ttl_seconds: 600,
+      requested_at: "2026-05-20T00:00:00Z",
+      expires_at: "2026-05-20T00:10:00Z",
+      created_at: "2026-05-20T00:00:00Z",
+      updated_at: "2026-05-20T00:00:00Z",
+    });
+
+    const grant = await createCredentialAccessGrantsApi().requestTaskRestoreCredentialGrant(
+      "auth-marker",
+      { taskId: 102, reason: "Routine restore", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/task-restore", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        task_id: 102,
+        reason: "Routine restore",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(grant).toMatchObject({ id: 25, taskId: 102, nodeId: undefined, action: "task.restore_trigger", purpose: "task_restore", status: "active" });
   });
 
   it("requests a terminal grant with node, reason, ttl, bearer token, and step-up proof", async () => {

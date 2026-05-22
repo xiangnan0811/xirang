@@ -131,7 +131,7 @@ go run ./cmd/server
 | POST | /tasks/:id/pause | 🔒 暂停调度 |
 | POST | /tasks/:id/resume | 🔒 恢复调度 |
 | POST | /tasks/:id/skip-next | 🔒 跳过下次 |
-| POST | /tasks/:id/restore | 🔒 从备份恢复（需二次验证） |
+| POST | /tasks/:id/restore | 🔒 从备份恢复（需二次验证 + task.restore_trigger/task_restore/task_id 临时授权） |
 | GET | /tasks/:id/backup-files | 🔒 备份文件列表 |
 | GET | /task-runs/:id | 🔒 执行详情 |
 | GET | /task-runs/:id/logs | 🔒 执行日志 |
@@ -262,6 +262,7 @@ go run ./cmd/server
 | POST | /credential-access-grants/config-import | 🔒 申请并激活短时配置导入授权（admin；需二次验证；绑定 config.import/config_import） |
 | POST | /credential-access-grants/config-export | 🔒 申请并激活短时敏感配置导出授权（admin；需二次验证；绑定 config.export/config_export） |
 | POST | /credential-access-grants/snapshot-restore | 🔒 申请并激活短时快照恢复授权（admin；需二次验证；绑定 snapshot.restore/snapshot/task_id） |
+| POST | /credential-access-grants/task-restore | 🔒 申请并激活短时任务恢复授权（admin；需二次验证；绑定 task.restore_trigger/task_restore/task_id） |
 
 ### SLA 报告
 
@@ -281,6 +282,7 @@ go run ./cmd/server
 |------|------|------|
 | GET | /tasks/:id/snapshots | 🔒 快照列表 |
 | GET | /tasks/:id/snapshots/:sid/files | 🔒 快照文件 |
+| POST | /tasks/:id/restore | 🔒 从备份恢复（需二次验证 + task.restore_trigger/task_restore/task_id 临时授权） |
 | POST | /tasks/:id/snapshots/:sid/restore | 🔒 从快照恢复（需二次验证 + snapshot.restore/snapshot/task_id 临时授权） |
 | GET | /tasks/:id/snapshots/diff | 🔒 快照对比 |
 | GET | /tasks/:id/snapshots/search | 🔒 搜索快照文件 |

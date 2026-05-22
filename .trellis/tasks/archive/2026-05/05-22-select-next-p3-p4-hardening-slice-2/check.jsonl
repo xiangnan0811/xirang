@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Validate additive grant semantics, fail-closed matrix, and safe credential-use audit metadata."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Validate grant and step-up denials use safe existing error envelopes."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Validate logs/audit metadata exclude credential material, target paths, commands, output, SQL, host-sensitive strings, and proofs."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Validate no browser storage persistence for proof, reason, grant metadata, target path, task ID, or run ID."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Validate frontend action/purpose/API additions remain typed and unknown fallback behavior is safe."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Validate restore grant UI remains minimal and consistent with existing component patterns."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Validate restore grant dialog labels, alerts, disabled states, and keyboard accessibility."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Validate required frontend tests, i18n updates, lint/typecheck/build gates, and docs sync."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/prd.md","reason":"Validate implementation against selected task restore slice, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/research/remaining-p3-p4-roadmap.md","reason":"Check selected slice still matches roadmap ranking and one-PR feasibility."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/research/code-candidate-feasibility.md","reason":"Check route/component assumptions and deferred candidate constraints remain respected."}
+{"file":".trellis/tasks/archive/2026-05/05-21-select-next-p3-p4-hardening-slice/prd.md","reason":"Check consistency with the previous task-scoped snapshot restore grant pattern."}

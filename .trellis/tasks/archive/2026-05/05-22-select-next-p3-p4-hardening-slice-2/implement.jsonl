@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"CredentialAccessGrant contract, additive authorization, fail-closed behavior, credential-use audit, and forbidden metadata rules."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Safe backend denial envelopes and machine-readable error handling for grant/step-up failures."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Sanitized logging and audit metadata constraints for credential-adjacent restore operations."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend grant prompt state, browser storage safety, and one-time non-persistent step-up proof guidance."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Typed frontend action/purpose/API additions and mapper fallback expectations."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Restore grant prompt should reuse existing UI patterns with minimal scope."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Reason prompt/dialog must remain accessible and keyboard-operable."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend API wrapper, i18n, test, lint, and build quality gates for behavior changes."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/prd.md","reason":"Current decision record selecting task restore trigger JIT grant and defining scope/acceptance criteria."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/research/remaining-p3-p4-roadmap.md","reason":"Roadmap selection evidence and remaining candidate trade-off ranking."}
+{"file":".trellis/tasks/05-22-select-next-p3-p4-hardening-slice-2/research/code-candidate-feasibility.md","reason":"Route/component feasibility research for task restore and deferred candidates."}
+{"file":".trellis/tasks/archive/2026-05/05-21-select-next-p3-p4-hardening-slice/prd.md","reason":"Previous snapshot restore selection record and task-scoped grant precedent."}

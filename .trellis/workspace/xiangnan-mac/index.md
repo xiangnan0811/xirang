@@ -7,8 +7,8 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-1.md`
-- **Total Sessions**: 58
+- **Active File**: `journal-2.md`
+- **Total Sessions**: 59
 - **Last Active**: 2026-05-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1983 | Active |
+| `journal-2.md` | ~40 | Active |
+| `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 59 | 2026-05-22 | Gate task restore with JIT grants | `66d1e35` | `security/select-next-p3-p4-hardening-slice-2` |
 | 58 | 2026-05-22 | Snapshot restore JIT grant | `032bbf7` | `security/select-next-p3-p4-hardening-slice` |
 | 57 | 2026-05-21 | Gate sensitive config export with JIT grants | `a372c8b` | `security/p3-control-plane-followups` |
 | 56 | 2026-05-21 | P3 config import grant and telemetry | `f07b767` | `security/p3-p4-security-roadmap` |
