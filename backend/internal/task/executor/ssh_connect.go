@@ -65,37 +65,42 @@ func resolveSSHAuthMethods(node model.Node) ([]ssh.AuthMethod, error) {
 
 func resolveSSHAuthMethodsForPurpose(node model.Node, purpose string) ([]ssh.AuthMethod, sshutil.ResolvedCredential, error) {
 	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
-	var authMethods []ssh.AuthMethod
+	resolvedNode := node
+	resolvedNode.AuthType = authType
+	authMethods, credential, err := sshutil.BuildSSHAuthForPurpose(resolvedNode, nil, purpose)
+	if err == nil {
+		return authMethods, credential, nil
+	}
 
 	switch authType {
 	case "key":
-		keyContent, _, credential, err := resolveNodePrivateKeyForPurpose(node, purpose)
-		if err != nil {
-			return nil, credential, err
-		}
-		if keyContent == "" {
+		message := err.Error()
+		if strings.Contains(message, "密钥认证模式下") {
 			return nil, credential, fmt.Errorf("密钥认证未配置")
 		}
-		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
+		if strings.Contains(message, "私钥校验失败") {
 			return nil, credential, fmt.Errorf("私钥校验失败")
 		}
-		signer, err := ssh.ParsePrivateKey([]byte(normalizedKey))
-		if err != nil {
-			return nil, credential, fmt.Errorf("解析私钥失败: %w", err)
-		}
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
-		return authMethods, credential, nil
+		return nil, credential, err
 	case "password":
-		credential := sshutil.ResolvedCredential{Kind: "password", Source: "node.password"}
-		if node.Password == "" {
+		if strings.Contains(err.Error(), "密码认证模式下") {
 			return nil, credential, fmt.Errorf("密码认证未配置密码")
 		}
-		authMethods = append(authMethods, ssh.Password(node.Password))
-		return authMethods, credential, nil
+		return nil, credential, err
 	default:
-		return nil, sshutil.ResolvedCredential{}, fmt.Errorf("不支持的认证方式: %s", authType)
+		return nil, credential, fmt.Errorf("不支持的认证方式: %s", authType)
 	}
+}
+
+func runtimeCredentialAuditSafeError(stage string, err error) string {
+	if err == nil {
+		return ""
+	}
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		return "operation failed"
+	}
+	return fmt.Sprintf("%s failed", stage)
 }
 
 func writeRuntimeCredentialAudit(ctx context.Context, node model.Node, purpose string, credential sshutil.ResolvedCredential, outcome string, stage string, err error, latencyMs int64) {
@@ -105,6 +110,9 @@ func writeRuntimeCredentialAudit(ctx context.Context, node model.Node, purpose s
 	metadata := map[string]any{
 		"stage":     stage,
 		"auth_type": strings.ToLower(strings.TrimSpace(node.AuthType)),
+	}
+	if strings.TrimSpace(credential.Provider) != "" {
+		metadata["provider"] = credential.Provider
 	}
 	if latencyMs > 0 {
 		metadata["latency_ms"] = latencyMs
@@ -129,7 +137,7 @@ func writeRuntimeCredentialAudit(ctx context.Context, node model.Node, purpose s
 		event.CredentialSource = "unknown"
 	}
 	if err != nil {
-		event.ErrorMessage = err.Error()
+		event.ErrorMessage = runtimeCredentialAuditSafeError(stage, err)
 	}
 	if writeErr := credentialaudit.WriteRuntime(ctx, event); writeErr != nil {
 		logger.Module("credential_audit").Warn().Err(writeErr).
