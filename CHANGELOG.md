@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.13](https://github.com/xiangnan0811/xirang/compare/v0.43.12...v0.43.13) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** route executor ssh through local provider ([ca37eda](https://github.com/xiangnan0811/xirang/commit/ca37edab5a6777eea5c2834da4a407a8cef8b196))
+
 ## [0.43.12](https://github.com/xiangnan0811/xirang/compare/v0.43.11...v0.43.12) (2026-05-22)
 
 
