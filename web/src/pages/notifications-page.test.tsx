@@ -25,20 +25,33 @@ const {
   mockRetryDelivery,
   mockGetAlertUnreadCount,
   mockTriggerTask,
+  mockRequestTaskManualTriggerCredentialGrant,
   mockGetAlerts,
-} = vi.hoisted(() => ({
-  toastSuccessMock: vi.fn(),
-  toastErrorMock: vi.fn(),
-  mockGetAlertsPaginated: vi.fn(),
-  mockAckAlert: vi.fn(),
-  mockResolveAlert: vi.fn(),
-  mockResolveAlertsBulk: vi.fn(),
-  mockGetAlertDeliveries: vi.fn(),
-  mockRetryDelivery: vi.fn(),
-  mockGetAlertUnreadCount: vi.fn(),
-  mockTriggerTask: vi.fn(),
-  mockGetAlerts: vi.fn(),
-}));
+  useStepUpActionMock,
+  oneShotStepUpOptions,
+} = vi.hoisted(() => {
+  const stepUpHookMock = vi.fn((options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+    stepUpHookMock.lastOptions = options;
+    return action("step-up-marker");
+  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+
+  return {
+    toastSuccessMock: vi.fn(),
+    toastErrorMock: vi.fn(),
+    mockGetAlertsPaginated: vi.fn(),
+    mockAckAlert: vi.fn(),
+    mockResolveAlert: vi.fn(),
+    mockResolveAlertsBulk: vi.fn(),
+    mockGetAlertDeliveries: vi.fn(),
+    mockRetryDelivery: vi.fn(),
+    mockGetAlertUnreadCount: vi.fn(),
+    mockTriggerTask: vi.fn(),
+    mockRequestTaskManualTriggerCredentialGrant: vi.fn(),
+    mockGetAlerts: vi.fn(),
+    useStepUpActionMock: stepUpHookMock,
+    oneShotStepUpOptions: { persist: false, reuseCached: false },
+  };
+});
 
 /* ---------- context ref ---------- */
 
@@ -97,6 +110,10 @@ vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
+vi.mock("@/hooks/use-step-up-action", () => ({
+  useStepUpAction: useStepUpActionMock,
+}));
+
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     getAlertsPaginated: mockGetAlertsPaginated,
@@ -106,6 +123,7 @@ vi.mock("@/lib/api/client", () => ({
     getAlertDeliveries: mockGetAlertDeliveries,
     getAlertUnreadCount: mockGetAlertUnreadCount,
     triggerTask: mockTriggerTask,
+    requestTaskManualTriggerCredentialGrant: mockRequestTaskManualTriggerCredentialGrant,
     getAlerts: mockGetAlerts,
     getAlert: vi.fn().mockRejectedValue(new Error("not found")),
     // Lazy-fetched for the "+N 条同类" badge when a delivery panel opens.
@@ -197,6 +215,7 @@ function setupDefaultMocks() {
     warning: 0,
   });
   mockTriggerTask.mockResolvedValue({ runId: 1 });
+  mockRequestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
   mockGetAlerts.mockResolvedValue([]);
 }
 
@@ -321,6 +340,9 @@ describe("NotificationsPage", () => {
     mockRetryDelivery.mockReset();
     mockGetAlertUnreadCount.mockReset();
     mockTriggerTask.mockReset();
+    mockRequestTaskManualTriggerCredentialGrant.mockReset();
+    useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastOptions = undefined;
     mockGetAlerts.mockReset();
     setupDefaultMocks();
     createContext();
@@ -418,6 +440,28 @@ describe("NotificationsPage", () => {
     });
     expect(toastSuccessMock).toHaveBeenCalledWith("\u8282\u70B9\u300Cnode-1\u300D\u5DF2\u6062\u590D 2 \u6761\u544A\u8B66");
     expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(2);
+  });
+
+  it("\u544A\u8B66\u4E00\u952E\u91CD\u8BD5\u4F1A\u5148\u7533\u8BF7\u4EFB\u52A1\u7EA7\u6388\u6743\uFF0C\u518D\u89E6\u53D1\u4EFB\u52A1", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    render(<NotificationsPage />);
+    expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "\u4E00\u952E\u91CD\u8BD5" })[0]);
+
+    await waitFor(() => {
+      expect(mockRequestTaskManualTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
+        taskId: 101,
+        reason: "\u624B\u52A8\u89E6\u53D1\u4EFB\u52A1 #101",
+        requestedTtlSeconds: 600,
+      }, "step-up-marker");
+    });
+    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
+    expect(mockTriggerTask).toHaveBeenCalledWith("test-token", 101, "step-up-marker");
+    expect(mockRequestTaskManualTriggerCredentialGrant.mock.invocationCallOrder[0]).toBeLessThan(mockTriggerTask.mock.invocationCallOrder[0]);
+    expect(toastSuccessMock).toHaveBeenCalledWith("\u4EFB\u52A1 #101 \u5DF2\u89E6\u53D1\u91CD\u8BD5");
   });
 
   it("\u6295\u9012\u8BB0\u5F55\u901A\u8FC7\u66F4\u591A\u83DC\u5355\u5C55\u5F00\u4E14\u6309\u9700\u52A0\u8F7D", async () => {

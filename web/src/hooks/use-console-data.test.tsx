@@ -3,53 +3,62 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
 import { useConsoleData } from "./use-console-data";
 
-const { apiClientMock } = vi.hoisted(() => ({
-  apiClientMock: {
-    getNodes: vi.fn(),
-    getPolicies: vi.fn(),
-    getTasks: vi.fn(),
-    getAlerts: vi.fn(),
-    getSSHKeys: vi.fn(),
-    getIntegrations: vi.fn(),
-    getOverviewSummary: vi.fn(),
-    getOverviewTraffic: vi.fn(),
-    createNode: vi.fn(),
-    updateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    deleteNodes: vi.fn(),
-    testNodeConnection: vi.fn(),
-    createSSHKey: vi.fn(),
-    updateSSHKey: vi.fn(),
-    deleteSSHKey: vi.fn(),
-    createTask: vi.fn(),
-    updateTask: vi.fn(),
-    deleteTask: vi.fn(),
-    triggerTask: vi.fn(),
-    cancelTask: vi.fn(),
-    retryTask: vi.fn(),
-    getTask: vi.fn(),
-    requestTaskManualTriggerCredentialGrant: vi.fn(),
-    getTaskLogs: vi.fn(),
-    createPolicy: vi.fn(),
-    updatePolicy: vi.fn(),
-    deletePolicy: vi.fn(),
-    togglePolicy: vi.fn(),
-    updatePolicySchedule: vi.fn(),
-    addIntegration: vi.fn(),
-    removeIntegration: vi.fn(),
-    toggleIntegration: vi.fn(),
-    updateIntegration: vi.fn(),
-    patchIntegration: vi.fn(),
-    retryAlert: vi.fn(),
-    acknowledgeAlert: vi.fn(),
-    resolveAlert: vi.fn(),
-    getAlertDeliveries: vi.fn(),
-    getAlertDeliveryStats: vi.fn(),
-    retryAlertDelivery: vi.fn(),
-    retryFailedAlertDeliveries: vi.fn(),
-    testIntegration: vi.fn(),
-  },
-}));
+const { apiClientMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
+  const stepUpHookMock = vi.fn((options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+    stepUpHookMock.lastOptions = options;
+    return action();
+  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+
+  return {
+    oneShotStepUpOptions: { persist: false, reuseCached: false },
+    useStepUpActionMock: stepUpHookMock,
+    apiClientMock: {
+      getNodes: vi.fn(),
+      getPolicies: vi.fn(),
+      getTasks: vi.fn(),
+      getAlerts: vi.fn(),
+      getSSHKeys: vi.fn(),
+      getIntegrations: vi.fn(),
+      getOverviewSummary: vi.fn(),
+      getOverviewTraffic: vi.fn(),
+      createNode: vi.fn(),
+      updateNode: vi.fn(),
+      deleteNode: vi.fn(),
+      deleteNodes: vi.fn(),
+      testNodeConnection: vi.fn(),
+      createSSHKey: vi.fn(),
+      updateSSHKey: vi.fn(),
+      deleteSSHKey: vi.fn(),
+      createTask: vi.fn(),
+      updateTask: vi.fn(),
+      deleteTask: vi.fn(),
+      triggerTask: vi.fn(),
+      cancelTask: vi.fn(),
+      retryTask: vi.fn(),
+      getTask: vi.fn(),
+      requestTaskManualTriggerCredentialGrant: vi.fn(),
+      getTaskLogs: vi.fn(),
+      createPolicy: vi.fn(),
+      updatePolicy: vi.fn(),
+      deletePolicy: vi.fn(),
+      togglePolicy: vi.fn(),
+      updatePolicySchedule: vi.fn(),
+      addIntegration: vi.fn(),
+      removeIntegration: vi.fn(),
+      toggleIntegration: vi.fn(),
+      updateIntegration: vi.fn(),
+      patchIntegration: vi.fn(),
+      retryAlert: vi.fn(),
+      acknowledgeAlert: vi.fn(),
+      resolveAlert: vi.fn(),
+      getAlertDeliveries: vi.fn(),
+      getAlertDeliveryStats: vi.fn(),
+      retryAlertDelivery: vi.fn(),
+      retryFailedAlertDeliveries: vi.fn(),
+      testIntegration: vi.fn(),
+    },
+  };
+});
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -83,7 +92,7 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 vi.mock("@/hooks/use-step-up-action", () => ({
-  useStepUpAction: () => async <T,>(action: (proof?: string) => Promise<T>) => action(),
+  useStepUpAction: useStepUpActionMock,
 }));
 
 function createNode(id: number, name: string): NodeRecord {
@@ -170,6 +179,7 @@ function createTrafficSeries(window: OverviewTrafficSeries["window"] = "1h"): Ov
 describe("useConsoleData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useStepUpActionMock.lastOptions = undefined;
     apiClientMock.getPolicies.mockResolvedValue([]);
     apiClientMock.getTasks.mockResolvedValue([]);
     apiClientMock.getAlerts.mockResolvedValue([]);
@@ -304,6 +314,7 @@ describe("useConsoleData", () => {
       await result.current.triggerTask(202);
     });
 
+    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
     expect(apiClientMock.requestTaskManualTriggerCredentialGrant).toHaveBeenCalledWith("token-1", {
       taskId: 202,
       reason: "手动触发任务 #202",

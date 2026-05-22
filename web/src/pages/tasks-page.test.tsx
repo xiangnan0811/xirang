@@ -7,13 +7,23 @@ import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
-const { apiClientMock, withStepUpMock } = vi.hoisted(() => ({
-  apiClientMock: {
-    requestTaskBatchTriggerCredentialGrant: vi.fn(),
-    batchTriggerTasks: vi.fn(),
-  },
-  withStepUpMock: vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker")),
-}));
+const { apiClientMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
+  const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
+  const stepUpHookMock = vi.fn((options?: unknown) => {
+    stepUpHookMock.lastOptions = options;
+    return withStepUpMock;
+  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+
+  return {
+    apiClientMock: {
+      requestTaskBatchTriggerCredentialGrant: vi.fn(),
+      batchTriggerTasks: vi.fn(),
+    },
+    withStepUpMock,
+    useStepUpActionMock: stepUpHookMock,
+    oneShotStepUpOptions: { persist: false, reuseCached: false },
+  };
+});
 
 const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
@@ -134,7 +144,7 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 vi.mock("@/hooks/use-step-up-action", () => ({
-  useStepUpAction: () => withStepUpMock,
+  useStepUpAction: useStepUpActionMock,
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
@@ -254,6 +264,8 @@ describe("TasksPage", () => {
     apiClientMock.batchTriggerTasks.mockResolvedValue({ successCount: 2, total: 2 });
     withStepUpMock.mockClear();
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
+    useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastOptions = undefined;
     createContext();
   });
 
@@ -477,6 +489,8 @@ describe("TasksPage", () => {
 
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ title: "批量触发任务" }));
     expect(withStepUpMock).toHaveBeenCalledTimes(1);
+    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
+    expect(withStepUpMock).toHaveBeenCalledWith(expect.any(Function));
     expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
       taskIds: [102, 101],
       reason: "批量触发 2 个任务",

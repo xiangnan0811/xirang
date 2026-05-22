@@ -136,8 +136,8 @@ describe("CredentialAccessGrantsPage", () => {
     await user.type(screen.getByPlaceholderText("按申请人过滤"), "  admin  ");
     await user.selectOptions(screen.getByLabelText("按申请人角色过滤凭据临时授权"), "admin");
     await user.type(screen.getByPlaceholderText("申请人用户 ID"), "7");
-    await user.selectOptions(screen.getByLabelText("按授权动作过滤"), "task.restore_trigger");
-    await user.selectOptions(screen.getByLabelText("按授权用途过滤"), "task_restore");
+    await user.selectOptions(screen.getByLabelText("按授权动作过滤"), "batch_command.create");
+    await user.selectOptions(screen.getByLabelText("按授权用途过滤"), "batch_command");
     await user.selectOptions(screen.getByLabelText("按授权状态过滤"), "revoked");
     await user.type(screen.getByPlaceholderText("节点 ID"), "10");
     await user.type(screen.getByPlaceholderText("任务 ID"), "102");
@@ -152,8 +152,8 @@ describe("CredentialAccessGrantsPage", () => {
         requesterUsername: "admin",
         requesterRole: "admin",
         requesterUserId: 7,
-        action: "task.restore_trigger",
-        purpose: "task_restore",
+        action: "batch_command.create",
+        purpose: "batch_command",
         status: "revoked",
         nodeId: 10,
         taskId: 102,

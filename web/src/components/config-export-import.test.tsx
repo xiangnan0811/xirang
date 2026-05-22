@@ -89,6 +89,7 @@ describe("ConfigExportImport", () => {
     await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
 
     await waitFor(() => expect(requestConfigImportCredentialGrantMock).toHaveBeenCalledTimes(1));
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith({ persist: false, reuseCached: false });
     expect(apiClient.requestConfigImportCredentialGrant).toHaveBeenCalledWith(
       "auth-marker",
       { reason: "例行恢复", requestedTtlSeconds: 600 },
@@ -122,6 +123,7 @@ describe("ConfigExportImport", () => {
     await user.click(screen.getByRole("button", { name: "申请授权并导出" }));
 
     await waitFor(() => expect(requestConfigExportCredentialGrantMock).toHaveBeenCalledTimes(1));
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith({ persist: false, reuseCached: false });
     expect(apiClient.requestConfigExportCredentialGrant).toHaveBeenCalledWith(
       "auth-marker",
       { reason: "例行导出", requestedTtlSeconds: 600 },

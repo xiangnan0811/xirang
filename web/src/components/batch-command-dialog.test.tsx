@@ -5,16 +5,26 @@ import { apiClient } from "@/lib/api/client";
 import { BatchCommandDialog } from "./batch-command-dialog";
 import type { NodeRecord } from "@/types/domain";
 
-const { requestBatchCommandCredentialGrantMock, createBatchCommandMock, withStepUpMock, onOpenChangeMock, onSuccessMock } = vi.hoisted(() => ({
-  requestBatchCommandCredentialGrantMock: vi.fn(),
-  createBatchCommandMock: vi.fn(),
-  withStepUpMock: vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker")),
-  onOpenChangeMock: vi.fn(),
-  onSuccessMock: vi.fn(),
-}));
+const { requestBatchCommandCredentialGrantMock, createBatchCommandMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions, onOpenChangeMock, onSuccessMock } = vi.hoisted(() => {
+  const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
+  const stepUpHookMock = vi.fn((options?: unknown) => {
+    stepUpHookMock.lastOptions = options;
+    return withStepUpMock;
+  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+
+  return {
+    requestBatchCommandCredentialGrantMock: vi.fn(),
+    createBatchCommandMock: vi.fn(),
+    withStepUpMock,
+    useStepUpActionMock: stepUpHookMock,
+    oneShotStepUpOptions: { persist: false, reuseCached: false },
+    onOpenChangeMock: vi.fn(),
+    onSuccessMock: vi.fn(),
+  };
+});
 
 vi.mock("@/hooks/use-step-up-action", () => ({
-  useStepUpAction: () => withStepUpMock,
+  useStepUpAction: useStepUpActionMock,
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -73,6 +83,8 @@ describe("BatchCommandDialog", () => {
     requestBatchCommandCredentialGrantMock.mockResolvedValue([{ id: 11, status: "active" }]);
     createBatchCommandMock.mockResolvedValue({ batchId: "batch-1", retain: false });
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
+    useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastOptions = undefined;
   });
 
   it("requests node-scoped grant before creating a batch command without storing command material", async () => {
@@ -92,6 +104,8 @@ describe("BatchCommandDialog", () => {
     await user.click(screen.getByRole("button", { name: "执行" }));
 
     await waitFor(() => expect(requestBatchCommandCredentialGrantMock).toHaveBeenCalledTimes(1));
+    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
+    expect(withStepUpMock).toHaveBeenCalledWith(expect.any(Function));
     expect(apiClient.requestBatchCommandCredentialGrant).toHaveBeenCalledWith("auth-marker", {
       nodeIds: [1, 2],
       reason: "批量操作 2 个节点",

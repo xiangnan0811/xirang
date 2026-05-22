@@ -1,9 +1,13 @@
 import { useCallback } from "react";
 import { useAuth } from "@/context/auth-context.hooks";
+import type { StepUpProofOptions } from "@/context/auth-context.shared";
 import { isStepUpRequiredError } from "@/lib/api/core";
 
-export function useStepUpAction() {
+export function useStepUpAction(options?: StepUpProofOptions) {
   const { ensureStepUpProof, clearStepUpProof } = useAuth();
+  const hasOptions = options?.persist !== undefined || options?.reuseCached !== undefined;
+  const persist = options?.persist;
+  const reuseCached = options?.reuseCached;
 
   return useCallback(async <T,>(action: (stepUpProof?: string) => Promise<T>): Promise<T> => {
     try {
@@ -12,7 +16,9 @@ export function useStepUpAction() {
       if (!isStepUpRequiredError(error)) {
         throw error;
       }
-      const proof = await ensureStepUpProof();
+      const proof = hasOptions
+        ? await ensureStepUpProof({ persist, reuseCached })
+        : await ensureStepUpProof();
       try {
         return await action(proof);
       } catch (retryError) {
@@ -22,5 +28,5 @@ export function useStepUpAction() {
         throw retryError;
       }
     }
-  }, [clearStepUpProof, ensureStepUpProof]);
+  }, [clearStepUpProof, ensureStepUpProof, hasOptions, persist, reuseCached]);
 }
