@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-22-p4-credential-broker-foundation/prd.md","reason":"Acceptance criteria and Definition of Done for the P4 broker foundation slice."}
+{"file":".trellis/tasks/05-22-p4-credential-broker-foundation/research/current-credential-resolution.md","reason":"Checklist for current credential paths, control order, seam candidates, affected tests, and risks to preserve."}
+{"file":".trellis/tasks/05-22-p4-credential-broker-foundation/research/broker-foundation-patterns.md","reason":"Checklist for keeping the provider seam local-only, no-migration, no-deployment-change, and future-compatible."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security regression checklist for SSH scope, credential audit metadata, grant-before-resolution behavior, and fail-closed enforcement."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check GORM hooks/encrypted fields are preserved and no migrations/schema drift are introduced."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check new code/tests do not log or persist decrypted secrets, executor config, command/output, endpoints, or host-sensitive values."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Check no external provider runtime, env var, compose, or deployment documentation changes are introduced."}

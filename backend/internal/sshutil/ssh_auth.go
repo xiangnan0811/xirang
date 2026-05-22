@@ -34,36 +34,7 @@ func ResolveKeyContent(node model.Node, db *gorm.DB) (string, string, error) {
 // ResolveKeyContentForPurpose resolves private key content and enforces managed
 // SSHKey least-privilege metadata when the key comes from ssh_keys.
 func ResolveKeyContentForPurpose(node model.Node, db *gorm.DB, purpose string) (string, string, ResolvedCredential, error) {
-	if node.SSHKey != nil {
-		if key := strings.TrimSpace(node.SSHKey.PrivateKey); key != "" {
-			credential := credentialFromSSHKey(node.SSHKeyID, node.SSHKey.ID)
-			if err := ValidateSSHKeyScope(*node.SSHKey, node, purpose); err != nil {
-				return "", credential.Source, credential, err
-			}
-			return key, credential.Source, credential, nil
-		}
-	}
-
-	if node.SSHKeyID != nil {
-		keyID := *node.SSHKeyID
-		credential := credentialFromSSHKey(&keyID, keyID)
-		var key model.SSHKey
-		if err := db.First(&key, keyID).Error; err != nil {
-			return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥不存在，请重新选择")
-		}
-		if err := ValidateSSHKeyScope(key, node, purpose); err != nil {
-			return "", credential.Source, credential, err
-		}
-		if content := strings.TrimSpace(key.PrivateKey); content != "" {
-			return content, credential.Source, credential, nil
-		}
-		return "", credential.Source, credential, fmt.Errorf("节点绑定的密钥内容为空，请重新配置")
-	}
-
-	if content := strings.TrimSpace(node.PrivateKey); content != "" {
-		return content, "node.private_key", ResolvedCredential{Kind: "node_private_key", Source: "node.private_key"}, nil
-	}
-	return "", "", ResolvedCredential{}, nil
+	return DefaultCredentialProvider().ResolveKeyContentForPurpose(node, db, purpose)
 }
 
 // BuildSSHAuth builds SSH authentication methods for a node.
@@ -85,36 +56,7 @@ func BuildSSHAuthWithKey(node model.Node, db *gorm.DB) ([]ssh.AuthMethod, string
 }
 
 func BuildSSHAuthWithKeyForPurpose(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, string, ResolvedCredential, error) {
-	switch node.AuthType {
-	case "password":
-		if node.Password == "" {
-			return nil, "", ResolvedCredential{Kind: "password", Source: "node.password"}, fmt.Errorf("密码认证模式下请填写密码")
-		}
-		return []ssh.AuthMethod{ssh.Password(node.Password)}, "", ResolvedCredential{Kind: "password", Source: "node.password"}, nil
-	case "key":
-		keyContent, keySource, credential, resolveErr := ResolveKeyContentForPurpose(node, db, purpose)
-		if resolveErr != nil {
-			return nil, "", credential, resolveErr
-		}
-		if keyContent == "" {
-			return nil, "", credential, fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
-		}
-		preparedKey, _, err := ValidateAndPreparePrivateKey(keyContent, SSHKeyTypeAuto)
-		if err != nil {
-			if strings.TrimSpace(keySource) == "" {
-				keySource = "unknown"
-			}
-			return nil, "", credential, fmt.Errorf("私钥校验失败(来源: %s)，请检查密钥内容是否正确", keySource)
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(preparedKey))
-		if err != nil {
-			return nil, "", credential, fmt.Errorf("解析私钥失败")
-		}
-		markSSHKeyLastUsed(db, credential)
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, preparedKey, credential, nil
-	default:
-		return nil, "", ResolvedCredential{}, fmt.Errorf("不支持的认证方式")
-	}
+	return DefaultCredentialProvider().BuildSSHAuthWithKeyForPurpose(node, db, purpose)
 }
 
 func BuildSSHAuthWithCredential(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, ResolvedCredential, error) {
@@ -135,7 +77,7 @@ func credentialFromSSHKey(nodeSSHKeyID *uint, keyID uint) ResolvedCredential {
 	if nodeSSHKeyID != nil && *nodeSSHKeyID != 0 {
 		resolvedID = *nodeSSHKeyID
 	}
-	return ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), KeyID: &resolvedID}
+	return ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), Provider: CredentialProviderLocal, KeyID: &resolvedID}
 }
 
 // ResolveSSHHostKeyCallback returns the host key callback based on env config.

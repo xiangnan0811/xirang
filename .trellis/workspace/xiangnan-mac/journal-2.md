@@ -137,3 +137,36 @@ Reviewed remaining P3 grant-control gaps, closed route/UI/proof-path coverage is
 ### Next Steps
 
 - None - task complete
+
+
+## Session 63: P4 credential broker foundation
+
+**Date**: 2026-05-22
+**Task**: P4 credential broker foundation
+**Branch**: `security/p4-credential-broker-foundation`
+
+### Summary
+
+Added a local credential provider seam for SSH auth resolution with safe provider metadata, preserving encrypted local storage, SSH key scope checks, inline key/password behavior, and LastUsedAt updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c36a479` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
