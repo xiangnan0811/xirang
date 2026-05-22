@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.8](https://github.com/xiangnan0811/xirang/compare/v0.43.7...v0.43.8) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** gate task restore with JIT grants ([f832359](https://github.com/xiangnan0811/xirang/commit/f832359dd910c9a018d9431a44bc190404413a43))
+
 ## [0.43.7](https://github.com/xiangnan0811/xirang/compare/v0.43.6...v0.43.7) (2026-05-21)
 
 
