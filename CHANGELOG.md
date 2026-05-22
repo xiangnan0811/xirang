@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.10](https://github.com/xiangnan0811/xirang/compare/v0.43.9...v0.43.10) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** enforce owned resource grant semantics ([a7ed3ca](https://github.com/xiangnan0811/xirang/commit/a7ed3ca9e7a5a24330c134bec9a8d945a5300dc2))
+
 ## [0.43.9](https://github.com/xiangnan0811/xirang/compare/v0.43.8...v0.43.9) (2026-05-22)
 
 
