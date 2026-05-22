@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-22-p3-comprehensive-security-review/prd.md","reason":"Current task requirements, P3 completion judgement, review scope, acceptance criteria, and out-of-scope P4 boundary."}
+{"file":".trellis/tasks/05-22-p3-comprehensive-security-review/research/p3-roadmap-completion.md","reason":"Roadmap evidence for completed P3 slices, remaining candidates, and why comprehensive review is the right next step."}
+{"file":".trellis/tasks/05-22-p3-comprehensive-security-review/research/p3-code-gap-audit.md","reason":"Code audit findings that identify concrete review gaps to close in this implementation slice."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Authoritative backend security contract for credential grants, step-up, audit metadata safety, and fail-closed enforcement."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend grant and step-up storage contract, including one-shot proof behavior and no grant/proof persistence rules."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend grant DTO/domain mapping, unknown fallback behavior, and safe error/status handling requirements."}
