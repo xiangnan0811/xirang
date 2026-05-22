@@ -57,9 +57,10 @@ var KnownPurposes = []string{
 // ResolvedCredential describes which credential source was selected without
 // exposing the secret material.
 type ResolvedCredential struct {
-	Kind   string
-	Source string
-	KeyID  *uint
+	Kind     string
+	Source   string
+	Provider string
+	KeyID    *uint
 }
 
 func NormalizePurpose(purpose string) string {
