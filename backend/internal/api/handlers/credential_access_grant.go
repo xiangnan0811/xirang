@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -54,6 +55,19 @@ var (
 	ErrCredentialGrantRevoked  = errors.New("credential access grant revoked")
 	ErrCredentialGrantDenied   = errors.New("credential access grant denied")
 )
+
+var credentialGrantAllowedSorts = map[string]bool{
+	"id":                 true,
+	"created_at":         true,
+	"updated_at":         true,
+	"requested_at":       true,
+	"expires_at":         true,
+	"status":             true,
+	"action":             true,
+	"purpose":            true,
+	"requester_username": true,
+	"requester_role":     true,
+}
 
 type CredentialAccessGrantHandler struct {
 	db         *gorm.DB
@@ -119,6 +133,25 @@ type credentialGrantDTO struct {
 
 func NewCredentialAccessGrantHandler(db *gorm.DB, jwtManager *auth.JWTManager) *CredentialAccessGrantHandler {
 	return &CredentialAccessGrantHandler{db: db, jwtManager: jwtManager}
+}
+
+func (h *CredentialAccessGrantHandler) List(c *gin.Context) {
+	query := h.buildListQuery(c)
+	pg := parsePagination(c, 50, "created_at", credentialGrantAllowedSorts)
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	var items []model.CredentialAccessGrant
+	if err := applyPagination(query, pg).Find(&items).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	respondPaginated(c, toCredentialGrantDTOs(items), total, pg.Page, pg.PageSize)
 }
 
 func (h *CredentialAccessGrantHandler) RequestTerminalGrant(c *gin.Context) {
@@ -601,24 +634,86 @@ func normalizeCredentialGrantTTL(seconds int) (time.Duration, error) {
 	return ttl, nil
 }
 
+func (h *CredentialAccessGrantHandler) buildListQuery(c *gin.Context) *gorm.DB {
+	query := h.db.Model(&model.CredentialAccessGrant{})
+
+	for _, item := range []struct {
+		param  string
+		column string
+	}{
+		{param: "status", column: "status"},
+		{param: "action", column: "action"},
+		{param: "purpose", column: "purpose"},
+		{param: "requester_username", column: "requester_username"},
+		{param: "requester_role", column: "requester_role"},
+	} {
+		if value := strings.TrimSpace(c.Query(item.param)); value != "" {
+			query = query.Where(item.column+" = ?", value)
+		}
+	}
+
+	for _, item := range []struct {
+		param  string
+		column string
+	}{
+		{param: "requester_user_id", column: "requester_user_id"},
+		{param: "node_id", column: "node_id"},
+		{param: "task_id", column: "task_id"},
+		{param: "policy_id", column: "policy_id"},
+	} {
+		if value, ok := parseCredentialGrantUintQuery(c, item.param); ok {
+			query = query.Where(item.column+" = ?", value)
+		}
+	}
+
+	if from := parseRFC3339(c.Query("from")); !from.IsZero() {
+		query = query.Where("created_at >= ?", from)
+	}
+	if to := parseRFC3339(c.Query("to")); !to.IsZero() {
+		query = query.Where("created_at <= ?", to)
+	}
+
+	return query
+}
+
+func parseCredentialGrantUintQuery(c *gin.Context, key string) (uint, bool) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		return 0, false
+	}
+	return uint(value), true
+}
+
+func toCredentialGrantDTOs(grants []model.CredentialAccessGrant) []credentialGrantDTO {
+	out := make([]credentialGrantDTO, 0, len(grants))
+	for _, grant := range grants {
+		out = append(out, toCredentialGrantDTO(grant))
+	}
+	return out
+}
+
 func toCredentialGrantDTO(grant model.CredentialAccessGrant) credentialGrantDTO {
 	return credentialGrantDTO{
 		ID:                  grant.ID,
 		RequesterUserID:     grant.RequesterUserID,
-		RequesterUsername:   grant.RequesterUsername,
-		RequesterRole:       grant.RequesterRole,
-		Action:              grant.Action,
-		Purpose:             grant.Purpose,
+		RequesterUsername:   normalizeCredentialGrantIdentity(grant.RequesterUsername, 64),
+		RequesterRole:       normalizeCredentialGrantIdentity(grant.RequesterRole, 32),
+		Action:              normalizeCredentialGrantIdentity(grant.Action, 64),
+		Purpose:             normalizeCredentialGrantIdentity(grant.Purpose, 64),
 		NodeID:              grant.NodeID,
 		TaskID:              grant.TaskID,
 		PolicyID:            grant.PolicyID,
-		Reason:              grant.Reason,
-		Status:              grant.Status,
+		Reason:              sanitizeCredentialGrantReasonForOutput(grant.Reason),
+		Status:              normalizeCredentialGrantIdentity(grant.Status, 32),
 		RequestedTTLSeconds: grant.RequestedTTLSeconds,
 		RequestedAt:         grant.RequestedAt,
 		ApprovedAt:          grant.ApprovedAt,
 		ApproverUserID:      grant.ApproverUserID,
-		ApproverUsername:    grant.ApproverUsername,
+		ApproverUsername:    normalizeCredentialGrantIdentity(grant.ApproverUsername, 64),
 		ExpiresAt:           grant.ExpiresAt,
 		RevokedAt:           grant.RevokedAt,
 		RevokedByUserID:     grant.RevokedByUserID,
@@ -797,6 +892,18 @@ func normalizeCredentialGrantIdentity(value string, max int) string {
 	}
 	runes := []rune(clean)
 	return string(runes[:max])
+}
+
+func sanitizeCredentialGrantReasonForOutput(value string) string {
+	clean := sanitizeCredentialGrantFreeText(value)
+	if credentialGrantTextHasSensitiveMarker(clean) {
+		clean = "[REDACTED]"
+	}
+	if utf8.RuneCountInString(clean) > credentialGrantMaxReasonLen {
+		runes := []rune(clean)
+		clean = string(runes[:credentialGrantMaxReasonLen])
+	}
+	return clean
 }
 
 func derefUint(value *uint) uint {

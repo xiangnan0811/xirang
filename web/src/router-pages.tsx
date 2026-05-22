@@ -32,6 +32,9 @@ export const AuditPage = lazy(() =>
 export const CredentialAuditPage = lazy(() =>
   import("@/pages/credential-audit-page").then((m) => ({ default: m.CredentialAuditPage }))
 );
+export const CredentialAccessGrantsPage = lazy(() =>
+  import("@/pages/credential-access-grants-page").then((m) => ({ default: m.CredentialAccessGrantsPage }))
+);
 export const ReportsPage = lazy(() =>
   import("@/pages/reports-page").then((m) => ({ default: m.ReportsPage }))
 );

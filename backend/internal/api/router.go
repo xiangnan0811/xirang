@@ -262,6 +262,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/audit-logs/export", middleware.RBAC("audit:read"), auditHandler.ExportCSV)
 	secured.GET("/credential-audit-events", middleware.RequireRole("admin"), credentialAuditHandler.List)
 	secured.GET("/credential-audit-events/export", middleware.RequireRole("admin"), credentialAuditHandler.ExportCSV)
+	secured.GET("/credential-access-grants", middleware.RequireRole("admin"), credentialAccessGrantHandler.List)
 	secured.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTerminalGrant)
 	secured.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigImportGrant)
 	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)

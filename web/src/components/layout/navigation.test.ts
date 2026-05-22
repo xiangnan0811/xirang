@@ -19,4 +19,10 @@ describe("getVisibleNavItems", () => {
     expect(getVisibleNavItems("operator").some((item) => item.path === "/app/credential-audit")).toBe(false);
     expect(getVisibleNavItems("viewer").some((item) => item.path === "/app/credential-audit")).toBe(false);
   });
+
+  it("keeps credential access grant navigation admin-only", () => {
+    expect(getVisibleNavItems("admin").some((item) => item.path === "/app/credential-access-grants")).toBe(true);
+    expect(getVisibleNavItems("operator").some((item) => item.path === "/app/credential-access-grants")).toBe(false);
+    expect(getVisibleNavItems("viewer").some((item) => item.path === "/app/credential-access-grants")).toBe(false);
+  });
 });

@@ -123,6 +123,14 @@ export const navItems: NavItem[] = [
     adminOnly: true
   },
   {
+    titleKey: "nav.credentialGrants",
+    path: "/app/credential-access-grants",
+    icon: Shield,
+    group: "observe",
+    mobileTab: false,
+    adminOnly: true
+  },
+  {
     titleKey: "nav.reports",
     path: "/app/reports",
     icon: FileText,
