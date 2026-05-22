@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-22-p3-grant-semantics/prd.md","reason":"Current task requirements, accepted scope boundary, target operations, and row-per-resource grant semantics."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Authoritative backend security contract for credential access grants, fail-closed behavior, safe audit metadata, and forbidden sensitive material."}
+{"file":".trellis/tasks/archive/2026-05/05-21-plan-p3-p4-credential-security-hardening/prd.md","reason":"Roadmap context for remaining P3 high-risk REST grant enforcement and P4 exclusions."}
+{"file":".trellis/tasks/archive/2026-05/05-22-select-next-p3-p4-hardening-slice-2/prd.md","reason":"Prior slice selection notes that deferred manual trigger and batch operations pending operator-owned/multi-resource grant semantics."}
+{"file":".trellis/tasks/archive/2026-05/05-22-p3-minimal-grant-status-list/prd.md","reason":"Predecessor grant status/list slice and explicit out-of-scope boundary for this semantics task."}
