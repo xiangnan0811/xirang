@@ -71,3 +71,36 @@ Added admin-only read-only credential grant status/list API and UI with sanitize
 ### Next Steps
 
 - None - task complete
+
+
+## Session 61: P3 grant semantics for owned resources
+
+**Date**: 2026-05-22
+**Task**: P3 grant semantics for owned resources
+**Branch**: `security/p3-grant-semantics`
+
+### Summary
+
+Implemented operator-owned and row-per-resource credential grant semantics for manual task trigger, batch task trigger, and batch command creation with backend/frontend enforcement and regression coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `75c9950` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
