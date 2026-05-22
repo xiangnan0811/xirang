@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.9](https://github.com/xiangnan0811/xirang/compare/v0.43.8...v0.43.9) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** add admin grant status list ([fd25d45](https://github.com/xiangnan0811/xirang/commit/fd25d45deb54c7bfd298de4ac17c87119b6e10fc))
+
 ## [0.43.8](https://github.com/xiangnan0811/xirang/compare/v0.43.7...v0.43.8) (2026-05-22)
 
 
