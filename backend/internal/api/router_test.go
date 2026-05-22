@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -93,6 +94,18 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/terminal") {
 		t.Fatalf("未注册终端凭据临时授权接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/task-manual-trigger") {
+		t.Fatalf("未注册任务手动触发凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/task-batch-trigger") {
+		t.Fatalf("未注册任务批量触发凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/batch-command") {
+		t.Fatalf("未注册批量命令凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/tasks/batch-trigger") {
+		t.Fatalf("未注册任务批量触发接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/alerts/:id/retry-delivery") {
 		t.Fatalf("未注册告警投递重发接口")
 	}
@@ -161,6 +174,54 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	router.ServeHTTP(adminResp, adminReq)
 	if adminResp.Code != http.StatusOK {
 		t.Fatalf("admin 应能访问安全风险摘要接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+
+func TestTaskBatchTriggerStaticRouteUsesBatchHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.SystemSetting{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	jwtManager := auth.NewJWTManager("task-batch-static-route-signing-marker", time.Hour)
+	admin := model.User{Username: "task-batch-static-admin", PasswordHash: "hash-redacted", Role: "admin", TOTPEnabled: true}
+	if err := db.Create(&admin).Error; err != nil {
+		t.Fatalf("创建 admin 失败: %v", err)
+	}
+	token, err := jwtManager.GenerateToken(admin)
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/batch-trigger", strings.NewReader(`{"task_ids":[999999]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("静态批量触发路由应命中 BatchTrigger 而非动态 task id 路由，实际状态码: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Results []struct {
+				TaskID uint   `json:"task_id"`
+				Error  string `json:"error"`
+			} `json:"results"`
+			Total        int `json:"total"`
+			SuccessCount int `json:"success_count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析批量触发响应失败: %v", err)
+	}
+	if payload.Data.Total != 1 || payload.Data.SuccessCount != 0 || len(payload.Data.Results) != 1 || payload.Data.Results[0].Error != "任务不存在" {
+		t.Fatalf("批量触发静态路由响应不符合预期: %+v", payload.Data)
 	}
 }
 

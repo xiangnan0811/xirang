@@ -99,7 +99,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 	}
 	for _, nodeID := range req.NodeIDs {
 		var node model.Node
-		if err := h.db.First(&node, nodeID).Error; err != nil {
+		if err := h.db.Select("id", "name").First(&node, nodeID).Error; err != nil {
 			respondBadRequest(c, fmt.Sprintf("节点 %d 不存在", nodeID))
 			return
 		}
@@ -110,7 +110,14 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		nodes = append(nodes, batchNode{ID: node.ID, Name: node.Name})
 	}
 
-	if !EnforceStepUp(c, h.db, h.jwtManager, "batch_command.create", sshutil.PurposeBatchCommand, "batch_run") {
+	if !EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run") {
+		return
+	}
+	grantNodeIDs := make([]uint, 0, len(nodes))
+	for _, node := range nodes {
+		grantNodeIDs = append(grantNodeIDs, node.ID)
+	}
+	if !EnforceBatchCommandCredentialGrants(c, h.db, grantNodeIDs) {
 		return
 	}
 

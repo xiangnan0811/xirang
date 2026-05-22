@@ -30,13 +30,16 @@ const (
 	CredentialGrantStatusExpired   = "expired"
 	CredentialGrantStatusRevoked   = "revoked"
 
-	CredentialGrantActionTerminalOpen    = "terminal.open"
-	CredentialGrantActionConfigImport    = "config.import"
-	CredentialGrantActionConfigExport    = "config.export"
-	CredentialGrantActionSnapshotRestore = "snapshot.restore"
-	CredentialGrantActionTaskRestore     = "task.restore_trigger"
-	CredentialGrantPurposeConfigImport   = "config_import"
-	CredentialGrantPurposeConfigExport   = "config_export"
+	CredentialGrantActionTerminalOpen      = "terminal.open"
+	CredentialGrantActionConfigImport      = "config.import"
+	CredentialGrantActionConfigExport      = "config.export"
+	CredentialGrantActionSnapshotRestore   = "snapshot.restore"
+	CredentialGrantActionTaskRestore       = "task.restore_trigger"
+	CredentialGrantActionTaskManualTrigger = "task.manual_trigger"
+	CredentialGrantActionTaskBatchTrigger  = "task.batch_trigger"
+	CredentialGrantActionBatchCommand      = "batch_command.create"
+	CredentialGrantPurposeConfigImport     = "config_import"
+	CredentialGrantPurposeConfigExport     = "config_export"
 
 	credentialGrantKind   = "jit_grant"
 	credentialGrantSource = "credential_access_grant"
@@ -98,6 +101,24 @@ type snapshotRestoreCredentialGrantRequest struct {
 
 type taskRestoreCredentialGrantRequest struct {
 	TaskID              uint   `json:"task_id" binding:"required"`
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type taskManualTriggerCredentialGrantRequest struct {
+	TaskID              uint   `json:"task_id" binding:"required"`
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type taskBatchTriggerCredentialGrantRequest struct {
+	TaskIDs             []uint `json:"task_ids" binding:"required,min=1"`
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type batchCommandCredentialGrantRequest struct {
+	NodeIDs             []uint `json:"node_ids" binding:"required,min=1"`
 	Reason              string `json:"reason" binding:"required"`
 	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
 }
@@ -309,6 +330,110 @@ func (h *CredentialAccessGrantHandler) RequestTaskRestoreGrant(c *gin.Context) {
 	respondCreated(c, toCredentialGrantDTO(grant))
 }
 
+func (h *CredentialAccessGrantHandler) RequestTaskManualTriggerGrant(c *gin.Context) {
+	var req taskManualTriggerCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	taskIDs := normalizeCredentialGrantResourceIDs([]uint{req.TaskID})
+	if len(taskIDs) != 1 {
+		respondBadRequest(c, "任务 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run", []string{"admin", "operator"})
+	if !ok {
+		return
+	}
+	if ok := h.authorizeTaskGrantTargets(c, taskIDs); !ok {
+		return
+	}
+
+	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
+		Action:              CredentialGrantActionTaskManualTrigger,
+		Purpose:             sshutil.PurposeTaskCommand,
+		TaskID:              credentialaudit.PtrUint(taskIDs[0]),
+		Reason:              reason,
+		RequestedTTLSeconds: int(ttl.Seconds()),
+	})
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTO(grant))
+}
+
+func (h *CredentialAccessGrantHandler) RequestTaskBatchTriggerGrant(c *gin.Context) {
+	var req taskBatchTriggerCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	taskIDs := normalizeCredentialGrantResourceIDs(req.TaskIDs)
+	if len(taskIDs) == 0 {
+		respondBadRequest(c, "任务 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run", []string{"admin", "operator"})
+	if !ok {
+		return
+	}
+	if ok := h.authorizeTaskGrantTargets(c, taskIDs); !ok {
+		return
+	}
+
+	inputs := make([]credentialGrantCreateInput, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		inputs = append(inputs, credentialGrantCreateInput{
+			Action:              CredentialGrantActionTaskBatchTrigger,
+			Purpose:             sshutil.PurposeTaskCommand,
+			TaskID:              credentialaudit.PtrUint(taskID),
+			Reason:              reason,
+			RequestedTTLSeconds: int(ttl.Seconds()),
+		})
+	}
+	grants, ok := h.createActiveSelfGrants(c, inputs)
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTOs(grants))
+}
+
+func (h *CredentialAccessGrantHandler) RequestBatchCommandGrant(c *gin.Context) {
+	var req batchCommandCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	nodeIDs := normalizeCredentialGrantResourceIDs(req.NodeIDs)
+	if len(nodeIDs) == 0 {
+		respondBadRequest(c, "节点 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run", []string{"admin", "operator"})
+	if !ok {
+		return
+	}
+	if ok := h.authorizeNodeGrantTargets(c, nodeIDs); !ok {
+		return
+	}
+
+	inputs := make([]credentialGrantCreateInput, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		inputs = append(inputs, credentialGrantCreateInput{
+			Action:              CredentialGrantActionBatchCommand,
+			Purpose:             sshutil.PurposeBatchCommand,
+			NodeID:              credentialaudit.PtrUint(nodeID),
+			Reason:              reason,
+			RequestedTTLSeconds: int(ttl.Seconds()),
+		})
+	}
+	grants, ok := h.createActiveSelfGrants(c, inputs)
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTOs(grants))
+}
+
 func (h *CredentialAccessGrantHandler) validateTaskRestoreGrantEligibility(c *gin.Context, taskID uint) bool {
 	var task model.Task
 	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type").First(&task, taskID).Error; err != nil {
@@ -349,6 +474,10 @@ type credentialGrantCreateInput struct {
 }
 
 func (h *CredentialAccessGrantHandler) validateGrantRequest(c *gin.Context, reasonValue string, ttlSeconds int, action, purpose, operation string) (string, time.Duration, bool) {
+	return h.validateGrantRequestForRoles(c, reasonValue, ttlSeconds, action, purpose, operation, []string{"admin"})
+}
+
+func (h *CredentialAccessGrantHandler) validateGrantRequestForRoles(c *gin.Context, reasonValue string, ttlSeconds int, action, purpose, operation string, allowedRoles []string) (string, time.Duration, bool) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("credential grant db unavailable"))
 		return "", 0, false
@@ -356,7 +485,7 @@ func (h *CredentialAccessGrantHandler) validateGrantRequest(c *gin.Context, reas
 	if !enforceStepUpForContext(c, h.db, h.jwtManager, stepUpAuditOperation{Action: action, Purpose: purpose, Operation: operation}) {
 		return "", 0, false
 	}
-	if err := validateGrantRequesterContext(c, h.db); err != nil {
+	if err := validateGrantRequesterContext(c, h.db, allowedRoles); err != nil {
 		respondForbidden(c, "认证状态已变化，请重新登录")
 		return "", 0, false
 	}
@@ -374,32 +503,130 @@ func (h *CredentialAccessGrantHandler) validateGrantRequest(c *gin.Context, reas
 }
 
 func (h *CredentialAccessGrantHandler) createActiveSelfGrant(c *gin.Context, input credentialGrantCreateInput) (model.CredentialAccessGrant, bool) {
+	grants, ok := h.createActiveSelfGrants(c, []credentialGrantCreateInput{input})
+	if !ok || len(grants) == 0 {
+		return model.CredentialAccessGrant{}, ok
+	}
+	return grants[0], true
+}
+
+func (h *CredentialAccessGrantHandler) createActiveSelfGrants(c *gin.Context, inputs []credentialGrantCreateInput) ([]model.CredentialAccessGrant, bool) {
+	if len(inputs) == 0 {
+		respondBadRequest(c, "授权资源不能为空")
+		return nil, false
+	}
 	now := time.Now().UTC()
-	grant := model.CredentialAccessGrant{
-		RequesterUserID:     middleware.CurrentUserID(c),
-		RequesterUsername:   normalizeCredentialGrantIdentity(c.GetString(middleware.CtxUsername), 64),
-		RequesterRole:       normalizeCredentialGrantIdentity(middleware.CurrentRole(c), 32),
-		Action:              input.Action,
-		Purpose:             input.Purpose,
-		NodeID:              input.NodeID,
-		TaskID:              input.TaskID,
-		PolicyID:            input.PolicyID,
-		Reason:              input.Reason,
-		Status:              CredentialGrantStatusActive,
-		RequestedTTLSeconds: input.RequestedTTLSeconds,
-		RequestedAt:         now,
-		ApprovedAt:          &now,
-		ApproverUserID:      credentialaudit.PtrUint(middleware.CurrentUserID(c)),
-		ApproverUsername:    normalizeCredentialGrantIdentity(c.GetString(middleware.CtxUsername), 64),
-		ExpiresAt:           now.Add(time.Duration(input.RequestedTTLSeconds) * time.Second).UTC(),
+	userID := middleware.CurrentUserID(c)
+	username := normalizeCredentialGrantIdentity(c.GetString(middleware.CtxUsername), 64)
+	role := normalizeCredentialGrantIdentity(middleware.CurrentRole(c), 32)
+	grants := make([]model.CredentialAccessGrant, 0, len(inputs))
+	for _, input := range inputs {
+		grants = append(grants, model.CredentialAccessGrant{
+			RequesterUserID:     userID,
+			RequesterUsername:   username,
+			RequesterRole:       role,
+			Action:              input.Action,
+			Purpose:             input.Purpose,
+			NodeID:              input.NodeID,
+			TaskID:              input.TaskID,
+			PolicyID:            input.PolicyID,
+			Reason:              input.Reason,
+			Status:              CredentialGrantStatusActive,
+			RequestedTTLSeconds: input.RequestedTTLSeconds,
+			RequestedAt:         now,
+			ApprovedAt:          &now,
+			ApproverUserID:      credentialaudit.PtrUint(userID),
+			ApproverUsername:    username,
+			ExpiresAt:           now.Add(time.Duration(input.RequestedTTLSeconds) * time.Second).UTC(),
+		})
 	}
-	if err := h.db.WithContext(c.Request.Context()).Create(&grant).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		return tx.Create(&grants).Error
+	}); err != nil {
 		respondInternalError(c, err)
-		return model.CredentialAccessGrant{}, false
+		return nil, false
 	}
-	writeCredentialGrantAudit(c, h.db, grant, credentialaudit.OutcomeSuccess, "request", "requested")
-	writeCredentialGrantAudit(c, h.db, grant, credentialaudit.OutcomeSuccess, "activate", "active")
-	return grant, true
+	for _, grant := range grants {
+		writeCredentialGrantAudit(c, h.db, grant, credentialaudit.OutcomeSuccess, "request", "requested")
+		writeCredentialGrantAudit(c, h.db, grant, credentialaudit.OutcomeSuccess, "activate", "active")
+	}
+	return grants, true
+}
+
+func (h *CredentialAccessGrantHandler) authorizeTaskGrantTargets(c *gin.Context, taskIDs []uint) bool {
+	if len(taskIDs) == 0 {
+		respondBadRequest(c, "任务 ID 无效")
+		return false
+	}
+	tasks := make([]model.Task, 0, len(taskIDs))
+	if err := h.db.WithContext(c.Request.Context()).Select("id", "node_id").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
+		respondInternalError(c, err)
+		return false
+	}
+	if len(tasks) != len(taskIDs) {
+		respondBadRequest(c, "任务不存在")
+		return false
+	}
+	nodeIDs := make([]uint, 0, len(tasks))
+	for _, taskEntity := range tasks {
+		nodeIDs = append(nodeIDs, taskEntity.NodeID)
+	}
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, nodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return false
+	}
+	for _, taskEntity := range tasks {
+		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
+			respondForbidden(c, "无权访问该任务")
+			return false
+		}
+	}
+	return true
+}
+
+func (h *CredentialAccessGrantHandler) authorizeNodeGrantTargets(c *gin.Context, nodeIDs []uint) bool {
+	if len(nodeIDs) == 0 {
+		respondBadRequest(c, "节点 ID 无效")
+		return false
+	}
+	var existing []uint
+	if err := h.db.WithContext(c.Request.Context()).Model(&model.Node{}).Where("id IN ?", nodeIDs).Pluck("id", &existing).Error; err != nil {
+		respondInternalError(c, err)
+		return false
+	}
+	if len(existing) != len(nodeIDs) {
+		respondBadRequest(c, "节点不存在")
+		return false
+	}
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, nodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return false
+	}
+	for _, nodeID := range nodeIDs {
+		if _, ok := allowedNodes[nodeID]; !ok {
+			respondForbidden(c, "无权访问该节点")
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeCredentialGrantResourceIDs(values []uint) []uint {
+	out := make([]uint, 0, len(values))
+	seen := make(map[uint]struct{}, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func EnforceTerminalCredentialGrantForWebSocket(c *gin.Context, db *gorm.DB, claims *auth.Claims, nodeID uint) (*model.CredentialAccessGrant, error) {
@@ -448,6 +675,33 @@ func RequireTaskRestoreCredentialGrant(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+func RequireTaskManualTriggerCredentialGrant(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		taskID, ok := parseID(c, "id")
+		if !ok {
+			c.Abort()
+			return
+		}
+		requireCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionTaskManualTrigger, Purpose: sshutil.PurposeTaskCommand, TaskID: credentialaudit.PtrUint(taskID)}, nil)(c)
+	}
+}
+
+func EnforceTaskBatchTriggerCredentialGrants(c *gin.Context, db *gorm.DB, taskIDs []uint) bool {
+	matches := make([]credentialGrantMatch, 0, len(taskIDs))
+	for _, taskID := range normalizeCredentialGrantResourceIDs(taskIDs) {
+		matches = append(matches, credentialGrantMatch{Action: CredentialGrantActionTaskBatchTrigger, Purpose: sshutil.PurposeTaskCommand, TaskID: credentialaudit.PtrUint(taskID)})
+	}
+	return enforceCredentialGrantMatches(c, db, matches)
+}
+
+func EnforceBatchCommandCredentialGrants(c *gin.Context, db *gorm.DB, nodeIDs []uint) bool {
+	matches := make([]credentialGrantMatch, 0, len(nodeIDs))
+	for _, nodeID := range normalizeCredentialGrantResourceIDs(nodeIDs) {
+		matches = append(matches, credentialGrantMatch{Action: CredentialGrantActionBatchCommand, Purpose: sshutil.PurposeBatchCommand, NodeID: credentialaudit.PtrUint(nodeID)})
+	}
+	return enforceCredentialGrantMatches(c, db, matches)
+}
+
 func requireSystemCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate func(*gin.Context) bool) gin.HandlerFunc {
 	return requireCredentialGrant(db, match, predicate)
 }
@@ -458,23 +712,45 @@ func requireCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate f
 			c.Next()
 			return
 		}
-		claims := claimsFromGinContext(c)
-		grant, err := findActiveCredentialGrant(c.Request.Context(), db, claims, match)
-		if err != nil {
-			if isCredentialGrantDenialError(err) {
-				status := credentialGrantStatusForError(err)
-				writeCredentialGrantBlockedAudit(c, db, claims, match, status)
-				respondCredentialGrantRequired(c, status)
-				c.Abort()
-				return
-			}
-			respondInternalError(c, err)
-			c.Abort()
+		if !enforceCredentialGrantMatch(c, db, claimsFromGinContext(c), match) {
 			return
 		}
-		writeCredentialGrantAuditWithClaims(c, db, claims, *grant, credentialaudit.OutcomeSuccess, "use", "active")
 		c.Next()
 	}
+}
+
+func enforceCredentialGrantMatches(c *gin.Context, db *gorm.DB, matches []credentialGrantMatch) bool {
+	if len(matches) == 0 {
+		writeCredentialGrantBlockedAudit(c, db, claimsFromGinContext(c), credentialGrantMatch{}, credentialGrantStatusForError(ErrCredentialGrantRequired))
+		respondCredentialGrantRequired(c, credentialGrantStatusForError(ErrCredentialGrantRequired))
+		c.Abort()
+		return false
+	}
+	claims := claimsFromGinContext(c)
+	for _, match := range matches {
+		if !enforceCredentialGrantMatch(c, db, claims, match) {
+			return false
+		}
+	}
+	return true
+}
+
+func enforceCredentialGrantMatch(c *gin.Context, db *gorm.DB, claims *auth.Claims, match credentialGrantMatch) bool {
+	grant, err := findActiveCredentialGrant(c.Request.Context(), db, claims, match)
+	if err != nil {
+		if isCredentialGrantDenialError(err) {
+			status := credentialGrantStatusForError(err)
+			writeCredentialGrantBlockedAudit(c, db, claims, match, status)
+			respondCredentialGrantRequired(c, status)
+			c.Abort()
+			return false
+		}
+		respondInternalError(c, err)
+		c.Abort()
+		return false
+	}
+	writeCredentialGrantAuditWithClaims(c, db, claims, *grant, credentialaudit.OutcomeSuccess, "use", "active")
+	return true
 }
 
 func terminalCredentialGrantRequiredCloseReason(reason string) string {
@@ -527,7 +803,7 @@ func findActiveCredentialGrant(ctx context.Context, db *gorm.DB, claims *auth.Cl
 	if err := db.WithContext(ctx).Select("id", "role").First(&user, claims.UserID).Error; err != nil {
 		return nil, err
 	}
-	if user.Role != claims.Role || user.Role != "admin" {
+	if user.Role != claims.Role || !credentialGrantRoleAllowed(user.Role, credentialGrantAllowedRolesForOperation(match.Action, match.Purpose)) {
 		return nil, ErrCredentialGrantInvalid
 	}
 	now := time.Now().UTC()
@@ -561,6 +837,19 @@ func findActiveCredentialGrant(ctx context.Context, db *gorm.DB, claims *auth.Cl
 		return nil, fmt.Errorf("%w: %w", ErrCredentialGrantInvalid, ErrCredentialGrantExpired)
 	}
 	return nil, ErrCredentialGrantRequired
+}
+
+func credentialGrantAllowedRolesForOperation(action, purpose string) []string {
+	switch {
+	case action == CredentialGrantActionTaskManualTrigger && purpose == sshutil.PurposeTaskCommand:
+		return []string{"admin", "operator"}
+	case action == CredentialGrantActionTaskBatchTrigger && purpose == sshutil.PurposeTaskCommand:
+		return []string{"admin", "operator"}
+	case action == CredentialGrantActionBatchCommand && purpose == sshutil.PurposeBatchCommand:
+		return []string{"admin", "operator"}
+	default:
+		return []string{"admin"}
+	}
 }
 
 func latestInactiveCredentialGrantStatus(ctx context.Context, db *gorm.DB, userID uint, requesterRole string, match credentialGrantMatch) (string, error) {
@@ -702,8 +991,8 @@ func toCredentialGrantDTO(grant model.CredentialAccessGrant) credentialGrantDTO 
 		RequesterUserID:     grant.RequesterUserID,
 		RequesterUsername:   normalizeCredentialGrantIdentity(grant.RequesterUsername, 64),
 		RequesterRole:       normalizeCredentialGrantIdentity(grant.RequesterRole, 32),
-		Action:              normalizeCredentialGrantIdentity(grant.Action, 64),
-		Purpose:             normalizeCredentialGrantIdentity(grant.Purpose, 64),
+		Action:              normalizeCredentialGrantCode(grant.Action, 64),
+		Purpose:             normalizeCredentialGrantCode(grant.Purpose, 64),
 		NodeID:              grant.NodeID,
 		TaskID:              grant.TaskID,
 		PolicyID:            grant.PolicyID,
@@ -843,12 +1132,18 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "snapshot_restore"
 	case action == CredentialGrantActionTaskRestore && purpose == sshutil.PurposeTaskRestore:
 		return "task_restore"
+	case action == CredentialGrantActionTaskManualTrigger && purpose == sshutil.PurposeTaskCommand:
+		return "task_run"
+	case action == CredentialGrantActionTaskBatchTrigger && purpose == sshutil.PurposeTaskCommand:
+		return "task_bulk_run"
+	case action == CredentialGrantActionBatchCommand && purpose == sshutil.PurposeBatchCommand:
+		return "batch_run"
 	default:
 		return "grant"
 	}
 }
 
-func validateGrantRequesterContext(c *gin.Context, db *gorm.DB) error {
+func validateGrantRequesterContext(c *gin.Context, db *gorm.DB, allowedRoles []string) error {
 	userID := middleware.CurrentUserID(c)
 	role := middleware.CurrentRole(c)
 	if userID == 0 || strings.TrimSpace(role) == "" {
@@ -858,10 +1153,23 @@ func validateGrantRequesterContext(c *gin.Context, db *gorm.DB) error {
 	if err := db.WithContext(c.Request.Context()).Select("id", "role").First(&user, userID).Error; err != nil {
 		return err
 	}
-	if user.Role != role || role != "admin" {
+	if user.Role != role || !credentialGrantRoleAllowed(role, allowedRoles) {
 		return fmt.Errorf("grant requester role changed")
 	}
 	return nil
+}
+
+func credentialGrantRoleAllowed(role string, allowedRoles []string) bool {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return false
+	}
+	for _, allowed := range allowedRoles {
+		if role == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeCredentialGrantFreeText(value string) string {
@@ -886,6 +1194,23 @@ func normalizeCredentialGrantIdentity(value string, max int) string {
 	clean := sanitizeCredentialGrantFreeText(value)
 	if credentialGrantTextHasSensitiveMarker(clean) {
 		clean = ""
+	}
+	if max <= 0 || utf8.RuneCountInString(clean) <= max {
+		return clean
+	}
+	runes := []rune(clean)
+	return string(runes[:max])
+}
+
+func normalizeCredentialGrantCode(value string, max int) string {
+	clean := strings.TrimSpace(value)
+	if clean == "" {
+		return ""
+	}
+	for _, r := range clean {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
+			return ""
+		}
 	}
 	if max <= 0 || utf8.RuneCountInString(clean) <= max {
 		return clean

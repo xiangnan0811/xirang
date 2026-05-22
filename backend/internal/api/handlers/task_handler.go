@@ -714,7 +714,10 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		tasksToTrigger = append(tasksToTrigger, tid)
 	}
 
-	if len(tasksToTrigger) > 0 && !EnforceStepUp(c, h.db, h.jwtManager, "task.batch_trigger", sshutil.PurposeTaskCommand, "task_bulk_run") {
+	if len(tasksToTrigger) > 0 && !EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
+		return
+	}
+	if len(tasksToTrigger) > 0 && !EnforceTaskBatchTriggerCredentialGrants(c, h.db, tasksToTrigger) {
 		return
 	}
 

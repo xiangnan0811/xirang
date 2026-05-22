@@ -125,8 +125,8 @@ go run ./cmd/server
 | PUT | /tasks/:id | 🔒 更新任务 |
 | DELETE | /tasks/:id | 🔒 删除任务 |
 | GET | /tasks/:id/runs | 🔒 执行历史 |
-| POST | /tasks/batch-trigger | 🔒 批量触发（需二次验证） |
-| POST | /tasks/:id/trigger | 🔒 手动触发（需二次验证） |
+| POST | /tasks/batch-trigger | 🔒 批量触发（需二次验证 + task.batch_trigger/task_command/task_id 临时授权） |
+| POST | /tasks/:id/trigger | 🔒 手动触发（需二次验证 + task.manual_trigger/task_command/task_id 临时授权） |
 | POST | /tasks/:id/cancel | 🔒 取消执行 |
 | POST | /tasks/:id/pause | 🔒 暂停调度 |
 | POST | /tasks/:id/resume | 🔒 恢复调度 |
@@ -140,7 +140,7 @@ go run ./cmd/server
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | /batch-commands | 🔒 创建批量命令（需二次验证） |
+| POST | /batch-commands | 🔒 创建批量命令（需二次验证 + batch_command.create/batch_command/node_id 临时授权） |
 | GET | /batch-commands/:batch_id | 🔒 查询状态 |
 | DELETE | /batch-commands/:batch_id | 🔒 取消/删除 |
 
@@ -264,6 +264,9 @@ go run ./cmd/server
 | POST | /credential-access-grants/config-export | 🔒 申请并激活短时敏感配置导出授权（admin；需二次验证；绑定 config.export/config_export） |
 | POST | /credential-access-grants/snapshot-restore | 🔒 申请并激活短时快照恢复授权（admin；需二次验证；绑定 snapshot.restore/snapshot/task_id） |
 | POST | /credential-access-grants/task-restore | 🔒 申请并激活短时任务恢复授权（admin；需二次验证；绑定 task.restore_trigger/task_restore/task_id） |
+| POST | /credential-access-grants/task-manual-trigger | 🔒 申请并激活短时任务手动触发授权（admin/operator；需二次验证；绑定 task.manual_trigger/task_command/task_id） |
+| POST | /credential-access-grants/task-batch-trigger | 🔒 申请并激活短时任务批量触发授权（admin/operator；需二次验证；逐 task_id 创建授权） |
+| POST | /credential-access-grants/batch-command | 🔒 申请并激活短时批量命令授权（admin/operator；需二次验证；逐 node_id 创建授权） |
 
 ### SLA 报告
 

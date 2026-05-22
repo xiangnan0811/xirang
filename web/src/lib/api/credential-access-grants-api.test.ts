@@ -402,4 +402,84 @@ describe("credential access grants api", () => {
     });
     expect(grant).toMatchObject({ id: 12, nodeId: 5, status: "active" });
   });
+
+  it("requests owned task trigger grants and maps task command tuples", async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        id: 26,
+        action: "task.manual_trigger",
+        purpose: "task_command",
+        task_id: 102,
+        status: "active",
+      })
+      .mockResolvedValueOnce([
+        { id: 27, action: "task.batch_trigger", purpose: "task_command", task_id: 102, status: "active" },
+        { id: 28, action: "task.batch_trigger", purpose: "task_command", task_id: 103, status: "active" },
+      ]);
+
+    const manual = await createCredentialAccessGrantsApi().requestTaskManualTriggerCredentialGrant(
+      "auth-marker",
+      { taskId: 102, reason: "Routine task run", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+    const batch = await createCredentialAccessGrantsApi().requestTaskBatchTriggerCredentialGrant(
+      "auth-marker",
+      { taskIds: [102, 103], reason: "Routine batch run", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, "/credential-access-grants/task-manual-trigger", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        task_id: 102,
+        reason: "Routine task run",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(2, "/credential-access-grants/task-batch-trigger", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        task_ids: [102, 103],
+        reason: "Routine batch run",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(manual).toMatchObject({ id: 26, action: "task.manual_trigger", purpose: "task_command", taskId: 102, status: "active" });
+    expect(batch).toMatchObject([
+      { id: 27, action: "task.batch_trigger", purpose: "task_command", taskId: 102, status: "active" },
+      { id: 28, action: "task.batch_trigger", purpose: "task_command", taskId: 103, status: "active" },
+    ]);
+  });
+
+  it("requests batch command grants as node-scoped rows", async () => {
+    requestMock.mockResolvedValueOnce([
+      { id: 29, action: "batch_command.create", purpose: "batch_command", node_id: 5, status: "active" },
+      { id: 30, action: "batch_command.create", purpose: "batch_command", node_id: 6, status: "active" },
+    ]);
+
+    const grants = await createCredentialAccessGrantsApi().requestBatchCommandCredentialGrant(
+      "auth-marker",
+      { nodeIds: [5, 6], reason: "Routine batch operation", requestedTtlSeconds: 600 },
+      "step-up-marker",
+    );
+
+    expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/batch-command", {
+      method: "POST",
+      token: "auth-marker",
+      stepUpProof: "step-up-marker",
+      body: {
+        node_ids: [5, 6],
+        reason: "Routine batch operation",
+        requested_ttl_seconds: 600,
+      },
+    });
+    expect(grants).toMatchObject([
+      { id: 29, action: "batch_command.create", purpose: "batch_command", nodeId: 5, status: "active" },
+      { id: 30, action: "batch_command.create", purpose: "batch_command", nodeId: 6, status: "active" },
+    ]);
+  });
 });

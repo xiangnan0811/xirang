@@ -106,7 +106,14 @@ export function useTaskOperations({
 
   const triggerTask = useCallback(async (taskID: number) => {
     const result = await exec(i18n.t("tasks.actions.triggerTask"), async (t) => {
-      await withStepUp((proof) => apiClient.triggerTask(t, taskID, proof));
+      await withStepUp(async (proof) => {
+        await apiClient.requestTaskManualTriggerCredentialGrant(t, {
+          taskId: taskID,
+          reason: i18n.t("tasks.manualTriggerGrantReason", { id: taskID }),
+          requestedTtlSeconds: 600,
+        }, proof);
+        return apiClient.triggerTask(t, taskID, proof);
+      });
       return apiClient.getTask(t, taskID).catch(() => null);
     });
     if (result && !result.ok) return;

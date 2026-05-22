@@ -28,6 +28,7 @@ const { apiClientMock } = vi.hoisted(() => ({
     cancelTask: vi.fn(),
     retryTask: vi.fn(),
     getTask: vi.fn(),
+    requestTaskManualTriggerCredentialGrant: vi.fn(),
     getTaskLogs: vi.fn(),
     createPolicy: vi.fn(),
     updatePolicy: vi.fn(),
@@ -291,6 +292,7 @@ describe("useConsoleData", () => {
     apiClientMock.getTasks.mockReturnValueOnce(pendingTasks.promise);
     apiClientMock.createTask.mockResolvedValue(createdTask);
     apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
     apiClientMock.getTask.mockResolvedValue(createTask(202, "running", 12));
 
     const { result } = renderHook(() => useConsoleData("token-1"));
@@ -302,6 +304,12 @@ describe("useConsoleData", () => {
       await result.current.triggerTask(202);
     });
 
+    expect(apiClientMock.requestTaskManualTriggerCredentialGrant).toHaveBeenCalledWith("token-1", {
+      taskId: 202,
+      reason: "手动触发任务 #202",
+      requestedTtlSeconds: 600,
+    }, undefined);
+    expect(apiClientMock.requestTaskManualTriggerCredentialGrant.mock.invocationCallOrder[0]).toBeLessThan(apiClientMock.triggerTask.mock.invocationCallOrder[0]);
     expect(result.current.tasks[0]?.status).toBe("running");
 
     await act(async () => {

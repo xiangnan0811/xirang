@@ -373,7 +373,15 @@ export function TasksPage() {
     });
     if (!ok) return;
     try {
-      const result = await withStepUp((proof) => apiClient.batchTriggerTasks(authToken!, selectedTaskIds, proof));
+      const taskIds = [...selectedTaskIds];
+      const result = await withStepUp(async (proof) => {
+        await apiClient.requestTaskBatchTriggerCredentialGrant(authToken!, {
+          taskIds,
+          reason: t("tasks.batchTriggerGrantReason", { count: taskIds.length }),
+          requestedTtlSeconds: 600,
+        }, proof);
+        return apiClient.batchTriggerTasks(authToken!, taskIds, proof);
+      });
       setSelectedTaskIds([]);
       toast.success(t("tasks.batchTriggerSuccess", { success: result.successCount, total: result.total }));
       void refreshTasks();
