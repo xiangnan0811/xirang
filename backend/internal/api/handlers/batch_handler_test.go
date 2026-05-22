@@ -1,14 +1,22 @@
 package handlers
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"xirang/backend/internal/auth"
+	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 )
@@ -62,6 +70,112 @@ func TestBatchCreateRejectsUnownedNodeForOperator(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("未授权节点不应创建批量任务，实际数量: %d", count)
 	}
+}
+
+func TestBatchCreateMissingGrantDoesNotDecryptInlineCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "batch-create-grant-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	node := model.Node{
+		Name:      "batch-create-gated-node",
+		Host:      "redacted",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "password",
+		Password:  encryptBatchHandlerTestCiphertext(t, "ENCRYPTED_INLINE_FIXTURE_VALUE"),
+		BackupDir: "batch-create-gated-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	handler := NewBatchHandler(db, &mockTaskRunner{}).WithJWTManager(manager)
+	r := gin.New()
+	r.Use(middleware.AuthMiddleware(manager, db))
+	r.POST("/batch-commands", handler.Create)
+
+	body := fmt.Sprintf(`{"node_ids":[%d],"command":"echo ok","name":"batch-gated"}`, node.ID)
+	resp := performStepUpRequest(t, r, http.MethodPost, "/batch-commands", token, proof, body)
+	assertCredentialGrantRequiredEnvelope(t, resp, "required")
+
+	var count int64
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("缺少 batch command grant 时不应创建任务，实际数量: %d", count)
+	}
+}
+
+func TestBatchCreateRequiresAllNodeGrantsBeforeCreatingTasks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "batch-create-all-grants-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProof(t, manager, admin)
+	nodeA := model.Node{Name: "batch-grant-node-a", Host: "redacted-a", Port: 22, Username: "root", AuthType: "key", BackupDir: "batch-grant-node-a"}
+	nodeB := model.Node{Name: "batch-grant-node-b", Host: "redacted-b", Port: 22, Username: "root", AuthType: "key", BackupDir: "batch-grant-node-b"}
+	if err := db.Create(&nodeA).Error; err != nil {
+		t.Fatalf("创建 nodeA 失败: %v", err)
+	}
+	if err := db.Create(&nodeB).Error; err != nil {
+		t.Fatalf("创建 nodeB 失败: %v", err)
+	}
+
+	createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(nodeA.ID), nil, "admin")
+	handler := NewBatchHandler(db, &mockTaskRunner{}).WithJWTManager(manager)
+	r := gin.New()
+	r.Use(middleware.AuthMiddleware(manager, db))
+	r.POST("/batch-commands", handler.Create)
+
+	body := fmt.Sprintf(`{"node_ids":[%d,%d],"command":"echo ok","name":"batch-all-or-nothing"}`, nodeA.ID, nodeB.ID)
+	missingResp := performStepUpRequest(t, r, http.MethodPost, "/batch-commands", token, proof, body)
+	assertCredentialGrantRequiredEnvelope(t, missingResp, "required")
+	var count int64
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("缺少部分 batch command grant 时不应部分创建任务，实际数量: %d", count)
+	}
+
+	createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(nodeB.ID), nil, "admin")
+	grantedResp := performStepUpRequest(t, r, http.MethodPost, "/batch-commands", token, proof, body)
+	if grantedResp.Code != http.StatusOK {
+		t.Fatalf("全部 batch command grant 存在时应创建批量任务，实际: %d，响应: %s", grantedResp.Code, grantedResp.Body.String())
+	}
+	if err := db.Model(&model.Task{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计任务失败: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("全部授权后应创建两个任务，实际数量: %d", count)
+	}
+}
+
+func encryptBatchHandlerTestCiphertext(t *testing.T, plain string) string {
+	t.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("生成测试加密 key 失败: %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("创建测试 cipher 失败: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("创建测试 GCM 失败: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("生成测试 nonce 失败: %v", err)
+	}
+	packed := append(nonce, gcm.Seal(nil, nonce, []byte(plain), nil)...)
+	return "enc:v2:" + base64.StdEncoding.EncodeToString(packed)
 }
 
 func TestBatchGetRedactsExecutorConfig(t *testing.T) {

@@ -60,12 +60,12 @@ function stringValue(value: unknown): string {
 
 function mapGrantAction(value: unknown): CredentialAccessGrantAction {
   const raw = stringValue(value);
-  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "snapshot.restore" || raw === "task.restore_trigger" ? raw : "unknown";
+  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "snapshot.restore" || raw === "task.restore_trigger" || raw === "task.manual_trigger" || raw === "task.batch_trigger" || raw === "batch_command.create" ? raw : "unknown";
 }
 
 function mapGrantPurpose(value: unknown): CredentialAccessGrantPurpose {
   const raw = stringValue(value);
-  return raw === "terminal" || raw === "config_import" || raw === "config_export" || raw === "snapshot" || raw === "task_restore" ? raw : "unknown";
+  return raw === "terminal" || raw === "config_import" || raw === "config_export" || raw === "snapshot" || raw === "task_restore" || raw === "task_command" || raw === "batch_command" ? raw : "unknown";
 }
 
 function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
@@ -259,6 +259,60 @@ export function createCredentialAccessGrantsApi() {
         },
       });
       return mapCredentialAccessGrant(raw);
+    },
+
+    async requestTaskManualTriggerCredentialGrant(
+      token: string,
+      input: { taskId: number; reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant> {
+      const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/task-manual-trigger", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          task_id: input.taskId,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return mapCredentialAccessGrant(raw);
+    },
+
+    async requestTaskBatchTriggerCredentialGrant(
+      token: string,
+      input: { taskIds: number[]; reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant[]> {
+      const raw = await request<CredentialAccessGrantResponse[]>("/credential-access-grants/task-batch-trigger", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          task_ids: input.taskIds,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return (raw ?? []).map((row) => mapCredentialAccessGrant(row));
+    },
+
+    async requestBatchCommandCredentialGrant(
+      token: string,
+      input: { nodeIds: number[]; reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant[]> {
+      const raw = await request<CredentialAccessGrantResponse[]>("/credential-access-grants/batch-command", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          node_ids: input.nodeIds,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return (raw ?? []).map((row) => mapCredentialAccessGrant(row));
     },
   };
 }

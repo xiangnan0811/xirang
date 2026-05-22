@@ -75,14 +75,22 @@ export function BatchCommandDialog({
     setSaving(true);
     setError("");
     try {
-      const result = await withStepUp((proof) => apiClient.createBatchCommand(
-        token,
-        selectedNodeIds,
-        command.trim(),
-        name.trim() || undefined,
-        retain,
-        proof
-      ));
+      const nodeIds = [...selectedNodeIds];
+      const result = await withStepUp(async (proof) => {
+        await apiClient.requestBatchCommandCredentialGrant(token, {
+          nodeIds,
+          reason: t("batchCommand.grantReason", { count: nodeIds.length }),
+          requestedTtlSeconds: 600,
+        }, proof);
+        return apiClient.createBatchCommand(
+          token,
+          nodeIds,
+          command.trim(),
+          name.trim() || undefined,
+          retain,
+          proof
+        );
+      });
       onOpenChange(false);
       onSuccess?.({ batchId: result.batchId, retain: result.retain });
     } catch (err) {
@@ -112,8 +120,9 @@ export function BatchCommandDialog({
       )}
 
       <div>
-        <label className="mb-1.5 block text-sm font-medium">{t("batchCommand.taskNameOptional")}</label>
+        <label htmlFor="batch-command-name" className="mb-1.5 block text-sm font-medium">{t("batchCommand.taskNameOptional")}</label>
         <input
+          id="batch-command-name"
           type="text"
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           placeholder={t("batchCommand.batchNamePlaceholder")}
@@ -158,8 +167,9 @@ export function BatchCommandDialog({
       </div>
 
       <div>
-        <label className="mb-1.5 block text-sm font-medium">{t("batchCommand.command")}</label>
+        <label htmlFor="batch-command-command" className="mb-1.5 block text-sm font-medium">{t("batchCommand.command")}</label>
         <textarea
+          id="batch-command-command"
           className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
           rows={3}
           placeholder={t("batchCommand.commandPlaceholder")}

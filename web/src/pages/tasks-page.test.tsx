@@ -7,6 +7,13 @@ import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
+const { apiClientMock, withStepUpMock } = vi.hoisted(() => ({
+  apiClientMock: {
+    requestTaskBatchTriggerCredentialGrant: vi.fn(),
+    batchTriggerTasks: vi.fn(),
+  },
+  withStepUpMock: vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker")),
+}));
 
 const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
@@ -122,6 +129,14 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   },
 }));
 
+vi.mock("@/lib/api/client", () => ({
+  apiClient: apiClientMock,
+}));
+
+vi.mock("@/hooks/use-step-up-action", () => ({
+  useStepUpAction: () => withStepUpMock,
+}));
+
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     token: "test-token",
@@ -233,6 +248,12 @@ describe("TasksPage", () => {
     window.localStorage.clear();
     confirmMock.mockClear();
     navigateMock.mockReset();
+    apiClientMock.requestTaskBatchTriggerCredentialGrant.mockReset();
+    apiClientMock.batchTriggerTasks.mockReset();
+    apiClientMock.requestTaskBatchTriggerCredentialGrant.mockResolvedValue([{ id: 1, status: "active" }]);
+    apiClientMock.batchTriggerTasks.mockResolvedValue({ successCount: 2, total: 2 });
+    withStepUpMock.mockClear();
+    withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
     createContext();
   });
 
@@ -437,6 +458,32 @@ describe("TasksPage", () => {
     await user.click(triggerButtons[0]);
 
     expect(triggerTaskMock).toHaveBeenCalledWith(102);
+  });
+
+  it("批量触发会先申请任务级授权，再触发任务", async () => {
+    const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
+    createContext({ refreshTasks: refreshTasksMock });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 每日备份任务" }));
+    await user.click(screen.getByRole("button", { name: "触发 2 个任务" }));
+
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ title: "批量触发任务" }));
+    expect(withStepUpMock).toHaveBeenCalledTimes(1);
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
+      taskIds: [102, 101],
+      reason: "批量触发 2 个任务",
+      requestedTtlSeconds: 600,
+    }, "step-up-marker");
+    expect(apiClientMock.batchTriggerTasks).toHaveBeenCalledWith("test-token", [102, 101], "step-up-marker");
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant.mock.invocationCallOrder[0]).toBeLessThan(apiClientMock.batchTriggerTasks.mock.invocationCallOrder[0]);
   });
 
   it("hasActiveRun 为 true 时启动 5 秒轮询（覆盖 restore 场景）", async () => {

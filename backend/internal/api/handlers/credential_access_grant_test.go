@@ -71,6 +71,9 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), handler.RequestConfigExportGrant)
 	router.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), handler.RequestSnapshotRestoreGrant)
 	router.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), handler.RequestTaskRestoreGrant)
+	router.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), handler.RequestTaskManualTriggerGrant)
+	router.POST("/credential-access-grants/task-batch-trigger", middleware.RBAC("tasks:write"), handler.RequestTaskBatchTriggerGrant)
+	router.POST("/credential-access-grants/batch-command", middleware.RBAC("tasks:write"), handler.RequestBatchCommandGrant)
 	return router
 }
 
@@ -858,6 +861,206 @@ func TestFindActiveSnapshotRestoreCredentialGrantMatchesTaskScopeAndRejectsWrong
 	}
 	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionSnapshotRestore, Purpose: sshutil.PurposeSnapshot}); !errors.Is(err, ErrCredentialGrantRequired) {
 		t.Fatalf("task-scoped grant 不应授权 system-scoped tuple，实际: %v", err)
+	}
+}
+
+func TestOperatorCanRequestOwnedManualTriggerGrant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	operator := seedStepUpUser(t, db, "grant-manual-operator", "operator")
+	token := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, operator)
+	node := seedCredentialGrantNode(t, db)
+	taskEntity := model.Task{Name: "owned-manual", NodeID: node.ID, ExecutorType: "command", Command: "echo ok", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+	router := newCredentialGrantTestRouter(db, manager)
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-manual-trigger", token, proof, fmt.Sprintf(`{"task_id":%d,"reason":"例行触发","requested_ttl_seconds":600}`, taskEntity.ID))
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("operator owned manual grant 期望 201，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		Data credentialGrantDTO `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析 grant 响应失败: %v", err)
+	}
+	if payload.Data.Action != CredentialGrantActionTaskManualTrigger || payload.Data.Purpose != sshutil.PurposeTaskCommand || payload.Data.TaskID == nil || *payload.Data.TaskID != taskEntity.ID || payload.Data.RequesterRole != "operator" {
+		t.Fatalf("operator manual grant DTO 不符合预期: %+v", payload.Data)
+	}
+	if strings.Contains(resp.Body.String(), "echo ok") {
+		t.Fatalf("manual grant 响应不应包含命令内容: %s", resp.Body.String())
+	}
+}
+
+func TestOperatorCannotRequestUnownedManualTriggerGrant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	operator := seedStepUpUser(t, db, "grant-manual-unowned-operator", "operator")
+	token := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, operator)
+	taskEntity := seedCredentialGrantTask(t, db, "command")
+	router := newCredentialGrantTestRouter(db, manager)
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-manual-trigger", token, proof, fmt.Sprintf(`{"task_id":%d,"reason":"例行触发","requested_ttl_seconds":600}`, taskEntity.ID))
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("operator unowned manual grant 期望 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var count int64
+	if err := db.Model(&model.CredentialAccessGrant{}).Where("action = ?", CredentialGrantActionTaskManualTrigger).Count(&count).Error; err != nil {
+		t.Fatalf("统计 grant 失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("未授权任务不应创建 grant，实际: %d", count)
+	}
+}
+
+func TestBatchGrantRequestsCreateRowsPerResource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	operator := seedStepUpUser(t, db, "grant-batch-operator", "operator")
+	token := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, operator)
+	nodeA := seedCredentialGrantNode(t, db)
+	nodeB := seedCredentialGrantNode(t, db)
+	for _, node := range []model.Node{nodeA, nodeB} {
+		if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: operator.ID}).Error; err != nil {
+			t.Fatalf("创建 ownership 失败: %v", err)
+		}
+	}
+	taskA := model.Task{Name: "batch-a", NodeID: nodeA.ID, ExecutorType: "rsync", Status: "pending"}
+	taskB := model.Task{Name: "batch-b", NodeID: nodeB.ID, ExecutorType: "rsync", Status: "pending"}
+	if err := db.Create(&taskA).Error; err != nil {
+		t.Fatalf("创建 taskA 失败: %v", err)
+	}
+	if err := db.Create(&taskB).Error; err != nil {
+		t.Fatalf("创建 taskB 失败: %v", err)
+	}
+	router := newCredentialGrantTestRouter(db, manager)
+
+	batchTaskResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-batch-trigger", token, proof, fmt.Sprintf(`{"task_ids":[%d,%d,%d],"reason":"批量触发","requested_ttl_seconds":600}`, taskA.ID, taskB.ID, taskA.ID))
+	if batchTaskResp.Code != http.StatusCreated {
+		t.Fatalf("batch task grant 期望 201，实际: %d，响应: %s", batchTaskResp.Code, batchTaskResp.Body.String())
+	}
+	var taskPayload struct {
+		Data []credentialGrantDTO `json:"data"`
+	}
+	if err := json.Unmarshal(batchTaskResp.Body.Bytes(), &taskPayload); err != nil {
+		t.Fatalf("解析 batch task grant 失败: %v", err)
+	}
+	if len(taskPayload.Data) != 2 {
+		t.Fatalf("batch task grant 应按去重任务创建 2 行，实际: %+v", taskPayload.Data)
+	}
+
+	batchCommandResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command", token, proof, fmt.Sprintf(`{"node_ids":[%d,%d,%d],"reason":"批量操作","requested_ttl_seconds":600}`, nodeA.ID, nodeB.ID, nodeA.ID))
+	if batchCommandResp.Code != http.StatusCreated {
+		t.Fatalf("batch command grant 期望 201，实际: %d，响应: %s", batchCommandResp.Code, batchCommandResp.Body.String())
+	}
+	var nodePayload struct {
+		Data []credentialGrantDTO `json:"data"`
+	}
+	if err := json.Unmarshal(batchCommandResp.Body.Bytes(), &nodePayload); err != nil {
+		t.Fatalf("解析 batch command grant 失败: %v", err)
+	}
+	if len(nodePayload.Data) != 2 {
+		t.Fatalf("batch command grant 应按去重节点创建 2 行，实际: %+v", nodePayload.Data)
+	}
+	if strings.Contains(batchCommandResp.Body.String(), "rm -rf") || strings.Contains(batchCommandResp.Body.String(), "echo ok") {
+		t.Fatalf("batch command grant 响应不应包含命令文本: %s", batchCommandResp.Body.String())
+	}
+}
+
+func TestFindActiveGrantAllowsOperatorOnlyForOwnedResourceOperations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	operator := seedStepUpUser(t, db, "grant-find-operator", "operator")
+	taskEntity := seedCredentialGrantTask(t, db, "command")
+	now := time.Now().UTC()
+	manualGrant := createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "operator")
+	createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "operator")
+	claims := &auth.Claims{UserID: operator.ID, Username: operator.Username, Role: operator.Role}
+
+	found, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTaskManualTrigger, Purpose: sshutil.PurposeTaskCommand, TaskID: credentialaudit.PtrUint(taskEntity.ID)})
+	if err != nil || found == nil || found.ID != manualGrant.ID || found.ExpiresAt.Before(now) {
+		t.Fatalf("operator manual grant 应授权，grant=%+v err=%v", found, err)
+	}
+	if _, err := findActiveCredentialGrant(context.Background(), db, claims, credentialGrantMatch{Action: CredentialGrantActionTaskRestore, Purpose: sshutil.PurposeTaskRestore, TaskID: credentialaudit.PtrUint(taskEntity.ID)}); !errors.Is(err, ErrCredentialGrantInvalid) {
+		t.Fatalf("operator 不应授权旧 admin-only task restore，实际: %v", err)
+	}
+}
+
+func TestManualTriggerRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	operator := seedStepUpUser(t, db, "manual-route-operator", "operator")
+	token := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, operator)
+	taskEntity := seedCredentialGrantTask(t, db, "command")
+	calls := 0
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/tasks/:id/trigger", RequireStepUp(db, manager, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), RequireTaskManualTriggerCredentialGrant(db), func(c *gin.Context) {
+		calls++
+		c.Status(http.StatusNoContent)
+	})
+
+	missingGrantResp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/trigger", taskEntity.ID), token, proof, "")
+	assertCredentialGrantRequiredEnvelope(t, missingGrantResp, "required")
+	if calls != 0 {
+		t.Fatalf("缺少 manual trigger grant 时不应进入 handler")
+	}
+	grant := createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "operator")
+	grantedResp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/trigger", taskEntity.ID), token, proof, "")
+	if grantedResp.Code != http.StatusNoContent || calls != 1 {
+		t.Fatalf("有效 manual trigger grant 应进入 handler，status=%d calls=%d body=%s", grantedResp.Code, calls, grantedResp.Body.String())
+	}
+	if grant.ID == 0 {
+		t.Fatalf("grant fixture 未创建")
+	}
+}
+
+func TestBatchGrantEnforcementIsAllOrNothing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	operator := seedStepUpUser(t, db, "batch-enforce-operator", "operator")
+	token := generatePrimaryToken(t, manager, operator)
+	proof := generateStepUpProof(t, manager, operator)
+	taskA := seedCredentialGrantTask(t, db, "rsync")
+	taskB := seedCredentialGrantTask(t, db, "rsync")
+	called := false
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/tasks/batch-trigger", func(c *gin.Context) {
+		if !EnforceStepUp(c, db, manager, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
+			return
+		}
+		if !EnforceTaskBatchTriggerCredentialGrants(c, db, []uint{taskA.ID, taskB.ID}) {
+			return
+		}
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+
+	createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, CredentialGrantStatusActive, credentialaudit.PtrUint(taskA.ID), nil, nil, "operator")
+	missingResp := performStepUpRequest(t, router, http.MethodPost, "/tasks/batch-trigger", token, proof, `{"task_ids":[]}`)
+	assertCredentialGrantRequiredEnvelope(t, missingResp, "required")
+	if called {
+		t.Fatalf("缺少一个 batch trigger grant 时不应执行")
+	}
+	createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, CredentialGrantStatusActive, credentialaudit.PtrUint(taskB.ID), nil, nil, "operator")
+	grantedResp := performStepUpRequest(t, router, http.MethodPost, "/tasks/batch-trigger", token, proof, `{"task_ids":[]}`)
+	if grantedResp.Code != http.StatusNoContent || !called {
+		t.Fatalf("全部 batch trigger grant 存在时应执行，status=%d body=%s", grantedResp.Code, grantedResp.Body.String())
 	}
 }
 

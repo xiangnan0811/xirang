@@ -268,6 +268,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)
 	secured.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestSnapshotRestoreGrant)
 	secured.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTaskRestoreGrant)
+	secured.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), credentialAccessGrantHandler.RequestTaskManualTriggerGrant)
+	secured.POST("/credential-access-grants/task-batch-trigger", middleware.RBAC("tasks:write"), credentialAccessGrantHandler.RequestTaskBatchTriggerGrant)
+	secured.POST("/credential-access-grants/batch-command", middleware.RBAC("tasks:write"), credentialAccessGrantHandler.RequestBatchCommandGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
@@ -286,7 +289,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/tasks/:id", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Delete)
 	secured.GET("/tasks/:id/runs", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskRunHandler.ListByTask)
 	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
-	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, "task.manual_trigger", sshutil.PurposeTaskCommand, "task_run"), taskHandler.Trigger)
+	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), handlers.RequireTaskManualTriggerCredentialGrant(dep.DB), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Cancel)
 	secured.POST("/tasks/:id/pause", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Pause)
 	secured.POST("/tasks/:id/resume", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Resume)
