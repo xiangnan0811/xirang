@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.11](https://github.com/xiangnan0811/xirang/compare/v0.43.10...v0.43.11) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* **security:** close p3 grant review gaps ([2e30281](https://github.com/xiangnan0811/xirang/commit/2e30281b75eff061e8d2682c482ffa2b3ec8945b))
+
 ## [0.43.10](https://github.com/xiangnan0811/xirang/compare/v0.43.9...v0.43.10) (2026-05-22)
 
 
