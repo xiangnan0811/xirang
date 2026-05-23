@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.14](https://github.com/xiangnan0811/xirang/compare/v0.43.13...v0.43.14) (2026-05-23)
+
+
+### 🐛 Bug Fixes
+
+* **security:** centralize restic repository access ([9ec737c](https://github.com/xiangnan0811/xirang/commit/9ec737cb3776e492ff022c3e530b0cb0f646041e))
+
 ## [0.43.13](https://github.com/xiangnan0811/xirang/compare/v0.43.12...v0.43.13) (2026-05-22)
 
 
