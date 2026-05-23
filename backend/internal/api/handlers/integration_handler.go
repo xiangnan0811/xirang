@@ -91,6 +91,20 @@ func checkChannelDomainHint(channelType, endpoint string) string {
 	return ""
 }
 
+type integrationResponse struct {
+	ID              uint      `json:"id"`
+	Type            string    `json:"type"`
+	Name            string    `json:"name"`
+	Endpoint        string    `json:"endpoint"`
+	HasSecret       bool      `json:"has_secret"`
+	Enabled         bool      `json:"enabled"`
+	FailThreshold   int       `json:"fail_threshold"`
+	CooldownMinutes int       `json:"cooldown_minutes"`
+	ProxyURL        string    `json:"proxy_url"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 type integrationTestResponse struct {
 	OK        bool   `json:"ok"`
 	Message   string `json:"message"`
@@ -203,7 +217,7 @@ func isPrivateOrLoopback(addr netip.Addr) bool {
 // @Tags         integrations
 // @Security     Bearer
 // @Produce      json
-// @Success      200  {object}  handlers.Response{data=[]model.Integration}
+// @Success      200  {object}  handlers.Response{data=[]integrationResponse}
 // @Failure      401  {object}  handlers.Response
 // @Router       /integrations [get]
 func (h *IntegrationHandler) List(c *gin.Context) {
@@ -212,10 +226,11 @@ func (h *IntegrationHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	out := make([]integrationResponse, 0, len(items))
 	for i := range items {
-		maskIntegrationEndpoint(&items[i])
+		out = append(out, sanitizeIntegration(&items[i]))
 	}
-	respondOK(c, items)
+	respondOK(c, out)
 }
 
 // Get godoc
@@ -225,7 +240,7 @@ func (h *IntegrationHandler) List(c *gin.Context) {
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "通知通道 ID"
-// @Success      200  {object}  handlers.Response{data=model.Integration}
+// @Success      200  {object}  handlers.Response{data=integrationResponse}
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /integrations/{id} [get]
@@ -239,8 +254,7 @@ func (h *IntegrationHandler) Get(c *gin.Context) {
 		respondNotFound(c, "通知通道不存在")
 		return
 	}
-	maskIntegrationEndpoint(&item)
-	respondOK(c, item)
+	respondOK(c, sanitizeIntegration(&item))
 }
 
 // Create godoc
@@ -251,7 +265,7 @@ func (h *IntegrationHandler) Get(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        body  body      integrationRequest  true  "创建通知通道请求"
-// @Success      201   {object}  handlers.Response{data=model.Integration}
+// @Success      201   {object}  handlers.Response{data=integrationResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Router       /integrations [post]
@@ -335,9 +349,11 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	item.HasSecret = req.Secret != ""
-	maskIntegrationEndpoint(&item)
-	respondCreated(c, item)
+	if err := h.db.First(&item, item.ID).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondCreated(c, sanitizeIntegration(&item))
 }
 
 // Update godoc
@@ -349,7 +365,7 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 // @Produce      json
 // @Param        id    path      int                 true  "通知通道 ID"
 // @Param        body  body      integrationRequest  true  "更新通知通道请求"
-// @Success      200   {object}  handlers.Response{data=model.Integration}
+// @Success      200   {object}  handlers.Response{data=integrationResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
@@ -378,12 +394,27 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// 优先从结构化字段构建 endpoint
+	var item model.Integration
+	if err := h.db.First(&item, id).Error; err != nil {
+		respondNotFound(c, "通知通道不存在")
+		return
+	}
+
+	// 记录更新前是否有 secret（AfterFind 已解密）
+	hadSecret := item.Secret != ""
+
+	// 优先从结构化字段构建 endpoint；若客户端回传 API 响应中的脱敏占位符，保持原 endpoint。
 	if built, err := buildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	} else if built != "" {
 		req.Endpoint = built
+	} else if isMaskedIntegrationURL(req.Endpoint) {
+		if !strings.EqualFold(req.Type, item.Type) || !maskedIntegrationURLMatches(req.Endpoint, item.Endpoint) {
+			respondBadRequest(c, "endpoint 不能使用脱敏占位符")
+			return
+		}
+		req.Endpoint = item.Endpoint
 	}
 
 	if req.Endpoint == "" {
@@ -396,11 +427,6 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var item model.Integration
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "通知通道不存在")
-		return
-	}
 	if req.FailThreshold <= 0 {
 		req.FailThreshold = item.FailThreshold
 	}
@@ -416,17 +442,23 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		}
 	}
 
-	// 验证代理 URL
+	// 验证代理 URL；若客户端回传脱敏占位符，保持原 proxy_url。
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
+	proxyURLChanged := false
 	if req.ProxyURL != "" {
-		if err := validateProxyURL(req.ProxyURL); err != nil {
-			respondBadRequest(c, err.Error())
-			return
+		if isMaskedIntegrationURL(req.ProxyURL) {
+			if !maskedIntegrationURLMatches(req.ProxyURL, item.ProxyURL) {
+				respondBadRequest(c, "代理地址不能使用脱敏占位符")
+				return
+			}
+		} else {
+			if err := validateProxyURL(req.ProxyURL); err != nil {
+				respondBadRequest(c, err.Error())
+				return
+			}
+			proxyURLChanged = true
 		}
 	}
-
-	// 记录更新前是否有 secret（AfterFind 已解密）
-	hadSecret := item.Secret != ""
 
 	item.Type = req.Type
 	item.Name = req.Name
@@ -439,10 +471,8 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	if req.Secret != "" {
 		item.Secret = req.Secret
 	}
-	// ProxyURL: 空字符串表示清除，未提供时保持不变（与 Secret 同模式不同，
-	// 因为 proxy_url 是可选字段，客户端可能未知此字段。这里采用：非空则更新。
-	// 如需显式清除，使用 PATCH + proxy_url=""）
-	if req.ProxyURL != "" {
+	// ProxyURL: 空字符串表示保持不变（PUT 兼容旧前端）；显式清除使用 PATCH + proxy_url=""。
+	if proxyURLChanged {
 		item.ProxyURL = req.ProxyURL
 	}
 
@@ -450,9 +480,12 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	if err := h.db.First(&item, item.ID).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	item.HasSecret = hadSecret || req.Secret != ""
-	maskIntegrationEndpoint(&item)
-	respondOK(c, item)
+	respondOK(c, sanitizeIntegration(&item))
 }
 
 // Patch godoc
@@ -464,7 +497,7 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 // @Produce      json
 // @Param        id    path      int                      true  "通知通道 ID"
 // @Param        body  body      integrationPatchRequest  true  "部分更新请求"
-// @Success      200   {object}  handlers.Response{data=model.Integration}
+// @Success      200   {object}  handlers.Response{data=integrationResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
@@ -519,12 +552,19 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 			respondBadRequest(c, "endpoint 不能为空")
 			return
 		}
-		if err := validateIntegrationEndpoint(item.Type, endpoint); err != nil {
-			respondBadRequest(c, err.Error())
-			return
+		if isMaskedIntegrationURL(endpoint) {
+			if !maskedIntegrationURLMatches(endpoint, item.Endpoint) {
+				respondBadRequest(c, "endpoint 不能使用脱敏占位符")
+				return
+			}
+		} else {
+			if err := validateIntegrationEndpoint(item.Type, endpoint); err != nil {
+				respondBadRequest(c, err.Error())
+				return
+			}
+			item.Endpoint = endpoint
+			endpointChanged = true
 		}
-		item.Endpoint = endpoint
-		endpointChanged = true
 	}
 
 	// 域名建议提示（仅当 endpoint 变化且未跳过时）
@@ -558,21 +598,33 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 	if req.ProxyURL != nil {
 		proxyURL := strings.TrimSpace(*req.ProxyURL)
 		if proxyURL != "" {
-			if err := validateProxyURL(proxyURL); err != nil {
-				respondBadRequest(c, err.Error())
-				return
+			if isMaskedIntegrationURL(proxyURL) {
+				if !maskedIntegrationURLMatches(proxyURL, item.ProxyURL) {
+					respondBadRequest(c, "代理地址不能使用脱敏占位符")
+					return
+				}
+			} else {
+				if err := validateProxyURL(proxyURL); err != nil {
+					respondBadRequest(c, err.Error())
+					return
+				}
+				item.ProxyURL = proxyURL
 			}
+		} else {
+			item.ProxyURL = ""
 		}
-		item.ProxyURL = proxyURL
 	}
 
 	if err := h.db.Save(&item).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
+	if err := h.db.First(&item, item.ID).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	item.HasSecret = hadSecret || (req.Secret != nil && *req.Secret != "")
-	maskIntegrationEndpoint(&item)
-	respondOK(c, item)
+	respondOK(c, sanitizeIntegration(&item))
 }
 
 // Delete godoc
@@ -625,13 +677,9 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 	err := alerting.SendProbe(item)
 	latency := time.Since(startedAt).Milliseconds()
 	if err != nil {
-		errMsg := err.Error()
-		if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
-			errMsg = util.SanitizeTelegramError(err)
-		}
 		respondOK(c, integrationTestResponse{
 			OK:        false,
-			Message:   "测试发送失败: " + errMsg,
+			Message:   "测试发送失败: " + util.SanitizeError(err),
 			LatencyMS: latency,
 		})
 		return
@@ -816,9 +864,51 @@ func parseWecomWebhookKey(endpoint string) string {
 	return parsed.Query().Get("key")
 }
 
-// maskIntegrationEndpoint 对 Telegram 类型通道的 endpoint 中 bot token 进行脱敏
-func maskIntegrationEndpoint(item *model.Integration) {
-	if strings.ToLower(strings.TrimSpace(item.Type)) == "telegram" {
-		item.Endpoint = util.MaskBotToken(item.Endpoint)
+func sanitizeIntegration(item *model.Integration) integrationResponse {
+	return integrationResponse{
+		ID:              item.ID,
+		Type:            item.Type,
+		Name:            item.Name,
+		Endpoint:        maskIntegrationURL(item.Endpoint),
+		HasSecret:       item.HasSecret,
+		Enabled:         item.Enabled,
+		FailThreshold:   item.FailThreshold,
+		CooldownMinutes: item.CooldownMinutes,
+		ProxyURL:        maskIntegrationURL(item.ProxyURL),
+		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 	}
+}
+
+func maskIntegrationURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return integrationMaskedPlaceholder
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + integrationMaskedHost
+}
+
+const (
+	integrationMaskedPlaceholder = "[redacted]"
+	integrationMaskedHost        = "redacted.invalid"
+)
+
+func isMaskedIntegrationURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == integrationMaskedPlaceholder {
+		return true
+	}
+	parsed, err := url.Parse(trimmed)
+	return err == nil && parsed != nil && strings.EqualFold(parsed.Host, integrationMaskedHost) && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func maskedIntegrationURLMatches(masked, original string) bool {
+	if !isMaskedIntegrationURL(masked) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(masked), maskIntegrationURL(original))
 }

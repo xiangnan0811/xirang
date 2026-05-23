@@ -3,7 +3,6 @@ package util
 import (
 	"net/url"
 	"regexp"
-	"strings"
 )
 
 // SanitizeMessage redacts URL credentials, query strings, path-segment
@@ -33,6 +32,9 @@ func SanitizeMessage(msg string) string {
 	msg = privateKeyBlockSanitizer.ReplaceAllString(msg, "[PRIVATE_KEY_REDACTED]")
 	msg = redactURLs(msg)
 	msg = botTokenSanitizer.ReplaceAllString(msg, "bot***:***")
+	for _, re := range hostErrorPatterns {
+		msg = re.ReplaceAllString(msg, "$1***$3")
+	}
 	for _, re := range sensitivePatterns {
 		msg = re.ReplaceAllString(msg, "$1=***")
 	}
@@ -64,6 +66,11 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
 }
 
+var hostErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(\blookup\s+)([^\s:]+)(:)`),
+	regexp.MustCompile(`(?i)(\bdial\s+(?:tcp|udp)\s+)([^\s:]+)(:)`),
+}
+
 // redactURLs drops credentials, query strings, and path-segment secrets from
 // any http(s)/ws URL embedded in msg. Webhook targets (Slack /services/T/B/X,
 // Feishu /open-apis/bot/v2/hook/<token>, DingTalk /robot/send?access_token=...,
@@ -73,21 +80,10 @@ var sensitivePatterns = []*regexp.Regexp{
 func redactURLs(msg string) string {
 	return urlLikePattern.ReplaceAllStringFunc(msg, func(match string) string {
 		u, err := url.Parse(match)
-		if err != nil {
+		if err != nil || u.Scheme == "" {
 			return match
 		}
-		if u.User != nil {
-			u.User = url.User("***")
-		}
-		if u.RawQuery != "" {
-			u.RawQuery = "***"
-		}
-		// Path can contain tokens — truncate to "/***" when non-trivial.
-		// A bare "/" or empty path is fine (no secrets).
-		if u.Path != "" && u.Path != "/" {
-			u.Path = "/***"
-		}
-		return strings.TrimSuffix(u.String(), "?")
+		return u.Scheme + "://***"
 	})
 }
 

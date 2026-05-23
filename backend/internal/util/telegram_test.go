@@ -121,9 +121,8 @@ func TestSanitizeDeliveryErrorNonTelegram(t *testing.T) {
 	if strings.Contains(urlResult, fakeAccessToken) {
 		t.Fatalf("期望 URL access_token 被屏蔽，实际: %s", urlResult)
 	}
-	// 应保留 host
-	if !strings.Contains(urlResult, "oapi.dingtalk.com") {
-		t.Fatalf("期望保留 host 用于诊断，实际: %s", urlResult)
+	if strings.Contains(urlResult, "oapi.dingtalk.com") {
+		t.Fatalf("期望 URL host 被屏蔽，实际: %s", urlResult)
 	}
 
 	// 含 token=secret 形式应被屏蔽
@@ -151,8 +150,8 @@ func TestSanitizeError_FeishuWebhookURL(t *testing.T) {
 	if strings.Contains(result, "abc-123-def") {
 		t.Fatalf("期望飞书 webhook 路径 token 被屏蔽，实际: %s", result)
 	}
-	if !strings.Contains(result, "feishu.cn") {
-		t.Fatalf("期望保留 host 用于诊断，实际: %s", result)
+	if strings.Contains(result, "feishu.cn") {
+		t.Fatalf("期望 URL host 被屏蔽，实际: %s", result)
 	}
 }
 
@@ -177,6 +176,18 @@ func TestSanitizeMessage_RedactsPrivateKeyBlocks(t *testing.T) {
 	}
 	if !strings.Contains(result, "[PRIVATE_KEY_REDACTED]") {
 		t.Fatalf("期望包含私钥屏蔽占位符，实际: %s", result)
+	}
+}
+
+func TestSanitizeMessage_RedactsLookupHost(t *testing.T) {
+	result := SanitizeMessage(`Post "https://hooks.example.test/services/FAKE_TOKEN": dial tcp: lookup hooks.example.test: no such host`)
+	for _, forbidden := range []string{"hooks.example.test", "FAKE_TOKEN", "/services/"} {
+		if strings.Contains(result, forbidden) {
+			t.Fatalf("期望 lookup 错误中的敏感片段被屏蔽，实际: %s", result)
+		}
+	}
+	if !strings.Contains(result, "https://***") || !strings.Contains(result, "lookup ***:") {
+		t.Fatalf("期望保留安全错误形态，实际: %s", result)
 	}
 }
 
