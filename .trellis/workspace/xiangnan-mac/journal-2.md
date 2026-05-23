@@ -302,3 +302,36 @@ Added sanitized Integration response DTOs and sender-error redaction for notific
 ### Next Steps
 
 - None - task complete
+
+
+## Session 68: P4 task runtime log sanitization
+
+**Date**: 2026-05-23
+**Task**: P4 task runtime log sanitization
+**Branch**: `security/p4-next-hardening`
+
+### Summary
+
+Sanitized task runtime logs, last_error fields, executor/verifier output, and maintenance/drill alert messages to hide commands, output, paths, endpoints, hostnames, and host-sensitive fragments.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `536cdbd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
