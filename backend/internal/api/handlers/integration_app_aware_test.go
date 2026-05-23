@@ -8,6 +8,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/profile"
+	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -18,10 +19,16 @@ import (
 func setupIntegrationAppAwareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
+	secure.ResetForTesting()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(&model.AppCredential{}, &model.Policy{}, &model.RestoreDrillEvidence{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
