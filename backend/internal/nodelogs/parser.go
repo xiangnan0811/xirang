@@ -69,10 +69,10 @@ func parseJournalJSON(nodeID uint, raw string) ([]LogEntry, string) {
 		entries = append(entries, LogEntry{
 			NodeID:    nodeID,
 			Source:    SourceJournalctl,
-			Path:      jl.SystemdUnit,
+			Path:      SanitizeLogPath(jl.SystemdUnit),
 			Timestamp: ts,
 			Priority:  mapPriority(jl.Priority),
-			Message:   jl.Message,
+			Message:   SanitizeLogMessage(jl.Message),
 		})
 	}
 	return entries, lastCursor
@@ -100,10 +100,10 @@ func parseFileChunk(nodeID uint, path, raw string, prevOffset int64) ([]LogEntry
 		entries = append(entries, LogEntry{
 			NodeID:    nodeID,
 			Source:    SourceFile,
-			Path:      path,
+			Path:      SanitizeLogPath(path),
 			Timestamp: now,
 			Priority:  "",
-			Message:   l,
+			Message:   SanitizeLogMessage(l),
 		})
 	}
 	return entries, prevOffset + int64(lastNL+1)

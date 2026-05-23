@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodelogs"
 	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
@@ -79,6 +81,13 @@ func seedLog(db *gorm.DB, nodeID uint, ts time.Time, msg string) {
 	})
 }
 
+func seedRawLog(db *gorm.DB, nodeID uint, ts time.Time, path, msg string) {
+	db.Create(&model.NodeLog{
+		NodeID: nodeID, Source: "journalctl", Path: path,
+		Timestamp: ts, Priority: "info", Message: msg,
+	})
+}
+
 func TestNodeLogs_FiltersNodeAndTime(t *testing.T) {
 	db := openNodeLogsTestDB(t)
 	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
@@ -107,8 +116,122 @@ func TestNodeLogs_FiltersNodeAndTime(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if len(resp.Data.Data) != 1 || resp.Data.Data[0].Message != "recent-n1" {
-		t.Fatalf("expected [recent-n1], got %+v", resp.Data.Data)
+	if len(resp.Data.Data) != 1 {
+		t.Fatalf("expected one row, got %+v", resp.Data.Data)
+	}
+	if strings.Contains(resp.Data.Data[0].Message, "recent-n1") {
+		t.Fatalf("node log response leaked raw message: %+v", resp.Data.Data)
+	}
+}
+
+func TestNodeLogs_SanitizesLegacyRawEvidenceInResponse(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
+	now := time.Now().UTC()
+	seedRawLog(db, 1, now.Add(-10*time.Minute), "/var/log/private/app.log", "token=FAKE_NODE_RESPONSE_TOKEN_FOR_TEST_ONLY host=logs.internal.example file=/srv/private/source")
+
+	r := newNodeLogsRouter(t, db, "operator")
+	start := now.Add(-time.Hour).Format(time.RFC3339)
+	end := now.Add(time.Minute).Format(time.RFC3339)
+	url := fmt.Sprintf("/api/v1/node-logs?start=%s&end=%s", start, end)
+	w := doNodeLogs(r, "GET", url, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, forbidden := range []string{
+		"/var/log/private/app.log",
+		"FAKE_NODE_RESPONSE_TOKEN_FOR_TEST_ONLY",
+		"logs.internal.example",
+		"/srv/private/source",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("node log response leaked %q: %s", forbidden, body)
+		}
+	}
+	for _, expected := range []string{"[日志路径:", "[日志内容已隐藏]"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected placeholder %q in %s", expected, body)
+		}
+	}
+}
+
+func TestNodeLogs_PathFilterUsesSanitizedPathKey(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
+	now := time.Now().UTC()
+	seedRawLog(db, 1, now.Add(-10*time.Minute), nodelogs.SanitizeLogPath("/var/log/private/app.log"), "matched")
+	seedRawLog(db, 1, now.Add(-9*time.Minute), nodelogs.SanitizeLogPath("/var/log/private/other.log"), "other")
+
+	r := newNodeLogsRouter(t, db, "operator")
+	start := now.Add(-time.Hour).Format(time.RFC3339)
+	end := now.Add(time.Minute).Format(time.RFC3339)
+	url := fmt.Sprintf("/api/v1/node-logs?path=/var/log/private/app.log&start=%s&end=%s", start, end)
+	w := doNodeLogs(r, "GET", url, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Data []model.NodeLog `json:"data"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Data.Data) != 1 {
+		t.Fatalf("expected one row for sanitized path filter, got %+v", resp.Data.Data)
+	}
+}
+
+func TestNodeLogs_PathFilterDoesNotQueryLegacyRawPath(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
+	now := time.Now().UTC()
+	seedRawLog(db, 1, now.Add(-10*time.Minute), "/var/log/private/legacy.log", "legacy")
+
+	r := newNodeLogsRouter(t, db, "operator")
+	start := now.Add(-time.Hour).Format(time.RFC3339)
+	end := now.Add(time.Minute).Format(time.RFC3339)
+	url := fmt.Sprintf("/api/v1/node-logs?path=/var/log/private/legacy.log&start=%s&end=%s", start, end)
+	w := doNodeLogs(r, "GET", url, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/var/log/private/legacy.log") || strings.Contains(body, "legacy") {
+		t.Fatalf("legacy path filter response leaked raw evidence: %s", body)
+	}
+	var resp struct {
+		Data struct {
+			Data []model.NodeLog `json:"data"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Data.Data) != 0 {
+		t.Fatalf("expected raw legacy path not to match sanitized path filter, got %+v", resp.Data.Data)
+	}
+}
+
+func TestNodeLogs_SanitizesMalformedPathPlaceholderInResponse(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
+	now := time.Now().UTC()
+	seedRawLog(db, 1, now.Add(-10*time.Minute), "[日志路径:/var/log/private/malformed.log]", "masked")
+
+	r := newNodeLogsRouter(t, db, "operator")
+	start := now.Add(-time.Hour).Format(time.RFC3339)
+	end := now.Add(time.Minute).Format(time.RFC3339)
+	url := fmt.Sprintf("/api/v1/node-logs?start=%s&end=%s", start, end)
+	w := doNodeLogs(r, "GET", url, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/var/log/private/malformed.log") || strings.Contains(body, "[日志路径:/") {
+		t.Fatalf("malformed placeholder leaked raw path: %s", body)
 	}
 }
 
@@ -190,8 +313,37 @@ func TestNodeLogs_KeywordExclusion(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if len(resp.Data.Data) != 1 || resp.Data.Data[0].Message != "deny traffic" {
-		t.Fatalf("expected only deny, got %+v", resp.Data.Data)
+	if len(resp.Data.Data) != 1 {
+		t.Fatalf("expected one non-excluded row, got %+v", resp.Data.Data)
+	}
+	if strings.Contains(resp.Data.Data[0].Message, "deny traffic") {
+		t.Fatalf("node log response leaked raw message: %+v", resp.Data.Data)
+	}
+}
+
+func TestAlertLogs_SanitizesLegacyRawEvidenceInResponse(t *testing.T) {
+	db := openNodeLogsTestDB(t)
+	db.Create(&model.Node{Name: "n1", Host: "h", Username: "u"})
+	seedOperatorOwnership(db, 1)
+	t0 := time.Now().UTC().Add(-30 * time.Minute)
+	db.Create(&model.Alert{NodeID: 1, NodeName: "n1", Severity: "warning", Status: "open", ErrorCode: "X", Message: "m", TriggeredAt: t0})
+	seedRawLog(db, 1, t0, "/var/log/private/alert.log", "password=FAKE_ALERT_LOG_PASSWORD_FOR_TEST_ONLY host=alert.internal.example file=/srv/private/alert")
+
+	r := newNodeLogsRouter(t, db, "operator")
+	w := doNodeLogs(r, "GET", "/api/v1/alerts/1/logs", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, forbidden := range []string{
+		"/var/log/private/alert.log",
+		"FAKE_ALERT_LOG_PASSWORD_FOR_TEST_ONLY",
+		"alert.internal.example",
+		"/srv/private/alert",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("alert log response leaked %q: %s", forbidden, body)
+		}
 	}
 }
 
@@ -217,8 +369,11 @@ func TestAlertLogs_ReturnsWindow(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if len(resp.Data.Data) != 1 || resp.Data.Data[0].Message != "in-window" {
-		t.Fatalf("expected [in-window], got %+v", resp.Data.Data)
+	if len(resp.Data.Data) != 1 {
+		t.Fatalf("expected one in-window row, got %+v", resp.Data.Data)
+	}
+	if strings.Contains(resp.Data.Data[0].Message, "in-window") {
+		t.Fatalf("alert log response leaked raw message: %+v", resp.Data.Data)
 	}
 	if resp.Data.NodeID != 1 {
 		t.Fatalf("node_id=%d", resp.Data.NodeID)

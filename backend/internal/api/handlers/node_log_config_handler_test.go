@@ -111,6 +111,9 @@ func TestNodeLogConfig_RejectsNonAbsolutePath(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("%d", w.Code)
 	}
+	if strings.Contains(w.Body.String(), "var/log/relative") {
+		t.Fatalf("validation response leaked rejected path: %s", w.Body.String())
+	}
 }
 
 func TestNodeLogConfig_RejectsDenyListPath(t *testing.T) {
@@ -122,6 +125,9 @@ func TestNodeLogConfig_RejectsDenyListPath(t *testing.T) {
 		w := doLogCfg(r, "PATCH", "/api/v1/nodes/1/log-config", body)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("path %q: %d", p, w.Code)
+		}
+		if strings.Contains(w.Body.String(), p) {
+			t.Fatalf("validation response leaked rejected path %q: %s", p, w.Body.String())
 		}
 	}
 }
@@ -142,6 +148,9 @@ func TestNodeLogConfig_RejectsShellMetaChars(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("path %q: %d", p, w.Code)
 		}
+		if strings.Contains(w.Body.String(), p) {
+			t.Fatalf("validation response leaked rejected path %q: %s", p, w.Body.String())
+		}
 	}
 }
 
@@ -153,6 +162,9 @@ func TestNodeLogConfig_RejectsWildcards(t *testing.T) {
 	w := doLogCfg(r, "PATCH", "/api/v1/nodes/1/log-config", body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("%d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "/var/log/*.log") {
+		t.Fatalf("validation response leaked rejected path: %s", w.Body.String())
 	}
 }
 

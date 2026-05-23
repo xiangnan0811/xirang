@@ -49,8 +49,11 @@ func TestWorker_ProcessInsertsLogsAndAdvancesCursor(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 inserted log, got %d", len(logs))
 	}
-	if logs[0].Message != "hello" {
-		t.Fatalf("expected message=hello, got %q", logs[0].Message)
+	if logs[0].Message != nodeLogMessagePlaceholder {
+		t.Fatalf("expected sanitized message, got %q", logs[0].Message)
+	}
+	if logs[0].Path != SanitizeLogPath("sshd") {
+		t.Fatalf("expected sanitized path, got %q", logs[0].Path)
 	}
 	if logs[0].NodeID != node.ID {
 		t.Fatalf("wrong node_id: %d", logs[0].NodeID)
