@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.15](https://github.com/xiangnan0811/xirang/compare/v0.43.14...v0.43.15) (2026-05-23)
+
+
+### 🐛 Bug Fixes
+
+* **security:** centralize app profile credential access ([#233](https://github.com/xiangnan0811/xirang/issues/233)) ([6e786e8](https://github.com/xiangnan0811/xirang/commit/6e786e8f811ab7202891cf5cfb04bf1c1df38f28))
+
 ## [0.43.14](https://github.com/xiangnan0811/xirang/compare/v0.43.13...v0.43.14) (2026-05-23)
 
 
