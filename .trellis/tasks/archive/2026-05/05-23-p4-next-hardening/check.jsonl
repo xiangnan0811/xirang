@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-23-p4-next-hardening/prd.md","reason":"Check implementation against acceptance criteria and explicit out-of-scope constraints."}
+{"file":".trellis/tasks/05-23-p4-next-hardening/research/remaining-p4-options.md","reason":"Verify the implemented scope matches the selected local-only AppCredential seam and does not drift into deferred P4 areas."}
+{"file":".trellis/tasks/05-23-p4-next-hardening/research/profile-hook-app-credential-flow.md","reason":"Use mapped call sites and existing tests to confirm all current AppCredential profile materialization paths were adopted."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check that AppCredential.Config remains protected by model hooks and no manual encryption/decryption is introduced in handlers."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check new resolver code/tests do not introduce logs or metadata containing decrypted values, command text/output, endpoints, or paths."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check invalid config and resolver errors remain generic and do not expose raw internal payloads."}

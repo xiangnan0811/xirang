@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-23-p4-next-hardening/prd.md","reason":"Defines the selected P4 AppCredential/profile hook local resolver seam requirements, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/tasks/05-23-p4-next-hardening/research/remaining-p4-options.md","reason":"Ranks remaining P4 candidates and identifies the AppCredential seam as the next smallest local-only backend slice."}
+{"file":".trellis/tasks/05-23-p4-next-hardening/research/profile-hook-app-credential-flow.md","reason":"Maps current AppCredential storage, profile rendering, policy hook persistence, runtime hook execution, and existing tests."}
+{"file":".trellis/tasks/05-23-p4-next-hardening/research/remaining-secret-materialization.md","reason":"Captures remaining non-SSH/non-restic secret materialization candidates and why they are deferred."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Authoritative sensitive-field model-hook and persistence constraints for AppCredential.Config."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Defines logging exclusions for decrypted model-hook values, secrets, command output, endpoints, and unsafe metadata."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines safe client-facing error behavior for internal parsing and dependency failures."}
