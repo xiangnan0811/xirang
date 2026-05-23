@@ -76,12 +76,12 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		errMsg := fmt.Sprintf("restic 完整性检查失败 (策略: %s, 节点: %s, 仓库: %s): %v", policy.Name, task.Node.Name, repo, err)
-		log.Error().Uint("task_id", task.ID).Err(err).Str("output", output).Msg("restic check 执行失败")
+		errMsg := sanitizeTaskLastError(fmt.Sprintf("restic 完整性检查失败: %v, 输出: %s", err, output))
+		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("restic check 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
 		_ = alerting.RaiseIntegrityCheckFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
-		msg := fmt.Sprintf("restic 完整性检查通过 (策略: %s, 节点: %s, 仓库: %s)", policy.Name, task.Node.Name, repo)
+		msg := "restic 完整性检查通过"
 		log.Info().Uint("task_id", task.ID).Msg("restic 完整性检查通过")
 		m.emitLog(0, nil, "info", msg, "")
 	}
@@ -112,12 +112,12 @@ func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		errMsg := fmt.Sprintf("rclone 完整性检查失败 (策略: %s, 节点: %s): %v", policy.Name, task.Node.Name, err)
-		log.Error().Uint("task_id", task.ID).Err(err).Str("output", output).Msg("rclone check 执行失败")
+		errMsg := sanitizeTaskLastError(fmt.Sprintf("rclone 完整性检查失败: %v, 输出: %s", err, output))
+		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("rclone check 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
 		_ = alerting.RaiseIntegrityCheckFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
-		msg := fmt.Sprintf("rclone 完整性检查通过 (策略: %s, 节点: %s)", policy.Name, task.Node.Name)
+		msg := "rclone 完整性检查通过"
 		log.Info().Uint("task_id", task.ID).Msg("rclone 完整性检查通过")
 		m.emitLog(0, nil, "info", msg, "")
 	}

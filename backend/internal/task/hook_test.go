@@ -98,7 +98,7 @@ func TestPreHookFailure(t *testing.T) {
 
 	// 注入失败的 hook 函数
 	m.hookRunFunc = func(_ context.Context, _ model.Task, command string) error {
-		return fmt.Errorf("pre-hook 执行出错: exit status 1")
+		return fmt.Errorf(`pre-hook 执行出错: exit status 1, 输出: token=FAKE_HOOK_OUTPUT_TOKEN_FOR_TEST_ONLY /srv/private/hook-output hooks.internal.example`)
 	}
 
 	node := model.Node{Name: "node-hook-pre-fail", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
@@ -145,6 +145,7 @@ func TestPreHookFailure(t *testing.T) {
 	if updated.LastError == "" {
 		t.Fatalf("任务 LastError 不应为空")
 	}
+	assertTaskRuntimeTextSanitized(t, updated.LastError, []string{"FAKE_HOOK_OUTPUT_TOKEN_FOR_TEST_ONLY", "/srv/private/hook-output", "hooks.internal.example"})
 
 	// TaskRun 状态应为 failed
 	var run model.TaskRun
@@ -154,6 +155,15 @@ func TestPreHookFailure(t *testing.T) {
 	}
 	if run.LastError == "" {
 		t.Fatalf("TaskRun.LastError 不应为空")
+	}
+	assertTaskRuntimeTextSanitized(t, run.LastError, []string{"FAKE_HOOK_OUTPUT_TOKEN_FOR_TEST_ONLY", "/srv/private/hook-output", "hooks.internal.example"})
+	var logs []model.TaskLog
+	db.Where("task_id = ?", task.ID).Find(&logs)
+	if len(logs) == 0 {
+		t.Fatalf("期望写入 hook 任务日志")
+	}
+	for _, log := range logs {
+		assertTaskRuntimeTextSanitized(t, log.Message, []string{"false", "FAKE_HOOK_OUTPUT_TOKEN_FOR_TEST_ONLY", "/srv/private/hook-output", "hooks.internal.example"})
 	}
 	if run.FinishedAt == nil {
 		t.Fatalf("TaskRun.FinishedAt 不应为空")
@@ -242,7 +252,7 @@ func TestPostHookFailureDoesNotAffectTaskStatus(t *testing.T) {
 	var hookCalls int32
 	m.hookRunFunc = func(_ context.Context, _ model.Task, command string) error {
 		atomic.AddInt32(&hookCalls, 1)
-		return fmt.Errorf("post-hook 执行出错: exit status 2")
+		return fmt.Errorf(`post-hook 执行出错: exit status 2, 输出: password=FAKE_POST_HOOK_PASSWORD_FOR_TEST_ONLY /srv/private/post-hook hooks-post.internal.example`)
 	}
 
 	node := model.Node{Name: "node-hook-post-fail", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
@@ -297,6 +307,14 @@ func TestPostHookFailureDoesNotAffectTaskStatus(t *testing.T) {
 	db.First(&run, runID)
 	if run.Status != "success" {
 		t.Fatalf("TaskRun 状态应为 success，实际: %s", run.Status)
+	}
+	var logs []model.TaskLog
+	db.Where("task_id = ?", task.ID).Find(&logs)
+	if len(logs) == 0 {
+		t.Fatalf("期望写入 post-hook 任务日志")
+	}
+	for _, log := range logs {
+		assertTaskRuntimeTextSanitized(t, log.Message, []string{"false", "FAKE_POST_HOOK_PASSWORD_FOR_TEST_ONLY", "/srv/private/post-hook", "hooks-post.internal.example"})
 	}
 }
 

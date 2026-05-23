@@ -78,24 +78,25 @@ type queuedTaskSample struct {
 }
 
 type Manager struct {
-	db                 *gorm.DB
-	stateMachine       *StateMachine
-	executorFactory    executor.Factory
-	hub                *ws.Hub
-	scheduler          *scheduler.CronScheduler
-	locks              sync.Map
-	strategyLocks      sync.Map
-	nodeLocks          sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
-	hookRunFunc        func(ctx context.Context, task model.Task, command string) error // 可测试注入
-	drillSSHScriptFunc func(ctx context.Context, node model.Node, script string) error  // 可测试注入
-	drillRestoreFunc   func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
-	runningCancels     sync.Map
-	pendingRuns        sync.Map
-	restoreNodes       sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
-	retryTimers        sync.Map
-	retryChainContexts sync.Map // taskID → chainContext
-	semaphore          chan struct{}
-	taskWG             sync.WaitGroup
+	db                          *gorm.DB
+	stateMachine                *StateMachine
+	executorFactory             executor.Factory
+	hub                         *ws.Hub
+	scheduler                   *scheduler.CronScheduler
+	locks                       sync.Map
+	strategyLocks               sync.Map
+	nodeLocks                   sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
+	hookRunFunc                 func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	drillSSHScriptFunc          func(ctx context.Context, node model.Node, script string) error  // 可测试注入
+	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
+	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
+	runningCancels              sync.Map
+	pendingRuns                 sync.Map
+	restoreNodes                sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
+	retryTimers                 sync.Map
+	retryChainContexts          sync.Map // taskID → chainContext
+	semaphore                   chan struct{}
+	taskWG                      sync.WaitGroup
 
 	logQueue         chan queuedTaskLog
 	logBatchSize     int
@@ -151,6 +152,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	m.hookRunFunc = m.runSSHHook
 	m.drillSSHScriptFunc = m.runDrillSSHScript
 	m.drillRestoreFunc = m.restoreBackupToSandbox
+	m.ensureRemoteTargetReadyFunc = executor.EnsureRemoteTargetReady
 	m.startLogWorker()
 	m.startSampleWorker()
 	return m

@@ -62,7 +62,7 @@ func (m *Manager) emitLog(taskID uint, runID *uint, level, message, status strin
 		taskID:    taskID,
 		taskRunID: runID,
 		level:     level,
-		message:   message,
+		message:   sanitizeTaskLogMessage(message),
 		status:    status,
 	}
 

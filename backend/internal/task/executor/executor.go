@@ -227,7 +227,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			if strings.TrimSpace(message) == "" {
 				continue
 			}
-			logf(level, message)
+			logf(level, sanitizeExecutorRuntimeEvidence(message))
 			if level == "info" && progressf != nil {
 				if sample, ok := parseProgressSample(message); ok {
 					progressf(sample)
@@ -294,7 +294,7 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 		ShellEscape(task.RsyncSource),
 		ShellEscape(task.RsyncTarget))
 
-	logf("info", fmt.Sprintf("在远程节点执行: %s", rsyncCmd))
+	logf("info", "在远程节点执行恢复命令")
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {
@@ -320,7 +320,7 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line != "" {
-				logf("info", line)
+				logf("info", sanitizeExecutorRuntimeEvidence(line))
 				if progressf != nil {
 					if sample, ok := parseProgressSample(line); ok {
 						progressf(sample)
@@ -336,7 +336,7 @@ func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, l
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line != "" {
-				logf("warn", line)
+				logf("warn", sanitizeExecutorRuntimeEvidence(line))
 			}
 		}
 	}()

@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-23-p4-task-runtime-log-sanitization/prd.md","reason":"P4 task runtime log sanitization scope, requirements, acceptance criteria, and out-of-scope boundaries"}
+{"file":".trellis/tasks/05-23-p4-task-runtime-log-sanitization/research/task-runtime-log-sanitization.md","reason":"Repo inspection findings for task log, hook, restore, and LastError exposure paths"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Project logging rules and sensitive data exclusions for backend logs and task evidence"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Project error exposure rules for API/user-visible errors and sensitive output handling"}

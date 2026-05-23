@@ -73,7 +73,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	if strings.Contains(checkOut, "Is there a repository at the following location") ||
 		strings.Contains(checkOut, "repository does not exist") ||
 		strings.Contains(checkOut, "no such file or directory") {
-		logf("info", fmt.Sprintf("初始化 restic 仓库: %s", repo))
+		logf("info", "初始化 restic 仓库")
 		initFlags := ""
 		if cfg.AppendOnly {
 			initFlags = " --repository-version 2"
@@ -81,7 +81,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, repoArg)
 		initOut, initErr := RunSSHCommandOutput(ctx, client, initCmd)
 		if initErr != nil {
-			return -1, fmt.Errorf("初始化 restic 仓库失败: %s", initOut)
+			return -1, fmt.Errorf("初始化 restic 仓库失败: %s", sanitizeExecutorRuntimeEvidence(initOut))
 		}
 		logf("info", "restic 仓库初始化成功")
 	}
@@ -108,7 +108,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	backupCmd := fmt.Sprintf("%s backup -r %s %s %s --json 2>&1",
 		cmdPrefix, repoArg, ShellEscape(source), excludeArgs)
 
-	logf("info", fmt.Sprintf("开始 restic 备份: %s → %s", source, repo))
+	logf("info", "开始 restic 备份")
 
 	exitCode, runErr := e.streamSSHCommand(ctx, client, backupCmd, logf, progressf)
 	if runErr != nil {
@@ -148,7 +148,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	restoreCmd := fmt.Sprintf("%s restore latest -r %s --target %s --json 2>&1",
 		cmdPrefix, repoArg, ShellEscape(targetPath))
 
-	logf("info", fmt.Sprintf("开始 restic 恢复: %s → %s", repo, targetPath))
+	logf("info", "开始 restic 恢复")
 	exitCode, runErr := e.streamSSHCommand(ctx, client, restoreCmd, logf, progressf)
 	if runErr != nil {
 		return exitCode, fmt.Errorf("restic 恢复执行失败: %w", runErr)
@@ -204,7 +204,7 @@ func (e *ResticExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 				continue
 			}
 		}
-		logf("info", line)
+		logf("info", sanitizeExecutorRuntimeEvidence(line))
 	}
 
 	waitErr := session.Wait()
@@ -300,7 +300,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		return nil, fmt.Errorf("获取快照列表失败: %w, 输出: %s", err, output)
+		return nil, fmt.Errorf("获取快照列表失败: %w, 输出: %s", err, sanitizeExecutorRuntimeOutput(output))
 	}
 
 	var snapshots []ResticSnapshot
@@ -332,7 +332,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 	cmd := fmt.Sprintf("%s ls %s %s -r %s --json", cmdPrefix, ShellEscape(snapshotID), ShellEscape(lsPath), ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		return nil, fmt.Errorf("获取文件列表失败: %w, 输出: %s", err, output)
+		return nil, fmt.Errorf("获取文件列表失败: %w, 输出: %s", err, sanitizeExecutorRuntimeOutput(output))
 	}
 
 	// restic ls 输出 NDJSON（每行一个 JSON 对象）
@@ -375,7 +375,7 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	cmd := fmt.Sprintf("%s restore %s -r %s --target %s%s", cmdPrefix, ShellEscape(snapshotID), ShellEscape(repo), ShellEscape(targetPath), includeArgs)
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		return fmt.Errorf("恢复失败: %w, 输出: %s", err, output)
+		return fmt.Errorf("恢复失败: %w, 输出: %s", err, sanitizeExecutorRuntimeOutput(output))
 	}
 	return nil
 }

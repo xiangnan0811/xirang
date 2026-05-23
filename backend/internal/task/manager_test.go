@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -555,12 +556,208 @@ func TestEmitLogWritesTaskRunID(t *testing.T) {
 	}
 }
 
+func TestEmitLogSanitizesTaskRuntimeEvidence(t *testing.T) {
+	db := openManagerTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+
+	taskEntity := seedTaskForManagerTest(t, db)
+	runID := uint(43)
+	message := `执行命令: curl https://hooks.example.test/services/FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY?secret=FAKE_QUERY_FOR_TEST_ONLY && rsync /srv/private/source root@db.internal.example:/backup/tenant-a`
+
+	m.emitLog(taskEntity.ID, &runID, "info", message, "running")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var log model.TaskLog
+	if err := db.Where("task_id = ?", taskEntity.ID).First(&log).Error; err != nil {
+		t.Fatalf("查询任务日志失败: %v", err)
+	}
+	for _, forbidden := range []string{"curl", "rsync", "hooks.example.test", "FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY", "FAKE_QUERY_FOR_TEST_ONLY", "/srv/private/source", "db.internal.example", "/backup/tenant-a"} {
+		if strings.Contains(log.Message, forbidden) {
+			t.Fatalf("TaskLog.Message 泄露敏感片段 %q: %s", forbidden, log.Message)
+		}
+	}
+	if !strings.Contains(log.Message, "[命令已隐藏]") {
+		t.Fatalf("TaskLog.Message 缺少命令脱敏占位: %s", log.Message)
+	}
+}
+
 type failingExecutor struct {
 	err error
 }
 
 func (e *failingExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
 	return 1, e.err
+}
+
+type failingRestoreExecutor struct {
+	err   error
+	calls int32
+}
+
+func (e *failingRestoreExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+	return 0, nil
+}
+
+func (e *failingRestoreExecutor) RunRestore(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+	atomic.AddInt32(&e.calls, 1)
+	return 1, e.err
+}
+
+func TestRunTaskSanitizesExecutorFailureLastError(t *testing.T) {
+	db := openManagerTestDB(t)
+	execErr := errors.New(`backup failed for /srv/private/source to root@backup.internal.example:/repo/tenant-a via https://backup.internal.example/api?token=FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY`)
+	m := NewManager(db, stubExecutorFactory{executor: &failingExecutor{err: execErr}}, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+
+	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Fatalf("期望 TaskRun failed，实际 %q", run.Status)
+	}
+	assertTaskRuntimeTextSanitized(t, run.LastError, []string{"/srv/private/source", "backup.internal.example", "/repo/tenant-a", "FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY"})
+
+	var updated model.Task
+	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
+		t.Fatalf("查询 Task 失败: %v", err)
+	}
+	assertTaskRuntimeTextSanitized(t, updated.LastError, []string{"/srv/private/source", "backup.internal.example", "/repo/tenant-a", "FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY"})
+}
+
+func TestRunRestoreTaskSanitizesPrecheckFailureLastError(t *testing.T) {
+	db := openManagerTestDB(t)
+	precheckErr := errors.New(`target /srv/private/restore unavailable on restore-precheck.internal.example output=/tmp/precheck-output token=FAKE_RESTORE_PRECHECK_TOKEN_FOR_TEST_ONLY`)
+	restoreExec := &failingRestoreExecutor{err: errors.New("restore executor should not run")}
+	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, 8, 90)
+	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		return precheckErr
+	}
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.RsyncSource = "/backup/private/source"
+	taskEntity.RsyncTarget = "/srv/private/restore"
+	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+
+	m.runRestoreTask(taskEntity.ID, runID, taskEntity)
+	if atomic.LoadInt32(&restoreExec.calls) != 0 {
+		t.Fatalf("恢复前检查失败时不应调用恢复执行器，实际调用 %d 次", atomic.LoadInt32(&restoreExec.calls))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Fatalf("期望恢复前检查 TaskRun failed，实际 %q", run.Status)
+	}
+	assertTaskRuntimeTextSanitized(t, run.LastError, []string{"/srv/private/restore", "/tmp/precheck-output", "restore-precheck.internal.example", "FAKE_RESTORE_PRECHECK_TOKEN_FOR_TEST_ONLY"})
+
+	var logs []model.TaskLog
+	if err := db.Where("task_run_id = ?", runID).Find(&logs).Error; err != nil {
+		t.Fatalf("查询恢复日志失败: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatalf("期望恢复前检查失败写入任务日志")
+	}
+	for _, logEntry := range logs {
+		assertTaskRuntimeTextSanitized(t, logEntry.Message, []string{"/srv/private/restore", "/tmp/precheck-output", "restore-precheck.internal.example", "FAKE_RESTORE_PRECHECK_TOKEN_FOR_TEST_ONLY"})
+	}
+}
+
+func TestRunRestoreTaskSanitizesRestoreFailureLastError(t *testing.T) {
+	db := openManagerTestDB(t)
+	restoreErr := errors.New(`restore failed from /backup/private/source to /srv/private/restore on restore.internal.example via https://restore.internal.example/api?token=FAKE_RESTORE_TOKEN_FOR_TEST_ONLY`)
+	restoreExec := &failingRestoreExecutor{err: restoreErr}
+	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, 8, 90)
+	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		return nil
+	}
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.RsyncSource = "/backup/private/source"
+	taskEntity.RsyncTarget = "/srv/private/restore"
+	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+
+	m.runRestoreTask(taskEntity.ID, runID, taskEntity)
+	if atomic.LoadInt32(&restoreExec.calls) != 1 {
+		t.Fatalf("期望执行恢复执行器失败路径，实际调用 %d 次", atomic.LoadInt32(&restoreExec.calls))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Fatalf("期望恢复 TaskRun failed，实际 %q", run.Status)
+	}
+	assertTaskRuntimeTextSanitized(t, run.LastError, []string{"/backup/private/source", "/srv/private/restore", "restore.internal.example", "FAKE_RESTORE_TOKEN_FOR_TEST_ONLY"})
+
+	var logs []model.TaskLog
+	if err := db.Where("task_run_id = ?", runID).Find(&logs).Error; err != nil {
+		t.Fatalf("查询恢复日志失败: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatalf("期望恢复失败写入任务日志")
+	}
+	for _, logEntry := range logs {
+		assertTaskRuntimeTextSanitized(t, logEntry.Message, []string{"/backup/private/source", "/srv/private/restore", "restore.internal.example", "FAKE_RESTORE_TOKEN_FOR_TEST_ONLY"})
+	}
+}
+
+func TestMaintenanceMessagesSanitizeRuntimeEvidence(t *testing.T) {
+	db := openManagerTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+
+	retentionErr := sanitizeTaskLastError(`restic 保留清理失败: remove /srv/private/repo on backup.internal.example token=FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
+	m.emitLog(0, nil, "error", retentionErr, "")
+	_ = alerting.RaiseRetentionFailure(db, 7, "policy-runtime", "node-runtime", 9, retentionErr)
+
+	integrityErr := sanitizeTaskLastError(`rclone 完整性检查失败: compare /srv/private/source to s3:tenant/private on integrity.internal.example token=FAKE_INTEGRITY_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
+	m.emitLog(0, nil, "error", integrityErr, "")
+	_ = alerting.RaiseIntegrityCheckFailure(db, 8, "policy-runtime", "node-runtime", 10, integrityErr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = m.Shutdown(ctx)
+
+	var logs []model.TaskLog
+	if err := db.Find(&logs).Error; err != nil {
+		t.Fatalf("查询维护日志失败: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("期望写入 2 条维护日志，实际 %d", len(logs))
+	}
+	for _, logEntry := range logs {
+		assertTaskRuntimeTextSanitized(t, logEntry.Message, []string{"/srv/private/repo", "/srv/private/source", "s3:tenant/private", "backup.internal.example", "integrity.internal.example", "FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY", "FAKE_INTEGRITY_ALERT_TOKEN_FOR_TEST_ONLY", "/tmp/raw-output"})
+	}
+
+	var alerts []model.Alert
+	if err := db.Find(&alerts).Error; err != nil {
+		t.Fatalf("查询维护告警失败: %v", err)
+	}
+	if len(alerts) != 2 {
+		t.Fatalf("期望写入 2 条维护告警，实际 %d", len(alerts))
+	}
+	for _, alert := range alerts {
+		assertTaskRuntimeTextSanitized(t, alert.Message, []string{"/srv/private/repo", "/srv/private/source", "s3:tenant/private", "backup.internal.example", "integrity.internal.example", "FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY", "FAKE_INTEGRITY_ALERT_TOKEN_FOR_TEST_ONLY", "/tmp/raw-output"})
+	}
 }
 
 // TestRestoreBlockedByInFlightNormalTask 验证即使普通任务已经进入 runTask() 但尚未将
