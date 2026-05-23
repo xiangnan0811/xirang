@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-23-p4-integration-notification-access/prd.md","reason":"Defines selected P4 Integration notification response/error hardening requirements, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/tasks/05-23-p4-integration-notification-access/research/integration-notification-access.md","reason":"Maps Integration credential materialization, API response exposure, dispatch paths, and chosen local-only slice."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Keep Integration sensitive fields protected by model hooks; avoid manual encryption/decryption or schema changes."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Ensure endpoints, proxy URLs, secrets, host-sensitive strings, command/text output are not introduced into logs or responses."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Ensure sender and validation errors crossing API/log/persistence boundaries are sanitized."}
