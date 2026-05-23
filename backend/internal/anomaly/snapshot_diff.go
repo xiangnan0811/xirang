@@ -264,29 +264,6 @@ func parseResticSnapshotsJSON(output string) ([]string, error) {
 	return ids, nil
 }
 
-// extractResticPassword 从 Task.ExecutorConfig JSON 中提取 repository_password。
-func extractResticPassword(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return ""
-	}
-	type cfg struct {
-		RepositoryPassword string `json:"repository_password,omitempty"`
-	}
-	var c cfg
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return ""
-	}
-	return c.RepositoryPassword
-}
-
-// buildDiffEnvPrefix 为 restic 命令构建 RESTIC_PASSWORD=... 环境变量前缀。
-func buildDiffEnvPrefix(password string) string {
-	if password == "" {
-		return "RESTIC_PASSWORD=''"
-	}
-	return "RESTIC_PASSWORD=" + executor.ShellEscape(password)
-}
-
 // shellEscapeArg 将字符串包裹在单引号中，防止 shell 注入。
 func shellEscapeArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
@@ -317,8 +294,8 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 		return nil, fmt.Errorf("任务未关联节点")
 	}
 
-	password := extractResticPassword(fullTask.ExecutorConfig)
-	envPrefix := buildDiffEnvPrefix(password)
+	access := executor.ResolveResticRepositoryAccessOrEmpty(fullTask.ExecutorConfig)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 	repoArg := shellEscapeArg(fullTask.RsyncTarget)
 	policyID := uint(0)
 	if fullTask.PolicyID != nil {

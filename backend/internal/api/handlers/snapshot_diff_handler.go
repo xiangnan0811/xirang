@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -99,7 +98,7 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 		return
 	}
 
-	cfg, err := parseResticConfigForDiff(task.ExecutorConfig)
+	access, err := executor.ResolveResticRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("解析 restic 配置失败: %w", err))
 		return
@@ -115,7 +114,7 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	envPrefix := buildDiffEnvPrefix(cfg.repositoryPassword)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 	resticBin := "restic"
 	repoArg := "'" + strings.ReplaceAll(repo, "'", "'\\''") + "'"
 	snap1Arg := "'" + strings.ReplaceAll(snap1, "'", "'\\''") + "'"
@@ -266,31 +265,4 @@ func parseHumanSize(numStr, unit string) int64 {
 	default:
 		return -1
 	}
-}
-
-// resticDiffConfig 内部解析 restic 配置。
-type resticDiffConfig struct {
-	repositoryPassword string
-}
-
-func parseResticConfigForDiff(raw string) (resticDiffConfig, error) {
-	if strings.TrimSpace(raw) == "" {
-		return resticDiffConfig{}, nil
-	}
-	// 复用 executor 中的结构，但只取密码字段
-	type cfg struct {
-		RepositoryPassword string `json:"repository_password,omitempty"`
-	}
-	var c cfg
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return resticDiffConfig{}, err
-	}
-	return resticDiffConfig{repositoryPassword: c.RepositoryPassword}, nil
-}
-
-func buildDiffEnvPrefix(password string) string {
-	if password == "" {
-		return "RESTIC_PASSWORD=''"
-	}
-	return "RESTIC_PASSWORD=" + executor.ShellEscape(password)
 }

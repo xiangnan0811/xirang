@@ -176,13 +176,13 @@ func indexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snapshotID
 	}
 	defer client.Close() //nolint:errcheck
 
-	cfg, err := parseResticIndexConfig(task.ExecutorConfig)
+	access, err := executor.ResolveResticRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return err
 	}
 
 	resticBin := resolveResticBinary()
-	envPrefix := buildIndexEnvPrefix(cfg.RepositoryPassword)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 	repoArg := executor.ShellEscape(task.RsyncTarget)
 	snapArg := executor.ShellEscape(snapshotID)
 
@@ -248,22 +248,6 @@ func parseResticFindOutput(output string) []resticFindEntry {
 	return entries
 }
 
-// indexConfig 索引器使用的内部 restic 配置。
-type indexConfig struct {
-	RepositoryPassword string `json:"repository_password,omitempty"`
-}
-
-func parseResticIndexConfig(raw string) (indexConfig, error) {
-	if strings.TrimSpace(raw) == "" {
-		return indexConfig{}, nil
-	}
-	var c indexConfig
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return indexConfig{}, err
-	}
-	return c, nil
-}
-
 // resolveResticBinary 返回 restic 二进制名称。
 func resolveResticBinary() string {
 	raw := strings.TrimSpace(os.Getenv("RESTIC_BINARY"))
@@ -271,14 +255,6 @@ func resolveResticBinary() string {
 		return raw
 	}
 	return "restic"
-}
-
-// buildIndexEnvPrefix 构造 restic 命令环境变量前缀。
-func buildIndexEnvPrefix(password string) string {
-	if password == "" {
-		return "RESTIC_PASSWORD=''"
-	}
-	return "RESTIC_PASSWORD=" + executor.ShellEscape(password)
 }
 
 // EscapeLikePattern 转义 LIKE 模式中的通配符 % 和 _。

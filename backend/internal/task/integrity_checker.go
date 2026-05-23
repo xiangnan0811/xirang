@@ -67,17 +67,8 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 		return
 	}
 
-	password := ""
-	if strings.TrimSpace(task.ExecutorConfig) != "" {
-		if strings.Contains(task.ExecutorConfig, "repository_password") {
-			password = extractResticPassword(task.ExecutorConfig)
-		}
-	}
-
-	envPrefix := "RESTIC_PASSWORD=''"
-	if password != "" {
-		envPrefix = fmt.Sprintf("RESTIC_PASSWORD=%s", shellEscape(password))
-	}
+	access := executor.ResolveResticRepositoryAccessOrEmpty(task.ExecutorConfig)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 	cmd := fmt.Sprintf("%s %s check -r %s --json 2>&1",

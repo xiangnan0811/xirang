@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/task/executor"
 )
 
 func TestCountRansomSuffixHits(t *testing.T) {
@@ -19,7 +20,7 @@ func TestCountRansomSuffixHits(t *testing.T) {
 		{name: "single encrypted file", paths: []string{"doc.txt.encrypted"}, want: 1},
 		{name: "multiple suffixes", paths: []string{"a.encrypted", "b.locked", "c.crypt"}, want: 3},
 		{name: "case insensitivity", paths: []string{"README.ENCRYPTED", "Data.LOCKED"}, want: 2},
-		{name: "mixed normal and ransom", paths: []string{"doc.txt", "secret.doc.encrypted", "photo.png"}, want: 1},
+		{name: "mixed normal and ransom", paths: []string{"doc.txt", "FAKE_DOCUMENT_FOR_TEST_ONLY.doc.encrypted", "photo.png"}, want: 1},
 		{name: "ransom suffix in middle", paths: []string{".encrypted.backup"}, want: 0}, // only suffix match
 		{name: "wannacry variant", paths: []string{"budget.xlsx.wannacry"}, want: 1},
 		{name: "multiple .xxx files", paths: []string{"a.xxx", "b.xxx", "c.xxx"}, want: 3},
@@ -283,22 +284,22 @@ func TestParseResticDiffEmpty(t *testing.T) {
 // restic helper function tests
 // ---------------------------------------------------------------------------
 
-func TestExtractResticPassword(t *testing.T) {
+func TestResolveResticRepositoryAccessForAnomaly(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
 		want string
 	}{
 		{"empty", "", ""},
-		{"no password field", `{"other":"value"}`, ""},
-		{"with password", `{"repository_password":"my-secret"}`, "my-secret"},
-		{"empty password", `{"repository_password":""}`, ""},
+		{"no access field", `{"other":"value"}`, ""},
+		{"with access", `{"repository_password":"FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY"}`, "FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY"},
+		{"empty access", `{"repository_password":""}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractResticPassword(tt.raw)
-			if got != tt.want {
-				t.Errorf("extractResticPassword() = %q, want %q", got, tt.want)
+			access := executor.ResolveResticRepositoryAccessOrEmpty(tt.raw)
+			if access.Password() != tt.want {
+				t.Errorf("ResolveResticRepositoryAccessOrEmpty() = %q, want %q", access.Password(), tt.want)
 			}
 		})
 	}
@@ -402,11 +403,11 @@ func TestAnalyzeSnapshotDiffNoTarget(t *testing.T) {
 	}
 }
 
-func TestBuildDiffEnvPrefix(t *testing.T) {
-	if got := buildDiffEnvPrefix(""); got != "RESTIC_PASSWORD=''" {
-		t.Errorf("empty password: got %q", got)
+func TestBuildResticEnvPrefixForAnomaly(t *testing.T) {
+	if got := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess("")); got != "RESTIC_PASSWORD=''" {
+		t.Errorf("empty access: got %q", got)
 	}
-	got := buildDiffEnvPrefix("test-pass")
+	got := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess("FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY"))
 	if !strings.HasPrefix(got, "RESTIC_PASSWORD=") {
 		t.Errorf("expected RESTIC_PASSWORD= prefix, got %q", got)
 	}

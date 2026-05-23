@@ -78,7 +78,7 @@ func TestInitCommandWithoutAppendOnly(t *testing.T) {
 	cfg := ResticConfig{AppendOnly: false}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	cmdPrefix := exec.buildCommandPrefix(node, cfg)
+	cmdPrefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
 	initFlags := ""
 	if cfg.AppendOnly {
 		initFlags = " --repository-version 2"
@@ -98,7 +98,7 @@ func TestInitCommandWithAppendOnly(t *testing.T) {
 	cfg := ResticConfig{AppendOnly: true}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	cmdPrefix := exec.buildCommandPrefix(node, cfg)
+	cmdPrefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
 	initFlags := " --repository-version 2"
 	initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, ShellEscape("/backup/repo"))
 
@@ -168,10 +168,11 @@ func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
 		AuthType: "key",
 	}
 
-	prefix := exec.buildCommandPrefix(node, cfg)
+	prefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
 
-	if !strings.Contains(prefix, "RESTIC_PASSWORD=") {
-		t.Fatalf("期望命令前缀包含 RESTIC_PASSWORD，实际: %s", prefix)
+	expectedEnv := "RESTIC_PASSWORD=" + ShellEscape(cfg.RepositoryPassword)
+	if !strings.Contains(prefix, expectedEnv) {
+		t.Fatalf("期望命令前缀包含转义后的 RESTIC_PASSWORD，实际: %s", prefix)
 	}
 	if !strings.Contains(prefix, "restic") {
 		t.Fatalf("期望命令前缀包含 restic 二进制名称，实际: %s", prefix)
@@ -187,10 +188,89 @@ func TestBuildCommandPrefixWithoutPassword(t *testing.T) {
 	cfg := ResticConfig{AppendOnly: false, RepositoryPassword: ""}
 	node := model.Node{Host: "10.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	prefix := exec.buildCommandPrefix(node, cfg)
+	prefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
 
 	if !strings.Contains(prefix, "RESTIC_PASSWORD=''") {
 		t.Fatalf("期望密码为空时前缀包含空密码，实际: %s", prefix)
+	}
+}
+
+func TestBuildCommandPrefixWithSudoPreservesEnvWrapping(t *testing.T) {
+	exec := &ResticExecutor{binary: "/usr/local/bin/restic"}
+	node := model.Node{
+		Host:     "10.0.0.1",
+		Port:     22,
+		Username: "FAKE_USER_FOR_TEST_ONLY",
+		AuthType: "key",
+		UseSudo:  true,
+	}
+	access := NewResticRepositoryAccess("FAKE_PASSWORD_WITH_QUOTE_'_FOR_TEST_ONLY")
+
+	prefix := exec.buildCommandPrefix(node, access)
+	expected := "sudo env " + BuildResticEnvPrefix(access) + " /usr/local/bin/restic"
+	if prefix != expected {
+		t.Fatalf("sudo env 前缀不等价，期望 %q，实际 %q", expected, prefix)
+	}
+}
+
+func TestBuildResticEnvPrefixEscapesNonEmptyPassword(t *testing.T) {
+	access := NewResticRepositoryAccess("FAKE_PASSWORD_WITH_QUOTE_'_FOR_TEST_ONLY")
+	got := BuildResticEnvPrefix(access)
+	expected := "RESTIC_PASSWORD=" + ShellEscape(access.Password())
+	if got != expected {
+		t.Fatalf("RESTIC_PASSWORD 转义不等价，期望 %q，实际 %q", expected, got)
+	}
+}
+
+func TestResolveResticRepositoryAccessReturnsSafeLocalMetadata(t *testing.T) {
+	access, err := ResolveResticRepositoryAccess(`{"repository_password":"FAKE_PASSWORD_FOR_TEST_ONLY"}`)
+	if err != nil {
+		t.Fatalf("解析 restic repository access 失败: %v", err)
+	}
+	if access.Password() != "FAKE_PASSWORD_FOR_TEST_ONLY" {
+		t.Fatalf("期望解析仓库访问口令")
+	}
+	metadata := access.SafeMetadata()
+	if metadata["provider"] != "local" || metadata["kind"] != "restic_repository_access" || metadata["source"] != "task_executor_settings" {
+		t.Fatalf("metadata 不符合预期: %#v", metadata)
+	}
+	serialized := fmt.Sprintf("%#v", metadata)
+	if strings.Contains(serialized, access.Password()) || strings.Contains(strings.ToLower(serialized), "password") || strings.Contains(strings.ToLower(serialized), "config") || strings.Contains(strings.ToLower(serialized), "credential") {
+		t.Fatalf("metadata 不应包含敏感字段或敏感词: %s", serialized)
+	}
+}
+
+func TestResticRepositoryAccessJSONDoesNotExposePassword(t *testing.T) {
+	access := NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY")
+	b, err := json.Marshal(access)
+	if err != nil {
+		t.Fatalf("序列化 access 失败: %v", err)
+	}
+	serialized := string(b)
+	if strings.Contains(serialized, "FAKE_PASSWORD_FOR_TEST_ONLY") || strings.Contains(strings.ToLower(serialized), "password") {
+		t.Fatalf("access JSON 不应包含口令字段或口令值: %s", serialized)
+	}
+}
+
+func TestResolveResticRepositoryAccessInvalidJSONDoesNotExposeRawConfig(t *testing.T) {
+	raw := `{"repository_password":"FAKE_PASSWORD_FOR_TEST_ONLY"`
+	_, err := ResolveResticRepositoryAccess(raw)
+	if err == nil {
+		t.Fatal("期望非法 JSON 返回错误")
+	}
+	if strings.Contains(err.Error(), "FAKE_PASSWORD_FOR_TEST_ONLY") || strings.Contains(err.Error(), raw) {
+		t.Fatalf("错误不应包含原始配置或口令: %v", err)
+	}
+}
+
+func TestResolveResticRepositoryAccessInvalidTypeDoesNotExposeRawPassword(t *testing.T) {
+	raw := `{"repository_password":123,"other":"FAKE_PASSWORD_FOR_TEST_ONLY"}`
+	_, err := ResolveResticRepositoryAccess(raw)
+	if err == nil {
+		t.Fatal("期望非法字段类型返回错误")
+	}
+	if strings.Contains(err.Error(), "FAKE_PASSWORD_FOR_TEST_ONLY") || strings.Contains(err.Error(), raw) {
+		t.Fatalf("错误不应包含原始配置或口令: %v", err)
 	}
 }
 
