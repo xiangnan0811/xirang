@@ -2,7 +2,6 @@ package verifier
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
+	"xirang/backend/internal/task/executor"
 
 	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
@@ -485,9 +485,8 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 		return Result{Status: "passed", Message: "无需校验：未配置仓库路径"}
 	}
 
-	// 从 executor_config 中解析密码
-	password := extractResticPassword(task.ExecutorConfig)
-	envPrefix := "RESTIC_PASSWORD=" + shellQuote(password)
+	access := executor.ResolveResticRepositoryAccessOrEmpty(task.ExecutorConfig)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 	checkCmd := fmt.Sprintf("%s restic check -r %s 2>&1", envPrefix, shellQuote(repo))
 
 	logf("info", fmt.Sprintf("执行 restic check: %s", repo))
@@ -526,20 +525,6 @@ func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	}
 	logf("info", strings.TrimSpace(output))
 	return Result{Status: "passed", Message: "rclone check 通过"}
-}
-
-// extractResticPassword 从 executor_config JSON 中提取 repository_password。
-func extractResticPassword(executorConfig string) string {
-	if strings.TrimSpace(executorConfig) == "" {
-		return ""
-	}
-	var cfg struct {
-		RepositoryPassword string `json:"repository_password"`
-	}
-	if err := json.Unmarshal([]byte(executorConfig), &cfg); err != nil {
-		return ""
-	}
-	return cfg.RepositoryPassword
 }
 
 func shellQuote(s string) string {

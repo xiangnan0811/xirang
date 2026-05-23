@@ -46,7 +46,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		return -1, fmt.Errorf("restic 备份任务缺少源路径或仓库路径")
 	}
 
-	cfg, err := parseResticConfig(task.ExecutorConfig)
+	cfg, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return -1, fmt.Errorf("解析 restic 配置失败: %w", err)
 	}
@@ -65,7 +65,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	}
 
 	repoArg := ShellEscape(repo)
-	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
+	cmdPrefix := e.buildCommandPrefix(task.Node, access)
 
 	// 初始化仓库（若不存在）
 	checkCmd := fmt.Sprintf("%s snapshots -r %s --json 2>&1", cmdPrefix, repoArg)
@@ -131,7 +131,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 		return -1, fmt.Errorf("restic 恢复任务缺少仓库路径或目标路径")
 	}
 
-	cfg, err := parseResticConfig(task.ExecutorConfig)
+	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return -1, fmt.Errorf("解析 restic 配置失败: %w", err)
 	}
@@ -143,7 +143,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
 	repoArg := ShellEscape(repo)
-	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
+	cmdPrefix := e.buildCommandPrefix(task.Node, access)
 
 	restoreCmd := fmt.Sprintf("%s restore latest -r %s --target %s --json 2>&1",
 		cmdPrefix, repoArg, ShellEscape(targetPath))
@@ -285,7 +285,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	if repo == "" {
 		return nil, fmt.Errorf("restic 仓库路径为空")
 	}
-	cfg, err := parseResticConfig(task.ExecutorConfig)
+	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
+	cmdPrefix := e.buildCommandPrefix(task.Node, access)
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -313,7 +313,7 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 // ListFiles 列出 restic 快照中指定路径下的文件。
 func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapshotID string, path string) ([]ResticEntry, error) {
 	repo := strings.TrimSpace(task.RsyncTarget)
-	cfg, err := parseResticConfig(task.ExecutorConfig)
+	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +324,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
+	cmdPrefix := e.buildCommandPrefix(task.Node, access)
 	lsPath := "/"
 	if path != "" {
 		lsPath = path
@@ -356,7 +356,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 // RestoreFiles 从 restic 快照恢复指定文件到目标路径。
 func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snapshotID string, includes []string, targetPath string) error {
 	repo := strings.TrimSpace(task.RsyncTarget)
-	cfg, err := parseResticConfig(task.ExecutorConfig)
+	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
 		return err
 	}
@@ -367,7 +367,7 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, cfg)
+	cmdPrefix := e.buildCommandPrefix(task.Node, access)
 	includeArgs := ""
 	for _, inc := range includes {
 		includeArgs += " --include " + ShellEscape(inc)
@@ -392,21 +392,14 @@ func parseResticConfig(raw string) (ResticConfig, error) {
 }
 
 // buildCommandPrefix 构造 restic 命令前缀（含环境变量和可选 sudo）。
-func (e *ResticExecutor) buildCommandPrefix(node model.Node, cfg ResticConfig) string {
-	envPrefix := buildResticEnvPrefix(cfg.RepositoryPassword)
+func (e *ResticExecutor) buildCommandPrefix(node model.Node, access ResticRepositoryAccess) string {
+	envPrefix := BuildResticEnvPrefix(access)
 	bin := e.resticBinary()
 	if NeedsSudo(node) {
 		// sudo env RESTIC_PASSWORD=xxx restic ...
 		return fmt.Sprintf("sudo env %s %s", envPrefix, bin)
 	}
 	return fmt.Sprintf("%s %s", envPrefix, bin)
-}
-
-func buildResticEnvPrefix(password string) string {
-	if password == "" {
-		return "RESTIC_PASSWORD=''"
-	}
-	return "RESTIC_PASSWORD=" + ShellEscape(password)
 }
 
 func buildResticExcludeArgs(patterns []string) string {

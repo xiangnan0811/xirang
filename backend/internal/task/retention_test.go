@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/task/executor"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -34,23 +35,22 @@ func TestShellEscape(t *testing.T) {
 	}
 }
 
-func TestExtractResticPassword(t *testing.T) {
+func TestResolveResticRepositoryAccessForRetention(t *testing.T) {
 	cases := []struct {
 		name   string
 		input  string
 		expect string
 	}{
-		{"有效 JSON", `{"repository_password": "secret123"}`, "secret123"},
-		{"无密码字段", `{"repo": "/backup"}`, ""},
-		{"空密码", `{"repository_password": ""}`, ""},
-		{"缺少结束引号", `{"repository_password": "broken`, ""},
-		{"额外空白", `{"repository_password" : "secret"}`, "secret"},
+		{"有效 JSON", `{"repository_password": "FAKE_RETENTION_RESTIC_PASSWORD_FOR_TEST_ONLY"}`, "FAKE_RETENTION_RESTIC_PASSWORD_FOR_TEST_ONLY"},
+		{"无访问口令字段", `{"repo": "/backup"}`, ""},
+		{"空访问口令", `{"repository_password": ""}`, ""},
+		{"额外空白", `{"repository_password" : "FAKE_RETENTION_RESTIC_PASSWORD_WITH_SPACE_FOR_TEST_ONLY"}`, "FAKE_RETENTION_RESTIC_PASSWORD_WITH_SPACE_FOR_TEST_ONLY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := extractResticPassword(tc.input)
-			if got != tc.expect {
-				t.Fatalf("extractResticPassword(%q): 期望 %q，实际 %q", tc.input, tc.expect, got)
+			access := executor.ResolveResticRepositoryAccessOrEmpty(tc.input)
+			if access.Password() != tc.expect {
+				t.Fatalf("ResolveResticRepositoryAccessOrEmpty(%q): 期望 %q，实际 %q", tc.input, tc.expect, access.Password())
 			}
 		})
 	}

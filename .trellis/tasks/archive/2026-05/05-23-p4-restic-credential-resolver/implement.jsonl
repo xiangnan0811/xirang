@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-23-p4-restic-credential-resolver/prd.md","reason":"Defines P4-3 scope, requirements, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/tasks/05-23-p4-restic-credential-resolver/research/restic-password-flow.md","reason":"Maps all restic repository_password consumers and identifies must-cover paths."}
+{"file":".trellis/tasks/05-23-p4-restic-credential-resolver/research/p4-provider-precedent.md","reason":"Captures reusable P4 local provider constraints and security requirements."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Sensitive field storage and credential audit safety constraints."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security-sensitive backend quality bar, credential-use audit, grant ordering, and denial-test guidance."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Logging exclusions for secrets, executor config, command output, endpoints, and unsafe metadata."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Client-facing error redaction constraints for secrets and command/output evidence."}

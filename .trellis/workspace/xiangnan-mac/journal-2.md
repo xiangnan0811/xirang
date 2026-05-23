@@ -203,3 +203,36 @@ Selected and delivered the next P4 hardening slice by routing executor SSH crede
 ### Next Steps
 
 - None - task complete
+
+
+## Session 65: P4 restic credential resolver seam
+
+**Date**: 2026-05-23
+**Task**: P4 restic credential resolver seam
+**Branch**: `security/p4-restic-credential-resolver`
+
+### Summary
+
+Centralized restic repository password materialization through a local-only access resolver, replaced duplicated consumers, and verified backend tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `235bdf5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

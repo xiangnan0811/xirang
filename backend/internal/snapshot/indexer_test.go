@@ -1,7 +1,10 @@
 package snapshot
 
 import (
+	"strings"
 	"testing"
+
+	"xirang/backend/internal/task/executor"
 )
 
 func TestEscapeLikePattern_Normal(t *testing.T) {
@@ -105,36 +108,36 @@ func TestParseResticFindOutput_EmptyMatches(t *testing.T) {
 	}
 }
 
-func TestParseResticIndexConfig_Empty(t *testing.T) {
-	cfg, err := parseResticIndexConfig("")
+func TestResolveResticRepositoryAccessForIndex_Empty(t *testing.T) {
+	access, err := executor.ResolveResticRepositoryAccess("")
 	if err != nil {
-		t.Fatalf("parseResticIndexConfig 不应失败: %v", err)
+		t.Fatalf("ResolveResticRepositoryAccess 不应失败: %v", err)
 	}
-	if cfg.RepositoryPassword != "" {
-		t.Fatalf("期望空密码，实际: %s", cfg.RepositoryPassword)
+	if access.Password() != "" {
+		t.Fatalf("期望空访问口令，实际: %s", access.Password())
 	}
 }
 
-func TestParseResticIndexConfig_WithPassword(t *testing.T) {
-	cfg, err := parseResticIndexConfig(`{"repository_password":"FAKE_PASSWORD_FOR_TEST_ONLY"}`)
+func TestResolveResticRepositoryAccessForIndex_WithPassword(t *testing.T) {
+	access, err := executor.ResolveResticRepositoryAccess(`{"repository_password":"FAKE_PASSWORD_FOR_TEST_ONLY"}`)
 	if err != nil {
-		t.Fatalf("parseResticIndexConfig 不应失败: %v", err)
+		t.Fatalf("ResolveResticRepositoryAccess 不应失败: %v", err)
 	}
-	if cfg.RepositoryPassword != "FAKE_PASSWORD_FOR_TEST_ONLY" {
-		t.Fatalf("期望密码匹配，实际: %s", cfg.RepositoryPassword)
+	if access.Password() != "FAKE_PASSWORD_FOR_TEST_ONLY" {
+		t.Fatalf("期望访问口令匹配，实际: %s", access.Password())
 	}
 }
 
-func TestBuildIndexEnvPrefix_EmptyPassword(t *testing.T) {
-	result := buildIndexEnvPrefix("")
+func TestBuildResticEnvPrefixForIndex_EmptyPassword(t *testing.T) {
+	result := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess(""))
 	if result != "RESTIC_PASSWORD=''" {
-		t.Fatalf("期望空密码，实际: %s", result)
+		t.Fatalf("期望空访问口令，实际: %s", result)
 	}
 }
 
-func TestBuildIndexEnvPrefix_WithPassword(t *testing.T) {
-	result := buildIndexEnvPrefix("FAKE_PASSWORD_FOR_TEST_ONLY")
-	if result == "" || result == "RESTIC_PASSWORD=''" {
-		t.Fatalf("期望密码被设置，实际: %s", result)
+func TestBuildResticEnvPrefixForIndex_WithPassword(t *testing.T) {
+	result := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY"))
+	if result == "" || result == "RESTIC_PASSWORD=''" || !strings.HasPrefix(result, "RESTIC_PASSWORD=") {
+		t.Fatalf("期望访问口令被设置，实际: %s", result)
 	}
 }

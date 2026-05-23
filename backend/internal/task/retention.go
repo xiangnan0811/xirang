@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -136,21 +135,8 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 		return
 	}
 
-	// 解析 restic 配置获取密码
-	password := ""
-	if strings.TrimSpace(task.ExecutorConfig) != "" {
-		// 简单解析 repository_password
-		cfg := task.ExecutorConfig
-		if strings.Contains(cfg, "repository_password") {
-			// 使用 executor 包内的辅助方法不可行（unexported），直接构造环境变量前缀
-			password = extractResticPassword(cfg)
-		}
-	}
-
-	envPrefix := "RESTIC_PASSWORD=''"
-	if password != "" {
-		envPrefix = fmt.Sprintf("RESTIC_PASSWORD=%s", shellEscape(password))
-	}
+	access := executor.ResolveResticRepositoryAccessOrEmpty(task.ExecutorConfig)
+	envPrefix := executor.BuildResticEnvPrefix(access)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 	var keepArgs string
@@ -233,15 +219,4 @@ func buildGFSKeepArgs(policy model.Policy) string {
 		return "--keep-within 7d"
 	}
 	return strings.Join(parts, " ")
-}
-
-// extractResticPassword 从 ExecutorConfig JSON 中提取 repository_password 字段
-func extractResticPassword(configJSON string) string {
-	var cfg struct {
-		RepositoryPassword string `json:"repository_password"`
-	}
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return ""
-	}
-	return cfg.RepositoryPassword
 }
