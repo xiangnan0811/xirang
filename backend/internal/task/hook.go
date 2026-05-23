@@ -20,9 +20,9 @@ func (m *Manager) runSSHHook(ctx context.Context, task model.Task, command strin
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	output, err := executor.RunSSHCommandOutput(ctx, client, command)
+	_, err = executor.RunSSHCommandOutput(ctx, client, command)
 	if err != nil {
-		return fmt.Errorf("钩子执行失败: %s, 输出: %s", err, output)
+		return fmt.Errorf("钩子执行失败: %s", sanitizeTaskLastError(err.Error()))
 	}
 	return nil
 }

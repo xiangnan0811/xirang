@@ -32,12 +32,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 	}
 	defer client.Close() //nolint:errcheck
 
-	user := ResolveSSHUser(task.Node)
-	addr := fmt.Sprintf("%s:%d", task.Node.Host, task.Node.Port)
-	if task.Node.Port == 0 {
-		addr = fmt.Sprintf("%s:22", task.Node.Host)
-	}
-	logf("info", fmt.Sprintf("连接节点 %s@%s", user, addr))
+	logf("info", "连接节点")
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -61,7 +56,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 	}
 
 	// 启动命令
-	logf("info", fmt.Sprintf("执行命令: %s", command))
+	logf("info", "执行命令")
 	if err := session.Start(command); err != nil {
 		return -1, fmt.Errorf("启动命令失败: %w", err)
 	}
@@ -76,7 +71,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 			if n > 0 {
 				for _, line := range strings.Split(strings.TrimRight(string(buf[:n]), "\n"), "\n") {
 					if strings.TrimSpace(line) != "" {
-						logf("info", line)
+						logf("info", sanitizeExecutorRuntimeEvidence(line))
 					}
 				}
 			}
@@ -93,7 +88,7 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 			if n > 0 {
 				for _, line := range strings.Split(strings.TrimRight(string(buf[:n]), "\n"), "\n") {
 					if strings.TrimSpace(line) != "" {
-						logf("error", line)
+						logf("error", sanitizeExecutorRuntimeEvidence(line))
 					}
 				}
 			}

@@ -109,8 +109,8 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	}
 
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "root@1.2.3.4:/var/data") {
-		t.Fatalf("期望 source 使用远端地址，实际日志: %s", joined)
+	if !strings.Contains(joined, "[远程路径已隐藏]") || strings.Contains(joined, "root@1.2.3.4:/var/data") {
+		t.Fatalf("期望 source 远端地址被脱敏，实际日志: %s", joined)
 	}
 	if !strings.Contains(joined, "\n--\n") {
 		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
@@ -118,8 +118,8 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	if !strings.Contains(joined, "StrictHostKeyChecking=accept-new") {
 		t.Fatalf("期望默认携带 StrictHostKeyChecking=accept-new，实际日志: %s", joined)
 	}
-	if !strings.Contains(joined, "-i ") || !strings.Contains(joined, "xirang-key-") {
-		t.Fatalf("期望携带 -i 临时密钥参数，实际日志: %s", joined)
+	if !strings.Contains(joined, "-i") || !strings.Contains(joined, "[路径已隐藏]") || strings.Contains(joined, "xirang-key-") {
+		t.Fatalf("期望携带已脱敏的 -i 临时密钥参数，实际日志: %s", joined)
 	}
 }
 

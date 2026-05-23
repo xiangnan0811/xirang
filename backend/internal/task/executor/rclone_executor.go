@@ -70,7 +70,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	}
 
 	syncCmd := buildRcloneSyncCmd(bin, source, remote, cfg, false, NeedsSudo(task.Node))
-	logf("info", fmt.Sprintf("开始 rclone 同步: %s → %s", source, remote))
+	logf("info", "开始 rclone 同步")
 
 	exitCode, runErr := e.streamSSHCommand(ctx, client, syncCmd, logf, progressf)
 	if runErr != nil {
@@ -106,7 +106,7 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 
 	bin := e.rcloneBinary()
 	syncCmd := buildRcloneSyncCmd(bin, remote, targetPath, cfg, true, NeedsSudo(task.Node))
-	logf("info", fmt.Sprintf("开始 rclone 恢复: %s → %s", remote, targetPath))
+	logf("info", "开始 rclone 恢复")
 
 	exitCode, runErr := e.streamSSHCommand(ctx, client, syncCmd, logf, progressf)
 	if runErr != nil {
@@ -152,7 +152,7 @@ func (e *RcloneExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 		if line == "" {
 			continue
 		}
-		logf("info", line)
+		logf("info", sanitizeExecutorRuntimeEvidence(line))
 		if progressf != nil {
 			if sample, ok := parseRcloneProgressLine(line); ok {
 				progressf(sample)

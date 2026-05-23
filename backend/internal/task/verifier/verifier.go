@@ -59,8 +59,9 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 	// 建立 SSH 连接，整个校验过程复用
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
-		logf("warn", fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err))
-		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err))
+		logf("warn", message)
+		return Result{Status: "warning", Message: message}
 	}
 	defer sshClient.Close() //nolint:errcheck
 
@@ -69,9 +70,10 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 	// 源端文件计数（远程）
 	srcCount, srcErr := remoteFileCount(ctx, sshClient, task.RsyncSource)
 	if srcErr != nil {
-		logf("warn", fmt.Sprintf("源端文件计数失败: %v", srcErr))
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("源端文件计数失败: %v", srcErr))
+		logf("warn", message)
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("源端文件计数失败: %v", srcErr)
+		result.Message = message
 		return result
 	}
 	result.FileCountSrc = srcCount
@@ -79,9 +81,10 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 	// 目标端文件计数（本地）
 	dstCount, dstErr := localFileCount(ctx, task.RsyncTarget)
 	if dstErr != nil {
-		logf("warn", fmt.Sprintf("目标端文件计数失败: %v", dstErr))
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("目标端文件计数失败: %v", dstErr))
+		logf("warn", message)
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("目标端文件计数失败: %v", dstErr)
+		result.Message = message
 		return result
 	}
 	result.FileCountDst = dstCount
@@ -129,7 +132,7 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 		result.MismatchedFiles = mismatched
 		if sampleErr != nil {
 			result.Status = "warning"
-			result.Message = fmt.Sprintf("抽样校验失败: %v", sampleErr)
+			result.Message = sanitizeVerifierRuntimeEvidence(fmt.Sprintf("抽样校验失败: %v", sampleErr))
 			return result
 		}
 		if mismatched > 0 {
@@ -151,8 +154,9 @@ func VerifyRemoteToRemote(ctx context.Context, task model.Task, sampleRate int, 
 	// 建立 SSH 连接
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
-		logf("warn", fmt.Sprintf("恢复校验阶段建立 SSH 连接失败: %v", err))
-		return Result{Status: "warning", Message: fmt.Sprintf("恢复校验阶段建立 SSH 连接失败: %v", err)}
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("恢复校验阶段建立 SSH 连接失败: %v", err))
+		logf("warn", message)
+		return Result{Status: "warning", Message: message}
 	}
 	defer sshClient.Close() //nolint:errcheck
 
@@ -161,9 +165,10 @@ func VerifyRemoteToRemote(ctx context.Context, task model.Task, sampleRate int, 
 	// 源端文件计数（远程）
 	srcCount, srcErr := remoteFileCount(ctx, sshClient, task.RsyncSource)
 	if srcErr != nil {
-		logf("warn", fmt.Sprintf("源端（备份）文件计数失败: %v", srcErr))
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("源端（备份）文件计数失败: %v", srcErr))
+		logf("warn", message)
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("源端（备份）文件计数失败: %v", srcErr)
+		result.Message = message
 		return result
 	}
 	result.FileCountSrc = srcCount
@@ -171,9 +176,10 @@ func VerifyRemoteToRemote(ctx context.Context, task model.Task, sampleRate int, 
 	// 目标端文件计数（也是远程）
 	dstCount, dstErr := remoteFileCount(ctx, sshClient, task.RsyncTarget)
 	if dstErr != nil {
-		logf("warn", fmt.Sprintf("目标端（恢复路径）文件计数失败: %v", dstErr))
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("目标端（恢复路径）文件计数失败: %v", dstErr))
+		logf("warn", message)
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("目标端（恢复路径）文件计数失败: %v", dstErr)
+		result.Message = message
 		return result
 	}
 	result.FileCountDst = dstCount
@@ -221,7 +227,7 @@ func VerifyRemoteToRemote(ctx context.Context, task model.Task, sampleRate int, 
 		result.MismatchedFiles = mismatched
 		if sampleErr != nil {
 			result.Status = "warning"
-			result.Message = fmt.Sprintf("抽样校验失败: %v", sampleErr)
+			result.Message = sanitizeVerifierRuntimeEvidence(fmt.Sprintf("抽样校验失败: %v", sampleErr))
 			return result
 		}
 		if mismatched > 0 {
@@ -393,7 +399,7 @@ func sampleChecksum(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath
 		sampled++
 		if strings.TrimSpace(srcChecksum) != strings.TrimSpace(string(dstOutput)) {
 			mismatched++
-			logf("warn", fmt.Sprintf("文件校验不一致: %s", relPath))
+			logf("warn", "文件校验不一致: [路径已隐藏]")
 		}
 	}
 
@@ -464,7 +470,7 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 		sampled++
 		if strings.TrimSpace(srcChecksum) != strings.TrimSpace(dstChecksum) {
 			mismatched++
-			logf("warn", fmt.Sprintf("文件校验不一致: %s", relPath))
+			logf("warn", "文件校验不一致: [路径已隐藏]")
 		}
 	}
 
@@ -475,8 +481,9 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
-		logf("warn", fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
-		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
+		logf("warn", message)
+		return Result{Status: "warning", Message: message}
 	}
 	defer sshClient.Close() //nolint:errcheck
 
@@ -489,14 +496,14 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	envPrefix := executor.BuildResticEnvPrefix(access)
 	checkCmd := fmt.Sprintf("%s restic check -r %s 2>&1", envPrefix, shellQuote(repo))
 
-	logf("info", fmt.Sprintf("执行 restic check: %s", repo))
+	logf("info", "执行 restic check")
 	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
 	if err != nil {
-		msg := fmt.Sprintf("restic check 失败: %v\n%s", err, strings.TrimSpace(output))
+		msg := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic check 失败: %v\n%s", err, strings.TrimSpace(output)))
 		logf("warn", msg)
 		return Result{Status: "warning", Message: msg}
 	}
-	logf("info", strings.TrimSpace(output))
+	logf("info", sanitizeVerifierRuntimeEvidence(strings.TrimSpace(output)))
 	return Result{Status: "passed", Message: "restic check 通过"}
 }
 
@@ -504,8 +511,9 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
-		logf("warn", fmt.Sprintf("rclone 校验阶段建立 SSH 连接失败: %v", err))
-		return Result{Status: "warning", Message: fmt.Sprintf("校验阶段建立 SSH 连接失败: %v", err)}
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("rclone 校验阶段建立 SSH 连接失败: %v", err))
+		logf("warn", message)
+		return Result{Status: "warning", Message: message}
 	}
 	defer sshClient.Close() //nolint:errcheck
 
@@ -516,14 +524,14 @@ func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	}
 
 	checkCmd := fmt.Sprintf("rclone check %s %s 2>&1", shellQuote(source), shellQuote(remote))
-	logf("info", fmt.Sprintf("执行 rclone check: %s <-> %s", source, remote))
+	logf("info", "执行 rclone check")
 	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
 	if err != nil {
-		msg := fmt.Sprintf("rclone check 失败: %v\n%s", err, strings.TrimSpace(output))
+		msg := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("rclone check 失败: %v\n%s", err, strings.TrimSpace(output)))
 		logf("warn", msg)
 		return Result{Status: "warning", Message: msg}
 	}
-	logf("info", strings.TrimSpace(output))
+	logf("info", sanitizeVerifierRuntimeEvidence(strings.TrimSpace(output)))
 	return Result{Status: "passed", Message: "rclone check 通过"}
 }
 

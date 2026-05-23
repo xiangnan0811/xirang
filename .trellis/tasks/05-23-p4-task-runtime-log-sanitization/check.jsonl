@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-23-p4-task-runtime-log-sanitization/prd.md","reason":"Acceptance criteria and explicit non-goals for review"}
+{"file":".trellis/tasks/05-23-p4-task-runtime-log-sanitization/research/task-runtime-log-sanitization.md","reason":"Expected sensitive surfaces and files identified before implementation"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review against backend logging and sensitive-data rules"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review against user-visible error redaction requirements"}

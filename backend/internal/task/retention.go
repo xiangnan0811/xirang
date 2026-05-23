@@ -72,7 +72,7 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 	cleanedTarget := filepath.Clean(targetPath)
 	for _, dangerous := range dangerousRoots {
 		if cleanedTarget == dangerous {
-			log.Warn().Str("path", targetPath).Msg("跳过危险的备份目标路径（系统根目录），不执行保留清理")
+			log.Warn().Str("path", sanitizeTaskLogMessage(targetPath)).Msg("跳过危险的备份目标路径（系统根目录），不执行保留清理")
 			return
 		}
 	}
@@ -80,7 +80,7 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 	entries, err := os.ReadDir(targetPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Warn().Str("path", targetPath).Err(err).Msg("读取备份目录失败")
+			log.Warn().Str("path", sanitizeTaskLogMessage(targetPath)).Str("error", sanitizeTaskRuntimeError(err)).Msg("读取备份目录失败")
 		}
 		return
 	}
@@ -94,7 +94,7 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 		// 安全检查：确保子目录路径在目标路径下
 		rel, err := filepath.Rel(targetPath, subdirPath)
 		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			log.Warn().Str("path", subdirPath).Msg("跳过不安全的子目录路径")
+			log.Warn().Str("path", sanitizeTaskLogMessage(subdirPath)).Msg("跳过不安全的子目录路径")
 			continue
 		}
 
@@ -104,14 +104,14 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 		}
 
 		if info.ModTime().Before(cutoff) {
-			log.Info().Str("path", subdirPath).Time("mtime", info.ModTime()).Int("retention_days", policy.RetentionDays).Msg("清理过期备份目录")
+			log.Info().Str("path", sanitizeTaskLogMessage(subdirPath)).Time("mtime", info.ModTime()).Int("retention_days", policy.RetentionDays).Msg("清理过期备份目录")
 			if err := os.RemoveAll(subdirPath); err != nil {
-				errMsg := fmt.Sprintf("清理过期备份目录失败: %s: %v", subdirPath, err)
-				log.Error().Err(err).Str("path", subdirPath).Msg("清理过期备份目录失败")
+				errMsg := sanitizeTaskLastError(fmt.Sprintf("清理过期备份目录失败: %s: %v", subdirPath, err))
+				log.Error().Str("error", sanitizeTaskRuntimeError(err)).Str("path", sanitizeTaskLogMessage(subdirPath)).Msg("清理过期备份目录失败")
 				m.emitLog(0, nil, "error", errMsg, "")
 				_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 			} else {
-				m.emitLog(0, nil, "info", fmt.Sprintf("已清理过期备份: %s (策略: %s, 保留天数: %d)", subdirPath, policy.Name, policy.RetentionDays), "")
+				m.emitLog(0, nil, "info", fmt.Sprintf("已清理过期备份 (保留天数: %d)", policy.RetentionDays), "")
 			}
 		}
 	}
@@ -150,12 +150,12 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		errMsg := fmt.Sprintf("restic 保留清理失败 (策略: %s, 仓库: %s): %v", policy.Name, repo, err)
-		log.Error().Uint("task_id", task.ID).Err(err).Str("output", output).Msg("restic forget 执行失败")
+		errMsg := sanitizeTaskLastError(fmt.Sprintf("restic 保留清理失败: %v, 输出: %s", err, output))
+		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("restic forget 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
 		_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
-		m.emitLog(0, nil, "info", fmt.Sprintf("restic 保留清理完成 (策略: %s, 仓库: %s, 保留: %s)", policy.Name, repo, keepArgs), "")
+		m.emitLog(0, nil, "info", fmt.Sprintf("restic 保留清理完成 (保留: %s)", keepArgs), "")
 	}
 }
 
@@ -183,12 +183,12 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		errMsg := fmt.Sprintf("rclone 保留清理失败 (策略: %s, 目标: %s): %v", policy.Name, target, err)
-		log.Error().Uint("task_id", task.ID).Err(err).Str("output", output).Msg("rclone delete 执行失败")
+		errMsg := sanitizeTaskLastError(fmt.Sprintf("rclone 保留清理失败: %v, 输出: %s", err, output))
+		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("rclone delete 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
 		_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
-		m.emitLog(0, nil, "info", fmt.Sprintf("rclone 保留清理完成 (策略: %s, 目标: %s, 最小年龄: %s)", policy.Name, target, minAge), "")
+		m.emitLog(0, nil, "info", fmt.Sprintf("rclone 保留清理完成 (最小年龄: %s)", minAge), "")
 	}
 }
 

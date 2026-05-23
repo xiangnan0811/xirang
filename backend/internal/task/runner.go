@@ -318,12 +318,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			hookTimeout = 5 * time.Minute
 		}
 		hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
-		m.emitLog(taskID, runIDPtr, "info", "执行 pre-hook: "+taskEntity.Policy.PreHook, taskEntity.Status)
+		m.emitLog(taskID, runIDPtr, "info", "执行 pre-hook", taskEntity.Status)
 		hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PreHook)
 		hookCancel()
 		if hookErr != nil {
-			m.emitLog(taskID, runIDPtr, "error", "pre-hook 失败: "+hookErr.Error(), taskEntity.Status)
-			errorMsg := fmt.Sprintf("pre-hook 执行失败: %v", hookErr)
+			errorMsg := sanitizeTaskLastError(fmt.Sprintf("pre-hook 执行失败: %v", hookErr))
+			m.emitLog(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 			failedAt := time.Now()
 			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 				"status":      "failed",
@@ -401,11 +401,11 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				hookTimeout = 5 * time.Minute
 			}
 			hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
-			m.emitLog(taskID, runIDPtr, "info", "执行 post-hook: "+taskEntity.Policy.PostHook, taskEntity.Status)
+			m.emitLog(taskID, runIDPtr, "info", "执行 post-hook", taskEntity.Status)
 			hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PostHook)
 			hookCancel()
 			if hookErr != nil {
-				m.emitLog(taskID, runIDPtr, "warn", "post-hook 失败（不影响备份结果）: "+hookErr.Error(), taskEntity.Status)
+				m.emitLog(taskID, runIDPtr, "warn", sanitizeTaskLastError("post-hook 失败（不影响备份结果）: "+hookErr.Error()), taskEntity.Status)
 			} else {
 				m.emitLog(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
 			}
@@ -440,10 +440,11 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			verifyStatus = result.Status
 
 			if result.Status == "warning" || result.Status == "failed" {
+				verifyMessage := sanitizeTaskLastError(result.Message)
 				m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
 					"retry_count":   0,
 					"next_run_at":   nextCronRun(taskEntity.CronSpec),
-					"last_error":    result.Message,
+					"last_error":    verifyMessage,
 					"verify_status": verifyStatus,
 				})
 				finishedAt := time.Now()
@@ -453,12 +454,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 					"finished_at":   &finishedAt,
 					"duration_ms":   duration,
 					"verify_status": verifyStatus,
-					"last_error":    result.Message,
+					"last_error":    verifyMessage,
 					"progress":      100,
 				})
 				runCompleted = true
-				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+result.Message, taskEntity.Status)
-				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, result.Message) //nolint:errcheck // best-effort alert during verification failure
+				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+verifyMessage, taskEntity.Status)
+				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
@@ -538,7 +539,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	var errorMsg string
 	if err != nil {
-		errorMsg = err.Error()
+		errorMsg = sanitizeTaskLastError(err.Error())
 	} else {
 		errorMsg = fmt.Sprintf("任务执行失败，退出码=%d", exitCode)
 	}
@@ -693,11 +694,11 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"started_at": &now,
 	})
 
-	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复任务，源: %s → 目标: %s", restoreTask.RsyncSource, restoreTask.RsyncTarget), "")
+	m.emitLog(taskID, runIDPtr, "info", "开始恢复任务", "")
 
 	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
 	m.emitLog(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if err := executor.EnsureRemoteTargetReady(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
 		// 区分取消与真实失败
 		if execCtx.Err() != nil {
 			finishedAt := time.Now()
@@ -710,7 +711,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			m.emitLog(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
 			return
 		}
-		errorMsg := fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error())
+		errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
 		finishedAt := time.Now()
 		duration := finishedAt.Sub(now).Milliseconds()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
@@ -768,7 +769,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	}
 
 	if err != nil {
-		errorMsg := err.Error()
+		errorMsg := sanitizeTaskLastError(err.Error())
 		finishedAt := time.Now()
 		duration := finishedAt.Sub(now).Milliseconds()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
@@ -811,6 +812,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	verifyStatus = result.Status
 
 	if result.Status == "warning" || result.Status == "failed" {
+		verifyMessage := sanitizeTaskLastError(result.Message)
 		finishedAt := time.Now()
 		duration := finishedAt.Sub(now).Milliseconds()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
@@ -818,12 +820,12 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"finished_at":   &finishedAt,
 			"duration_ms":   duration,
 			"verify_status": verifyStatus,
-			"last_error":    result.Message,
+			"last_error":    verifyMessage,
 			"progress":      100,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+result.Message, "warning")
-		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, result.Message) //nolint:errcheck // best-effort alert during verification failure
+		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
+		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
@@ -913,7 +915,7 @@ func (m *Manager) skipDownstreamIfAny(upstream model.Task, runID uint, chainRunI
 	if err := m.db.Where("depends_on_task_id = ?", upstream.ID).Find(&downstreams).Error; err != nil {
 		return
 	}
-	skipMsg := fmt.Sprintf("前置任务 [%s] 永久失败: %s", upstream.Name, reason)
+	skipMsg := sanitizeTaskLastError(fmt.Sprintf("前置任务 [%s] 永久失败: %s", upstream.Name, reason))
 	for _, downstream := range downstreams {
 		upstreamRunID := runID
 		m.skipTask(downstream, chainRunID, &upstreamRunID, skipMsg)

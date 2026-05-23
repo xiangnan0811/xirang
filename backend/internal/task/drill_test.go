@@ -734,6 +734,31 @@ func TestExecuteDrillWritesSecretSafePhaseCredentialAudit(t *testing.T) {
 	}
 }
 
+func TestExecuteDrillSanitizesPhaseCredentialAuditErrors(t *testing.T) {
+	db := openDrillTestDB(t)
+	fixture := setupDrillEvidenceFixture(t, db)
+	fixture.manager.drillSSHScriptFunc = func(_ context.Context, _ model.Node, script string) error {
+		if script == fixture.policy.DrillVerify {
+			return errors.New(`verify failed at /tmp/xirang-drill-evidence on drill-audit.internal.example output=/tmp/raw-output token=FAKE_DRILL_AUDIT_TOKEN_FOR_TEST_ONLY`)
+		}
+		return nil
+	}
+	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
+
+	fixture.manager.executeDrill(&fixture.policy, fixture.task, fixture.sandbox, runID)
+
+	var events []model.CredentialAuditEvent
+	if err := db.Where("action = ? AND outcome = ?", "drill.phase", credentialaudit.OutcomeFailure).Find(&events).Error; err != nil {
+		t.Fatalf("查询恢复演练失败凭据审计事件失败: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("期望写入失败阶段凭据审计事件")
+	}
+	for _, event := range events {
+		assertTaskRuntimeTextSanitized(t, event.ErrorMessage, []string{"/tmp/xirang-drill-evidence", "drill-audit.internal.example", "/tmp/raw-output", "FAKE_DRILL_AUDIT_TOKEN_FOR_TEST_ONLY"})
+	}
+}
+
 func TestExecuteDrillRecordsFailureEvidence(t *testing.T) {
 	db := openDrillTestDB(t)
 	fixture := setupDrillEvidenceFixture(t, db)
@@ -831,10 +856,18 @@ func TestExecuteDrillDoesNotLogVerifyScriptContent(t *testing.T) {
 		t.Fatalf("查询 TaskLog 失败: %v", err)
 	}
 	for _, logEntry := range logs {
-		if strings.Contains(logEntry.Message, "FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY") ||
-			strings.Contains(logEntry.Message, "FAKE_VERIFY_TOKEN_FOR_TEST_ONLY") ||
-			strings.Contains(logEntry.Message, "FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY") {
-			t.Fatalf("日志不应包含脚本原文或敏感 token，实际日志: %q", logEntry.Message)
+		for _, forbidden := range []string{
+			"FAKE_PRE_VERIFY_TOKEN_FOR_TEST_ONLY",
+			"FAKE_VERIFY_TOKEN_FOR_TEST_ONLY",
+			"FAKE_POST_VERIFY_TOKEN_FOR_TEST_ONLY",
+			fixture.policy.DrillRestorePath,
+			fixture.sandbox.Host,
+			fixture.sandbox.Name,
+			fixture.policy.Name,
+		} {
+			if strings.Contains(logEntry.Message, forbidden) {
+				t.Fatalf("日志不应包含脚本原文或恢复演练运行时敏感片段 %q，实际日志: %q", forbidden, logEntry.Message)
+			}
 		}
 	}
 }

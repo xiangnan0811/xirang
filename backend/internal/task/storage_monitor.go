@@ -1,6 +1,7 @@
 package task
 
 import (
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -8,8 +9,6 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
-
-	"strconv"
 )
 
 func (m *Manager) checkLocalStorageSpace() {
@@ -66,7 +65,7 @@ func (m *Manager) checkLocalStorageSpace() {
 	for _, path := range localPaths {
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(path, &stat); err != nil {
-			log.Warn().Str("path", path).Err(err).Msg("获取磁盘空间信息失败")
+			log.Warn().Str("path", sanitizeTaskLogMessage(path)).Str("error", sanitizeTaskRuntimeError(err)).Msg("获取磁盘空间信息失败")
 			continue
 		}
 
@@ -88,11 +87,11 @@ func (m *Manager) checkLocalStorageSpace() {
 		}
 
 		if overThreshold {
-			log.Warn().Str("path", path).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
-			_ = alerting.RaiseStorageSpaceAlert(m.db, path, freeGB, totalGB, usagePct)
+			log.Warn().Str("path", sanitizeTaskLogMessage(path)).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
+			_ = alerting.RaiseStorageSpaceAlert(m.db, sanitizeTaskLogMessage(path), freeGB, totalGB, usagePct)
 		} else {
-			// 如果之前有告警，现在恢复了，按路径解除告警
-			_ = alerting.ResolveAlertsByErrorCode(m.db, "XR-STORAGE-LOW:"+path, "存储空间恢复正常")
+			// 如果之前有告警，现在恢复了，按脱敏后的路径标识解除告警
+			_ = alerting.ResolveAlertsByErrorCode(m.db, "XR-STORAGE-LOW:"+sanitizeTaskLogMessage(path), "存储空间恢复正常")
 		}
 	}
 }
