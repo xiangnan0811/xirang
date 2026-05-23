@@ -269,3 +269,36 @@ Centralized AppCredential profile hook materialization behind a local resolver s
 ### Next Steps
 
 - None - task complete
+
+
+## Session 67: P4 Integration notification sanitization
+
+**Date**: 2026-05-23
+**Task**: P4 Integration notification sanitization
+**Branch**: `security/p4-next-local-seam`
+
+### Summary
+
+Added sanitized Integration response DTOs and sender-error redaction for notification credential surfaces.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bb43e71` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 66
+- **Total Sessions**: 67
 - **Last Active**: 2026-05-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~271 | Active |
+| `journal-2.md` | ~304 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 67 | 2026-05-23 | P4 Integration notification sanitization | `bb43e71` | `security/p4-next-local-seam` |
 | 66 | 2026-05-23 | P4 AppCredential profile access seam | `797d21a` | `security/p4-next-hardening` |
 | 65 | 2026-05-23 | P4 restic credential resolver seam | `235bdf5` | `security/p4-restic-credential-resolver` |
 | 64 | 2026-05-22 | P4 executor SSH local provider adoption | `cee580a` | `security/p4-next-hardening-slice` |
