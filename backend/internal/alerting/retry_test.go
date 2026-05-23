@@ -3,6 +3,7 @@ package alerting
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,32 @@ func TestRetryWorker_MarksFailedAfterMaxAttempts(t *testing.T) {
 	}
 	if got.AttemptCount != 4 {
 		t.Fatalf("expected attempts=4, got %d", got.AttemptCount)
+	}
+}
+
+func TestRetryWorker_SanitizesPersistedSenderErrors(t *testing.T) {
+	db := setupTestDB(t)
+	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: "https://hooks.example.test/services/FAKE_RETRY_ENDPOINT_TOKEN?secret=FAKE_RETRY_QUERY"})
+	db.Create(&model.Alert{NodeID: 1, ErrorCode: "probe_down"})
+	past := time.Now().Add(-time.Second)
+	d := model.AlertDelivery{Status: "retrying", AttemptCount: 0, NextRetryAt: &past, IntegrationID: 1, AlertID: 1}
+	db.Create(&d)
+
+	w := NewRetryWorker(db)
+	w.sendFn = func(integ model.Integration, alert model.Alert) error {
+		return errors.New(`Post "https://hooks.example.test/services/FAKE_RETRY_SEND_TOKEN?secret=FAKE_RETRY_SEND_QUERY": dial tcp: lookup hooks.example.test: no such host`)
+	}
+	w.tick(context.Background(), time.Now())
+
+	var got model.AlertDelivery
+	db.First(&got, d.ID)
+	for _, forbidden := range []string{"hooks.example.test", "FAKE_RETRY_SEND_TOKEN", "FAKE_RETRY_SEND_QUERY", "/services/"} {
+		if strings.Contains(got.LastError, forbidden) {
+			t.Fatalf("expected sanitized LastError, leaked %q in %q", forbidden, got.LastError)
+		}
+	}
+	if !strings.Contains(got.LastError, "https://***") || !strings.Contains(got.LastError, "lookup ***:") {
+		t.Fatalf("expected safe sanitized error shape, got %q", got.LastError)
 	}
 }
 

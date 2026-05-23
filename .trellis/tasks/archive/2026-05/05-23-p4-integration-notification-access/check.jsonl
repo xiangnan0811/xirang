@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-23-p4-integration-notification-access/prd.md","reason":"Check implementation against acceptance criteria and local-only scope."}
+{"file":".trellis/tasks/05-23-p4-integration-notification-access/research/integration-notification-access.md","reason":"Verify all mapped Integration response and error surfaces are covered without changing dispatch behavior."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check no manual secret encryption/decryption or persistence semantic drift was introduced."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check new DTO/error paths do not expose endpoint/proxy/secret/host-sensitive values."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check user-facing and persisted errors remain safe and generic where needed."}

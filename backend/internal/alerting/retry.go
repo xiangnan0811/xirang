@@ -149,7 +149,7 @@ func (w *RetryWorker) attempt(ctx context.Context, d model.AlertDelivery) {
 		d.LastError = sanitizeDeliveryError(sendErr)
 		logger.Module("alerting").Warn().
 			Uint("delivery_id", d.ID).
-			Err(sendErr).
+			Str("error", sanitizeDeliveryError(sendErr)).
 			Msg("告警投递重试达到上限，终止")
 	default:
 		next := time.Now().Add(backoffDuration(d.AttemptCount))

@@ -674,7 +674,7 @@ func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
 	}
 	for _, ch := range integrations {
 		if err := send(ch, alert); err != nil {
-			logger.Module("alerting").Warn().Err(err).Uint("integration_id", ch.ID).Msg("send failed")
+			logger.Module("alerting").Warn().Str("error", util.SanitizeError(err)).Uint("integration_id", ch.ID).Msg("send failed")
 		}
 	}
 }
