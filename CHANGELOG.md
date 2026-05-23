@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.17](https://github.com/xiangnan0811/xirang/compare/v0.43.16...v0.43.17) (2026-05-23)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize task runtime evidence ([1e76ae4](https://github.com/xiangnan0811/xirang/commit/1e76ae48e27c4b346bba9fc4c50d2b94125e20a1))
+
 ## [0.43.16](https://github.com/xiangnan0811/xirang/compare/v0.43.15...v0.43.16) (2026-05-23)
 
 
