@@ -236,3 +236,36 @@ Centralized restic repository password materialization through a local-only acce
 ### Next Steps
 
 - None - task complete
+
+
+## Session 66: P4 AppCredential profile access seam
+
+**Date**: 2026-05-23
+**Task**: P4 AppCredential profile access seam
+**Branch**: `security/p4-next-hardening`
+
+### Summary
+
+Centralized AppCredential profile hook materialization behind a local resolver seam with safe metadata and preserved hook/update behavior.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `797d21a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
