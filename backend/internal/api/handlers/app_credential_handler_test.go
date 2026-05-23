@@ -8,6 +8,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/profile"
+	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -16,10 +17,17 @@ import (
 
 func setupCredentialTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	secure.ResetForTesting()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	// 创建 app_credentials 表 + policies 表（Policy 模型用）
 	if err := db.AutoMigrate(&model.AppCredential{}, &model.Policy{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
@@ -174,6 +182,33 @@ func TestAppCredentialUpdate(t *testing.T) {
 	}
 }
 
+func TestAppCredentialUpdateInvalidStoredConfigDoesNotExposeSecret(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	h := NewAppCredentialHandler(db)
+
+	if err := db.Exec("INSERT INTO app_credentials (id, name, type, config, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", 1, "bad-config", "mysql", `{"password":"FAKE_BAD_CONFIG_PW_FOR_TEST_ONLY","host":"bad.internal"`).Error; err != nil {
+		t.Fatalf("insert invalid credential: %v", err)
+	}
+
+	r := setupCredentialRouter(db)
+	r.PUT("/app-credentials/:id", h.Update)
+
+	body := `{"type":"mysql","name":"bad-config","host":"127.0.0.1"}`
+	req := httptest.NewRequest("PUT", "/app-credentials/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != 500 {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, forbidden := range []string{"FAKE_BAD_CONFIG_PW_FOR_TEST_ONLY", "bad.internal", "password", "host"} {
+		if strings.Contains(w.Body.String(), forbidden) {
+			t.Fatalf("response exposed forbidden value %q in %s", forbidden, w.Body.String())
+		}
+	}
+}
+
 func TestAppCredentialUpdatePreservePassword(t *testing.T) {
 	db := setupCredentialTestDB(t)
 	h := NewAppCredentialHandler(db)
@@ -205,6 +240,61 @@ func TestAppCredentialUpdatePreservePassword(t *testing.T) {
 	}
 	if cfg["host"] != "9.9.9.9" {
 		t.Errorf("host should be updated, got %v", cfg["host"])
+	}
+}
+
+func TestAppCredentialUpdateCascadeWithoutPassword(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	h := NewAppCredentialHandler(db)
+
+	oldCfg := map[string]interface{}{"host": "10.0.0.1", "user": "root"}
+	oldCfgJSON, _ := json.Marshal(oldCfg)
+	if err := db.Create(&model.AppCredential{Name: "cascade-no-pw", Type: "mysql", Config: string(oldCfgJSON)}).Error; err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	renderedPre, renderedPost, err := profile.RenderHooks("mysql", oldCfg)
+	if err != nil {
+		t.Fatalf("RenderHooks: %v", err)
+	}
+	if err := db.Create(&model.Policy{
+		Name:            "cascade-no-pw-policy",
+		AppProfile:      "mysql",
+		AppCredentialID: uintPtr(1),
+		SourcePath:      "/src",
+		CronSpec:        "0 0 * * *",
+		TargetPath:      "/dst",
+		PreHook:         renderedPre,
+		PostHook:        renderedPost,
+	}).Error; err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	r := setupCredentialRouter(db)
+	r.PUT("/app-credentials/:id", h.Update)
+
+	body := `{"type":"mysql","name":"cascade-no-pw","host":"10.0.0.2","user":"root"}`
+	req := httptest.NewRequest("PUT", "/app-credentials/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var p model.Policy
+	if err := db.First(&p, 1).Error; err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	if !strings.Contains(p.PreHook, "-h 10.0.0.2") {
+		t.Errorf("policy pre-hook should contain updated host, got: %s", p.PreHook)
+	}
+	if strings.Contains(p.PreHook, "10.0.0.1") {
+		t.Errorf("policy pre-hook should not contain old host, got: %s", p.PreHook)
+	}
+	if strings.Contains(p.PreHook, "FAKE_") || strings.Contains(w.Body.String(), `"password"`) {
+		t.Fatalf("no-password cascade leaked password-shaped data: hook=%s response=%s", p.PreHook, w.Body.String())
 	}
 }
 

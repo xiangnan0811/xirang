@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -260,18 +259,16 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 				respondBadRequest(c, "选择应用类型后必须指定凭据")
 				return
 			}
-			var cred model.AppCredential
-			if err := h.db.First(&cred, *req.AppCredentialID).Error; err != nil {
-				respondBadRequest(c, "指定的凭据不存在")
-				return
-			}
-			// AfterFind 已解密 Config
-			var configMap map[string]interface{}
-			if err := json.Unmarshal([]byte(cred.Config), &configMap); err != nil {
+			access, err := profile.ResolveAppProfileAccess(h.db, *req.AppCredentialID)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					respondBadRequest(c, "指定的凭据不存在")
+					return
+				}
 				respondInternalError(c, err)
 				return
 			}
-			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, configMap)
+			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, access.Config())
 			if err != nil {
 				respondInternalError(c, err)
 				return
@@ -585,17 +582,16 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				respondBadRequest(c, "选择应用类型后必须指定凭据")
 				return
 			}
-			var cred model.AppCredential
-			if err := h.db.First(&cred, *req.AppCredentialID).Error; err != nil {
-				respondBadRequest(c, "指定的凭据不存在")
-				return
-			}
-			var configMap map[string]interface{}
-			if err := json.Unmarshal([]byte(cred.Config), &configMap); err != nil {
+			access, err := profile.ResolveAppProfileAccess(h.db, *req.AppCredentialID)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					respondBadRequest(c, "指定的凭据不存在")
+					return
+				}
 				respondInternalError(c, err)
 				return
 			}
-			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, configMap)
+			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, access.Config())
 			if err != nil {
 				respondInternalError(c, err)
 				return

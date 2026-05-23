@@ -44,15 +44,15 @@ type appCredentialRequest struct {
 }
 
 type appCredentialResponse struct {
-	ID            uint                   `json:"id"`
-	Name          string                 `json:"name"`
-	Type          string                 `json:"type"`
-	Description   string                 `json:"description"`
-	Config        map[string]interface{} `json:"config"`
-	HasPassword   bool                   `json:"has_password"`
-	ReferenceCount int64                 `json:"reference_count"`
-	CreatedAt     string                 `json:"created_at"`
-	UpdatedAt     string                 `json:"updated_at"`
+	ID             uint                   `json:"id"`
+	Name           string                 `json:"name"`
+	Type           string                 `json:"type"`
+	Description    string                 `json:"description"`
+	Config         map[string]interface{} `json:"config"`
+	HasPassword    bool                   `json:"has_password"`
+	ReferenceCount int64                  `json:"reference_count"`
+	CreatedAt      string                 `json:"created_at"`
+	UpdatedAt      string                 `json:"updated_at"`
 }
 
 func sanitizeAppCredential(item *model.AppCredential, refCount int64) appCredentialResponse {
@@ -115,13 +115,7 @@ func validateCredentialRequest(req appCredentialRequest) error {
 }
 
 func setHasPassword(item *model.AppCredential) {
-	var raw map[string]interface{}
-	if err := json.Unmarshal([]byte(item.Config), &raw); err != nil {
-		return
-	}
-	if pw, ok := raw["password"]; ok && pw != "" {
-		item.HasPassword = true
-	}
+	item.HasPassword = profile.ResolveAppProfileAccessFromRawOrEmpty(item.Config).HasPassword()
 }
 
 func countCredentialReferences(db *gorm.DB, credentialID uint) (int64, error) {
@@ -259,35 +253,34 @@ func (h *AppCredentialHandler) Update(c *gin.Context) {
 	setHasPassword(&item)
 	hadPassword := item.HasPassword
 
-	// 保存旧 config map（用于级联更新时对比 hook 是否被用户修改过）
-	var oldConfigMap map[string]interface{}
-	json.Unmarshal([]byte(item.Config), &oldConfigMap) //nolint:errcheck
+	oldAccess, err := profile.ResolveAppProfileAccessFromRaw(item.Config)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	oldConfigMap := oldAccess.Config()
 
 	newCfg := buildConfigJSON(req)
-	// 密码为空字符串 → 保留原密码
+	newAccess, err := profile.ResolveAppProfileAccessFromRaw(newCfg)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	newConfigMap := newAccess.Config()
 	if req.Password == "" && hadPassword {
-		var oldCfg map[string]interface{}
-		if err := json.Unmarshal([]byte(item.Config), &oldCfg); err == nil {
-			if pw, ok := oldCfg["password"]; ok {
-				var newCfgMap map[string]interface{}
-				json.Unmarshal([]byte(newCfg), &newCfgMap) //nolint:errcheck
-				newCfgMap["password"] = pw
-				b, _ := json.Marshal(newCfgMap)
-				newCfg = string(b)
-			}
+		if pw, ok := oldAccess.Value("password"); ok {
+			newConfigMap["password"] = pw
+			b, _ := json.Marshal(newConfigMap)
+			newCfg = string(b)
 		}
 	}
-
-	// 解析新 config map（用于级联渲染）
-	var newConfigMap map[string]interface{}
-	json.Unmarshal([]byte(newCfg), &newConfigMap) //nolint:errcheck
 
 	item.Name = req.Name
 	item.Type = req.Type
 	item.Description = strings.TrimSpace(req.Description)
 	item.Config = newCfg
 
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&item).Error; err != nil {
 			return err
 		}
