@@ -335,3 +335,36 @@ Sanitized task runtime logs, last_error fields, executor/verifier output, and ma
 ### Next Steps
 
 - None - task complete
+
+
+## Session 69: P4 node log evidence sanitization
+
+**Date**: 2026-05-24
+**Task**: P4 node log evidence sanitization
+**Branch**: `security/p4-next-hardening-2`
+
+### Summary
+
+Implemented node-log path/message sanitization before persistence and API responses, sanitized node-log config validation errors, and verified backend tests/build/lint.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b18bff` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
