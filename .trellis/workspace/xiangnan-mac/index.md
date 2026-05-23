@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 64
-- **Last Active**: 2026-05-22
+- **Total Sessions**: 65
+- **Last Active**: 2026-05-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~205 | Active |
+| `journal-2.md` | ~238 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 65 | 2026-05-23 | P4 restic credential resolver seam | `235bdf5` | `security/p4-restic-credential-resolver` |
 | 64 | 2026-05-22 | P4 executor SSH local provider adoption | `cee580a` | `security/p4-next-hardening-slice` |
 | 63 | 2026-05-22 | P4 credential broker foundation | `c36a479` | `security/p4-credential-broker-foundation` |
 | 62 | 2026-05-22 | P3 comprehensive security review | `122b8c7` | `security/p3-comprehensive-review` |
