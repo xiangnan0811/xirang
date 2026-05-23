@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.16](https://github.com/xiangnan0811/xirang/compare/v0.43.15...v0.43.16) (2026-05-23)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize integration credential surfaces ([#235](https://github.com/xiangnan0811/xirang/issues/235)) ([e1dcdc9](https://github.com/xiangnan0811/xirang/commit/e1dcdc9f66b5475324a2afb8fe9c2d05f9985cf1))
+
 ## [0.43.15](https://github.com/xiangnan0811/xirang/compare/v0.43.14...v0.43.15) (2026-05-23)
 
 
