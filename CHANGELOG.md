@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.18](https://github.com/xiangnan0811/xirang/compare/v0.43.17...v0.43.18) (2026-05-23)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize node log evidence ([ae86ebc](https://github.com/xiangnan0811/xirang/commit/ae86ebcfe2958d93c529c8e74a8e8004ef23c0c0))
+
 ## [0.43.17](https://github.com/xiangnan0811/xirang/compare/v0.43.16...v0.43.17) (2026-05-23)
 
 
