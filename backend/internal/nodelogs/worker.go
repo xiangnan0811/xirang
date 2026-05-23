@@ -43,11 +43,13 @@ func (w *Worker) process(ctx context.Context, job CollectJob) {
 	entries, newCursors, err := w.fetcher.Fetch(ctx, job.Node, cursors)
 	if err != nil {
 		logger.Module("nodelogs").Warn().
-			Uint("node_id", job.Node.ID).Err(err).
+			Uint("node_id", job.Node.ID).
+			Str("error", sanitizeNodeLogError(err)).
 			Msg("fetch failed")
 		return
 	}
 	if len(entries) > 0 {
+		sanitizeLogEntries(entries)
 		if err := w.db.CreateInBatches(&entries, InsertBatchSize).Error; err != nil {
 			logger.Module("nodelogs").Warn().
 				Uint("node_id", job.Node.ID).Err(err).

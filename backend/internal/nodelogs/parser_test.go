@@ -19,7 +19,7 @@ func TestParseJournalJSON_SingleLine(t *testing.T) {
 	if e.Source != SourceJournalctl {
 		t.Fatalf("Source=%q", e.Source)
 	}
-	if e.Path != "sshd.service" {
+	if e.Path != SanitizeLogPath("sshd.service") {
 		t.Fatalf("Path=%q", e.Path)
 	}
 	if e.Priority != "info" {
@@ -28,13 +28,110 @@ func TestParseJournalJSON_SingleLine(t *testing.T) {
 	if !e.Timestamp.Equal(time.Unix(1713600000, 0).UTC()) {
 		t.Fatalf("Timestamp=%v", e.Timestamp)
 	}
-	if e.Message != "Accepted publickey" {
+	if e.Message != nodeLogMessagePlaceholder {
 		t.Fatalf("Message=%q", e.Message)
 	}
 	if lastCursor != "abc123" {
 		t.Fatalf("lastCursor=%q", lastCursor)
 	}
 }
+
+func TestParseJournalJSON_SanitizesRuntimeEvidence(t *testing.T) {
+	raw := `{"__REALTIME_TIMESTAMP":"1713600000000000","__CURSOR":"abc123","PRIORITY":"6","_SYSTEMD_UNIT":"tenant-backup.internal.example.service","MESSAGE":"failed token=FAKE_NODE_LOG_TOKEN_FOR_TEST_ONLY path=/srv/private/source host=db.internal.example output=/tmp/raw"}`
+	entries, _ := parseJournalJSON(1, raw)
+	if len(entries) != 1 {
+		t.Fatalf("len=%d want 1", len(entries))
+	}
+	joined := entries[0].Path + " " + entries[0].Message
+	for _, forbidden := range []string{
+		"tenant-backup.internal.example.service",
+		"FAKE_NODE_LOG_TOKEN_FOR_TEST_ONLY",
+		"/srv/private/source",
+		"db.internal.example",
+		"/tmp/raw",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("node log evidence leaked %q: %+v", forbidden, entries[0])
+		}
+	}
+	if entries[0].Path != SanitizeLogPath("tenant-backup.internal.example.service") || entries[0].Message != nodeLogMessagePlaceholder {
+		t.Fatalf("unexpected sanitized entry: %+v", entries[0])
+	}
+}
+
+func TestParseFileChunk_SanitizesRuntimeEvidence(t *testing.T) {
+	entries, _ := parseFileChunk(1, "/var/log/private/app.log", "password=FAKE_NODE_FILE_PASSWORD_FOR_TEST_ONLY host=app.internal.example file=/srv/private/data\n", 0)
+	if len(entries) != 1 {
+		t.Fatalf("len=%d want 1", len(entries))
+	}
+	joined := entries[0].Path + " " + entries[0].Message
+	for _, forbidden := range []string{
+		"/var/log/private/app.log",
+		"FAKE_NODE_FILE_PASSWORD_FOR_TEST_ONLY",
+		"app.internal.example",
+		"/srv/private/data",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("node file log evidence leaked %q: %+v", forbidden, entries[0])
+		}
+	}
+	if entries[0].Path != SanitizeLogPath("/var/log/private/app.log") || entries[0].Message != nodeLogMessagePlaceholder {
+		t.Fatalf("unexpected sanitized entry: %+v", entries[0])
+	}
+}
+
+func TestSanitizeLogPathRehashesMalformedPlaceholder(t *testing.T) {
+	malformed := "[日志路径:/var/log/private/app.log]"
+	got := SanitizeLogPath(malformed)
+	if strings.Contains(got, "/var/log/private/app.log") {
+		t.Fatalf("malformed placeholder leaked raw path: %q", got)
+	}
+	if got == malformed || !strings.HasPrefix(got, nodeLogPathPrefix) {
+		t.Fatalf("unexpected sanitized path: %q", got)
+	}
+}
+
+func TestSanitizeLogEntriesDefenseInDepth(t *testing.T) {
+	entries := []LogEntry{{
+		Path:    "/var/log/private/worker.log",
+		Message: "password=FAKE_WORKER_PASSWORD_FOR_TEST_ONLY host=worker.internal.example stdout: /srv/private/output",
+	}}
+	sanitizeLogEntries(entries)
+	joined := entries[0].Path + " " + entries[0].Message
+	for _, forbidden := range []string{
+		"/var/log/private/worker.log",
+		"FAKE_WORKER_PASSWORD_FOR_TEST_ONLY",
+		"worker.internal.example",
+		"/srv/private/output",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("worker sanitizer leaked %q: %+v", forbidden, entries[0])
+		}
+	}
+}
+
+func TestSanitizeNodeLogErrorHidesHostSensitiveEvidence(t *testing.T) {
+	got := sanitizeNodeLogError(&transientErrWithMessage{message: "dial tcp 10.0.0.5:22 to node.internal.example failed, stdout: /srv/private/raw-output token=FAKE_NODE_LOG_ERROR_TOKEN_FOR_TEST_ONLY"})
+	for _, forbidden := range []string{
+		"10.0.0.5",
+		"node.internal.example",
+		"/srv/private/raw-output",
+		"FAKE_NODE_LOG_ERROR_TOKEN_FOR_TEST_ONLY",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("error sanitizer leaked %q: %q", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "[输出已隐藏]") {
+		t.Fatalf("expected output marker redaction, got %q", got)
+	}
+}
+
+type transientErrWithMessage struct {
+	message string
+}
+
+func (e *transientErrWithMessage) Error() string { return e.message }
 
 func TestParseJournalJSON_MultipleLines(t *testing.T) {
 	raw := strings.Join([]string{
@@ -91,10 +188,10 @@ func TestParseFileChunk_CompleteLines(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("len=%d", len(entries))
 	}
-	if entries[0].Message != "line1" {
+	if entries[0].Message != nodeLogMessagePlaceholder {
 		t.Fatalf("msg0=%q", entries[0].Message)
 	}
-	if entries[0].Path != "/var/log/x" {
+	if entries[0].Path != SanitizeLogPath("/var/log/x") {
 		t.Fatalf("path=%q", entries[0].Path)
 	}
 	if entries[0].Source != SourceFile {

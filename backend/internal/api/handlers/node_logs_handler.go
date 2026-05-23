@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodelogs"
 	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
@@ -78,7 +79,7 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 		q = q.Where("source IN ?", strings.Split(s, ","))
 	}
 	if s := c.Query("path"); s != "" {
-		q = q.Where("path = ?", s)
+		q = q.Where("path = ?", nodelogs.SanitizeLogPath(s))
 	}
 	if s := c.Query("priority"); s != "" {
 		q = q.Where("priority IN ?", strings.Split(s, ","))
@@ -128,7 +129,7 @@ func (h *NodeLogsHandler) Query(c *gin.Context) {
 	}
 
 	respondOK(c, nodeLogsResponse{
-		Data:    rows,
+		Data:    sanitizeNodeLogRows(rows),
 		Total:   total,
 		HasMore: int64(page*pageSize) < total,
 	})
@@ -186,8 +187,21 @@ func (h *NodeLogsHandler) AlertLogs(c *gin.Context) {
 		resp.HasMore = true
 		rows = rows[:alertLogsMaxRows]
 	}
-	resp.Data = rows
+	resp.Data = sanitizeNodeLogRows(rows)
 	respondOK(c, resp)
+}
+
+func sanitizeNodeLogRows(rows []model.NodeLog) []model.NodeLog {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]model.NodeLog, len(rows))
+	copy(out, rows)
+	for i := range out {
+		out[i].Path = nodelogs.SanitizeLogPath(out[i].Path)
+		out[i].Message = nodelogs.SanitizeLogMessage(out[i].Message)
+	}
+	return out
 }
 
 type logsSettingsResponse struct {

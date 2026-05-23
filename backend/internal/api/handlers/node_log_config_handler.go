@@ -41,17 +41,17 @@ func validateLogPaths(paths []string) error {
 	}
 	for _, p := range paths {
 		if !strings.HasPrefix(p, "/") {
-			return errors.New("log_paths: 必须绝对路径 (" + p + ")")
+			return errors.New("log_paths: 必须绝对路径")
 		}
 		if strings.ContainsAny(p, "*?[]") {
-			return errors.New("log_paths: 不支持通配符 (" + p + ")")
+			return errors.New("log_paths: 不支持通配符")
 		}
 		if strings.ContainsAny(p, logPathShellMetaChars) {
-			return errors.New("log_paths: 路径包含非法字符 (" + p + ")")
+			return errors.New("log_paths: 路径包含非法字符")
 		}
 		for _, deny := range logPathDenyPrefixes {
 			if strings.HasPrefix(p, deny) {
-				return errors.New("log_paths: 路径在黑名单中 (" + p + ")")
+				return errors.New("log_paths: 路径在黑名单中")
 			}
 		}
 	}
