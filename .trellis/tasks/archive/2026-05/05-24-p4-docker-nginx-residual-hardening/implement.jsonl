@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-24-p4-docker-nginx-residual-hardening/prd.md","reason":"Task requirements, scope boundaries, acceptance criteria, and selected Nginx access-log hardening approach."}
+{"file":".trellis/tasks/05-24-p4-docker-nginx-residual-hardening/research/docker-nginx-residual.md","reason":"Internal research comparing Docker/nginx residual surfaces and recommending the minimal compatible slice."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Official Docker Compose and All-in-One deployment contracts that must remain unchanged."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Logging redaction constraints for secrets, Docker output, diagnostic evidence, and runtime logs."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Doc synchronization rules for deployment-facing changes."}

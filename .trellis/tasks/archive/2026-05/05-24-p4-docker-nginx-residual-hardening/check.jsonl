@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-24-p4-docker-nginx-residual-hardening/prd.md","reason":"Acceptance criteria and definition of done for the checker."}
+{"file":".trellis/tasks/05-24-p4-docker-nginx-residual-hardening/research/docker-nginx-residual.md","reason":"Evidence for selected slice and intentionally excluded residual surfaces."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Deployment validation matrix and required checks for Nginx/Compose changes."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Security logging constraints the change must satisfy."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Doc freshness and truth-source requirements for deployment docs."}
