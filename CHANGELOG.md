@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.23](https://github.com/xiangnan0811/xirang/compare/v0.43.22...v0.43.23) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize task read responses ([0ac703e](https://github.com/xiangnan0811/xirang/commit/0ac703ee60486dee89cb21256ec175453320bf66))
+
 ## [0.43.22](https://github.com/xiangnan0811/xirang/compare/v0.43.21...v0.43.22) (2026-05-24)
 
 
