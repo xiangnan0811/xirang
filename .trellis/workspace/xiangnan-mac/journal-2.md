@@ -533,3 +533,36 @@ Reviewed residual P4 task read surfaces and sanitized task list/detail responses
 ### Next Steps
 
 - None - task complete
+
+
+## Session 75: P4 Docker nginx access log redaction
+
+**Date**: 2026-05-24
+**Task**: P4 Docker nginx access log redaction
+**Branch**: `security/p4-docker-nginx-residual-hardening`
+
+### Summary
+
+Reviewed Docker/nginx residual surfaces and implemented a local-only Nginx access-log format that preserves the deployment contract while omitting query strings from persisted access-log request lines; deployment docs were updated and focused checks passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c83acba` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

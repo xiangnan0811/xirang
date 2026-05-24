@@ -23,4 +23,4 @@
 
 ## 日志
 
-Nginx 访问日志和错误日志写入 `/logs/nginx-access.log` 与 `/logs/nginx-error.log`，生产 Compose 默认将容器内 `/logs` 映射到宿主机 `./logs`。
+Nginx 访问日志和错误日志写入 `/logs/nginx-access.log` 与 `/logs/nginx-error.log`，生产 Compose 默认将容器内 `/logs` 映射到宿主机 `./logs`；访问日志请求行仅记录路径，不记录查询字符串。
