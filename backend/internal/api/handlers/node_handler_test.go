@@ -318,6 +318,74 @@ func TestMigrationPreflightAuditDoesNotCopyDiagnosticHostOrPath(t *testing.T) {
 	}
 }
 
+func TestMigrationPreflightResponseSanitizesDiagnosticFields(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	source := model.Node{Name: "source-response-node", Host: "source-db.example.internal", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", BackupDir: "source-response-node", DiskUsedGB: 12}
+	target := model.Node{Name: "target-response-node", Host: "10.92.0.2", Port: 22, Username: "root", AuthType: "password", Password: "", BackupDir: "target-response-node"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("创建源节点失败: %v", err)
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("创建目标节点失败: %v", err)
+	}
+	policy := model.Policy{Name: "response-policy", SourcePath: "/sensitive/include/source", TargetPath: "/backup/target", Enabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	if err := db.Create(&model.Task{Name: "response-task", NodeID: source.ID, PolicyID: &policy.ID, Source: "policy", ExecutorType: "rsync", RsyncSource: "/sensitive/include/source", RsyncTarget: "/tmp/not-used", Status: "pending"}).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	r := gin.New()
+	handler := NewNodeHandler(db, nil)
+	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
+		c.Set("userID", uint(101))
+		c.Set("username", "alice")
+		c.Set("role", "admin")
+		handler.MigratePreflight(c)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/migrate-preflight", source.ID), strings.NewReader(fmt.Sprintf(`{"targetNodeId":%d}`, target.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("预检认证失败仍应返回结构化 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Code int                      `json:"code"`
+		Data MigratePreflightResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != 0 {
+		t.Fatalf("响应信封不符合预期: %+v", envelope)
+	}
+	if envelope.Data.SourceNode.Host != "[HOST_REDACTED]" || envelope.Data.TargetNode.Host != "[HOST_REDACTED]" {
+		t.Fatalf("host 字段应保留但脱敏: %+v", envelope.Data)
+	}
+	if len(envelope.Data.Policies) != 1 || envelope.Data.Policies[0].SourcePath != "[PATH_REDACTED]" {
+		t.Fatalf("policy sourcePath 字段应保留但脱敏: %+v", envelope.Data.Policies)
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"source-db.example.internal", "10.92.0.2", "/sensitive/include/source", "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", "no supported methods"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("preflight 响应泄漏 %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, "SSH 连接目标节点失败") || !strings.Contains(body, "SSH 认证失败") {
+		t.Fatalf("preflight 响应应保留有用的通用失败分类: %s", body)
+	}
+}
+
 func TestPreflightAuditOutcomeClassifiesSSHFailureAsBlocked(t *testing.T) {
 	checks := []PreflightCheckItem{
 		{Name: "ssh", Status: "fail", Message: "SSH 连接目标节点失败: FAKE_PASSWORD_FOR_TEST_ONLY"},

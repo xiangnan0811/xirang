@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 69
+- **Total Sessions**: 70
 - **Last Active**: 2026-05-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~370 | Active |
+| `journal-2.md` | ~403 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 70 | 2026-05-24 | P4 diagnostic evidence sanitizer | `0e4598a` | `security/p4-next-hardening-3` |
 | 69 | 2026-05-24 | P4 node log evidence sanitization | `1b18bff` | `security/p4-next-hardening-2` |
 | 68 | 2026-05-23 | P4 task runtime log sanitization | `536cdbd` | `security/p4-next-hardening` |
 | 67 | 2026-05-23 | P4 Integration notification sanitization | `bb43e71` | `security/p4-next-local-seam` |

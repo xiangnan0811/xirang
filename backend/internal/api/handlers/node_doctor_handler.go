@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -362,14 +363,27 @@ func (r *nodeDoctorRunner) checkSudo(ctx context.Context, client *ssh.Client) {
 	}
 	output, err := runDoctorCommand(ctx, client, "sudo -n true 2>&1")
 	if err != nil {
-		evidence := strings.TrimSpace(output)
-		if evidence == "" {
-			evidence = "sudo -n true 执行失败"
-		}
-		r.add("sudo", doctorStatusFail, evidence, "为该用户配置 NOPASSWD sudo，或关闭节点 sudo 执行。")
+		r.add("sudo", doctorStatusFail, classifyDoctorSudoEvidence(output), "为该用户配置 NOPASSWD sudo，或关闭节点 sudo 执行。")
 		return
 	}
-	r.add("sudo", doctorStatusPass, "sudo -n true 执行成功", "sudo 可用。")
+	r.add("sudo", doctorStatusPass, "sudo 非交互检查通过", "sudo 可用。")
+}
+
+func classifyDoctorSudoEvidence(output string) string {
+	msg := strings.ToLower(strings.TrimSpace(output))
+	if msg == "" {
+		return "sudo 非交互检查失败"
+	}
+	if strings.Contains(msg, "password") || strings.Contains(msg, "askpass") || strings.Contains(msg, "tty") {
+		return "sudo 需要交互式密码或终端，非交互检查失败"
+	}
+	if strings.Contains(msg, "not in the sudoers") || strings.Contains(msg, "not allowed") || strings.Contains(msg, "permission denied") {
+		return "当前用户未授予 sudo 权限"
+	}
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "command not found") {
+		return "sudo 工具不可用"
+	}
+	return "sudo 非交互检查失败"
 }
 
 func (r *nodeDoctorRunner) checkTools(ctx context.Context, client *ssh.Client) {
@@ -463,10 +477,10 @@ func (r *nodeDoctorRunner) checkBackupDirectories(ctx context.Context, client *s
 	if len(missing) > 0 || len(unwritable) > 0 {
 		parts := []string{fmt.Sprintf("通过 %d 个目录", okCount)}
 		if len(missing) > 0 {
-			parts = append(parts, fmt.Sprintf("不存在：%s", strings.Join(missing, ", ")))
+			parts = append(parts, fmt.Sprintf("不存在：%d 个目录", len(missing)))
 		}
 		if len(unwritable) > 0 {
-			parts = append(parts, fmt.Sprintf("不可写：%s", strings.Join(unwritable, ", ")))
+			parts = append(parts, fmt.Sprintf("不可写：%d 个目录", len(unwritable)))
 		}
 		r.add("backup_dir", doctorStatusFail, strings.Join(parts, "；"), "预先创建备份目录并授予备份用户写权限；Doctor 不会自动创建目录。")
 		return
@@ -692,21 +706,81 @@ func isDoctorSafePath(rawPath string) bool {
 }
 
 func sanitizeDoctorEvidence(input string) string {
+	return sanitizeDiagnosticEvidence(input)
+}
+
+func sanitizeDiagnosticEvidence(input string) string {
 	value := strings.TrimSpace(input)
 	if value == "" {
 		return ""
 	}
+	if diagnosticEvidenceHasSensitiveMarker(value) {
+		return "诊断输出包含敏感模式，已隐藏。"
+	}
+	value = redactDiagnosticCommandText(value)
+	value = redactDiagnosticOutput(value)
+	value = util.SanitizeMessage(value)
+	value = diagnosticRemotePathPattern.ReplaceAllString(value, "$1[REMOTE_PATH_REDACTED]")
+	value = diagnosticHomePathPattern.ReplaceAllString(value, "$1[PATH_REDACTED]")
+	value = diagnosticAbsolutePathPattern.ReplaceAllString(value, "$1[PATH_REDACTED]")
+	value = diagnosticEndpointPattern.ReplaceAllString(value, "$1=[ENDPOINT_REDACTED]")
+	value = diagnosticIPv6Pattern.ReplaceAllString(value, "[HOST_REDACTED]")
+	value = diagnosticIPv4Pattern.ReplaceAllString(value, "[HOST_REDACTED]")
+	value = diagnosticHostnamePattern.ReplaceAllString(value, "[HOST_REDACTED]")
+	value = diagnosticHostValuePattern.ReplaceAllString(value, "$1=[HOST_REDACTED]")
+	value = diagnosticProxyValuePattern.ReplaceAllString(value, "$1=[ENDPOINT_REDACTED]")
+	value = strings.TrimSpace(value)
 	if len([]rune(value)) > 500 {
 		value = string([]rune(value)[:500]) + "…"
 	}
+	return value
+}
+
+func diagnosticEvidenceHasSensitiveMarker(value string) bool {
 	secretMarkers := []string{
-		"-----BEGIN", "PRIVATE KEY", "password", "passwd", "token", "secret", "authorization", "bearer", "proxy_url", "DATA_ENCRYPTION_KEY",
+		"-----BEGIN", "PRIVATE KEY", "password", "passwd=", "passwd:", "token", "secret", "authorization", "bearer", "proxy_url", "proxy=", "DATA_ENCRYPTION_KEY",
+		"otp", "totp", "recovery code", "step-up", "step_up", "executor_config", "terminal stream", "docker output", "import payload", "export payload",
 	}
 	lower := strings.ToLower(value)
 	for _, marker := range secretMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
-			return "诊断输出包含敏感模式，已隐藏。"
+			return true
 		}
 	}
-	return util.SanitizeMessage(value)
+	return false
 }
+
+func redactDiagnosticOutput(value string) string {
+	return redactDiagnosticAfterMarker(value, []string{"输出:", "output:", "stdout:", "stderr:", "command output:", "diagnostic output:"}, "[REDACTED_OUTPUT]")
+}
+
+func redactDiagnosticCommandText(value string) string {
+	return redactDiagnosticAfterMarker(value, []string{"命令:", "command:", "cmd:"}, "[REDACTED_COMMAND]")
+}
+
+func redactDiagnosticAfterMarker(value string, markers []string, placeholder string) string {
+	lower := strings.ToLower(value)
+	cut := -1
+	for _, marker := range markers {
+		idx := strings.Index(lower, strings.ToLower(marker))
+		if idx >= 0 && (cut == -1 || idx < cut) {
+			cut = idx + len(marker)
+		}
+	}
+	if cut == -1 {
+		return value
+	}
+	return strings.TrimSpace(value[:cut]) + " " + placeholder
+}
+
+var (
+	diagnosticRemotePathPattern   = regexp.MustCompile(`(^|[\s（(：:，,；;=])(?:[A-Za-z0-9._~-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*(?::\d+)?:(?:/(?:[^\s，,；;)）]+)|~(?:/[^\s，,；;)）]*)?)`)
+	diagnosticHomePathPattern     = regexp.MustCompile(`(^|[\s（(：:，,；;=])~(?:/[^\s，,；;)）]*)?`)
+	diagnosticAbsolutePathPattern = regexp.MustCompile(`(^|[\s（(：:，,；;=])/(?:[^\s，,；;)）]+)`)
+	diagnosticEndpointPattern     = regexp.MustCompile(`(?i)\b(host|hostname|endpoint|proxy|proxy_url|addr|address|server|url)\s*[=:]\s*[^\s，,；;)）]+`)
+	diagnosticHostValuePattern    = regexp.MustCompile(`(?i)\b(host|hostname|addr|address|server)\s*=\s*[^\s，,；;)）]+`)
+	diagnosticProxyValuePattern   = regexp.MustCompile(`(?i)\b(proxy|proxy_url|endpoint|url)\s*=\s*[^\s，,；;)）]+`)
+	diagnosticIPv4Pattern         = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b`)
+	diagnosticIPv6Pattern         = regexp.MustCompile(`\[[0-9A-Fa-f:]+\](?::\d+)?|\b[0-9A-Fa-f]{0,4}:[0-9A-Fa-f:]{2,}(?::\d+)?\b`)
+	diagnosticHostnamePattern     = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:\.?)\b(?::\d+)?`)
+)

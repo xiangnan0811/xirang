@@ -185,18 +185,18 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 		policyInfos = append(policyInfos, PreflightPolicy{
 			ID:           p.ID,
 			Name:         p.Name,
-			SourcePath:   p.SourcePath,
+			SourcePath:   sanitizeDiagnosticPathField(p.SourcePath),
 			ExecutorType: et,
 		})
 	}
 
 	resp := MigratePreflightResponse{
 		SourceNode: PreflightNodeInfo{
-			ID: sourceNode.ID, Name: sourceNode.Name, Host: sourceNode.Host,
+			ID: sourceNode.ID, Name: sourceNode.Name, Host: sanitizeDiagnosticHostField(sourceNode.Host),
 			Status: sourceNode.Status, DiskUsedGB: sourceNode.DiskUsedGB, DiskTotalGB: sourceNode.DiskTotalGB,
 		},
 		TargetNode: PreflightNodeInfo{
-			ID: targetNode.ID, Name: targetNode.Name, Host: targetNode.Host,
+			ID: targetNode.ID, Name: targetNode.Name, Host: sanitizeDiagnosticHostField(targetNode.Host),
 			Status: targetNode.Status, DiskUsedGB: targetNode.DiskUsedGB, DiskTotalGB: targetNode.DiskTotalGB,
 		},
 		Policies:   policyInfos,
@@ -216,7 +216,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	if probeErr != nil {
 		checks = append(checks, PreflightCheckItem{
 			Name: "ssh", Status: "fail",
-			Message: fmt.Sprintf("SSH 连接目标节点失败: %s", probeErr.Error()),
+			Message: fmt.Sprintf("SSH 连接目标节点失败: %s", classifyDoctorSSHEvidence(probeErr)),
 		})
 		sshFailed = true
 		resp.CanProceed = false
@@ -249,7 +249,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 			for _, tool := range tools {
 				checks = append(checks, PreflightCheckItem{
 					Name: "tool_" + tool, Status: "fail",
-					Message: fmt.Sprintf("无法建立 SSH 会话检测工具: %s", dialErr.Error()),
+					Message: fmt.Sprintf("无法建立 SSH 会话检测工具: %s", classifyDoctorSSHEvidence(dialErr)),
 				})
 				resp.CanProceed = false
 			}
@@ -286,12 +286,12 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 				if _, err := executor.RunSSHCommandOutput(ctx, client, checkCmd); err != nil {
 					checks = append(checks, PreflightCheckItem{
 						Name: "path", Status: "warn",
-						Message: fmt.Sprintf("目标节点路径不存在: %s", path),
+						Message: "目标节点路径不存在或不可访问: [PATH_REDACTED]",
 					})
 				} else {
 					checks = append(checks, PreflightCheckItem{
 						Name: "path", Status: "pass",
-						Message: fmt.Sprintf("路径存在: %s", path),
+						Message: "路径存在: [PATH_REDACTED]",
 					})
 				}
 			}
@@ -384,6 +384,20 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 		"data_migratable": resp.DataMigratable,
 	})
 	respondOK(c, resp)
+}
+
+func sanitizeDiagnosticHostField(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	return "[HOST_REDACTED]"
+}
+
+func sanitizeDiagnosticPathField(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	return "[PATH_REDACTED]"
 }
 
 func resolveNodeCredentialForAudit(node model.Node, db *gorm.DB, purpose string) sshutil.ResolvedCredential {
