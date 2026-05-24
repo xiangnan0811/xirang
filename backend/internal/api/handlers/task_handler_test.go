@@ -375,7 +375,8 @@ func TestTaskLogsFilterLevelLimitBeforeID(t *testing.T) {
 	}
 
 	log1 := model.TaskLog{TaskID: taskEntity.ID, Level: "info", Message: "info message"}
-	log2 := model.TaskLog{TaskID: taskEntity.ID, Level: "error", Message: "error message 1"}
+	rawLegacyErrorLog := `执行命令: rclone sync /srv/private/task-log remote:backup/task-log --password FAKE_TASK_LOG_PASSWORD_FOR_TEST_ONLY`
+	log2 := model.TaskLog{TaskID: taskEntity.ID, Level: "error", Message: rawLegacyErrorLog}
 	log3 := model.TaskLog{TaskID: taskEntity.ID, Level: "error", Message: "error message 2"}
 	if err := db.Create(&log1).Error; err != nil {
 		t.Fatalf("创建日志1失败: %v", err)
@@ -408,6 +409,22 @@ func TestTaskLogsFilterLevelLimitBeforeID(t *testing.T) {
 	}
 	if len(result.Data) != 1 || result.Data[0].ID != log2.ID {
 		t.Fatalf("日志过滤结果不符合预期，实际: %+v", result.Data)
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"rclone", "/srv/private/task-log", "remote:backup/task-log", "FAKE_TASK_LOG_PASSWORD_FOR_TEST_ONLY"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("任务日志响应泄漏原始遗留证据片段 %q: %s", forbidden, body)
+		}
+	}
+	if result.Data[0].Message == rawLegacyErrorLog || !strings.Contains(result.Data[0].Message, "[命令已隐藏]") {
+		t.Fatalf("期望任务日志 message 在读边界脱敏，实际: %+v", result.Data[0])
+	}
+	var storedLog model.TaskLog
+	if err := db.First(&storedLog, log2.ID).Error; err != nil {
+		t.Fatalf("重新读取日志失败: %v", err)
+	}
+	if storedLog.Message != rawLegacyErrorLog {
+		t.Fatalf("读边界脱敏不应改写 DB task_logs.message，实际: %q", storedLog.Message)
 	}
 
 	url = fmt.Sprintf("/tasks/%d/logs?level=error&limit=1", taskEntity.ID)

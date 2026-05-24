@@ -817,7 +817,7 @@ func (h *TaskHandler) Logs(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, logs)
+	respondOK(c, sanitizeTaskLogsForResponse(logs))
 }
 
 func (h *TaskHandler) loadTaskCredentialAuditContext(taskID uint) (model.Task, bool) {

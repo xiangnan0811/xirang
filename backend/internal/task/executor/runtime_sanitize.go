@@ -39,8 +39,7 @@ func sanitizeExecutorRuntimeEvidence(message string) string {
 	})
 	message = executorRemotePathPattern.ReplaceAllString(message, "[远程路径已隐藏]")
 	message = executorNamedPathPattern.ReplaceAllStringFunc(message, func(match string) string {
-		parsed, err := url.Parse(match)
-		if err == nil && parsed.Scheme != "" {
+		if strings.Contains(match, "://") {
 			return match
 		}
 		return "[远程路径已隐藏]"

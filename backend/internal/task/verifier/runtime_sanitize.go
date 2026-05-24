@@ -32,8 +32,7 @@ func sanitizeVerifierRuntimeEvidence(message string) string {
 	})
 	message = verifierRemotePathPattern.ReplaceAllString(message, "[远程路径已隐藏]")
 	message = verifierNamedPathPattern.ReplaceAllStringFunc(message, func(match string) string {
-		parsed, err := url.Parse(match)
-		if err == nil && parsed.Scheme != "" {
+		if strings.Contains(match, "://") {
 			return match
 		}
 		return "[远程路径已隐藏]"

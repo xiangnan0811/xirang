@@ -351,7 +351,8 @@ respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
 - `latest_drill` contains only scan-friendly summary fields: `task_run_id`, `status`, `started_at`, `finished_at`, `duration_ms`, `failed_step`, and `confidence_eligible`.
 - `drill_evidence` contains the full structured evidence record for the requested task run when a row exists; omit it or return null for non-drill or legacy runs without evidence.
 - Only completed successful drills with successful or skipped cleanup may set `confidence_eligible=true`. Failed, canceled, pending, post-verify-failed, cleanup-failed, or abnormally terminated drills must set `confidence_eligible=false`.
-- Evidence error fields must be sanitized before storage/return; do not expose tokens, SSH secrets, private keys, raw stack traces, or raw SQL/encryption errors.
+- Evidence error fields must be sanitized before storage/return; do not expose tokens, SSH secrets, private keys, raw stack traces, raw SQL/encryption errors, command output/text, endpoints, hostnames, or raw paths.
+- Task/task-run log and task-run detail read endpoints must apply response-time sanitization to stored runtime evidence so legacy rows cannot bypass current write-time sanitizers.
 
 ### 4. Validation & Error Matrix
 

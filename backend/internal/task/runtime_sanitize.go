@@ -10,7 +10,7 @@ import (
 
 var (
 	taskURLPattern              = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>，,;。)]+`)
-	taskCommandLifecyclePattern = regexp.MustCompile(`(?i)^\s*(执行命令|在远程节点执行|执行\s+(?:restic|rclone)\s+check)\s*[:：]\s*.*$`)
+	taskCommandLifecyclePattern = regexp.MustCompile(`(?is)(执行命令|在远程节点执行|执行\s+(?:restic|rclone)\s+check|command|cmd)\s*[:：=]\s*.*`)
 	taskOutputMarkerPattern     = regexp.MustCompile(`(?is)(输出\s*[:：=]|output\s*[:=]|stdout\s*[:=]|stderr\s*[:=])\s*.*`)
 	taskRemotePathPattern       = regexp.MustCompile(`\b[^\s"'，,;]+@[^\s"'，,;:]+(?::\d{1,5})?:/[^\s"'，,;]+`)
 	taskNamedPathPattern        = regexp.MustCompile(`\b[a-zA-Z0-9_.-]+:[^\s"'，,;]*[/][^\s"'，,;]+`)
@@ -22,6 +22,11 @@ var (
 )
 
 func sanitizeTaskLogMessage(message string) string {
+	return sanitizeTaskRuntimeEvidence(message)
+}
+
+// SanitizeRuntimeEvidenceForRead sanitizes stored task evidence for API reads.
+func SanitizeRuntimeEvidenceForRead(message string) string {
 	return sanitizeTaskRuntimeEvidence(message)
 }
 
@@ -56,8 +61,7 @@ func sanitizeTaskRuntimeEvidence(message string) string {
 	message = taskCommandLifecyclePattern.ReplaceAllString(message, "$1: [命令已隐藏]")
 	message = taskRemotePathPattern.ReplaceAllString(message, "[远程路径已隐藏]")
 	message = taskNamedPathPattern.ReplaceAllStringFunc(message, func(match string) string {
-		parsed, err := url.Parse(match)
-		if err == nil && parsed.Scheme != "" {
+		if strings.Contains(match, "://") {
 			return match
 		}
 		return "[远程路径已隐藏]"

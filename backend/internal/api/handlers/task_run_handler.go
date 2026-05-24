@@ -6,6 +6,7 @@ import (
 
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,6 +19,46 @@ type TaskRunHandler struct {
 type taskRunDetailResponse struct {
 	model.TaskRun
 	DrillEvidence *model.RestoreDrillEvidence `json:"drill_evidence,omitempty"`
+}
+
+func sanitizeTaskRunForResponse(run model.TaskRun) model.TaskRun {
+	run.LastError = task.SanitizeRuntimeEvidenceForRead(run.LastError)
+	return run
+}
+
+func sanitizeTaskRunsForResponse(runs []model.TaskRun) []model.TaskRun {
+	if len(runs) == 0 {
+		return runs
+	}
+	sanitized := make([]model.TaskRun, len(runs))
+	for i, run := range runs {
+		sanitized[i] = sanitizeTaskRunForResponse(run)
+	}
+	return sanitized
+}
+
+func sanitizeTaskLogForResponse(logEntry model.TaskLog) model.TaskLog {
+	logEntry.Message = task.SanitizeRuntimeEvidenceForRead(logEntry.Message)
+	return logEntry
+}
+
+func sanitizeTaskLogsForResponse(logs []model.TaskLog) []model.TaskLog {
+	if len(logs) == 0 {
+		return logs
+	}
+	sanitized := make([]model.TaskLog, len(logs))
+	for i, logEntry := range logs {
+		sanitized[i] = sanitizeTaskLogForResponse(logEntry)
+	}
+	return sanitized
+}
+
+func sanitizeRestoreDrillEvidenceForResponse(evidence model.RestoreDrillEvidence) model.RestoreDrillEvidence {
+	evidence.RestoreError = task.SanitizeRuntimeEvidenceForRead(evidence.RestoreError)
+	evidence.VerifyError = task.SanitizeRuntimeEvidenceForRead(evidence.VerifyError)
+	evidence.PostVerifyError = task.SanitizeRuntimeEvidenceForRead(evidence.PostVerifyError)
+	evidence.CleanupError = task.SanitizeRuntimeEvidenceForRead(evidence.CleanupError)
+	return evidence
 }
 
 func NewTaskRunHandler(db *gorm.DB) *TaskRunHandler {
@@ -72,7 +113,7 @@ func (h *TaskRunHandler) ListByTask(c *gin.Context) {
 		return
 	}
 
-	respondPaginated(c, runs, total, pg.Page, pg.PageSize)
+	respondPaginated(c, sanitizeTaskRunsForResponse(runs), total, pg.Page, pg.PageSize)
 }
 
 // Get godoc
@@ -126,10 +167,11 @@ func (h *TaskRunHandler) Get(c *gin.Context) {
 	}
 	var evidencePtr *model.RestoreDrillEvidence
 	if err == nil {
-		evidencePtr = &evidence
+		sanitizedEvidence := sanitizeRestoreDrillEvidenceForResponse(evidence)
+		evidencePtr = &sanitizedEvidence
 	}
 
-	respondOK(c, taskRunDetailResponse{TaskRun: run, DrillEvidence: evidencePtr})
+	respondOK(c, taskRunDetailResponse{TaskRun: sanitizeTaskRunForResponse(run), DrillEvidence: evidencePtr})
 }
 
 // Logs godoc
@@ -205,5 +247,5 @@ func (h *TaskRunHandler) Logs(c *gin.Context) {
 		return
 	}
 
-	respondOK(c, logs)
+	respondOK(c, sanitizeTaskLogsForResponse(logs))
 }

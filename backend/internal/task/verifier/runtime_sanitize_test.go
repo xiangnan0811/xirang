@@ -24,3 +24,18 @@ func TestSanitizeVerifierRuntimeEvidenceHidesPathHostAndTokens(t *testing.T) {
 		t.Fatalf("expected output placeholder in %q", got)
 	}
 }
+
+func TestSanitizeVerifierRuntimeEvidenceHidesNamedRemotePaths(t *testing.T) {
+	message := `rclone check remote:backup/tenant-a target:private/tenant-b token=FAKE_VERIFIER_NAMED_REMOTE_TOKEN_FOR_TEST_ONLY`
+
+	got := sanitizeVerifierRuntimeEvidence(message)
+
+	for _, forbidden := range []string{"remote:backup/tenant-a", "target:private/tenant-b", "FAKE_VERIFIER_NAMED_REMOTE_TOKEN_FOR_TEST_ONLY"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("verifier runtime evidence leaked %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "[远程路径已隐藏]") {
+		t.Fatalf("expected remote path placeholder in %q", got)
+	}
+}
