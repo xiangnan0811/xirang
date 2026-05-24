@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-24-p4-export-import-residual-hardening/research/export-import-residual.md","reason":"Verify the selected residual and ensure excluded candidates were not modified."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Confirm process logs contain no raw command output, command text, executor config, hosts, endpoints, paths, or sensitive diagnostic evidence."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Confirm no raw remote evidence is introduced through errors or loggable returned errors."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Confirm focused tests, gofmt, and backend validation are appropriate for a security-sensitive backend-only change."}

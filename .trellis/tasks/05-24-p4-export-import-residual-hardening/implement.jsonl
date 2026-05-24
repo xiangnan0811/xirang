@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-24-p4-export-import-residual-hardening/research/export-import-residual.md","reason":"Research proving export/import and other candidates are out of scope, and identifying anomaly snapshot diff logging as the implementation target."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Backend logging rules prohibit raw command output, diagnostic evidence, executor config, hosts, endpoints, and paths in process logs."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Error/evidence boundaries for raw command output, diagnostic output, raw SQL, paths, endpoints, and sensitive details."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security-sensitive backend changes require focused regression tests, gofmt, and standard Go validation."}
