@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.19](https://github.com/xiangnan0811/xirang/compare/v0.43.18...v0.43.19) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize diagnostic evidence ([fc26854](https://github.com/xiangnan0811/xirang/commit/fc268540ef0e7ca70ace7bf8dbb391095e392d3f))
+
 ## [0.43.18](https://github.com/xiangnan0811/xirang/compare/v0.43.17...v0.43.18) (2026-05-23)
 
 
