@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.21](https://github.com/xiangnan0811/xirang/compare/v0.43.20...v0.43.21) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize websocket log backfill ([913cdae](https://github.com/xiangnan0811/xirang/commit/913cdae3bbef1c75b5cd8dfbf1dc686160807af5))
+
 ## [0.43.20](https://github.com/xiangnan0811/xirang/compare/v0.43.19...v0.43.20) (2026-05-24)
 
 
