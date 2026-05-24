@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/prd.md","reason":"Task requirements, acceptance criteria, and selected minimal response-boundary slice."}
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/research/task-response-residual.md","reason":"Current task list/detail response residual findings and implementation target."}
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/research/appcredential-hook-residual.md","reason":"Prioritized AppCredential nested policy hook residual and compatibility analysis."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Sensitive runtime evidence must not be exposed in API responses."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Raw model values containing sensitive evidence require response sanitizers."}
