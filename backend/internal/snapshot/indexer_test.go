@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -46,6 +47,39 @@ func TestEscapeLikePattern_Backslash(t *testing.T) {
 	result := EscapeLikePattern(`path\to\file`)
 	if result != `path\\to\\file` {
 		t.Fatalf("期望 \\ 被转义为 \\\\，实际: %s", result)
+	}
+}
+
+func TestResticFindFailureErrorHidesNonEmptyOutput(t *testing.T) {
+	rawOutput := strings.Join([]string{
+		"repository password rejected for token=FAKE_TOKEN_FOR_TEST_ONLY",
+		"host backup.internal.example.com endpoint https://backup.internal.example.com/repo",
+		"stdout: /srv/backup/private/path FAKE_COMMAND_OUTPUT_FOR_TEST_ONLY",
+	}, "\n")
+
+	err := newResticFindFailureError(errors.New("exit status 1"), rawOutput)
+	errText := err.Error()
+	if !strings.Contains(errText, "[输出已隐藏]") {
+		t.Fatalf("期望非空输出使用隐藏占位符，实际: %s", errText)
+	}
+	for _, forbidden := range []string{
+		"FAKE_TOKEN_FOR_TEST_ONLY",
+		"backup.internal.example.com",
+		"https://backup.internal.example.com/repo",
+		"/srv/backup/private/path",
+		"FAKE_COMMAND_OUTPUT_FOR_TEST_ONLY",
+	} {
+		if strings.Contains(errText, forbidden) {
+			t.Fatalf("错误字符串泄露原始输出片段 %q: %s", forbidden, errText)
+		}
+	}
+}
+
+func TestResticFindFailureErrorOmitsOutputForEmptyOutput(t *testing.T) {
+	err := newResticFindFailureError(errors.New("exit status 1"), " \n\t ")
+	errText := err.Error()
+	if strings.Contains(errText, "输出:") || strings.Contains(errText, "[输出已隐藏]") {
+		t.Fatalf("空输出不应附加输出字段或占位符，实际: %s", errText)
 	}
 }
 

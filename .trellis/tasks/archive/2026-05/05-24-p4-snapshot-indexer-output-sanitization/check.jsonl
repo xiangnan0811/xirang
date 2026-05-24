@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check that errors and API/log paths do not expose command output or sensitive runtime evidence."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check that any returned/logged errors avoid full command output, endpoints, hosts, and raw remote evidence."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check focused tests, gofmt, standard backend gates, and security-sensitive denial/sanitization coverage."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check that snapshot index schema/storage/search contracts are unchanged by this sanitizer slice."}
+{"file":".trellis/tasks/05-24-p4-snapshot-indexer-output-sanitization/research/snapshot-indexer-restic-output.md","reason":"Check implementation against the researched target branch and executor output-hiding precedent."}
+{"file":".trellis/tasks/05-24-p4-snapshot-indexer-output-sanitization/research/snapshot-adjacent-surfaces.md","reason":"Check scope boundaries and ensure no unrelated adjacent surfaces were changed."}

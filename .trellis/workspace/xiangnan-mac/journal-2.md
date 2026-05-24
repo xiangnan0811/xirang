@@ -467,3 +467,36 @@ Reviewed the AppCredential rendered-hook residual surface and implemented the sm
 ### Next Steps
 
 - None - task complete
+
+
+## Session 73: P4 snapshot indexer output sanitizer
+
+**Date**: 2026-05-24
+**Task**: P4 snapshot indexer output sanitizer
+**Branch**: `security/p4-snapshot-indexer-sanitize`
+
+### Summary
+
+Reviewed residual snapshot indexing surfaces and hid raw restic find command output from snapshot indexer failure errors while preserving indexing/search behavior; backend tests/build/lint passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `097e33b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

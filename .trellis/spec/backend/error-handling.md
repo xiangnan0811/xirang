@@ -353,6 +353,7 @@ respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
 - Only completed successful drills with successful or skipped cleanup may set `confidence_eligible=true`. Failed, canceled, pending, post-verify-failed, cleanup-failed, or abnormally terminated drills must set `confidence_eligible=false`.
 - Evidence error fields must be sanitized before storage/return; do not expose tokens, SSH secrets, private keys, raw stack traces, raw SQL/encryption errors, command output/text, endpoints, hostnames, or raw paths.
 - Task/task-run log, task-run detail, and WebSocket task-log backfill read endpoints must apply response-time sanitization to stored runtime evidence so legacy rows cannot bypass current write-time sanitizers.
+- Remote command helpers that surface errors outside their package must hide non-empty command output before wrapping or logging the error; use a stable placeholder rather than raw stdout/stderr, paths, hosts, endpoints, or tokens.
 
 ### 4. Validation & Error Matrix
 

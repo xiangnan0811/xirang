@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 72
+- **Total Sessions**: 73
 - **Last Active**: 2026-05-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~469 | Active |
+| `journal-2.md` | ~502 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 73 | 2026-05-24 | P4 snapshot indexer output sanitizer | `097e33b` | `security/p4-snapshot-indexer-sanitize` |
 | 72 | 2026-05-24 | P4 websocket log backfill sanitizer | `c3591b9` | `security/p4-appcredential-hook-hardening` |
 | 71 | 2026-05-24 | P4 residual read-boundary sanitizer | `0bfc631` | `security/p4-residual-review` |
 | 70 | 2026-05-24 | P4 diagnostic evidence sanitizer | `0e4598a` | `security/p4-next-hardening-3` |

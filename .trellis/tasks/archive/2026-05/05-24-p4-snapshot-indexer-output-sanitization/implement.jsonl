@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend-only hardening in snapshot indexing must follow backend package conventions."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Snapshot indexer errors must not expose raw command output, paths, endpoints, hosts, or sensitive details."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Returned errors may be logged through internal-error paths and must avoid raw command output or remote evidence."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Security-sensitive backend changes need minimal implementation, focused regression tests, and standard Go quality gates."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Snapshot index storage/search contracts must remain unchanged and not mutate stored rows for this sanitizer slice."}
+{"file":".trellis/tasks/05-24-p4-snapshot-indexer-output-sanitization/research/snapshot-indexer-restic-output.md","reason":"Primary research identifying the raw restic find output error branch and comparable executor sanitization precedent."}
+{"file":".trellis/tasks/05-24-p4-snapshot-indexer-output-sanitization/research/snapshot-adjacent-surfaces.md","reason":"Scope research confirming adjacent snapshot search/status surfaces are not part of this minimal slice."}
