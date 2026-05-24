@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/runtimeevidence"
 	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
@@ -324,7 +325,7 @@ func (h *Hub) loadBackfillEvents(sinceID uint, taskID *uint, access AccessScope)
 			LogID:     item.ID,
 			TaskID:    item.TaskID,
 			Level:     item.Level,
-			Message:   item.Message,
+			Message:   runtimeevidence.SanitizeTaskRuntimeEvidence(item.Message),
 			Status:    taskStatusByID[item.TaskID],
 			Timestamp: item.CreatedAt,
 		})
