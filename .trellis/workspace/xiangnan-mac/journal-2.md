@@ -401,3 +401,36 @@ Sanitized Node Doctor and migration preflight diagnostic evidence responses, tig
 ### Next Steps
 
 - None - task complete
+
+
+## Session 71: P4 residual read-boundary sanitizer
+
+**Date**: 2026-05-24
+**Task**: P4 residual read-boundary sanitizer
+**Branch**: `security/p4-residual-review`
+
+### Summary
+
+Reviewed residual P4 surfaces and implemented read-boundary sanitization for task/task-run logs and task-run detail legacy runtime evidence; backend tests/build/lint passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0bfc631` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
