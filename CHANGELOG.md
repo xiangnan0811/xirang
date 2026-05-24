@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.22](https://github.com/xiangnan0811/xirang/compare/v0.43.21...v0.43.22) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** hide snapshot indexer command output ([ca13535](https://github.com/xiangnan0811/xirang/commit/ca135358a9ee4d2b0e2277170b9f2c9468d80fca))
+
 ## [0.43.21](https://github.com/xiangnan0811/xirang/compare/v0.43.20...v0.43.21) (2026-05-24)
 
 
