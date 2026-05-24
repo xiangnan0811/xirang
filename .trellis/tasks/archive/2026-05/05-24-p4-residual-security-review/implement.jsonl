@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"backend handler and security conventions"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"task-run detail and drill evidence response safety"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"runtime evidence, command output, path, endpoint, and host-sensitive restrictions"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"sanitizer and backend test expectations"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"legacy evidence at-rest and read-boundary expectations"}
+{"file":".trellis/tasks/05-24-p4-residual-security-review/research/legacy-hooks-residual.md","reason":"selected task-run/detail/log legacy evidence read-boundary findings"}
+{"file":".trellis/tasks/05-24-p4-residual-security-review/research/rclone-executor-residual.md","reason":"rclone residual review and legacy evidence comparison"}
+{"file":".trellis/tasks/05-24-p4-residual-security-review/research/file-import-export-residual.md","reason":"residual candidate comparison and process-log caveats"}
+{"file":".trellis/tasks/05-24-p4-residual-security-review/research/docker-runtime-residual.md","reason":"residual candidate comparison and deployment log caveats"}
