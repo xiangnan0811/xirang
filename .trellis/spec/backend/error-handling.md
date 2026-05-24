@@ -104,8 +104,9 @@ codebase mostly uses Simplified Chinese strings.
   backup directory existence/writability, disk space, required tools, and probe
   status when available.
 - Evidence must be sanitized and concise. Do not return passwords, private keys,
-  tokens, proxy endpoints, raw SQL/encryption details, or full command output
-  that may contain credentials.
+  tokens, proxy endpoints, hostnames, raw paths, raw SQL/encryption details, raw
+  command text, diagnostic output, or full command output that may contain
+  credentials.
 
 ### 4. Validation & Error Matrix
 

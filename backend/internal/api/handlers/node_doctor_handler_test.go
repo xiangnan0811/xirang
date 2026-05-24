@@ -291,3 +291,56 @@ func TestNodeDoctorSanitizesSensitiveEvidence(t *testing.T) {
 		t.Fatalf("脱敏后应返回占位说明")
 	}
 }
+
+func TestNodeDoctorSanitizesDiagnosticEvidenceHostPathAndOutput(t *testing.T) {
+	input := "sudo failed on prod-db.example.internal at 10.12.13.14:22 path /srv/backups/prod and root@backup.internal:/repo output: cat /etc/passwd"
+	got := sanitizeDoctorEvidence(input)
+	for _, forbidden := range []string{"prod-db.example.internal", "backup.internal", "10.12.13.14", "/srv/backups/prod", "/repo", "/etc/passwd", "cat"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("doctor evidence 泄漏 %q: %s", forbidden, got)
+		}
+	}
+	for _, expected := range []string{"[HOST_REDACTED]", "[PATH_REDACTED]", "[REMOTE_PATH_REDACTED]", "[REDACTED_OUTPUT]"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("doctor evidence 缺少脱敏占位 %q: %s", expected, got)
+		}
+	}
+}
+
+func TestNodeDoctorSanitizesDiagnosticPathAssignments(t *testing.T) {
+	input := "path=/srv/backups/prod home=~/restore endpoint=https://backup.example.internal:8443/api"
+	got := sanitizeDoctorEvidence(input)
+	for _, forbidden := range []string{"/srv/backups/prod", "~/restore", "backup.example.internal", ":8443", "/api"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("doctor evidence 泄漏路径或端点 %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "[PATH_REDACTED]") || !strings.Contains(got, "[ENDPOINT_REDACTED]") {
+		t.Fatalf("doctor evidence 缺少路径/端点脱敏占位: %s", got)
+	}
+}
+
+func TestNodeDoctorSanitizesDiagnosticCommandText(t *testing.T) {
+	input := "diagnostic failed command: cat /etc/hosts on prod-db.example.internal"
+	got := sanitizeDoctorEvidence(input)
+	for _, forbidden := range []string{"cat", "/etc/hosts", "prod-db.example.internal"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("doctor evidence 泄漏命令文本 %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "[REDACTED_COMMAND]") {
+		t.Fatalf("doctor evidence 缺少命令文本脱敏占位: %s", got)
+	}
+}
+
+func TestNodeDoctorSudoEvidenceDoesNotCopyCommandOutput(t *testing.T) {
+	got := classifyDoctorSudoEvidence("sudo: a password is required\noutput: cat /etc/passwd on prod-db.example.internal")
+	for _, forbidden := range []string{"cat", "/etc/passwd", "prod-db.example.internal"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("sudo evidence 不应复制原始命令输出 %q: %s", forbidden, got)
+		}
+	}
+	if got == "" || strings.Contains(got, "[REDACTED_OUTPUT]") {
+		t.Fatalf("sudo evidence 应返回通用分类而非原始输出脱敏片段: %s", got)
+	}
+}
