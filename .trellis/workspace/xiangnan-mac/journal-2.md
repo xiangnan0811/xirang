@@ -599,3 +599,36 @@ Reviewed file browser/process-log residual surfaces and implemented local-only h
 ### Next Steps
 
 - None - task complete
+
+
+## Session 77: P4 export/import residual hardening
+
+**Date**: 2026-05-25
+**Task**: P4 export/import residual hardening
+**Branch**: `security/p4-export-import-residual-hardening`
+
+### Summary
+
+Audited export/import, AppCredential rendered hooks, rclone/restic residuals, and adjacent local evidence; selected the minimal local-only anomaly snapshot diff parse-failure process-log residual; replaced raw restic snapshots output logging with safe structured metadata while preserving behavior, and added focused regression coverage. Validation passed: git diff --check, backend anomaly tests, full backend tests, and backend build.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4cd33b4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
