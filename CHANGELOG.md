@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.20](https://github.com/xiangnan0811/xirang/compare/v0.43.19...v0.43.20) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** sanitize legacy task evidence reads ([de81b54](https://github.com/xiangnan0811/xirang/commit/de81b54caf6e5e394f84a816f778a3ba8c1fe5bb))
+
 ## [0.43.19](https://github.com/xiangnan0811/xirang/compare/v0.43.18...v0.43.19) (2026-05-24)
 
 
