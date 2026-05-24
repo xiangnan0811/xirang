@@ -500,3 +500,36 @@ Reviewed residual snapshot indexing surfaces and hid raw restic find command out
 ### Next Steps
 
 - None - task complete
+
+
+## Session 74: P4 task read response sanitizer
+
+**Date**: 2026-05-24
+**Task**: P4 task read response sanitizer
+**Branch**: `security/p4-next-residual-hardening`
+
+### Summary
+
+Reviewed residual P4 task read surfaces and sanitized task list/detail responses so legacy last_error runtime evidence and nested policy hook command text are not exposed while preserving stored rows and task behavior.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23b0723` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

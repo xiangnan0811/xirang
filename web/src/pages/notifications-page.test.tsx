@@ -354,7 +354,7 @@ describe("NotificationsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "通知与告警" })
     ).toBeInTheDocument();
-    expect(screen.getByText("1 条待处理")).toBeInTheDocument();
+    expect(await screen.findByText("1 条待处理")).toBeInTheDocument();
     expect(screen.getByText("1/1 通道启用")).toBeInTheDocument();
     expect(screen.getByText("告警中心")).toBeInTheDocument();
   });

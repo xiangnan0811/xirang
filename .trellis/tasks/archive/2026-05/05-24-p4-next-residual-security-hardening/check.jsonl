@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/prd.md","reason":"Check implementation against requirements and acceptance criteria."}
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/research/task-response-residual.md","reason":"Verify the selected task response boundary is covered and no broader behavior changed."}
+{"file":".trellis/tasks/05-24-p4-next-residual-security-hardening/research/appcredential-hook-residual.md","reason":"Verify nested policy hook duplicate exposure is removed without redesigning policy hooks."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check response sanitization against sensitive runtime evidence rules."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check response sanitizer pattern and DB non-mutation expectations."}
