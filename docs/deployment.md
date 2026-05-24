@@ -224,7 +224,7 @@ docker compose logs -f xirang
 # 最近 200 行 stdout 日志
 docker compose logs --tail=200 xirang
 
-# 持久化日志文件
+# 持久化日志文件（Nginx 访问日志请求行会省略查询字符串）
 ls -lah ./logs
 tail -f ./logs/xirang.log
 
