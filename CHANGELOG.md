@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.25](https://github.com/xiangnan0811/xirang/compare/v0.43.24...v0.43.25) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** harden file browser residuals ([025e40f](https://github.com/xiangnan0811/xirang/commit/025e40f3c1b79cbd58c770586e3dd86d7261ca84))
+
 ## [0.43.24](https://github.com/xiangnan0811/xirang/compare/v0.43.23...v0.43.24) (2026-05-24)
 
 
