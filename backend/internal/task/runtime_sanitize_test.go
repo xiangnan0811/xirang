@@ -14,6 +14,17 @@ func assertTaskRuntimeTextSanitized(t *testing.T, text string, forbidden []strin
 	}
 }
 
+func TestSanitizeRuntimeEvidenceForReadHidesLegacyStoredEvidence(t *testing.T) {
+	msg := `执行命令: restic restore --target /srv/private/restore; stdout: https://legacy.internal.example/api?token=FAKE_READ_BOUNDARY_TOKEN_FOR_TEST_ONLY root@legacy.internal.example:/backup/tenant-a`
+
+	got := SanitizeRuntimeEvidenceForRead(msg)
+
+	assertTaskRuntimeTextSanitized(t, got, []string{"restic", "/srv/private/restore", "legacy.internal.example", "FAKE_READ_BOUNDARY_TOKEN_FOR_TEST_ONLY", "/backup/tenant-a"})
+	if !strings.Contains(got, "[命令已隐藏]") {
+		t.Fatalf("expected command placeholder in %q", got)
+	}
+}
+
 func TestSanitizeTaskLastErrorHidesRuntimeEvidence(t *testing.T) {
 	msg := `Post "https://backup.internal.example/api?token=FAKE_RUNTIME_TOKEN_FOR_TEST_ONLY": lookup backup.internal.example: no such host; source=/srv/private/db.sql; output=/tmp/raw-output root@db.internal.example:/backup/tenant-a`
 	got := sanitizeTaskLastError(msg)
@@ -26,14 +37,30 @@ func TestSanitizeTaskLastErrorHidesRuntimeEvidence(t *testing.T) {
 	}
 }
 
+func TestSanitizeRuntimeEvidenceForReadHidesNamedRemotePaths(t *testing.T) {
+	msg := `legacy rclone line copied remote:backup/tenant-a to target:private/tenant-b token=FAKE_NAMED_REMOTE_TOKEN_FOR_TEST_ONLY`
+
+	got := SanitizeRuntimeEvidenceForRead(msg)
+
+	assertTaskRuntimeTextSanitized(t, got, []string{"remote:backup/tenant-a", "target:private/tenant-b", "FAKE_NAMED_REMOTE_TOKEN_FOR_TEST_ONLY"})
+	if !strings.Contains(got, "[远程路径已隐藏]") {
+		t.Fatalf("expected remote path placeholder in %q", got)
+	}
+}
+
 func TestSanitizeTaskLogMessageHidesCommandLifecycleText(t *testing.T) {
-	message := `执行命令: curl https://hooks.example.test/services/FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY?secret=FAKE_QUERY_FOR_TEST_ONLY && rsync /srv/private/source root@db.internal.example:/backup/tenant-a`
+	tests := []string{
+		`执行命令: curl https://hooks.example.test/services/FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY?secret=FAKE_QUERY_FOR_TEST_ONLY && rsync /srv/private/source root@db.internal.example:/backup/tenant-a`,
+		`legacy failed command: curl https://hooks.example.test/services/FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY?secret=FAKE_QUERY_FOR_TEST_ONLY && rsync /srv/private/source root@db.internal.example:/backup/tenant-a`,
+	}
 
-	got := sanitizeTaskLogMessage(message)
+	for _, message := range tests {
+		got := sanitizeTaskLogMessage(message)
 
-	assertTaskRuntimeTextSanitized(t, got, []string{"curl", "rsync", "hooks.example.test", "FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY", "FAKE_QUERY_FOR_TEST_ONLY", "/srv/private/source", "db.internal.example", "/backup/tenant-a"})
-	if !strings.Contains(got, "[命令已隐藏]") {
-		t.Fatalf("expected command placeholder in %q", got)
+		assertTaskRuntimeTextSanitized(t, got, []string{"curl", "rsync", "hooks.example.test", "FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY", "FAKE_QUERY_FOR_TEST_ONLY", "/srv/private/source", "db.internal.example", "/backup/tenant-a"})
+		if !strings.Contains(got, "[命令已隐藏]") {
+			t.Fatalf("expected command placeholder in %q", got)
+		}
 	}
 }
 
