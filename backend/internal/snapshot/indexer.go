@@ -193,7 +193,7 @@ func indexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snapshotID
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
-		return fmt.Errorf("restic find 执行失败: %w, 输出: %s", err, strings.TrimSpace(output))
+		return newResticFindFailureError(err, output)
 	}
 
 	entries := parseResticFindOutput(output)
@@ -221,6 +221,13 @@ type resticFindEntry struct {
 	Path  string `json:"path"`
 	Size  int64  `json:"size"`
 	Mtime string `json:"mtime"`
+}
+
+func newResticFindFailureError(err error, output string) error {
+	if strings.TrimSpace(output) == "" {
+		return fmt.Errorf("restic find 执行失败: %w", err)
+	}
+	return fmt.Errorf("restic find 执行失败: %w, 输出: [输出已隐藏]", err)
 }
 
 // parseResticFindOutput 解析 restic find --json --long 的 NDJSON 输出。
