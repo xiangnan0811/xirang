@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.24](https://github.com/xiangnan0811/xirang/compare/v0.43.23...v0.43.24) (2026-05-24)
+
+
+### 🐛 Bug Fixes
+
+* **security:** redact nginx access log queries ([67561f9](https://github.com/xiangnan0811/xirang/commit/67561f94a37ac714a2d343928f511be4dfc29e8e))
+
 ## [0.43.23](https://github.com/xiangnan0811/xirang/compare/v0.43.22...v0.43.23) (2026-05-24)
 
 
