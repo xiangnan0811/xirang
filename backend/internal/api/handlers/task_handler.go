@@ -66,6 +66,28 @@ type taskRequest struct {
 	CronSpec        string `json:"cron_spec"`
 }
 
+func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
+	taskEntity.LastError = task.SanitizeRuntimeEvidenceForRead(taskEntity.LastError)
+	if taskEntity.Policy != nil {
+		policyCopy := *taskEntity.Policy
+		policyCopy.PreHook = ""
+		policyCopy.PostHook = ""
+		taskEntity.Policy = &policyCopy
+	}
+	return taskEntity
+}
+
+func sanitizeTasksForResponse(tasks []model.Task) []model.Task {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	sanitized := make([]model.Task, len(tasks))
+	for i, taskEntity := range tasks {
+		sanitized[i] = sanitizeTaskForResponse(taskEntity)
+	}
+	return sanitized
+}
+
 // List godoc
 // @Summary      列出任务
 // @Description  返回任务列表（分页），支持按状态、节点、策略、关键字过滤
@@ -166,7 +188,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 			}
 		}
 	}
-	respondPaginated(c, tasks, total, pg.Page, pg.PageSize)
+	respondPaginated(c, sanitizeTasksForResponse(tasks), total, pg.Page, pg.PageSize)
 }
 
 // Get godoc
@@ -199,7 +221,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
 		taskEntity.Progress = &runProgress[0]
 	}
-	respondOK(c, taskEntity)
+	respondOK(c, sanitizeTaskForResponse(taskEntity))
 }
 
 // Create godoc

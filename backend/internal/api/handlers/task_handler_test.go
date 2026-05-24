@@ -172,6 +172,230 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	}
 }
 
+func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-task-list-boundary", Host: "10.0.3.1", Username: "root", AuthType: "key", BackupDir: "node-task-list-boundary", Password: "FAKE_NODE_LIST_PASSWORD_FOR_TEST_ONLY", PrivateKey: "FAKE_NODE_LIST_PRIVATE_KEY_FOR_TEST_ONLY"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	rawPreHook := `mysqldump -h db.internal.example -u app -p'FAKE_POLICY_LIST_PASSWORD_FOR_TEST_ONLY' --all-databases > /tmp/xirang-mysql-backup.sql`
+	rawPostHook := `curl https://hooks.internal.example/notify?token=FAKE_POLICY_LIST_HOOK_TOKEN_FOR_TEST_ONLY /tmp/xirang-mysql-backup.sql`
+	policy := model.Policy{
+		Name:       "policy-task-list-boundary",
+		SourcePath: "/data/policy-list-source",
+		TargetPath: "/backup/policy-list-target",
+		CronSpec:   "*/5 * * * *",
+		PreHook:    rawPreHook,
+		PostHook:   rawPostHook,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+
+	rawLastError := `执行命令: rsync /srv/private/source root@task-list.internal.example:/backup/private/target; stderr: token=FAKE_TASK_LIST_LAST_ERROR_TOKEN_FOR_TEST_ONLY from https://task-list.internal.example/api?token=FAKE_TASK_LIST_QUERY_TOKEN_FOR_TEST_ONLY`
+	policyID := policy.ID
+	taskEntity := model.Task{
+		Name:         "task-list-boundary",
+		NodeID:       node.ID,
+		PolicyID:     &policyID,
+		ExecutorType: "rsync",
+		RsyncSource:  "/data/task-list-source",
+		RsyncTarget:  "/backup/task-list-target",
+		Status:       "running",
+		LastError:    rawLastError,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	runningRun := model.TaskRun{TaskID: taskEntity.ID, Status: "running", TriggerType: "manual", Progress: 67}
+	if err := db.Create(&runningRun).Error; err != nil {
+		t.Fatalf("创建运行记录失败: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "admin")
+		c.Next()
+	})
+	handler := NewTaskHandler(db, nil)
+	router.GET("/tasks", handler.List)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks?status=running&page_size=10&page=1", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	assertTaskReadResponseDoesNotLeak(t, body, []string{
+		"rsync /srv/private/source", "/srv/private/source", "root@task-list.internal.example", "task-list.internal.example", "/backup/private/target", "FAKE_TASK_LIST_LAST_ERROR_TOKEN_FOR_TEST_ONLY", "FAKE_TASK_LIST_QUERY_TOKEN_FOR_TEST_ONLY",
+		"mysqldump", "db.internal.example", "FAKE_POLICY_LIST_PASSWORD_FOR_TEST_ONLY", "FAKE_POLICY_LIST_HOOK_TOKEN_FOR_TEST_ONLY", "hooks.internal.example", "/tmp/xirang-mysql-backup.sql",
+		"FAKE_NODE_LIST_PASSWORD_FOR_TEST_ONLY", "FAKE_NODE_LIST_PRIVATE_KEY_FOR_TEST_ONLY",
+	})
+	for _, expected := range []string{"[命令已隐藏]", "\"pre_hook\":\"\"", "\"post_hook\":\"\""} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("期望任务列表响应包含脱敏结果 %q，实际: %s", expected, body)
+		}
+	}
+
+	var payload struct {
+		Data  []model.Task `json:"data"`
+		Total int64        `json:"total"`
+		Page  int          `json:"page"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if payload.Total != 1 || payload.Page != 1 || len(payload.Data) != 1 {
+		t.Fatalf("分页响应不符合预期: %+v", payload)
+	}
+	got := payload.Data[0]
+	if got.ID != taskEntity.ID || got.Policy == nil || got.Policy.ID != policy.ID || got.Policy.Name != policy.Name || got.Progress == nil || *got.Progress != runningRun.Progress {
+		t.Fatalf("任务列表响应应保留任务结构、策略关联和进度: %+v", got)
+	}
+	if got.LastError == rawLastError || !strings.Contains(got.LastError, "[命令已隐藏]") {
+		t.Fatalf("任务列表 last_error 未按读边界脱敏: %q", got.LastError)
+	}
+	if got.Policy.PreHook != "" || got.Policy.PostHook != "" {
+		t.Fatalf("任务列表嵌套 policy hook 应清空，实际: pre=%q post=%q", got.Policy.PreHook, got.Policy.PostHook)
+	}
+	if got.Node.Password != "" || got.Node.PrivateKey != "" {
+		t.Fatalf("任务列表响应应保留节点脱敏行为，实际: %+v", got.Node)
+	}
+
+	var storedTask model.Task
+	if err := db.First(&storedTask, taskEntity.ID).Error; err != nil {
+		t.Fatalf("重新读取任务失败: %v", err)
+	}
+	if storedTask.LastError != rawLastError {
+		t.Fatalf("读边界脱敏不应改写 DB tasks.last_error，实际: %q", storedTask.LastError)
+	}
+	var storedPolicy model.Policy
+	if err := db.First(&storedPolicy, policy.ID).Error; err != nil {
+		t.Fatalf("重新读取策略失败: %v", err)
+	}
+	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook {
+		t.Fatalf("读边界脱敏不应改写 DB policy hooks，实际: pre=%q post=%q", storedPolicy.PreHook, storedPolicy.PostHook)
+	}
+}
+
+func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	node := model.Node{Name: "node-task-detail-boundary", Host: "10.0.3.2", Username: "root", AuthType: "key", BackupDir: "node-task-detail-boundary", Password: "FAKE_NODE_DETAIL_PASSWORD_FOR_TEST_ONLY", PrivateKey: "FAKE_NODE_DETAIL_PRIVATE_KEY_FOR_TEST_ONLY"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	rawPreHook := `PGPASSWORD='FAKE_POLICY_DETAIL_PASSWORD_FOR_TEST_ONLY' pg_dumpall -h pg.internal.example > /tmp/xirang-pg-backup.sql`
+	rawPostHook := `redis-cli -h redis.internal.example -a 'FAKE_POLICY_DETAIL_REDIS_PASSWORD_FOR_TEST_ONLY' BGSAVE`
+	policy := model.Policy{
+		Name:       "policy-task-detail-boundary",
+		SourcePath: "/data/policy-detail-source",
+		TargetPath: "/backup/policy-detail-target",
+		CronSpec:   "*/10 * * * *",
+		PreHook:    rawPreHook,
+		PostHook:   rawPostHook,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+
+	rawLastError := `output: curl https://task-detail.internal.example/hook?token=FAKE_TASK_DETAIL_QUERY_TOKEN_FOR_TEST_ONLY && cat /var/lib/postgresql/private.sql; stderr: bearer=FAKE_TASK_DETAIL_LAST_ERROR_TOKEN_FOR_TEST_ONLY root@task-detail.internal.example:/backup/postgresql`
+	policyID := policy.ID
+	taskEntity := model.Task{
+		Name:         "task-detail-boundary",
+		NodeID:       node.ID,
+		PolicyID:     &policyID,
+		ExecutorType: "restic",
+		RsyncSource:  "/data/task-detail-source",
+		RsyncTarget:  "/backup/task-detail-target",
+		Status:       "running",
+		LastError:    rawLastError,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	runningRun := model.TaskRun{TaskID: taskEntity.ID, Status: "running", TriggerType: "manual", Progress: 42}
+	if err := db.Create(&runningRun).Error; err != nil {
+		t.Fatalf("创建运行记录失败: %v", err)
+	}
+
+	router := gin.New()
+	handler := NewTaskHandler(db, nil)
+	router.GET("/tasks/:id", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", taskEntity.ID), nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	assertTaskReadResponseDoesNotLeak(t, body, []string{
+		"curl https://task-detail.internal.example", "cat /var/lib/postgresql/private.sql", "/var/lib/postgresql/private.sql", "root@task-detail.internal.example", "task-detail.internal.example", "/backup/postgresql", "FAKE_TASK_DETAIL_QUERY_TOKEN_FOR_TEST_ONLY", "FAKE_TASK_DETAIL_LAST_ERROR_TOKEN_FOR_TEST_ONLY",
+		"PGPASSWORD", "pg_dumpall", "pg.internal.example", "FAKE_POLICY_DETAIL_PASSWORD_FOR_TEST_ONLY", "redis-cli", "redis.internal.example", "FAKE_POLICY_DETAIL_REDIS_PASSWORD_FOR_TEST_ONLY", "/tmp/xirang-pg-backup.sql",
+		"FAKE_NODE_DETAIL_PASSWORD_FOR_TEST_ONLY", "FAKE_NODE_DETAIL_PRIVATE_KEY_FOR_TEST_ONLY",
+	})
+	for _, expected := range []string{"[输出已隐藏]", "\"pre_hook\":\"\"", "\"post_hook\":\"\""} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("期望任务详情响应包含脱敏结果 %q，实际: %s", expected, body)
+		}
+	}
+
+	var payload struct {
+		Data model.Task `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	got := payload.Data
+	if got.ID != taskEntity.ID || got.Policy == nil || got.Policy.ID != policy.ID || got.Policy.Name != policy.Name || got.Progress == nil || *got.Progress != runningRun.Progress {
+		t.Fatalf("任务详情响应应保留任务结构、策略关联和进度: %+v", got)
+	}
+	if got.LastError == rawLastError || !strings.Contains(got.LastError, "[输出已隐藏]") {
+		t.Fatalf("任务详情 last_error 未按读边界脱敏: %q", got.LastError)
+	}
+	if got.Policy.PreHook != "" || got.Policy.PostHook != "" {
+		t.Fatalf("任务详情嵌套 policy hook 应清空，实际: pre=%q post=%q", got.Policy.PreHook, got.Policy.PostHook)
+	}
+	if got.Node.Password != "" || got.Node.PrivateKey != "" {
+		t.Fatalf("任务详情响应应保留节点脱敏行为，实际: %+v", got.Node)
+	}
+
+	var storedTask model.Task
+	if err := db.First(&storedTask, taskEntity.ID).Error; err != nil {
+		t.Fatalf("重新读取任务失败: %v", err)
+	}
+	if storedTask.LastError != rawLastError {
+		t.Fatalf("读边界脱敏不应改写 DB tasks.last_error，实际: %q", storedTask.LastError)
+	}
+	var storedPolicy model.Policy
+	if err := db.First(&storedPolicy, policy.ID).Error; err != nil {
+		t.Fatalf("重新读取策略失败: %v", err)
+	}
+	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook {
+		t.Fatalf("读边界脱敏不应改写 DB policy hooks，实际: pre=%q post=%q", storedPolicy.PreHook, storedPolicy.PostHook)
+	}
+}
+
+func assertTaskReadResponseDoesNotLeak(t *testing.T, body string, forbidden []string) {
+	t.Helper()
+	for _, fragment := range forbidden {
+		if strings.Contains(body, fragment) {
+			t.Fatalf("任务读响应泄漏原始敏感片段 %q: %s", fragment, body)
+		}
+	}
+}
+
 func TestTaskResponsesRedactExecutorConfig(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
