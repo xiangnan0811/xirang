@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 75
+- **Total Sessions**: 76
 - **Last Active**: 2026-05-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~568 | Active |
+| `journal-2.md` | ~601 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 76 | 2026-05-24 | P4 file browser residual hardening | `74e6147` | `security/p4-file-process-residual-hardening` |
 | 75 | 2026-05-24 | P4 Docker nginx access log redaction | `c83acba` | `security/p4-docker-nginx-residual-hardening` |
 | 74 | 2026-05-24 | P4 task read response sanitizer | `23b0723` | `security/p4-next-residual-hardening` |
 | 73 | 2026-05-24 | P4 snapshot indexer output sanitizer | `097e33b` | `security/p4-snapshot-indexer-sanitize` |

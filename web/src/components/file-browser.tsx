@@ -18,7 +18,7 @@ type FileBrowserProps = {
   /** 加载目录内容 */
   fetchDir: (path: string, signal?: AbortSignal) => Promise<FileListResult>;
   /** 加载文件内容（用于预览） */
-  fetchContent: (path: string) => Promise<FileContentResult>;
+  fetchContent: (path: string, signal?: AbortSignal) => Promise<FileContentResult>;
   /** 根路径（默认 "/"） */
   rootPath?: string;
   className?: string;
@@ -253,7 +253,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
           open={previewOpen}
           onOpenChange={setPreviewOpen}
           filePath={previewPath}
-          fetchContent={() => fetchContent(previewPath)}
+          fetchContent={(signal) => fetchContent(previewPath, signal)}
         />
       )}
     </div>

@@ -92,7 +92,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 
 	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
+		logFileHandlerFailure("error", node.ID, "dial", rawPath, "SFTP 连接失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialAuditSSHOutcome("dial", err), err, map[string]any{
 			"stage":     "dial",
 			"path_hash": safePathHash(rawPath),
@@ -106,7 +106,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	// 路径安全校验：通过 SFTP RealPath 解析后再做白名单比对，防御远程符号链接逃逸。
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
 	if err != nil {
-		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		logFileHandlerFailure("warn", node.ID, "path_validate", rawPath, "节点路径校验拒绝")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeBlocked, err, map[string]any{
 			"stage":     "path_validate",
 			"path_hash": safePathHash(rawPath),
@@ -117,7 +117,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 
 	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("SFTP 读取目录失败")
+		logFileHandlerFailure("error", node.ID, "read_dir", cleanPath, "SFTP 读取目录失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeFailure, err, map[string]any{
 			"stage":     "read_dir",
 			"path_hash": safePathHash(cleanPath),
@@ -177,7 +177,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 
 	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("SFTP 连接失败")
+		logFileHandlerFailure("error", node.ID, "dial", rawPath, "SFTP 连接失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialAuditSSHOutcome("dial", err), err, map[string]any{
 			"stage":     "dial",
 			"path_hash": safePathHash(rawPath),
@@ -190,7 +190,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 
 	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
 	if err != nil {
-		logger.Log.Warn().Err(err).Msg("节点路径校验拒绝")
+		logFileHandlerFailure("warn", node.ID, "path_validate", rawPath, "节点路径校验拒绝")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeBlocked, err, map[string]any{
 			"stage":     "path_validate",
 			"path_hash": safePathHash(rawPath),
@@ -220,7 +220,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 
 	f, err := sftpClient.Open(cleanPath)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("SFTP 打开文件失败")
+		logFileHandlerFailure("error", node.ID, "open", cleanPath, "SFTP 打开文件失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
 			"stage":     "open",
 			"path_hash": safePathHash(cleanPath),
@@ -233,7 +233,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	buf := make([]byte, filePreviewMaxBytes+1)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		logger.Log.Error().Err(err).Msg("SFTP 读取文件失败")
+		logFileHandlerFailure("error", node.ID, "read", cleanPath, "SFTP 读取文件失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
 			"stage":     "read",
 			"path_hash": safePathHash(cleanPath),
@@ -304,7 +304,7 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 	// 将请求路径拼接到 RsyncTarget 并做安全校验
 	fullPath, err := validateLocalPath(rawPath, base)
 	if err != nil {
-		logger.Log.Warn().Err(err).Msg("本地路径校验拒绝")
+		logLocalFileHandlerFailure("warn", taskEntity.ID, taskEntity.NodeID, "path_validate", rawPath, "本地路径校验拒绝")
 		respondForbidden(c, "路径不在允许的访问范围内")
 		return
 	}
@@ -314,8 +314,8 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 		if os.IsNotExist(err) {
 			respondNotFound(c, "目录不存在")
 		} else {
-			logger.Log.Error().Err(err).Msg("读取本地目录失败")
-			respondInternalError(c, err)
+			logLocalFileHandlerFailure("error", taskEntity.ID, taskEntity.NodeID, "read_dir", fullPath, "读取本地目录失败")
+			respondInternalError(c, nil)
 		}
 		return
 	}
@@ -329,6 +329,24 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 }
 
 // --- 内部辅助函数 ---
+
+func logFileHandlerFailure(level string, nodeID uint, stage, path, msg string) {
+	log := logger.Module("file_handler")
+	if level == "warn" {
+		log.Warn().Uint("node_id", nodeID).Str("stage", stage).Str("path_hash", safePathHash(path)).Msg(msg)
+		return
+	}
+	log.Error().Uint("node_id", nodeID).Str("stage", stage).Str("path_hash", safePathHash(path)).Msg(msg)
+}
+
+func logLocalFileHandlerFailure(level string, taskID, nodeID uint, stage, path, msg string) {
+	log := logger.Module("file_handler")
+	if level == "warn" {
+		log.Warn().Uint("task_id", taskID).Uint("node_id", nodeID).Str("stage", stage).Str("path_hash", safePathHash(path)).Msg(msg)
+		return
+	}
+	log.Error().Uint("task_id", taskID).Uint("node_id", nodeID).Str("stage", stage).Str("path_hash", safePathHash(path)).Msg(msg)
+}
 
 func (h *FileHandler) writeFileBrowserAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, action, outcome string, err error, metadata map[string]any) {
 	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(node)

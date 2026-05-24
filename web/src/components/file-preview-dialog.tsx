@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, AlertCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -17,7 +17,7 @@ type FilePreviewDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   filePath: string;
-  fetchContent: () => Promise<FileContentResult>;
+  fetchContent: (signal?: AbortSignal) => Promise<FileContentResult>;
 };
 
 export function FilePreviewDialog({
@@ -32,29 +32,81 @@ export function FilePreviewDialog({
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadedPath, setLoadedPath] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+
+  const clearPreviewState = useCallback(() => {
+    setContent("");
+    setSize(0);
+    setTruncated(false);
+    setError(null);
+    setLoadedPath(null);
+  }, []);
+
+  const abortCurrentRequest = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    requestSeqRef.current += 1;
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
-    setContent("");
-    setError(null);
+    if (!open) {
+      abortCurrentRequest();
+      clearPreviewState();
+      setLoading(false);
+      return;
+    }
+
+    abortCurrentRequest();
+    clearPreviewState();
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const requestSeq = requestSeqRef.current;
+
     setLoading(true);
-    fetchContent()
+    fetchContent(ctrl.signal)
       .then((result) => {
+        if (ctrl.signal.aborted || requestSeq !== requestSeqRef.current) return;
         setContent(result.content);
         setSize(result.size);
         setTruncated(result.truncated);
+        setLoadedPath(filePath);
       })
       .catch((err: unknown) => {
+        if (ctrl.signal.aborted || requestSeq !== requestSeqRef.current) return;
         setError(err instanceof Error ? err.message : t('fileBrowser.loadFileFailed'));
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (ctrl.signal.aborted || requestSeq !== requestSeqRef.current) return;
+        setLoading(false);
+      });
+
+    return () => {
+      ctrl.abort();
+      if (abortRef.current === ctrl) {
+        abortRef.current = null;
+      }
+      requestSeqRef.current += 1;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [open, fetchContent]);
+  }, [open, filePath, fetchContent, abortCurrentRequest, clearPreviewState]);
+
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) {
+      abortCurrentRequest();
+      clearPreviewState();
+      setLoading(false);
+    }
+    onOpenChange(nextOpen);
+  }, [abortCurrentRequest, clearPreviewState, onOpenChange]);
 
   const fileName = filePath.split("/").pop() ?? filePath;
+  const visibleContent = loadedPath === filePath ? content : "";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent size="lg" className="md:max-w-[800px]">
         <DialogHeader>
           <div className="flex items-center gap-2 pr-8">
@@ -84,7 +136,7 @@ export function FilePreviewDialog({
                 </div>
               )}
               <pre className="overflow-auto p-4 text-xs leading-relaxed font-mono whitespace-pre-wrap break-all thin-scrollbar max-h-[60vh]">
-                {content || <span className="text-muted-foreground">{t('fileBrowser.emptyContent')}</span>}
+                {visibleContent || <span className="text-muted-foreground">{t('fileBrowser.emptyContent')}</span>}
               </pre>
             </>
           )}

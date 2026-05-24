@@ -200,8 +200,8 @@ export function NodesPageDialogs({
                   fetchDir={(path, signal) =>
                     filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
                   }
-                  fetchContent={(path) =>
-                    filesApi.getNodeFileContent(token, fileBrowserNode.id, path)
+                  fetchContent={(path, signal) =>
+                    filesApi.getNodeFileContent(token, fileBrowserNode.id, path, { signal })
                   }
                 />
               ) : (

@@ -566,3 +566,36 @@ Reviewed Docker/nginx residual surfaces and implemented a local-only Nginx acces
 ### Next Steps
 
 - None - task complete
+
+
+## Session 76: P4 file browser residual hardening
+
+**Date**: 2026-05-24
+**Task**: P4 file browser residual hardening
+**Branch**: `security/p4-file-process-residual-hardening`
+
+### Summary
+
+Reviewed file browser/process-log residual surfaces and implemented local-only hardening that removes raw file-handler error/path evidence from process logs while aborting and clearing frontend preview content state on close, file switch, and unmount; backend and frontend full checks passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74e6147` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

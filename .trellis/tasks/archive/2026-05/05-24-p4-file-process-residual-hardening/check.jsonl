@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-24-p4-file-process-residual-hardening/prd.md","reason":"Acceptance criteria and definition of done for review."}
+{"file":".trellis/tasks/05-24-p4-file-process-residual-hardening/research/file-process-residual.md","reason":"Evidence for selected minimal slice and excluded broader residual surfaces."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify response behavior remains safe and compatible."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify process logs avoid raw SFTP/path/content evidence."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify purpose-aware SSH/SFTP boundaries remain intact."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify preview content state is local, abortable, and cleared."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify frontend tests and async behavior changes are adequate."}
