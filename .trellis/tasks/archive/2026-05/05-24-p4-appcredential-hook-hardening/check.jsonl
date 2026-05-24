@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend task touches WebSocket log delivery and runtime evidence handling."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check response-time sanitization against backend error/evidence policy."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no task log or WebSocket path leaks raw commands, paths, hosts, output, or credentials."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review security-sensitive regression coverage and behavior compatibility."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify read-boundary sanitization does not mutate legacy stored rows."}
+{"file":".trellis/tasks/05-24-p4-appcredential-hook-hardening/research/appcredential-rendered-hooks.md","reason":"Check implementation against the selected minimal residual slice and documented exclusions."}
+{"file":".trellis/tasks/05-24-p4-appcredential-hook-hardening/research/residual-alternatives.md","reason":"Confirm implementation does not unintentionally broaden into excluded adjacent surfaces."}

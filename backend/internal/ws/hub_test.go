@@ -71,6 +71,90 @@ func TestLoadBackfillEventsBySinceIDAndTaskID(t *testing.T) {
 	}
 }
 
+func TestLoadBackfillEventsSanitizesLegacyMessagesWithoutMutatingRows(t *testing.T) {
+	db := openHubTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskLog{}); err != nil {
+		t.Fatalf("初始化任务/任务日志表失败: %v", err)
+	}
+
+	task := model.Task{Name: "legacy-task", NodeID: 1, ExecutorType: "rsync", Status: "running"}
+	otherTask := model.Task{Name: "other-task", NodeID: 1, ExecutorType: "rsync", Status: "failed"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("创建目标任务失败: %v", err)
+	}
+	if err := db.Create(&otherTask).Error; err != nil {
+		t.Fatalf("创建其他任务失败: %v", err)
+	}
+
+	createdAt := time.Date(2026, 5, 24, 10, 30, 0, 123456000, time.UTC)
+	cursor := model.TaskLog{TaskID: task.ID, Level: "info", Message: "cursor-log", CreatedAt: createdAt.Add(-2 * time.Minute)}
+	if err := db.Create(&cursor).Error; err != nil {
+		t.Fatalf("创建游标日志失败: %v", err)
+	}
+
+	rawMessage := `proxy=https://proxy.internal.example/tunnel?token=FAKE_PROXY_TOKEN_FOR_TEST_ONLY private=FAKE_PRIVATE_VALUE_FOR_TEST_ONLY path=/srv/private/source host=prod-db.internal.example command: mysqldump -h prod-db.internal.example -pFAKE_PASSWORD_FOR_TEST_ONLY; stdout: root@backup.internal.example:/backup/tenant-a token=FAKE_OUTPUT_TOKEN_FOR_TEST_ONLY`
+	legacyLog := model.TaskLog{TaskID: task.ID, Level: "error", Message: rawMessage, CreatedAt: createdAt}
+	if err := db.Create(&legacyLog).Error; err != nil {
+		t.Fatalf("创建遗留原始日志失败: %v", err)
+	}
+	otherLog := model.TaskLog{TaskID: otherTask.ID, Level: "error", Message: "other-task-log", CreatedAt: createdAt.Add(time.Second)}
+	if err := db.Create(&otherLog).Error; err != nil {
+		t.Fatalf("创建其他任务日志失败: %v", err)
+	}
+	targetSafeLog := model.TaskLog{TaskID: task.ID, Level: "info", Message: "target-safe-log", CreatedAt: createdAt.Add(2 * time.Second)}
+	if err := db.Create(&targetSafeLog).Error; err != nil {
+		t.Fatalf("创建目标安全日志失败: %v", err)
+	}
+
+	hub := NewHub(db, nil, false)
+	taskID := task.ID
+	events, err := hub.loadBackfillEvents(cursor.ID, &taskID, AccessScope{})
+	if err != nil {
+		t.Fatalf("加载带过滤的补日志失败: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("期望返回 2 条目标任务补日志，实际: %d", len(events))
+	}
+	if events[0].LogID != legacyLog.ID || events[1].LogID != targetSafeLog.ID {
+		t.Fatalf("补日志顺序/过滤不符合预期，实际 log_id: %d, %d", events[0].LogID, events[1].LogID)
+	}
+	if events[0].TaskID != task.ID || events[0].Level != "error" || events[0].Status != "running" {
+		t.Fatalf("补日志元数据不符合预期: task_id=%d level=%q status=%q", events[0].TaskID, events[0].Level, events[0].Status)
+	}
+	if !events[0].Timestamp.Equal(createdAt) {
+		t.Fatalf("补日志时间戳不符合预期，期望 %s，实际 %s", createdAt, events[0].Timestamp)
+	}
+
+	forbidden := []string{
+		"proxy.internal.example",
+		"FAKE_PROXY_TOKEN_FOR_TEST_ONLY",
+		"FAKE_PRIVATE_VALUE_FOR_TEST_ONLY",
+		"/srv/private/source",
+		"prod-db.internal.example",
+		"mysqldump",
+		"FAKE_PASSWORD_FOR_TEST_ONLY",
+		"root@backup.internal.example",
+		"/backup/tenant-a",
+		"FAKE_OUTPUT_TOKEN_FOR_TEST_ONLY",
+	}
+	for _, item := range forbidden {
+		if strings.Contains(events[0].Message, item) {
+			t.Fatalf("补日志消息泄露敏感片段 %q: %s", item, events[0].Message)
+		}
+	}
+	if !strings.Contains(events[0].Message, "[命令已隐藏]") {
+		t.Fatalf("期望补日志消息包含命令隐藏占位符，实际: %q", events[0].Message)
+	}
+
+	var stored model.TaskLog
+	if err := db.First(&stored, legacyLog.ID).Error; err != nil {
+		t.Fatalf("读取遗留日志失败: %v", err)
+	}
+	if stored.Message != rawMessage {
+		t.Fatalf("补日志读取不应修改存储行，期望 %q，实际 %q", rawMessage, stored.Message)
+	}
+}
+
 func TestLoadBackfillEventsLeavesStatusEmptyWhenTaskMissing(t *testing.T) {
 	db := openHubTestDB(t)
 	if err := db.AutoMigrate(&model.Task{}, &model.TaskLog{}); err != nil {

@@ -434,3 +434,36 @@ Reviewed residual P4 surfaces and implemented read-boundary sanitization for tas
 ### Next Steps
 
 - None - task complete
+
+
+## Session 72: P4 websocket log backfill sanitizer
+
+**Date**: 2026-05-24
+**Task**: P4 websocket log backfill sanitizer
+**Branch**: `security/p4-appcredential-hook-hardening`
+
+### Summary
+
+Reviewed the AppCredential rendered-hook residual surface and implemented the smallest compatible hardening slice by sanitizing WebSocket task-log backfill for legacy runtime evidence; backend tests/build/lint passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3591b9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
