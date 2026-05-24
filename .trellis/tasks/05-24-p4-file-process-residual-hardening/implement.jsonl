@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/05-24-p4-file-process-residual-hardening/prd.md","reason":"Task requirements, selected scope, acceptance criteria, and implementation approach."}
+{"file":".trellis/tasks/05-24-p4-file-process-residual-hardening/research/file-process-residual.md","reason":"Internal research comparing file browser, node-log, audit, and frontend state residual surfaces."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend client error and sensitive evidence response constraints."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Backend process logging rules for SFTP/file content and raw remote evidence."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Purpose-aware SSH/SFTP least-privilege scope contract for file browser and node logs."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend local transient state and storage-safety constraints."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend typed API wrapper, accessibility, async-state, and testing expectations."}

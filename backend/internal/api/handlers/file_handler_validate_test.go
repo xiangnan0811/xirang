@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,12 +16,14 @@ import (
 	"time"
 
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/pkg/sftp"
+	"github.com/rs/zerolog"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -319,12 +322,30 @@ func TestValidateNodePath_TaskRsyncSourceAlsoActsAsRoot(t *testing.T) {
 	}
 }
 
-// --- 集成 smoke：用 net.Pipe + sftp.NewServer 验证 *sftp.Client 满足 realPathResolver 接口 ---
+func TestFileHandlerFailureLogsUseSafeStructuredFields(t *testing.T) {
+	var buf bytes.Buffer
+	previous := logger.Log
+	logger.Log = zerolog.New(&buf)
+	t.Cleanup(func() { logger.Log = previous })
 
-// 注意：pkg/sftp 自带的 NewServer 实现的 RealPath 仅做 filepath.Abs+cleanPath，不解析符号链接。
-// 这里的 smoke 测试只是验证 *sftp.Client.RealPath() 方法签名兼容 realPathResolver 接口，
-// 真实的符号链接解析行为由前面的 fsRealPathResolver 单元测试覆盖。生产环境对接的是 OpenSSH SFTP server，
-// 其 RealPath 走 realpath(3) 语义会解析符号链接。
+	rawPath := "/safe/FAKE_FILE_NAME_FOR_TEST_ONLY"
+	logFileHandlerFailure("error", 42, "read", rawPath, "SFTP 读取文件失败")
+	logLocalFileHandlerFailure("warn", 77, 88, "read_dir", "/backups/FAKE_BACKUP_NAME_FOR_TEST_ONLY", "读取本地目录失败")
+
+	logOutput := buf.String()
+	if strings.Contains(logOutput, rawPath) || strings.Contains(logOutput, "/backups/FAKE_BACKUP_NAME_FOR_TEST_ONLY") {
+		t.Fatalf("file handler process logs must not include raw paths: %s", logOutput)
+	}
+	if strings.Contains(logOutput, "FAKE_SFTP_OUTPUT_FOR_TEST_ONLY") || strings.Contains(logOutput, "no such file") {
+		t.Fatalf("file handler process logs must not include raw error/output evidence: %s", logOutput)
+	}
+	for _, want := range []string{`"module":"file_handler"`, `"node_id":42`, `"node_id":88`, `"task_id":77`, `"stage":"read"`, `"stage":"read_dir"`, `"path_hash":"`} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("file handler process log missing safe field %s: %s", want, logOutput)
+		}
+	}
+}
+
 func TestFileBrowserAuditDoesNotPersistPathOrPreviewContent(t *testing.T) {
 	db := newValidateTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.CredentialAuditEvent{}); err != nil {
@@ -377,6 +398,12 @@ func TestFileBrowserAuditDoesNotPersistPathOrPreviewContent(t *testing.T) {
 	}
 }
 
+// --- 集成 smoke：用 net.Pipe + sftp.NewServer 验证 *sftp.Client 满足 realPathResolver 接口 ---
+
+// 注意：pkg/sftp 自带的 NewServer 实现的 RealPath 仅做 filepath.Abs+cleanPath，不解析符号链接。
+// 这里的 smoke 测试只是验证 *sftp.Client.RealPath() 方法签名兼容 realPathResolver 接口，
+// 真实的符号链接解析行为由前面的 fsRealPathResolver 单元测试覆盖。生产环境对接的是 OpenSSH SFTP server，
+// 其 RealPath 走 realpath(3) 语义会解析符号链接。
 func TestSFTPClient_SatisfiesRealPathResolver(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("net.Pipe + sftp server 在 Windows CI 路径表示有差异，跳过")
