@@ -368,3 +368,36 @@ Implemented node-log path/message sanitization before persistence and API respon
 ### Next Steps
 
 - None - task complete
+
+
+## Session 70: P4 diagnostic evidence sanitizer
+
+**Date**: 2026-05-24
+**Task**: P4 diagnostic evidence sanitizer
+**Branch**: `security/p4-next-hardening-3`
+
+### Summary
+
+Sanitized Node Doctor and migration preflight diagnostic evidence responses, tightened Doctor evidence specs, and verified backend tests/build/lint.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0e4598a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
