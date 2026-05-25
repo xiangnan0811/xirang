@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.31](https://github.com/xiangnan0811/xirang/compare/v0.43.30...v0.43.31) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report deployment secret posture ([#265](https://github.com/xiangnan0811/xirang/issues/265)) ([46bfe0e](https://github.com/xiangnan0811/xirang/commit/46bfe0ed6d9ca5570cc76e2e74c3d9194ae8153d))
+
 ## [0.43.30](https://github.com/xiangnan0811/xirang/compare/v0.43.29...v0.43.30) (2026-05-25)
 
 
