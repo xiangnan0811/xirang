@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 11, categories: 6 },
+      summary: { totalRisks: 16, categories: 7 },
       items: [
         {
           code: "root_ssh_users",
@@ -95,6 +95,14 @@ describe("SystemTab security risk summary", () => {
           examples: ["Development mode enabled"],
         },
         {
+          code: "backup_restore_posture",
+          severity: "critical",
+          title: "Backup restore posture",
+          description: "backup recoverability",
+          count: 5,
+          examples: ["No successful backup evidence"],
+        },
+        {
           code: "weak_security_defaults",
           severity: "info",
           title: "Weak defaults",
@@ -127,6 +135,8 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByText("Strict host-key checking disabled")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Deployment secret posture" })).toBeInTheDocument();
     expect(screen.getByText("Development mode enabled")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Backup restore posture" })).toBeInTheDocument();
+    expect(screen.getByText("No successful backup evidence")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
     const riskSummarySection = riskSummaryTitle.closest("section");

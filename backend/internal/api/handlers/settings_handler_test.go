@@ -67,7 +67,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate security risk tables: %v", err)
 	}
 	now := time.Now().UTC()
@@ -178,6 +178,33 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		createAudit("file_browser.preview", sshutil.PurposeFileBrowser, `{"path":"/safe/FAKE_FILE_NAME_FOR_TEST_ONLY","content":"FAKE_FILE_CONTENT_FOR_TEST_ONLY"}`, "preview failed: output: FAKE_SFTP_OUTPUT_FOR_TEST_ONLY")
 	}
 	createAudit("docker_volumes.discover", sshutil.PurposeDockerVolumes, `{"volume":"volume-prod-data","output":"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY"}`, "docker failed: output: FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY")
+	backupPolicy := model.Policy{Name: "FAKE_BACKUP_POLICY_NAME_FOR_TEST_ONLY", SourcePath: "/srv/FAKE_SOURCE_PATH_FOR_TEST_ONLY", TargetPath: "/backup/FAKE_TARGET_PATH_FOR_TEST_ONLY", CronSpec: "0 2 * * *", Enabled: true, VerifyEnabled: true, RPOMinutes: 60, DrillEnabled: true}
+	if err := db.Create(&backupPolicy).Error; err != nil {
+		t.Fatalf("创建备份策略失败: %v", err)
+	}
+	backupNode := model.Node{Name: "FAKE_BACKUP_NODE_NAME_FOR_TEST_ONLY", Host: "backup.internal.example", Port: 22, Username: "ops", AuthType: "key", BackupDir: "FAKE_BACKUP_DIR_FOR_TEST_ONLY"}
+	if err := db.Create(&backupNode).Error; err != nil {
+		t.Fatalf("创建备份节点失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: backupPolicy.ID, NodeID: backupNode.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	backupTask := model.Task{Name: "FAKE_BACKUP_TASK_NAME_FOR_TEST_ONLY", NodeID: backupNode.ID, PolicyID: &backupPolicy.ID, ExecutorType: "rsync", Status: "failed", Source: "policy", VerifyStatus: "failed", ExecutorConfig: `{"password":"FAKE_EXECUTOR_PASSWORD_FOR_TEST_ONLY","path":"/srv/FAKE_EXECUTOR_PATH_FOR_TEST_ONLY"}`}
+	if err := db.Create(&backupTask).Error; err != nil {
+		t.Fatalf("创建备份任务失败: %v", err)
+	}
+	failedRun := model.TaskRun{TaskID: backupTask.ID, TriggerType: "manual", Status: "failed", VerifyStatus: "failed", LastError: "backup failed on backup.internal.example path /srv/FAKE_SOURCE_PATH_FOR_TEST_ONLY output FAKE_BACKUP_OUTPUT_FOR_TEST_ONLY", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+	if err := db.Create(&failedRun).Error; err != nil {
+		t.Fatalf("创建失败备份执行失败: %v", err)
+	}
+	failedDrill := model.RestoreDrillEvidence{PolicyID: backupPolicy.ID, TaskID: backupTask.ID, TaskRunID: failedRun.ID, SnapshotRef: "FAKE_SNAPSHOT_REF_FOR_TEST_ONLY", SandboxNodeID: backupNode.ID, SandboxNodeName: "FAKE_SANDBOX_NODE_NAME_FOR_TEST_ONLY", SandboxPath: "/tmp/FAKE_SANDBOX_PATH_FOR_TEST_ONLY", Status: "failed", FailedStep: "verify", ConfidenceEligible: false, RestoreStatus: "failed", RestoreError: "restore failed path /tmp/FAKE_SANDBOX_PATH_FOR_TEST_ONLY output FAKE_RESTORE_OUTPUT_FOR_TEST_ONLY", VerifyStatus: "failed", VerifyError: "verify failed host backup.internal.example", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+	if err := db.Create(&failedDrill).Error; err != nil {
+		t.Fatalf("创建恢复演练证据失败: %v", err)
+	}
+	if err := db.Create(&model.Alert{NodeID: backupNode.ID, NodeName: "FAKE_BACKUP_NODE_NAME_FOR_TEST_ONLY", TaskID: &backupTask.ID, TaskRunID: &failedRun.ID, PolicyName: "FAKE_BACKUP_POLICY_NAME_FOR_TEST_ONLY", Severity: "critical", Status: "firing", ErrorCode: fmt.Sprintf("XR-INTG-%d", backupPolicy.ID), Message: "integrity failed at /backup/FAKE_TARGET_PATH_FOR_TEST_ONLY output FAKE_INTEGRITY_OUTPUT_FOR_TEST_ONLY", TriggeredAt: now, CreatedAt: now}).Error; err != nil {
+		t.Fatalf("创建完整性告警失败: %v", err)
+	}
+
 	for _, row := range []model.AuditLog{
 		{Username: "raw-audit-admin", Role: "admin", Method: http.MethodPost, Path: "/api/v1/secret/path", StatusCode: 200, ClientIP: "198.51.100.10", UserAgent: "raw-audit-agent", EntryHash: "hash-a", CreatedAt: now},
 		{Username: "raw-audit-operator", Role: "operator", Method: http.MethodPut, Path: "/api/v1/another/secret", StatusCode: 500, ClientIP: "198.51.100.11", UserAgent: "raw-audit-agent", PrevHash: "wrong-hash", EntryHash: "hash-b", CreatedAt: now},
@@ -261,6 +288,15 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 			t.Fatalf("部署密钥姿态不应暴露原始环境值 %q: %+v", forbidden, byCode["deployment_secret_posture"])
 		}
 	}
+	backupRestoreExamples := strings.Join(byCode["backup_restore_posture"].Examples, ",")
+	if byCode["backup_restore_posture"].Severity != "critical" || byCode["backup_restore_posture"].Count < 5 || len(byCode["backup_restore_posture"].Examples) != maxSecurityRiskExamples || !strings.Contains(backupRestoreExamples, "存在启用策略缺少成功备份证据") || !strings.Contains(backupRestoreExamples, "存在最近备份失败的策略") || !strings.Contains(backupRestoreExamples, "存在备份校验失败证据") {
+		t.Fatalf("备份恢复姿态风险不符合预期: %+v", byCode["backup_restore_posture"])
+	}
+	for _, forbidden := range []string{"FAKE_BACKUP_POLICY_NAME_FOR_TEST_ONLY", "FAKE_BACKUP_NODE_NAME_FOR_TEST_ONLY", "backup.internal.example", "FAKE_SOURCE_PATH_FOR_TEST_ONLY", "FAKE_TARGET_PATH_FOR_TEST_ONLY", "FAKE_BACKUP_TASK_NAME_FOR_TEST_ONLY", "FAKE_EXECUTOR_PASSWORD_FOR_TEST_ONLY", "FAKE_EXECUTOR_PATH_FOR_TEST_ONLY", "FAKE_BACKUP_OUTPUT_FOR_TEST_ONLY", "FAKE_SNAPSHOT_REF_FOR_TEST_ONLY", "FAKE_SANDBOX_NODE_NAME_FOR_TEST_ONLY", "FAKE_SANDBOX_PATH_FOR_TEST_ONLY", "FAKE_RESTORE_OUTPUT_FOR_TEST_ONLY", "FAKE_INTEGRITY_OUTPUT_FOR_TEST_ONLY"} {
+		if strings.Contains(backupRestoreExamples, forbidden) {
+			t.Fatalf("备份恢复姿态不应暴露原始证据字段 %q: %+v", forbidden, byCode["backup_restore_posture"])
+		}
+	}
 	if strings.Contains(strings.Join(byCode["weak_security_defaults"].Examples, ","), "SSH 主机密钥") {
 		t.Fatalf("弱安全默认项不应重复 SSH 主机密钥姿态: %+v", byCode["weak_security_defaults"])
 	}
@@ -287,10 +323,143 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		"change-me-in-production",
 		"change-me-encryption-key",
 		"change-me-admin-password",
+		"FAKE_BACKUP_POLICY_NAME_FOR_TEST_ONLY",
+		"FAKE_BACKUP_NODE_NAME_FOR_TEST_ONLY",
+		"backup.internal.example",
+		"FAKE_SOURCE_PATH_FOR_TEST_ONLY",
+		"FAKE_TARGET_PATH_FOR_TEST_ONLY",
+		"FAKE_BACKUP_TASK_NAME_FOR_TEST_ONLY",
+		"FAKE_EXECUTOR_PASSWORD_FOR_TEST_ONLY",
+		"FAKE_EXECUTOR_PATH_FOR_TEST_ONLY",
+		"FAKE_BACKUP_OUTPUT_FOR_TEST_ONLY",
+		"FAKE_SNAPSHOT_REF_FOR_TEST_ONLY",
+		"FAKE_SANDBOX_NODE_NAME_FOR_TEST_ONLY",
+		"FAKE_SANDBOX_PATH_FOR_TEST_ONLY",
+		"FAKE_RESTORE_OUTPUT_FOR_TEST_ONLY",
+		"FAKE_INTEGRITY_OUTPUT_FOR_TEST_ONLY",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("安全风险摘要不应暴露敏感字段 %q，实际: %s", forbidden, body)
 		}
+	}
+}
+
+func TestSettingsSecurityRiskSummaryBackupRestorePostureWarningWhenNoPolicies(t *testing.T) {
+	db := openSettingsAnomalySmokeDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate backup restore posture tables: %v", err)
+	}
+
+	handler := NewSettingsHandler(db, settings.NewService(db))
+	r := gin.New()
+	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
+	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("security risk summary status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data securityRiskSummaryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析安全风险摘要失败: %v", err)
+	}
+	byCode := make(map[string]securityRiskItem, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		byCode[item.Code] = item
+	}
+	item := byCode["backup_restore_posture"]
+	if item.Severity != "warning" || item.Count != 1 || len(item.Examples) != 1 || item.Examples[0] != "尚未配置启用中的备份策略" {
+		t.Fatalf("无启用备份策略时应返回 warning 汇总: %+v", item)
+	}
+}
+
+func TestSettingsSecurityRiskSummaryBackupRestorePostureAvoidsDuplicateMissingSuccessCount(t *testing.T) {
+	db := openSettingsAnomalySmokeDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate backup restore posture tables: %v", err)
+	}
+	policy := model.Policy{Name: "missing-success-policy", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 2 * * *", Enabled: true, DrillEnabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建无执行证据策略失败: %v", err)
+	}
+
+	handler := NewSettingsHandler(db, settings.NewService(db))
+	r := gin.New()
+	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
+	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("security risk summary status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data securityRiskSummaryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析安全风险摘要失败: %v", err)
+	}
+	byCode := make(map[string]securityRiskItem, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		byCode[item.Code] = item
+	}
+	item := byCode["backup_restore_posture"]
+	if item.Count != 3 {
+		t.Fatalf("无执行记录策略应只计一次缺少成功备份证据，实际: %+v", item)
+	}
+	examples := strings.Join(item.Examples, ",")
+	if strings.Count(examples, "存在启用策略缺少成功备份证据") != 1 {
+		t.Fatalf("缺少成功备份证据示例不应重复: %+v", item)
+	}
+}
+
+func TestSettingsSecurityRiskSummaryBackupRestorePostureInfoWhenHealthy(t *testing.T) {
+	db := openSettingsAnomalySmokeDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate backup restore posture tables: %v", err)
+	}
+	now := time.Now().UTC()
+	node := model.Node{Name: "healthy-backup-node", Host: "healthy.example", Port: 22, Username: "ops", AuthType: "key", BackupDir: "healthy-backup-node", LastBackupAt: &now}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建健康备份节点失败: %v", err)
+	}
+	policy := model.Policy{Name: "healthy-backup-policy", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 2 * * *", Enabled: true, VerifyEnabled: true, RPOMinutes: 1440, DrillEnabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建健康备份策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("创建健康策略节点关联失败: %v", err)
+	}
+	task := model.Task{Name: "healthy-backup-task", NodeID: node.ID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: "success", Source: "policy", VerifyStatus: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("创建健康备份任务失败: %v", err)
+	}
+	run := model.TaskRun{TaskID: task.ID, TriggerType: "manual", Status: "success", VerifyStatus: "success", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建健康备份执行失败: %v", err)
+	}
+	drill := model.RestoreDrillEvidence{PolicyID: policy.ID, TaskID: task.ID, TaskRunID: run.ID, SandboxNodeID: node.ID, SandboxPath: "/tmp/xirang-drill", Status: "success", ConfidenceEligible: true, RestoreStatus: "success", VerifyStatus: "success", CleanupStatus: "success", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+	if err := db.Create(&drill).Error; err != nil {
+		t.Fatalf("创建健康恢复演练证据失败: %v", err)
+	}
+
+	handler := NewSettingsHandler(db, settings.NewService(db))
+	r := gin.New()
+	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
+	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("security risk summary status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data securityRiskSummaryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析安全风险摘要失败: %v", err)
+	}
+	byCode := make(map[string]securityRiskItem, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		byCode[item.Code] = item
+	}
+	item := byCode["backup_restore_posture"]
+	if item.Severity != "info" || item.Count != 0 || len(item.Examples) != 0 {
+		t.Fatalf("健康备份恢复姿态应为 info 且无风险: %+v", item)
 	}
 }
 

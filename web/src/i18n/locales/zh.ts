@@ -2610,6 +2610,10 @@ const zh = {
             title: "部署密钥姿态",
             description: "个人或小团队部署也应在暴露控制面前明确运行环境，并使用强随机密钥。",
           },
+          backup_restore_posture: {
+            title: "备份恢复姿态",
+            description: "个人或小团队部署也应定期确认备份新鲜度、校验结果和恢复演练证据。",
+          },
           weak_security_defaults: {
             title: "弱安全默认项",
             description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",

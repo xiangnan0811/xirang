@@ -67,6 +67,14 @@ describe("settings api mappers", () => {
           examples: ["Development mode enabled"],
         },
         {
+          code: "backup_restore_posture",
+          severity: "critical",
+          title: "Backup restore posture",
+          description: "backup recoverability",
+          count: "5",
+          examples: ["No successful backup evidence"],
+        },
+        {
           code: "unexpected",
           severity: "unexpected",
           title: "Unknown",
@@ -123,6 +131,12 @@ describe("settings api mappers", () => {
       examples: ["Development mode enabled"],
     });
     expect(mapped.items[7]).toMatchObject({
+      code: "backup_restore_posture",
+      severity: "critical",
+      count: 5,
+      examples: ["No successful backup evidence"],
+    });
+    expect(mapped.items[8]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,
