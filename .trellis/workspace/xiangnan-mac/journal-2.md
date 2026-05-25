@@ -632,3 +632,36 @@ Audited export/import, AppCredential rendered hooks, rclone/restic residuals, an
 ### Next Steps
 
 - None - task complete
+
+
+## Session 78: P4 closeout residual security review
+
+**Date**: 2026-05-25
+**Task**: P4 closeout residual security review
+**Branch**: `security/p4-closeout-residual-review`
+
+### Summary
+
+Implemented SSH key batch import secret-state cleanup, added stale/late-reader regression coverage, and validated focused tests plus full frontend check.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bbf769e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
