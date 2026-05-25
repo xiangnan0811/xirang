@@ -665,3 +665,36 @@ Implemented SSH key batch import secret-state cleanup, added stale/late-reader r
 ### Next Steps
 
 - None - task complete
+
+
+## Session 79: P5 strong-auth posture roadmap
+
+**Date**: 2026-05-25
+**Task**: P5 strong-auth posture roadmap
+**Branch**: `security/p5-architecture-security-roadmap`
+
+### Summary
+
+Audited P5 architecture security candidates and implemented the first behavior-compatible slice: a report-only Settings risk summary item for privileged users without TOTP, with backend/frontend tests and full validation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `95cd93e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
