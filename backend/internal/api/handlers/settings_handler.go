@@ -235,6 +235,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	hostKeyTrustItem := h.sshHostKeyTrustPostureRiskItem()
 	weakItem := h.weakSecurityDefaultsRiskItem()
 	return []securityRiskItem{
 		rootItem,
@@ -246,6 +247,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		staleItem,
 		credentialOpsItem,
 		privilegedAuthItem,
+		hostKeyTrustItem,
 		weakItem,
 	}, nil
 }
@@ -584,6 +586,36 @@ func credentialActionLabel(action string) string {
 	}
 }
 
+func (h *SettingsHandler) sshHostKeyTrustPostureRiskItem() securityRiskItem {
+	examples := make([]string, 0, maxSecurityRiskExamples)
+	strictHostCheck, strictErr := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	if strictErr != nil {
+		examples = append(examples, "SSH 主机密钥校验配置值无效")
+	} else if !strictHostCheck {
+		examples = append(examples, "SSH 主机密钥校验已关闭")
+	} else {
+		autoAccept, autoAcceptErr := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+		if autoAcceptErr != nil {
+			examples = append(examples, "SSH 自动接受未知主机密钥配置值无效")
+		} else if autoAccept {
+			examples = append(examples, "SSH 自动接受首次发现的主机密钥")
+		}
+	}
+
+	item := securityRiskItem{
+		Code:        "ssh_host_key_trust_posture",
+		Severity:    "warning",
+		Title:       "SSH 主机密钥信任姿态",
+		Description: "SSH 主机密钥校验应保持启用，并谨慎评估首次连接自动接受未知主机密钥的部署边界。",
+		Count:       int64(len(examples)),
+		Examples:    examples,
+	}
+	if item.Count == 0 {
+		item.Severity = "info"
+	}
+	return item
+}
+
 func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
 	examples := make([]string, 0, maxSecurityRiskExamples)
 	appendEnvBoolRisk := func(key string, defaultValue bool, riskyValue bool, label string) {
@@ -615,8 +647,6 @@ func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
 		}
 	}
 
-	appendEnvBoolRisk("SSH_STRICT_HOST_KEY_CHECKING", true, false, "SSH 主机密钥校验已关闭")
-	appendEnvBoolRisk("SSH_AUTO_ACCEPT_NEW_HOSTS", true, true, "SSH 自动接受未知主机密钥")
 	appendEnvBoolRisk("WS_ALLOW_EMPTY_ORIGIN", false, true, "WebSocket 允许空 Origin")
 	appendSettingBoolRisk("login.captcha_enabled", "LOGIN_CAPTCHA_ENABLED", false, false, "登录验证码未启用")
 	appendSettingBoolRisk("login.second_captcha_enabled", "LOGIN_SECOND_CAPTCHA_ENABLED", false, false, "登录二次验证码未启用")

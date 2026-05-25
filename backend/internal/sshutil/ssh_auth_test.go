@@ -59,8 +59,12 @@ func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *tes
 		t.Fatalf("已记录的主机密钥再次校验应通过，实际错误: %v", err)
 	}
 
-	if err := callback(hostname, remote, changedKey); err == nil {
+	err = callback(hostname, remote, changedKey)
+	if err == nil {
 		t.Fatalf("主机密钥变化时应继续拒绝连接")
+	}
+	if strings.Contains(err.Error(), "example.com") || strings.Contains(err.Error(), "203.0.113.10") || strings.Contains(err.Error(), knownHostsPath) {
+		t.Fatalf("主机密钥冲突错误不应暴露主机标识或 known_hosts 路径: %v", err)
 	}
 }
 
@@ -95,8 +99,44 @@ func TestResolveSSHHostKeyCallbackRejectsUnknownKeyWhenExplicitlyDisabled(t *tes
 
 	hostname := "example.com:22"
 	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
-	if err := callback(hostname, remote, newTestPublicKey(t)); err == nil {
+	err = callback(hostname, remote, newTestPublicKey(t))
+	if err == nil {
 		t.Fatalf("显式禁用时未知主机密钥应被拒绝")
+	}
+	if strings.Contains(err.Error(), "example.com") || strings.Contains(err.Error(), "203.0.113.10") {
+		t.Fatalf("未知主机密钥错误不应暴露主机标识: %v", err)
+	}
+}
+
+func TestResolveSSHHostKeyCallbackSanitizesAutoAcceptWriteFailure(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
+	tempDir := t.TempDir()
+	knownHostsPath := filepath.Join(tempDir, "ssh", "known_hosts")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+
+	callback, err := ResolveSSHHostKeyCallback()
+	if err != nil {
+		t.Fatalf("初始化 SSH host key callback 失败: %v", err)
+	}
+	if err := os.Remove(knownHostsPath); err != nil {
+		t.Fatalf("移除 known_hosts 测试文件失败: %v", err)
+	}
+	if err := os.Mkdir(knownHostsPath, 0o700); err != nil {
+		t.Fatalf("创建 known_hosts 同名目录失败: %v", err)
+	}
+
+	hostname := "example.com:22"
+	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
+	err = callback(hostname, remote, newTestPublicKey(t))
+	if err == nil {
+		t.Fatalf("known_hosts 写入失败时应返回错误")
+	}
+	message := err.Error()
+	for _, forbidden := range []string{hostname, "example.com", "203.0.113.10", knownHostsPath, tempDir} {
+		if strings.Contains(message, forbidden) {
+			t.Fatalf("自动接受写入失败错误不应暴露主机或路径 %q，实际: %v", forbidden, err)
+		}
 	}
 }
 

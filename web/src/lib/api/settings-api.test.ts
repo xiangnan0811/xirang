@@ -43,6 +43,14 @@ describe("settings api mappers", () => {
           examples: ["admin（admin）", "operator（operator）"],
         },
         {
+          code: "ssh_host_key_trust_posture",
+          severity: "warning",
+          title: "SSH host-key trust posture",
+          description: "host-key posture",
+          count: "1",
+          examples: ["Strict host-key checking disabled"],
+        },
+        {
           code: "unexpected",
           severity: "unexpected",
           title: "Unknown",
@@ -81,6 +89,12 @@ describe("settings api mappers", () => {
       examples: ["admin（admin）", "operator（operator）"],
     });
     expect(mapped.items[4]).toMatchObject({
+      code: "ssh_host_key_trust_posture",
+      severity: "warning",
+      count: 1,
+      examples: ["Strict host-key checking disabled"],
+    });
+    expect(mapped.items[5]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,

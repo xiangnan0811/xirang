@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-host-key-trust-posture/prd.md","reason":"Verify implementation matches scoped MVP and acceptance criteria."}
+{"file":".trellis/tasks/05-25-p5-host-key-trust-posture/research/host-key-trust-posture.md","reason":"Verify code changes remain compatible with env/file-backed host-key trust constraints."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check backend responses do not disclose sensitive diagnostic details."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check logging/audit output excludes secrets, paths, hosts, and command evidence."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend mapper and Settings risk-code handling."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check UI advisory rendering remains accessible."}
