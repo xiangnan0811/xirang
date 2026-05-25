@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 16, categories: 7 },
+      summary: { totalRisks: 17, categories: 8 },
       items: [
         {
           code: "root_ssh_users",
@@ -69,6 +69,14 @@ describe("SystemTab security risk summary", () => {
           description: "privileged accounts",
           count: 2,
           examples: ["admin（admin）", "operator（operator）"],
+        },
+        {
+          code: "admin_recovery_posture",
+          severity: "warning",
+          title: "Admin recovery posture",
+          description: "admin recovery posture",
+          count: 1,
+          examples: ["At least one 2FA admin lacks recovery-code evidence"],
         },
         {
           code: "audit_log_integrity_posture",
@@ -129,6 +137,8 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByRole("heading", { name: "Privileged users without 2FA" })).toBeInTheDocument();
     expect(screen.getByText("admin（admin）")).toBeInTheDocument();
     expect(screen.getByText("operator（operator）")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Admin recovery posture" })).toBeInTheDocument();
+    expect(screen.getByText("At least one 2FA admin lacks recovery-code evidence")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Audit log integrity posture" })).toBeInTheDocument();
     expect(screen.getByText("Audit log hash-chain gap detected")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "SSH host-key trust posture" })).toBeInTheDocument();

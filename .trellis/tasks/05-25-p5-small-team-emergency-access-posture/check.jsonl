@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-small-team-emergency-access-posture/prd.md","reason":"Check implementation against MVP boundaries, out-of-scope access-governance directions, and acceptance criteria."}
+{"file":".trellis/tasks/05-25-p5-small-team-emergency-access-posture/research/emergency-access-posture.md","reason":"Verify implementation uses existing auth/user/TOTP/recovery metadata and avoids bypass or enterprise access workflows."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify backend response shape and sensitive evidence handling remain consistent with Settings summary contracts."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no raw usernames, TOTP/recovery material, tokens, environment values, audit metadata, or errors are logged or returned."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify frontend risk-code mapping remains type-safe and normalized."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify Settings UI remains accessible and report-only."}

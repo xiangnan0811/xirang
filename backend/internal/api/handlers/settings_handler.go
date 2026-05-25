@@ -236,6 +236,10 @@ func (h *SettingsHandler) securityRiskItems(c *gin.Context) ([]securityRiskItem,
 	if err != nil {
 		return nil, err
 	}
+	adminRecoveryItem, err := h.adminRecoveryPostureRiskItem()
+	if err != nil {
+		return nil, err
+	}
 	auditIntegrityItem, err := h.auditLogIntegrityPostureRiskItem()
 	if err != nil {
 		return nil, err
@@ -256,6 +260,7 @@ func (h *SettingsHandler) securityRiskItems(c *gin.Context) ([]securityRiskItem,
 		staleItem,
 		credentialOpsItem,
 		privilegedAuthItem,
+		adminRecoveryItem,
 		auditIntegrityItem,
 		hostKeyTrustItem,
 		deploymentSecretPostureRiskItem(),
@@ -483,6 +488,85 @@ func (h *SettingsHandler) privilegedUsersWithoutTOTPRiskItem() (securityRiskItem
 	}
 	if item.Count == 0 {
 		item.Severity = "info"
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) adminRecoveryPostureRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "admin_recovery_posture",
+		Severity:    "warning",
+		Title:       "管理员恢复姿态",
+		Description: "个人或小团队应保留可恢复的管理员访问路径，避免单个账号、两步验证设备或恢复码遗失导致控制面锁死。",
+	}
+	countUsers := func(scope func(*gorm.DB) *gorm.DB) (int64, error) {
+		var count int64
+		if err := scope(h.db.Model(&model.User{})).Count(&count).Error; err != nil {
+			return 0, err
+		}
+		return count, nil
+	}
+	adminCount, err := countUsers(func(db *gorm.DB) *gorm.DB {
+		return db.Where("role = ?", "admin")
+	})
+	if err != nil {
+		return item, err
+	}
+	operatorCount, err := countUsers(func(db *gorm.DB) *gorm.DB {
+		return db.Where("role = ?", "operator")
+	})
+	if err != nil {
+		return item, err
+	}
+	adminWithTOTP, err := countUsers(func(db *gorm.DB) *gorm.DB {
+		return db.Where("role = ? AND totp_enabled = ?", "admin", true)
+	})
+	if err != nil {
+		return item, err
+	}
+	adminWithRecoveryEvidence, err := countUsers(func(db *gorm.DB) *gorm.DB {
+		return db.Where("role = ? AND totp_enabled = ? AND TRIM(COALESCE(recovery_codes, '')) <> ''", "admin", true)
+	})
+	if err != nil {
+		return item, err
+	}
+	totpAdminWithoutRecoveryEvidence, err := countUsers(func(db *gorm.DB) *gorm.DB {
+		return db.Where("role = ? AND totp_enabled = ? AND TRIM(COALESCE(recovery_codes, '')) = ''", "admin", true)
+	})
+	if err != nil {
+		return item, err
+	}
+
+	addFinding := func(label string) {
+		item.Count++
+		if len(item.Examples) < maxSecurityRiskExamples {
+			item.Examples = append(item.Examples, label)
+		}
+	}
+	critical := false
+	if adminCount == 0 {
+		addFinding("未发现管理员账号")
+		critical = true
+	} else {
+		if adminCount == 1 {
+			addFinding("仅有一个管理员账号")
+		}
+		if adminWithTOTP == 0 {
+			addFinding("没有管理员启用两步验证")
+		} else if adminWithTOTP == adminCount && adminWithRecoveryEvidence == 0 {
+			addFinding("所有管理员依赖两步验证但缺少恢复码证据")
+			critical = true
+		} else if totpAdminWithoutRecoveryEvidence > 0 {
+			addFinding("存在启用两步验证但缺少恢复码证据的管理员")
+		}
+	}
+	if operatorCount == 0 {
+		addFinding("缺少低权限操作员账号作为日常操作后备")
+	}
+	if item.Count == 0 {
+		item.Severity = "info"
+	} else if critical {
+		item.Severity = "critical"
 	}
 	return item, nil
 }
