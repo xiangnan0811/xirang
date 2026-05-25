@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/prd.md","reason":"Defines the selected final P4 closeout slice and strict out-of-scope boundaries."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/frontend-residual-closeout.md","reason":"Primary evidence for SSH key batch import private-key state cleanup and expected compatibility."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/backend-residual-closeout.md","reason":"Documents non-selected backend candidates so implementation does not expand into them."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/credential-executor-closeout.md","reason":"Confirms credential/executor/deployment exclusions and selected final closeout recommendation."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Frontend state cleanup must follow existing React state and storage conventions."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"The dialog change and tests must preserve typed API/domain inputs without unsafe casts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Dialog behavior, lifecycle cleanup, and component tests should follow frontend component conventions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"The dialog close/reset change must not regress dialog accessibility or keyboard behavior."}
