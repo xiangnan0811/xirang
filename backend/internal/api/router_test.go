@@ -149,7 +149,7 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 

@@ -2610,6 +2610,10 @@ const en = {
             title: "Deployment secret posture",
             description: "Personal and small-team deployments should use explicit runtime mode and strong random secrets before exposing the control plane.",
           },
+          backup_restore_posture: {
+            title: "Backup restore posture",
+            description: "Personal and small-team deployments should regularly confirm backup freshness, verification, and restore-drill evidence.",
+          },
           weak_security_defaults: {
             title: "Weak security defaults",
             description: "These switches are advisory only; tighten them according to your deployment boundary.",

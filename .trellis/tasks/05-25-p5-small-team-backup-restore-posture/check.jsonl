@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-small-team-backup-restore-posture/prd.md","reason":"Check implementation against MVP boundaries, out-of-scope directions, and acceptance criteria."}
+{"file":".trellis/tasks/05-25-p5-small-team-backup-restore-posture/research/backup-restore-posture.md","reason":"Verify implementation uses existing backup/restore posture evidence and avoids heavy enterprise directions."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify backend response shape and sensitive-evidence handling remain consistent."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no raw backup/restore evidence, paths, hosts, output, executor config, or secrets are logged or returned."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify frontend risk-code mapping remains type-safe and normalized."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify Settings UI remains accessible and report-only."}

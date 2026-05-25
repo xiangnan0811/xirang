@@ -87,7 +87,7 @@ func (h *SettingsHandler) GetAll(c *gin.Context) {
 // @Failure      401  {object}  handlers.Response
 // @Router       /settings/security-risk-summary [get]
 func (h *SettingsHandler) SecurityRiskSummary(c *gin.Context) {
-	items, err := h.securityRiskItems()
+	items, err := h.securityRiskItems(c)
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -199,7 +199,7 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 	respondMessage(c, "设置已重置")
 }
 
-func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
+func (h *SettingsHandler) securityRiskItems(c *gin.Context) ([]securityRiskItem, error) {
 	rootItem, err := h.rootSSHUserRiskItem()
 	if err != nil {
 		return nil, err
@@ -241,6 +241,10 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		return nil, err
 	}
 	hostKeyTrustItem := h.sshHostKeyTrustPostureRiskItem()
+	backupRestoreItem, err := h.backupRestorePostureRiskItem(c)
+	if err != nil {
+		return nil, err
+	}
 	weakItem := h.weakSecurityDefaultsRiskItem()
 	return []securityRiskItem{
 		rootItem,
@@ -255,6 +259,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		auditIntegrityItem,
 		hostKeyTrustItem,
 		deploymentSecretPostureRiskItem(),
+		backupRestoreItem,
 		weakItem,
 	}, nil
 }
@@ -746,6 +751,136 @@ func isPlaceholderAdminInitialPassword(value string) bool {
 	default:
 		return false
 	}
+}
+
+func (h *SettingsHandler) backupRestorePostureRiskItem(c *gin.Context) (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "backup_restore_posture",
+		Severity:    "warning",
+		Title:       "备份恢复姿态",
+		Description: "个人或小团队也应定期确认备份新鲜度、校验结果和恢复演练证据，避免只拥有不可恢复的备份。",
+	}
+
+	var policies []model.Policy
+	if err := h.db.Where("enabled = ? AND is_template = ?", true, false).Preload("Nodes").Order("id asc").Find(&policies).Error; err != nil {
+		return item, err
+	}
+	if len(policies) == 0 {
+		item.Count = 1
+		item.Examples = []string{"尚未配置启用中的备份策略"}
+		return item, nil
+	}
+
+	aggregated := make(map[string]int64)
+	confidenceHandler := NewBackupConfidenceHandler(h.db)
+	now := time.Now().UTC()
+	for _, policy := range policies {
+		ctx, err := confidenceHandler.loadPolicyContext(c, policy)
+		if err != nil {
+			return item, err
+		}
+		if len(ctx.Tasks) > 0 && !backupRestorePostureHasExecutableTask(ctx.Tasks) {
+			addBackupRestorePostureFinding(aggregated, "no_task")
+		}
+		// 仅补齐已有执行但从未成功的场景，避免与 no_successful_backup 重复计数。
+		if ctx.LatestBackupRun != nil && ctx.LatestSuccessfulBackupRun == nil {
+			addBackupRestorePostureFinding(aggregated, "no_successful_backup")
+		}
+		confidence := buildBackupConfidenceItem(now, ctx)
+		for _, reason := range confidence.Reasons {
+			addBackupRestorePostureFinding(aggregated, reason.Code)
+		}
+	}
+
+	examples := make([]string, 0, maxSecurityRiskExamples)
+	for _, label := range backupRestorePostureLabelOrder() {
+		count := aggregated[label]
+		if count == 0 {
+			continue
+		}
+		item.Count += count
+		if len(examples) < maxSecurityRiskExamples {
+			examples = append(examples, label)
+		}
+	}
+	item.Examples = examples
+	if item.Count == 0 {
+		item.Severity = "info"
+	} else if backupRestorePostureHasCritical(aggregated) {
+		item.Severity = "critical"
+	}
+	return item, nil
+}
+
+type backupRestorePostureLabelSpec struct {
+	code     string
+	label    string
+	critical bool
+}
+
+func backupRestorePostureLabelSpecs() []backupRestorePostureLabelSpec {
+	return []backupRestorePostureLabelSpec{
+		{code: "no_task", label: "存在启用策略尚未关联可执行备份任务", critical: true},
+		{code: "no_successful_backup", label: "存在启用策略缺少成功备份证据", critical: true},
+		{code: "recent_backup_failed", label: "存在最近备份失败的策略", critical: true},
+		{code: "backup_not_completed", label: "存在最近备份尚未完成的策略"},
+		{code: "verify_failed", label: "存在备份校验失败证据", critical: true},
+		{code: "verify_warning", label: "存在备份校验告警证据"},
+		{code: "verify_missing", label: "存在启用校验但缺少校验证据的策略"},
+		{code: "recent_run_failed", label: "存在最近任务执行失败的策略", critical: true},
+		{code: "rpo_unknown", label: "存在无法证明 RPO 达标的策略"},
+		{code: "rpo_exceeded", label: "存在 RPO 已超限的策略", critical: true},
+		{code: "drill_missing", label: "存在缺少恢复演练证据的策略"},
+		{code: "drill_failed", label: "存在恢复演练失败证据", critical: true},
+		{code: "drill_not_confident", label: "存在恢复演练不能作为可信证据的策略"},
+		{code: "integrity_alert", label: "存在未解决的完整性校验告警", critical: true},
+		{code: "verification_alert", label: "存在未解决的备份校验告警"},
+		{code: "drill_alert", label: "存在未解决的恢复演练告警", critical: true},
+	}
+}
+
+func addBackupRestorePostureFinding(counts map[string]int64, code string) {
+	label := backupRestorePostureLabel(code)
+	if label == "" {
+		return
+	}
+	counts[label]++
+}
+
+func backupRestorePostureLabel(code string) string {
+	for _, spec := range backupRestorePostureLabelSpecs() {
+		if spec.code == code {
+			return spec.label
+		}
+	}
+	return ""
+}
+
+func backupRestorePostureHasExecutableTask(tasks []model.Task) bool {
+	for _, task := range tasks {
+		if task.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func backupRestorePostureLabelOrder() []string {
+	specs := backupRestorePostureLabelSpecs()
+	labels := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		labels = append(labels, spec.label)
+	}
+	return labels
+}
+
+func backupRestorePostureHasCritical(counts map[string]int64) bool {
+	for _, spec := range backupRestorePostureLabelSpecs() {
+		if spec.critical && counts[spec.label] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {

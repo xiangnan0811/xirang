@@ -37,6 +37,7 @@ export type SecurityRiskCode =
   | "audit_log_integrity_posture"
   | "ssh_host_key_trust_posture"
   | "deployment_secret_posture"
+  | "backup_restore_posture"
   | "weak_security_defaults";
 
 export type SecurityRiskItem = {
@@ -101,6 +102,7 @@ function normalizeRiskCode(value?: string): SecurityRiskCode {
     case "audit_log_integrity_posture":
     case "ssh_host_key_trust_posture":
     case "deployment_secret_posture":
+    case "backup_restore_posture":
     case "weak_security_defaults":
       return value;
     default:

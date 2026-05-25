@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-small-team-backup-restore-posture/prd.md","reason":"Defines the small-team backup/restore posture MVP, scope limits, and acceptance criteria."}
+{"file":".trellis/tasks/05-25-p5-small-team-backup-restore-posture/research/backup-restore-posture.md","reason":"Maps low-burden backup/restore posture conventions to existing Xirang evidence sources."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend Settings summary must preserve read-only/no-leak error and response contracts."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Implementation must not log raw backup, restore, host, path, executor, credential, or error evidence."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend Settings API mapper must keep risk-code normalization type-safe."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Settings risk-summary card must remain accessible and advisory-only."}
