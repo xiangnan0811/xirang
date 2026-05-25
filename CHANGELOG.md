@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.28](https://github.com/xiangnan0811/xirang/compare/v0.43.27...v0.43.28) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report privileged users without 2FA ([d593771](https://github.com/xiangnan0811/xirang/commit/d59377106af205446fd622fafb7863b5a9880631))
+
 ## [0.43.27](https://github.com/xiangnan0811/xirang/compare/v0.43.26...v0.43.27) (2026-05-25)
 
 
