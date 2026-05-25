@@ -833,3 +833,36 @@ Implemented a report-only backup_restore_posture Settings security-risk card for
 ### Next Steps
 
 - None - task complete
+
+
+## Session 84: P5 admin recovery posture
+
+**Date**: 2026-05-25
+**Task**: P5 admin recovery posture
+**Branch**: `security/p5-emergency-access-posture`
+
+### Summary
+
+Added a read-only Settings admin recovery posture risk card with backend aggregation, leak-safe tests, frontend mapper/i18n/UI coverage, and local validation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2dc1faf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

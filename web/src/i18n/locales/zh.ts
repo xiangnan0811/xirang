@@ -2598,6 +2598,10 @@ const zh = {
             title: "高权限用户未启用两步验证",
             description: "管理员和操作员账号应启用两步验证，降低账号凭据泄露后的控制面风险。",
           },
+          admin_recovery_posture: {
+            title: "管理员恢复姿态",
+            description: "个人或小团队部署应保留可恢复的管理员访问路径，避免控制面锁死。",
+          },
           audit_log_integrity_posture: {
             title: "审计日志完整性姿态",
             description: "审计日志哈希链应保持连续，以便管理员复核关键控制面操作的完整性。",

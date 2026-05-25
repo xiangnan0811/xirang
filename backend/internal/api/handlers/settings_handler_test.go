@@ -77,7 +77,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		{Username: "risk-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: false, TOTPSecret: "FAKE_TOTP_SECRET_FOR_TEST_ONLY", RecoveryCodes: "FAKE_RECOVERY_CODE_FOR_TEST_ONLY"},
 		{Username: "risk-operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: false},
 		{Username: "risk-viewer", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "viewer", TOTPEnabled: false},
-		{Username: "risk-ready-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: true},
+		{Username: "risk-ready-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: true, TOTPSecret: "FAKE_READY_TOTP_SECRET_FOR_TEST_ONLY"},
 	} {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatalf("创建用户失败: %v", err)
@@ -175,7 +175,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		createAudit("ssh_key.export", sshutil.PurposeSSHKeyExport, `{"scope":"all"}`, "")
 	}
 	for i := 0; i < 2; i++ {
-		createAudit("file_browser.preview", sshutil.PurposeFileBrowser, `{"path":"/safe/FAKE_FILE_NAME_FOR_TEST_ONLY","content":"FAKE_FILE_CONTENT_FOR_TEST_ONLY"}`, "preview failed: output: FAKE_SFTP_OUTPUT_FOR_TEST_ONLY")
+		createAudit("file_browser.preview", sshutil.PurposeFileBrowser, `{"path":"/safe/FAKE_FILE_NAME_FOR_TEST_ONLY","content":"FAKE_FILE_CONTENT_FOR_TEST_ONLY","login_token":"FAKE_LOGIN_TOKEN_FOR_TEST_ONLY","step_up_proof":"FAKE_STEP_UP_PROOF_FOR_TEST_ONLY","token_version":"FAKE_TOKEN_VERSION_FOR_TEST_ONLY"}`, "preview failed: raw error FAKE_RAW_ERROR_FOR_TEST_ONLY output: FAKE_SFTP_OUTPUT_FOR_TEST_ONLY")
 	}
 	createAudit("docker_volumes.discover", sshutil.PurposeDockerVolumes, `{"volume":"volume-prod-data","output":"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY"}`, "docker failed: output: FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY")
 	backupPolicy := model.Policy{Name: "FAKE_BACKUP_POLICY_NAME_FOR_TEST_ONLY", SourcePath: "/srv/FAKE_SOURCE_PATH_FOR_TEST_ONLY", TargetPath: "/backup/FAKE_TARGET_PATH_FOR_TEST_ONLY", CronSpec: "0 2 * * *", Enabled: true, VerifyEnabled: true, RPOMinutes: 60, DrillEnabled: true}
@@ -263,6 +263,15 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["privileged_users_without_totp"].Count != 2 || !strings.Contains(privilegedExamples, "risk-admin") || !strings.Contains(privilegedExamples, "risk-operator") || strings.Contains(privilegedExamples, "risk-viewer") || strings.Contains(privilegedExamples, "risk-ready-admin") {
 		t.Fatalf("高权限用户强认证风险不符合预期: %+v", byCode["privileged_users_without_totp"])
 	}
+	adminRecoveryExamples := strings.Join(byCode["admin_recovery_posture"].Examples, ",")
+	if byCode["admin_recovery_posture"].Severity != "warning" || byCode["admin_recovery_posture"].Count != 1 || !strings.Contains(adminRecoveryExamples, "存在启用两步验证但缺少恢复码证据的管理员") {
+		t.Fatalf("管理员恢复姿态风险不符合预期: %+v", byCode["admin_recovery_posture"])
+	}
+	for _, forbidden := range []string{"risk-admin", "risk-operator", "risk-ready-admin", "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", "FAKE_TOTP_SECRET_FOR_TEST_ONLY", "FAKE_READY_TOTP_SECRET_FOR_TEST_ONLY", "FAKE_RECOVERY_CODE_FOR_TEST_ONLY"} {
+		if strings.Contains(adminRecoveryExamples, forbidden) {
+			t.Fatalf("管理员恢复姿态不应暴露原始用户或恢复字段 %q: %+v", forbidden, byCode["admin_recovery_posture"])
+		}
+	}
 	auditIntegrityExamples := strings.Join(byCode["audit_log_integrity_posture"].Examples, ",")
 	if byCode["audit_log_integrity_posture"].Severity != "critical" || byCode["audit_log_integrity_posture"].Count != 4 || !strings.Contains(auditIntegrityExamples, "审计日志存在缺失的完整性哈希") || !strings.Contains(auditIntegrityExamples, "审计日志存在缺失的前序哈希") || !strings.Contains(auditIntegrityExamples, "审计日志哈希链存在断点") {
 		t.Fatalf("审计日志完整性姿态风险不符合预期: %+v", byCode["audit_log_integrity_posture"])
@@ -305,9 +314,14 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		"PrivateKey",
 		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
 		"FAKE_TOTP_SECRET_FOR_TEST_ONLY",
+		"FAKE_READY_TOTP_SECRET_FOR_TEST_ONLY",
 		"FAKE_RECOVERY_CODE_FOR_TEST_ONLY",
 		"FAKE_FILE_NAME_FOR_TEST_ONLY",
 		"FAKE_FILE_CONTENT_FOR_TEST_ONLY",
+		"FAKE_LOGIN_TOKEN_FOR_TEST_ONLY",
+		"FAKE_STEP_UP_PROOF_FOR_TEST_ONLY",
+		"FAKE_TOKEN_VERSION_FOR_TEST_ONLY",
+		"FAKE_RAW_ERROR_FOR_TEST_ONLY",
 		"FAKE_SFTP_OUTPUT_FOR_TEST_ONLY",
 		"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY",
 		"volume-prod-data",
@@ -340,6 +354,89 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("安全风险摘要不应暴露敏感字段 %q，实际: %s", forbidden, body)
+		}
+	}
+}
+
+func TestSettingsSecurityRiskSummaryAdminRecoveryPostureCriticalWhenNoAdmin(t *testing.T) {
+	db := openSettingsAnomalySmokeDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate admin recovery posture tables: %v", err)
+	}
+	if err := db.Create(&model.User{Username: "FAKE_OPERATOR_USERNAME_FOR_TEST_ONLY", PasswordHash: "FAKE_OPERATOR_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: true, TOTPSecret: "FAKE_OPERATOR_TOTP_SECRET_FOR_TEST_ONLY", RecoveryCodes: "FAKE_OPERATOR_RECOVERY_CODE_FOR_TEST_ONLY"}).Error; err != nil {
+		t.Fatalf("创建无管理员场景用户失败: %v", err)
+	}
+
+	handler := NewSettingsHandler(db, settings.NewService(db))
+	r := gin.New()
+	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
+	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("security risk summary status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data securityRiskSummaryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析安全风险摘要失败: %v", err)
+	}
+	byCode := make(map[string]securityRiskItem, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		byCode[item.Code] = item
+	}
+	item := byCode["admin_recovery_posture"]
+	examples := strings.Join(item.Examples, ",")
+	if item.Severity != "critical" || item.Count != 1 || !strings.Contains(examples, "未发现管理员账号") {
+		t.Fatalf("无管理员账号时应返回 critical 汇总: %+v", item)
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"FAKE_OPERATOR_USERNAME_FOR_TEST_ONLY", "FAKE_OPERATOR_PASSWORD_HASH_FOR_TEST_ONLY", "FAKE_OPERATOR_TOTP_SECRET_FOR_TEST_ONLY", "FAKE_OPERATOR_RECOVERY_CODE_FOR_TEST_ONLY"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("管理员恢复姿态不应暴露无管理员场景原始字段 %q，实际: %s", forbidden, body)
+		}
+	}
+}
+
+func TestSettingsSecurityRiskSummaryAdminRecoveryPostureInfoWhenHealthy(t *testing.T) {
+	db := openSettingsAnomalySmokeDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate admin recovery posture tables: %v", err)
+	}
+	for _, user := range []model.User{
+		{Username: "healthy-admin-a", PasswordHash: "FAKE_HEALTHY_ADMIN_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: true, TOTPSecret: "FAKE_HEALTHY_ADMIN_TOTP_FOR_TEST_ONLY", RecoveryCodes: `["FAKE_HEALTHY_RECOVERY_CODE_FOR_TEST_ONLY"]`},
+		{Username: "healthy-admin-b", PasswordHash: "FAKE_HEALTHY_ADMIN_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: true, TOTPSecret: "FAKE_HEALTHY_ADMIN_TOTP_FOR_TEST_ONLY", RecoveryCodes: `["FAKE_HEALTHY_RECOVERY_CODE_FOR_TEST_ONLY"]`},
+		{Username: "healthy-operator", PasswordHash: "FAKE_HEALTHY_OPERATOR_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: true, TOTPSecret: "FAKE_HEALTHY_OPERATOR_TOTP_FOR_TEST_ONLY", RecoveryCodes: `["FAKE_HEALTHY_OPERATOR_RECOVERY_CODE_FOR_TEST_ONLY"]`},
+	} {
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建健康管理员恢复姿态用户失败: %v", err)
+		}
+	}
+
+	handler := NewSettingsHandler(db, settings.NewService(db))
+	r := gin.New()
+	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
+	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("security risk summary status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data securityRiskSummaryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析安全风险摘要失败: %v", err)
+	}
+	byCode := make(map[string]securityRiskItem, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		byCode[item.Code] = item
+	}
+	item := byCode["admin_recovery_posture"]
+	if item.Severity != "info" || item.Count != 0 || len(item.Examples) != 0 {
+		t.Fatalf("健康管理员恢复姿态应为 info 且无风险: %+v", item)
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"healthy-admin-a", "healthy-admin-b", "healthy-operator", "FAKE_HEALTHY_ADMIN_HASH_FOR_TEST_ONLY", "FAKE_HEALTHY_ADMIN_TOTP_FOR_TEST_ONLY", "FAKE_HEALTHY_RECOVERY_CODE_FOR_TEST_ONLY", "FAKE_HEALTHY_OPERATOR_HASH_FOR_TEST_ONLY", "FAKE_HEALTHY_OPERATOR_TOTP_FOR_TEST_ONLY", "FAKE_HEALTHY_OPERATOR_RECOVERY_CODE_FOR_TEST_ONLY"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("健康管理员恢复姿态不应暴露原始字段 %q，实际: %s", forbidden, body)
 		}
 	}
 }

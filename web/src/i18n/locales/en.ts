@@ -2598,6 +2598,10 @@ const en = {
             title: "Privileged users without 2FA",
             description: "Admin and operator accounts should enable 2FA to reduce control-plane risk after credential exposure.",
           },
+          admin_recovery_posture: {
+            title: "Admin recovery posture",
+            description: "Personal and small-team deployments should keep recoverable administrator access paths to avoid control-plane lockout.",
+          },
           audit_log_integrity_posture: {
             title: "Audit log integrity posture",
             description: "Audit log hash chains should stay continuous so administrators can review control-plane activity integrity.",

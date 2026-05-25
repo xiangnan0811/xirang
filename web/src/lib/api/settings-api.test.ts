@@ -43,6 +43,14 @@ describe("settings api mappers", () => {
           examples: ["admin（admin）", "operator（operator）"],
         },
         {
+          code: "admin_recovery_posture",
+          severity: "critical",
+          title: "Admin recovery posture",
+          description: "admin recovery posture",
+          count: "1",
+          examples: ["No admin recovery evidence"],
+        },
+        {
           code: "audit_log_integrity_posture",
           severity: "critical",
           title: "Audit log integrity posture",
@@ -113,30 +121,36 @@ describe("settings api mappers", () => {
       examples: ["admin（admin）", "operator（operator）"],
     });
     expect(mapped.items[4]).toMatchObject({
+      code: "admin_recovery_posture",
+      severity: "critical",
+      count: 1,
+      examples: ["No admin recovery evidence"],
+    });
+    expect(mapped.items[5]).toMatchObject({
       code: "audit_log_integrity_posture",
       severity: "critical",
       count: 2,
       examples: ["Audit log hash-chain gap detected"],
     });
-    expect(mapped.items[5]).toMatchObject({
+    expect(mapped.items[6]).toMatchObject({
       code: "ssh_host_key_trust_posture",
       severity: "warning",
       count: 1,
       examples: ["Strict host-key checking disabled"],
     });
-    expect(mapped.items[6]).toMatchObject({
+    expect(mapped.items[7]).toMatchObject({
       code: "deployment_secret_posture",
       severity: "warning",
       count: 3,
       examples: ["Development mode enabled"],
     });
-    expect(mapped.items[7]).toMatchObject({
+    expect(mapped.items[8]).toMatchObject({
       code: "backup_restore_posture",
       severity: "critical",
       count: 5,
       examples: ["No successful backup evidence"],
     });
-    expect(mapped.items[8]).toMatchObject({
+    expect(mapped.items[9]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,
