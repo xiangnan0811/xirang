@@ -43,6 +43,14 @@ describe("settings api mappers", () => {
           examples: ["admin（admin）", "operator（operator）"],
         },
         {
+          code: "audit_log_integrity_posture",
+          severity: "critical",
+          title: "Audit log integrity posture",
+          description: "audit integrity posture",
+          count: "2",
+          examples: ["Audit log hash-chain gap detected"],
+        },
+        {
           code: "ssh_host_key_trust_posture",
           severity: "warning",
           title: "SSH host-key trust posture",
@@ -89,12 +97,18 @@ describe("settings api mappers", () => {
       examples: ["admin（admin）", "operator（operator）"],
     });
     expect(mapped.items[4]).toMatchObject({
+      code: "audit_log_integrity_posture",
+      severity: "critical",
+      count: 2,
+      examples: ["Audit log hash-chain gap detected"],
+    });
+    expect(mapped.items[5]).toMatchObject({
       code: "ssh_host_key_trust_posture",
       severity: "warning",
       count: 1,
       examples: ["Strict host-key checking disabled"],
     });
-    expect(mapped.items[5]).toMatchObject({
+    expect(mapped.items[6]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,

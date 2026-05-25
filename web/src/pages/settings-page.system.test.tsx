@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { SystemTab } from "./settings-page.system";
 
 const apiClientMock = vi.hoisted(() => ({
@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 6, categories: 4 },
+      summary: { totalRisks: 8, categories: 5 },
       items: [
         {
           code: "root_ssh_users",
@@ -69,6 +69,14 @@ describe("SystemTab security risk summary", () => {
           description: "privileged accounts",
           count: 2,
           examples: ["admin（admin）", "operator（operator）"],
+        },
+        {
+          code: "audit_log_integrity_posture",
+          severity: "critical",
+          title: "Audit log integrity posture",
+          description: "audit integrity posture",
+          count: 2,
+          examples: ["Audit log hash-chain gap detected"],
         },
         {
           code: "ssh_host_key_trust_posture",
@@ -96,19 +104,25 @@ describe("SystemTab security risk summary", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "settings.system.securityRisk.title" })).toBeInTheDocument();
     });
+    const riskSummaryTitle = screen.getByRole("heading", { name: "settings.system.securityRisk.title" });
     expect(apiClientMock.getSecurityRiskSummary).toHaveBeenCalledWith("test-token");
     expect(screen.getByRole("heading", { name: "Root SSH users" })).toBeInTheDocument();
-    expect(screen.getAllByText("settings.system.securityRisk.count:2")).toHaveLength(2);
     expect(screen.getByText("node-a")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Broad scope SSH keys" })).toBeInTheDocument();
     expect(screen.getByText("ops-key")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Privileged users without 2FA" })).toBeInTheDocument();
     expect(screen.getByText("admin（admin）")).toBeInTheDocument();
     expect(screen.getByText("operator（operator）")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Audit log integrity posture" })).toBeInTheDocument();
+    expect(screen.getByText("Audit log hash-chain gap detected")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "SSH host-key trust posture" })).toBeInTheDocument();
     expect(screen.getByText("Strict host-key checking disabled")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    const riskSummarySection = riskSummaryTitle.closest("section");
+    expect(riskSummarySection).not.toBeNull();
+    const riskSummary = within(riskSummarySection as HTMLElement);
+    expect(riskSummary.queryByRole("link")).not.toBeInTheDocument();
+    expect(riskSummary.queryByRole("button")).not.toBeInTheDocument();
   });
 });

@@ -2598,6 +2598,10 @@ const zh = {
             title: "高权限用户未启用两步验证",
             description: "管理员和操作员账号应启用两步验证，降低账号凭据泄露后的控制面风险。",
           },
+          audit_log_integrity_posture: {
+            title: "审计日志完整性姿态",
+            description: "审计日志哈希链应保持连续，以便管理员复核关键控制面操作的完整性。",
+          },
           ssh_host_key_trust_posture: {
             title: "SSH 主机密钥信任姿态",
             description: "SSH 主机密钥校验应保持启用，并谨慎评估首次连接自动接受未知主机密钥的部署边界。",

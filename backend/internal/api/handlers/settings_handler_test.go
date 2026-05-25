@@ -65,7 +65,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate security risk tables: %v", err)
 	}
 	now := time.Now().UTC()
@@ -176,6 +176,16 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		createAudit("file_browser.preview", sshutil.PurposeFileBrowser, `{"path":"/safe/FAKE_FILE_NAME_FOR_TEST_ONLY","content":"FAKE_FILE_CONTENT_FOR_TEST_ONLY"}`, "preview failed: output: FAKE_SFTP_OUTPUT_FOR_TEST_ONLY")
 	}
 	createAudit("docker_volumes.discover", sshutil.PurposeDockerVolumes, `{"volume":"volume-prod-data","output":"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY"}`, "docker failed: output: FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY")
+	for _, row := range []model.AuditLog{
+		{Username: "raw-audit-admin", Role: "admin", Method: http.MethodPost, Path: "/api/v1/secret/path", StatusCode: 200, ClientIP: "198.51.100.10", UserAgent: "raw-audit-agent", EntryHash: "hash-a", CreatedAt: now},
+		{Username: "raw-audit-operator", Role: "operator", Method: http.MethodPut, Path: "/api/v1/another/secret", StatusCode: 500, ClientIP: "198.51.100.11", UserAgent: "raw-audit-agent", PrevHash: "wrong-hash", EntryHash: "hash-b", CreatedAt: now},
+		{Username: "raw-audit-viewer", Role: "viewer", Method: http.MethodDelete, Path: "/api/v1/delete/secret", StatusCode: 204, ClientIP: "198.51.100.12", UserAgent: "raw-audit-agent", CreatedAt: now},
+		{Username: "raw-audit-maintainer", Role: "admin", Method: http.MethodPatch, Path: "/api/v1/maintain/secret", StatusCode: 202, ClientIP: "198.51.100.13", UserAgent: "raw-audit-agent", PrevHash: "hash-c", EntryHash: "hash-d", CreatedAt: now},
+	} {
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatalf("创建审计日志失败: %v", err)
+		}
+	}
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
@@ -224,6 +234,15 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["privileged_users_without_totp"].Count != 2 || !strings.Contains(privilegedExamples, "risk-admin") || !strings.Contains(privilegedExamples, "risk-operator") || strings.Contains(privilegedExamples, "risk-viewer") || strings.Contains(privilegedExamples, "risk-ready-admin") {
 		t.Fatalf("高权限用户强认证风险不符合预期: %+v", byCode["privileged_users_without_totp"])
 	}
+	auditIntegrityExamples := strings.Join(byCode["audit_log_integrity_posture"].Examples, ",")
+	if byCode["audit_log_integrity_posture"].Severity != "critical" || byCode["audit_log_integrity_posture"].Count != 4 || !strings.Contains(auditIntegrityExamples, "审计日志存在缺失的完整性哈希") || !strings.Contains(auditIntegrityExamples, "审计日志存在缺失的前序哈希") || !strings.Contains(auditIntegrityExamples, "审计日志哈希链存在断点") {
+		t.Fatalf("审计日志完整性姿态风险不符合预期: %+v", byCode["audit_log_integrity_posture"])
+	}
+	for _, forbidden := range []string{"raw-audit-admin", "raw-audit-operator", "raw-audit-viewer", "raw-audit-maintainer", "198.51.100.", "/api/v1/", "raw-audit-agent"} {
+		if strings.Contains(auditIntegrityExamples, forbidden) {
+			t.Fatalf("审计日志完整性姿态不应暴露原始审计字段 %q: %+v", forbidden, byCode["audit_log_integrity_posture"])
+		}
+	}
 	hostKeyExamples := strings.Join(byCode["ssh_host_key_trust_posture"].Examples, ",")
 	if byCode["ssh_host_key_trust_posture"].Count != 1 || !strings.Contains(hostKeyExamples, "SSH 主机密钥校验已关闭") {
 		t.Fatalf("SSH 主机密钥信任姿态风险不符合预期: %+v", byCode["ssh_host_key_trust_posture"])
@@ -246,6 +265,14 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		"FAKE_DOCKER_OUTPUT_FOR_TEST_ONLY",
 		"volume-prod-data",
 		"10.10.0.",
+		"raw-audit-admin",
+		"raw-audit-operator",
+		"raw-audit-viewer",
+		"raw-audit-maintainer",
+		"198.51.100.",
+		"/api/v1/secret",
+		"/api/v1/maintain",
+		"raw-audit-agent",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("安全风险摘要不应暴露敏感字段 %q，实际: %s", forbidden, body)

@@ -2598,6 +2598,10 @@ const en = {
             title: "Privileged users without 2FA",
             description: "Admin and operator accounts should enable 2FA to reduce control-plane risk after credential exposure.",
           },
+          audit_log_integrity_posture: {
+            title: "Audit log integrity posture",
+            description: "Audit log hash chains should stay continuous so administrators can review control-plane activity integrity.",
+          },
           ssh_host_key_trust_posture: {
             title: "SSH host-key trust posture",
             description: "SSH host-key checking should stay enabled, and first-seen auto-accept should be reviewed against the deployment boundary.",
