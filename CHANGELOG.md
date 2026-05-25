@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.26](https://github.com/xiangnan0811/xirang/compare/v0.43.25...v0.43.26) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** harden anomaly snapshot logging ([#255](https://github.com/xiangnan0811/xirang/issues/255)) ([c65fc33](https://github.com/xiangnan0811/xirang/commit/c65fc33be3b40bfa43cf5978993daaf83b1db7d0))
+
 ## [0.43.25](https://github.com/xiangnan0811/xirang/compare/v0.43.24...v0.43.25) (2026-05-24)
 
 
