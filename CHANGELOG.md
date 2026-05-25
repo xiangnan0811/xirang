@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.33](https://github.com/xiangnan0811/xirang/compare/v0.43.32...v0.43.33) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report admin recovery posture ([3df4663](https://github.com/xiangnan0811/xirang/commit/3df46637a4968bed63830ba645c2014021f29547))
+
 ## [0.43.32](https://github.com/xiangnan0811/xirang/compare/v0.43.31...v0.43.32) (2026-05-25)
 
 
