@@ -46,9 +46,10 @@ type securityRiskItem struct {
 }
 
 const (
-	maxSecurityRiskExamples = 3
-	staleSSHKeyAge          = 90 * 24 * time.Hour
-	credentialAuditRiskAge  = 7 * 24 * time.Hour
+	maxSecurityRiskExamples            = 3
+	staleSSHKeyAge                     = 90 * 24 * time.Hour
+	credentialAuditRiskAge             = 7 * 24 * time.Hour
+	weakSecurityDefaultJWTTTLThreshold = 24 * time.Hour
 )
 
 // NewSettingsHandler 创建设置处理器
@@ -968,15 +969,27 @@ func backupRestorePostureHasCritical(counts map[string]int64) bool {
 }
 
 func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
-	examples := make([]string, 0, maxSecurityRiskExamples)
+	item := securityRiskItem{
+		Code:        "weak_security_defaults",
+		Severity:    "warning",
+		Title:       "弱安全默认项",
+		Description: "这些本地硬化提示不会自动修复；请结合部署环境评估是否需要收紧。",
+		Examples:    make([]string, 0, maxSecurityRiskExamples),
+	}
+	addFinding := func(label string) {
+		item.Count++
+		if len(item.Examples) < maxSecurityRiskExamples {
+			item.Examples = append(item.Examples, label)
+		}
+	}
 	appendEnvBoolRisk := func(key string, defaultValue bool, riskyValue bool, label string) {
 		value, err := util.ReadBoolEnv(key, defaultValue)
 		if err != nil {
-			examples = append(examples, key+" 配置值无效")
+			addFinding(key + " 配置值无效")
 			return
 		}
 		if value == riskyValue {
-			examples = append(examples, label)
+			addFinding(label)
 		}
 	}
 	appendSettingBoolRisk := func(key string, envVar string, defaultValue bool, riskyValue bool, label string) {
@@ -988,31 +1001,52 @@ func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
 		if raw != "" {
 			parsed, err := strconv.ParseBool(raw)
 			if err != nil {
-				examples = append(examples, key+" 配置值无效")
+				addFinding(key + " 配置值无效")
 				return
 			}
 			value = parsed
 		}
 		if value == riskyValue {
-			examples = append(examples, label)
+			addFinding(label)
+		}
+	}
+	appendCORSRisk := func() {
+		raw, configured := os.LookupEnv("CORS_ALLOWED_ORIGINS")
+		if !configured || strings.TrimSpace(raw) == "" {
+			addFinding("CORS 允许来源未显式声明")
+			return
+		}
+		for _, origin := range strings.Split(raw, ",") {
+			if strings.TrimSpace(origin) == "*" {
+				addFinding("CORS 允许来源包含通配符")
+				return
+			}
+		}
+	}
+	appendJWTTTLRisk := func() {
+		raw := strings.TrimSpace(os.Getenv("JWT_TTL"))
+		if raw == "" {
+			raw = "24h"
+		}
+		jwtTTL, err := time.ParseDuration(raw)
+		if err != nil {
+			addFinding("JWT 会话有效期配置值无效")
+			return
+		}
+		if jwtTTL > weakSecurityDefaultJWTTTLThreshold {
+			addFinding("JWT 会话有效期偏长")
 		}
 	}
 
 	appendEnvBoolRisk("WS_ALLOW_EMPTY_ORIGIN", false, true, "WebSocket 允许空 Origin")
 	appendSettingBoolRisk("login.captcha_enabled", "LOGIN_CAPTCHA_ENABLED", false, false, "登录验证码未启用")
 	appendSettingBoolRisk("login.second_captcha_enabled", "LOGIN_SECOND_CAPTCHA_ENABLED", false, false, "登录二次验证码未启用")
+	if strings.TrimSpace(os.Getenv("METRICS_TOKEN")) == "" {
+		addFinding("Metrics 抓取端点未配置 token 保护")
+	}
+	appendCORSRisk()
+	appendJWTTTLRisk()
 
-	item := securityRiskItem{
-		Code:        "weak_security_defaults",
-		Severity:    "warning",
-		Title:       "弱安全默认项",
-		Description: "这些开关不会自动修复；请结合部署环境评估是否需要收紧。",
-		Count:       int64(len(examples)),
-		Examples:    examples,
-	}
-	if len(item.Examples) > maxSecurityRiskExamples {
-		item.Examples = item.Examples[:maxSecurityRiskExamples]
-	}
 	if item.Count == 0 {
 		item.Severity = "info"
 	}
