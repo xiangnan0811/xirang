@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/05-25-p5-settings-audit-posture/prd.md","reason":"Confirmed MVP requirements and acceptance criteria for report-only audit integrity posture."}
+{"file":".trellis/tasks/05-25-p5-settings-audit-posture/research/audit-posture.md","reason":"Research findings for existing audit log hash-chain state, safe aggregate signals, and implementation boundaries."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Backend logging and audit sanitization constraints for security posture output."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API mapper/type union updates for the new risk code."}
+{"file":".trellis/spec/frontend/accessibility.md","reason":"Settings risk-card UI rendering should preserve existing accessible card behavior."}

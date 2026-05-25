@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 80
+- **Total Sessions**: 81
 - **Last Active**: 2026-05-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~733 | Active |
+| `journal-2.md` | ~766 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 81 | 2026-05-25 | P5 audit log integrity posture | `3a9a260` | `security/p5-settings-audit-posture` |
 | 80 | 2026-05-25 | P5 host-key trust posture | `8b77abb` | `security/p5-host-key-trust-posture` |
 | 79 | 2026-05-25 | P5 strong-auth posture roadmap | `95cd93e` | `security/p5-architecture-security-roadmap` |
 | 78 | 2026-05-25 | P4 closeout residual security review | `bbf769e` | `security/p4-closeout-residual-review` |

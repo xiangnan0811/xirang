@@ -34,6 +34,7 @@ export type SecurityRiskCode =
   | "stale_ssh_keys"
   | "recent_credential_operations"
   | "privileged_users_without_totp"
+  | "audit_log_integrity_posture"
   | "ssh_host_key_trust_posture"
   | "weak_security_defaults";
 
@@ -96,6 +97,7 @@ function normalizeRiskCode(value?: string): SecurityRiskCode {
     case "stale_ssh_keys":
     case "recent_credential_operations":
     case "privileged_users_without_totp":
+    case "audit_log_integrity_posture":
     case "ssh_host_key_trust_posture":
     case "weak_security_defaults":
       return value;

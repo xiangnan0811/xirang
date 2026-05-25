@@ -235,6 +235,10 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	auditIntegrityItem, err := h.auditLogIntegrityPostureRiskItem()
+	if err != nil {
+		return nil, err
+	}
 	hostKeyTrustItem := h.sshHostKeyTrustPostureRiskItem()
 	weakItem := h.weakSecurityDefaultsRiskItem()
 	return []securityRiskItem{
@@ -247,6 +251,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		staleItem,
 		credentialOpsItem,
 		privilegedAuthItem,
+		auditIntegrityItem,
 		hostKeyTrustItem,
 		weakItem,
 	}, nil
@@ -584,6 +589,82 @@ func credentialActionLabel(action string) string {
 	default:
 		return "凭据操作"
 	}
+}
+
+func (h *SettingsHandler) auditLogIntegrityPostureRiskItem() (item securityRiskItem, err error) {
+	item = securityRiskItem{
+		Code:        "audit_log_integrity_posture",
+		Severity:    "info",
+		Title:       "审计日志完整性姿态",
+		Description: "审计日志哈希链应保持连续，以便管理员复核关键控制面操作的完整性。",
+		Examples:    []string{},
+	}
+	type auditIntegrityRow struct {
+		ID        uint
+		PrevHash  string
+		EntryHash string
+	}
+	rows, err := h.db.Model(&model.AuditLog{}).
+		Select("id", "prev_hash", "entry_hash").
+		Order("id asc").
+		Rows()
+	if err != nil {
+		return item, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	missingEntryHash := int64(0)
+	missingPrevHash := int64(0)
+	brokenLinks := int64(0)
+	rowIndex := int64(0)
+	previousEntryHash := ""
+	for rows.Next() {
+		var row auditIntegrityRow
+		if err := h.db.ScanRows(rows, &row); err != nil {
+			return item, err
+		}
+		entryHash := strings.TrimSpace(row.EntryHash)
+		if entryHash == "" {
+			missingEntryHash++
+		}
+		if rowIndex > 0 {
+			prevHash := strings.TrimSpace(row.PrevHash)
+			if prevHash == "" {
+				missingPrevHash++
+			} else if prevHash != previousEntryHash {
+				brokenLinks++
+			}
+		}
+		previousEntryHash = entryHash
+		rowIndex++
+	}
+	if err := rows.Err(); err != nil {
+		return item, err
+	}
+	if rowIndex == 0 {
+		return item, nil
+	}
+
+	appendFinding := func(count int64, label string) {
+		if count == 0 {
+			return
+		}
+		item.Count += count
+		if len(item.Examples) < maxSecurityRiskExamples {
+			item.Examples = append(item.Examples, label)
+		}
+	}
+	appendFinding(missingEntryHash, "审计日志存在缺失的完整性哈希")
+	appendFinding(missingPrevHash, "审计日志存在缺失的前序哈希")
+	appendFinding(brokenLinks, "审计日志哈希链存在断点")
+	if item.Count > 0 {
+		item.Severity = "critical"
+	}
+	return item, nil
 }
 
 func (h *SettingsHandler) sshHostKeyTrustPostureRiskItem() securityRiskItem {
