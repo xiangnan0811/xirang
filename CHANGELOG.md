@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.27](https://github.com/xiangnan0811/xirang/compare/v0.43.26...v0.43.27) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** clear SSH key import secrets on close ([329f695](https://github.com/xiangnan0811/xirang/commit/329f6955fb47a30640ec432014bd9dfd870acbdd))
+
 ## [0.43.26](https://github.com/xiangnan0811/xirang/compare/v0.43.25...v0.43.26) (2026-05-25)
 
 
