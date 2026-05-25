@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 4, categories: 4 },
+      summary: { totalRisks: 6, categories: 4 },
       items: [
         {
           code: "root_ssh_users",
@@ -61,6 +61,14 @@ describe("SystemTab security risk summary", () => {
           description: "broad keys",
           count: 1,
           examples: ["ops-key"],
+        },
+        {
+          code: "privileged_users_without_totp",
+          severity: "warning",
+          title: "Privileged users without 2FA",
+          description: "privileged accounts",
+          count: 2,
+          examples: ["admin（admin）", "operator（operator）"],
         },
         {
           code: "weak_security_defaults",
@@ -82,10 +90,13 @@ describe("SystemTab security risk summary", () => {
     });
     expect(apiClientMock.getSecurityRiskSummary).toHaveBeenCalledWith("test-token");
     expect(screen.getByRole("heading", { name: "Root SSH users" })).toBeInTheDocument();
-    expect(screen.getByText("settings.system.securityRisk.count:2")).toBeInTheDocument();
+    expect(screen.getAllByText("settings.system.securityRisk.count:2")).toHaveLength(2);
     expect(screen.getByText("node-a")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Broad scope SSH keys" })).toBeInTheDocument();
     expect(screen.getByText("ops-key")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Privileged users without 2FA" })).toBeInTheDocument();
+    expect(screen.getByText("admin（admin）")).toBeInTheDocument();
+    expect(screen.getByText("operator（operator）")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

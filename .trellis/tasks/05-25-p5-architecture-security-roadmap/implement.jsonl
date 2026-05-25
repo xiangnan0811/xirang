@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/prd.md","reason":"Selected first P5 slice, scope boundaries, acceptance criteria, and security constraints."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/secret-broker-vault-kms.md","reason":"Secret broker/Vault/KMS candidate ranking and first-slice deferral rationale."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/ssh-session-command-controls.md","reason":"SSH trust/session recording/command-control candidate ranking and first-slice deferral rationale."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/strong-auth-device-policy.md","reason":"Strong-auth/device-policy candidate ranking and selected report-only posture recommendation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend API response and sensitive error disclosure constraints."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Security logging exclusions for secrets, command evidence, endpoints, paths, and diagnostic output."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API mapper and Settings security-risk summary type-safety contracts."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Frontend Settings UI accessibility baseline for any rendered advisory item."}

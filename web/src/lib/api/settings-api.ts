@@ -33,6 +33,7 @@ export type SecurityRiskCode =
   | "expired_ssh_keys_in_use"
   | "stale_ssh_keys"
   | "recent_credential_operations"
+  | "privileged_users_without_totp"
   | "weak_security_defaults";
 
 export type SecurityRiskItem = {
@@ -93,6 +94,7 @@ function normalizeRiskCode(value?: string): SecurityRiskCode {
     case "expired_ssh_keys_in_use":
     case "stale_ssh_keys":
     case "recent_credential_operations":
+    case "privileged_users_without_totp":
     case "weak_security_defaults":
       return value;
     default:

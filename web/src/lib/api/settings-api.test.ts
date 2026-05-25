@@ -35,6 +35,14 @@ describe("settings api mappers", () => {
           examples: ["SSH Key export"],
         },
         {
+          code: "privileged_users_without_totp",
+          severity: "warning",
+          title: "Privileged users without 2FA",
+          description: "privileged accounts",
+          count: "2",
+          examples: ["admin（admin）", "operator（operator）"],
+        },
+        {
           code: "unexpected",
           severity: "unexpected",
           title: "Unknown",
@@ -67,6 +75,12 @@ describe("settings api mappers", () => {
       examples: ["SSH Key export"],
     });
     expect(mapped.items[3]).toMatchObject({
+      code: "privileged_users_without_totp",
+      severity: "warning",
+      count: 2,
+      examples: ["admin（admin）", "operator（operator）"],
+    });
+    expect(mapped.items[4]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,
