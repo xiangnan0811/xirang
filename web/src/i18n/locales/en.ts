@@ -2558,6 +2558,8 @@ const en = {
         title: "Security risk summary",
         description: "Read-only advisory signals. It never exposes raw credentials or changes nodes and keys automatically.",
         loadFailed: "Failed to load security risk summary",
+        summary: "{{total}} findings across {{categories}} categories",
+        generatedAt: "Generated {{time}}",
         count: "{{count}} items",
         examplesLabel: "Risk examples",
         noExamples: "No matching risk found right now.",

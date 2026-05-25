@@ -866,3 +866,36 @@ Added a read-only Settings admin recovery posture risk card with backend aggrega
 ### Next Steps
 
 - None - task complete
+
+
+## Session 85: P5 risk summary usability
+
+**Date**: 2026-05-25
+**Task**: P5 risk summary usability
+**Branch**: `security/p5-risk-summary-usability`
+
+### Summary
+
+Improved the read-only Settings security-risk summary by showing existing aggregate metadata, sorting cards by severity and count, preserving info categories, and validating the frontend/UI flow.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7bd6f6a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

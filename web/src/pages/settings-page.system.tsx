@@ -6,6 +6,7 @@ import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast-sonner";
+import { formatTime } from "@/lib/date-utils";
 import { cn, getErrorMessage } from "@/lib/utils";
 import type { SecurityRiskItem, SecurityRiskSummary, SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
 
@@ -16,6 +17,25 @@ const riskToneClasses: Record<SecurityRiskItem["severity"], string> = {
   warning: "border-warning/30 bg-warning/5 text-warning-foreground dark:text-warning",
   critical: "border-destructive/30 bg-destructive/5 text-destructive",
 };
+
+const riskSeverityOrder: Record<SecurityRiskItem["severity"], number> = {
+  critical: 0,
+  warning: 1,
+  info: 2,
+};
+
+function sortSecurityRiskItems(items: SecurityRiskItem[]): SecurityRiskItem[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const severityDiff = riskSeverityOrder[a.item.severity] - riskSeverityOrder[b.item.severity];
+      if (severityDiff !== 0) return severityDiff;
+      const countDiff = b.item.count - a.item.count;
+      if (countDiff !== 0) return countDiff;
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
 
 export function SystemTab() {
   const { t } = useTranslation();
@@ -127,6 +147,8 @@ export function SystemTab() {
     category: cat,
     items: definitions.filter((d) => d.category === cat),
   })).filter((g) => g.items.length > 0);
+  const sortedSecurityRiskItems = securityRisk ? sortSecurityRiskItems(securityRisk.items) : [];
+  const securityRiskGeneratedAtText = securityRisk?.generatedAt ? formatTime(securityRisk.generatedAt) : null;
 
   const categoryLabels: Record<string, string> = {
     security: t("settings.system.catSecurity"),
@@ -180,34 +202,43 @@ export function SystemTab() {
         ) : null}
 
         {securityRisk ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            {securityRisk.items.map((item) => (
-              <article key={item.code} className="rounded-md border border-border bg-background/60 p-3 space-y-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-sm font-medium">
-                      {t(`settings.system.securityRisk.items.${item.code}.title`, { defaultValue: item.title })}
-                    </h4>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t(`settings.system.securityRisk.items.${item.code}.description`, { defaultValue: item.description })}
-                    </p>
+          <>
+            <p className="text-xs text-muted-foreground" role="status">
+              {t("settings.system.securityRisk.summary", {
+                total: securityRisk.summary.totalRisks,
+                categories: securityRisk.summary.categories,
+              })}
+              {securityRiskGeneratedAtText ? ` · ${t("settings.system.securityRisk.generatedAt", { time: securityRiskGeneratedAtText })}` : null}
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              {sortedSecurityRiskItems.map((item) => (
+                <article key={item.code} className="rounded-md border border-border bg-background/60 p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-medium">
+                        {t(`settings.system.securityRisk.items.${item.code}.title`, { defaultValue: item.title })}
+                      </h4>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t(`settings.system.securityRisk.items.${item.code}.description`, { defaultValue: item.description })}
+                      </p>
+                    </div>
+                    <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium", riskToneClasses[item.severity])}>
+                      {t("settings.system.securityRisk.count", { count: item.count })}
+                    </span>
                   </div>
-                  <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium", riskToneClasses[item.severity])}>
-                    {t("settings.system.securityRisk.count", { count: item.count })}
-                  </span>
-                </div>
-                {item.examples.length > 0 ? (
-                  <ul className="space-y-1 text-xs text-muted-foreground" aria-label={t("settings.system.securityRisk.examplesLabel")}>
-                    {item.examples.map((example) => (
-                      <li key={example} className="truncate">{example}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-xs text-muted-foreground">{t("settings.system.securityRisk.noExamples")}</p>
-                )}
-              </article>
-            ))}
-          </div>
+                  {item.examples.length > 0 ? (
+                    <ul className="space-y-1 text-xs text-muted-foreground" aria-label={t("settings.system.securityRisk.examplesLabel")}>
+                      {item.examples.map((example) => (
+                        <li key={example} className="truncate">{example}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{t("settings.system.securityRisk.noExamples")}</p>
+                  )}
+                </article>
+              ))}
+            </div>
+          </>
         ) : null}
       </section>
 

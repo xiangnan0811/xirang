@@ -25,6 +25,12 @@ vi.mock("react-i18next", () => ({
       if (typeof options?.count === "number") {
         return `${key}:${options.count}`;
       }
+      if (key === "settings.system.securityRisk.summary") {
+        return `summary:${String(options?.total)}:${String(options?.categories)}`;
+      }
+      if (key === "settings.system.securityRisk.generatedAt") {
+        return `generated:${String(options?.time)}`;
+      }
       if (typeof options?.defaultValue === "string") {
         return options.defaultValue;
       }
@@ -152,6 +158,19 @@ describe("SystemTab security risk summary", () => {
     const riskSummarySection = riskSummaryTitle.closest("section");
     expect(riskSummarySection).not.toBeNull();
     const riskSummary = within(riskSummarySection as HTMLElement);
+    expect(riskSummary.getByText(/^summary:17:8 · generated:/)).toBeInTheDocument();
+    const headings = riskSummary.getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent);
+    expect(headings).toEqual([
+      "Backup restore posture",
+      "Audit log integrity posture",
+      "Deployment secret posture",
+      "Root SSH users",
+      "Privileged users without 2FA",
+      "Broad scope SSH keys",
+      "Admin recovery posture",
+      "SSH host-key trust posture",
+      "Weak defaults",
+    ]);
     expect(riskSummary.queryByRole("link")).not.toBeInTheDocument();
     expect(riskSummary.queryByRole("button")).not.toBeInTheDocument();
   });

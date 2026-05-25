@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/05-25-p5-risk-summary-usability/prd.md","reason":"Defines the small-team risk-summary usability MVP, scope limits, and acceptance criteria."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend summary sorting and metadata rendering must remain type-safe and use existing API fields."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Settings security-risk summary must remain accessible and read-only after UI refinement."}
