@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/05-25-p5-risk-summary-usability/prd.md","reason":"Check implementation against frontend-only MVP boundaries, out-of-scope remediation directions, and acceptance criteria."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify risk sorting and summary metadata rendering stay type-safe and deterministic."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify the Settings risk summary remains accessible and report-only with no actionable controls."}

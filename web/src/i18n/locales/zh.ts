@@ -2558,6 +2558,8 @@ const zh = {
         title: "安全风险摘要",
         description: "只读提示，不会暴露原始凭据，也不会自动修改节点或密钥配置。",
         loadFailed: "安全风险摘要加载失败",
+        summary: "共 {{total}} 项发现，覆盖 {{categories}} 个类别",
+        generatedAt: "生成时间 {{time}}",
         count: "{{count}} 项",
         examplesLabel: "风险示例",
         noExamples: "当前未发现此类风险。",
