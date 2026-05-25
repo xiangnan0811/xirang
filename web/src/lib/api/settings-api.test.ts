@@ -59,6 +59,14 @@ describe("settings api mappers", () => {
           examples: ["Strict host-key checking disabled"],
         },
         {
+          code: "deployment_secret_posture",
+          severity: "warning",
+          title: "Deployment secret posture",
+          description: "deployment secrets",
+          count: "3",
+          examples: ["Development mode enabled"],
+        },
+        {
           code: "unexpected",
           severity: "unexpected",
           title: "Unknown",
@@ -109,6 +117,12 @@ describe("settings api mappers", () => {
       examples: ["Strict host-key checking disabled"],
     });
     expect(mapped.items[6]).toMatchObject({
+      code: "deployment_secret_posture",
+      severity: "warning",
+      count: 3,
+      examples: ["Development mode enabled"],
+    });
+    expect(mapped.items[7]).toMatchObject({
       code: "weak_security_defaults",
       severity: "warning",
       count: 0,

@@ -60,7 +60,9 @@ func doSettingsAnomalySmoke(r *gin.Engine, method, path, body string) *httptest.
 
 func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
-	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("JWT_SECRET", "change-me-in-production")
+	t.Setenv("DATA_ENCRYPTION_KEY", "change-me-encryption-key")
+	t.Setenv("ADMIN_INITIAL_PASSWORD", "change-me-admin-password")
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
@@ -250,6 +252,15 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if strings.Contains(hostKeyExamples, "10.10.0.") || strings.Contains(hostKeyExamples, "/") || strings.Contains(hostKeyExamples, "SHA256:") {
 		t.Fatalf("SSH 主机密钥信任姿态不应暴露主机、路径或指纹: %+v", byCode["ssh_host_key_trust_posture"])
 	}
+	deploymentSecretExamples := strings.Join(byCode["deployment_secret_posture"].Examples, ",")
+	if byCode["deployment_secret_posture"].Count != 4 || len(byCode["deployment_secret_posture"].Examples) != maxSecurityRiskExamples || !strings.Contains(deploymentSecretExamples, "运行环境仍处于开发模式") || !strings.Contains(deploymentSecretExamples, "JWT 签名密钥缺失或强度不足") || !strings.Contains(deploymentSecretExamples, "数据加密密钥缺失或强度不足") {
+		t.Fatalf("部署密钥姿态风险不符合预期: %+v", byCode["deployment_secret_posture"])
+	}
+	for _, forbidden := range []string{"change-me-in-production", "change-me-encryption-key", "change-me-admin-password", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY"} {
+		if strings.Contains(deploymentSecretExamples, forbidden) {
+			t.Fatalf("部署密钥姿态不应暴露原始环境值 %q: %+v", forbidden, byCode["deployment_secret_posture"])
+		}
+	}
 	if strings.Contains(strings.Join(byCode["weak_security_defaults"].Examples, ","), "SSH 主机密钥") {
 		t.Fatalf("弱安全默认项不应重复 SSH 主机密钥姿态: %+v", byCode["weak_security_defaults"])
 	}
@@ -273,6 +284,9 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 		"/api/v1/secret",
 		"/api/v1/maintain",
 		"raw-audit-agent",
+		"change-me-in-production",
+		"change-me-encryption-key",
+		"change-me-admin-password",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("安全风险摘要不应暴露敏感字段 %q，实际: %s", forbidden, body)

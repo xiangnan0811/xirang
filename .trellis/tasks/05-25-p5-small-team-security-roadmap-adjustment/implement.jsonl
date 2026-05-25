@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-small-team-security-roadmap-adjustment/prd.md","reason":"Defines the adjusted small-team P5 roadmap and selected deployment secret posture slice."}
+{"file":".trellis/tasks/05-25-p5-small-team-security-roadmap-adjustment/research/small-team-roadmap.md","reason":"Summarizes why enterprise P5 items move out of default scope and why deployment secret posture is next."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend handler changes must preserve existing response/error conventions."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Security posture implementation must avoid logging raw secrets or sensitive runtime values."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend API mapper changes must keep risk-code normalization type-safe."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Settings risk-summary UI must remain accessible and read-only."}

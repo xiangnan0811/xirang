@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-small-team-security-roadmap-adjustment/prd.md","reason":"Check implementation against adjusted small-team scope, roadmap decisions, and acceptance criteria."}
+{"file":".trellis/tasks/05-25-p5-small-team-security-roadmap-adjustment/research/small-team-roadmap.md","reason":"Check that enterprise-grade directions stay deferred and the first slice stays low-burden/report-only."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify backend errors and responses remain consistent."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no raw secret/env values are logged or returned."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify frontend risk-code mapping remains type-safe."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify Settings UI remains accessible and read-only."}
