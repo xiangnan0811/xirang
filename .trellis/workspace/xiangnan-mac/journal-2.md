@@ -731,3 +731,36 @@ Added a report-only SSH host-key trust posture item to the Settings security-ris
 ### Next Steps
 
 - None - task complete
+
+
+## Session 81: P5 audit log integrity posture
+
+**Date**: 2026-05-25
+**Task**: P5 audit log integrity posture
+**Branch**: `security/p5-settings-audit-posture`
+
+### Summary
+
+Added a report-only Settings security-risk summary signal for aggregate audit log hash-chain integrity posture, with sanitized backend tests, frontend mapper/i18n coverage, Trellis check, and full backend/frontend validation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a9a260` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
