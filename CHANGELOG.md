@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.34](https://github.com/xiangnan0811/xirang/compare/v0.43.33...v0.43.34) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** improve risk summary scanability ([454b2e9](https://github.com/xiangnan0811/xirang/commit/454b2e9289595a841930ee243abff03b3d26d492))
+
 ## [0.43.33](https://github.com/xiangnan0811/xirang/compare/v0.43.32...v0.43.33) (2026-05-25)
 
 
