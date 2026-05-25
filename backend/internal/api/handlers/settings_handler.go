@@ -591,8 +591,8 @@ func credentialActionLabel(action string) string {
 	}
 }
 
-func (h *SettingsHandler) auditLogIntegrityPostureRiskItem() (securityRiskItem, error) {
-	item := securityRiskItem{
+func (h *SettingsHandler) auditLogIntegrityPostureRiskItem() (item securityRiskItem, err error) {
+	item = securityRiskItem{
 		Code:        "audit_log_integrity_posture",
 		Severity:    "info",
 		Title:       "审计日志完整性姿态",
@@ -611,7 +611,11 @@ func (h *SettingsHandler) auditLogIntegrityPostureRiskItem() (securityRiskItem, 
 	if err != nil {
 		return item, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	missingEntryHash := int64(0)
 	missingPrevHash := int64(0)
