@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.29](https://github.com/xiangnan0811/xirang/compare/v0.43.28...v0.43.29) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report SSH host-key trust posture ([c6590eb](https://github.com/xiangnan0811/xirang/commit/c6590ebbe76b8de7525c14c419a99e6b3688d143))
+
 ## [0.43.28](https://github.com/xiangnan0811/xirang/compare/v0.43.27...v0.43.28) (2026-05-25)
 
 
