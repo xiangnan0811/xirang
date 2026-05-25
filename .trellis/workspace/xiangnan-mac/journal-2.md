@@ -764,3 +764,39 @@ Added a report-only Settings security-risk summary signal for aggregate audit lo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 82: Report deployment secret posture
+
+**Date**: 2026-05-25
+**Task**: Report deployment secret posture
+**Branch**: `security/p5-small-team-roadmap-adjustment`
+
+### Summary
+
+Adjusted the remaining P5 roadmap for personal/small-team users and shipped a report-only deployment secret posture card in Settings security risk summary, with backend/frontend tests and full validation.
+
+### Main Changes
+
+- Re-ranked the remaining P5 roadmap for personal and small-team deployments.
+- Added the `deployment_secret_posture` Settings security-risk summary item with bounded generic examples.
+- Reused backend config weak-secret checks and added backend/frontend coverage for the new advisory card.
+- Corrected the PR title to Conventional Commits format after the initial CI title check used the original non-conforming title.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6031366` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

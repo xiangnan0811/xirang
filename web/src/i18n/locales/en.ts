@@ -2606,6 +2606,10 @@ const en = {
             title: "SSH host-key trust posture",
             description: "SSH host-key checking should stay enabled, and first-seen auto-accept should be reviewed against the deployment boundary.",
           },
+          deployment_secret_posture: {
+            title: "Deployment secret posture",
+            description: "Personal and small-team deployments should use explicit runtime mode and strong random secrets before exposing the control plane.",
+          },
           weak_security_defaults: {
             title: "Weak security defaults",
             description: "These switches are advisory only; tighten them according to your deployment boundary.",

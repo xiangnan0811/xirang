@@ -44,7 +44,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 8, categories: 5 },
+      summary: { totalRisks: 11, categories: 6 },
       items: [
         {
           code: "root_ssh_users",
@@ -87,6 +87,14 @@ describe("SystemTab security risk summary", () => {
           examples: ["Strict host-key checking disabled"],
         },
         {
+          code: "deployment_secret_posture",
+          severity: "warning",
+          title: "Deployment secret posture",
+          description: "deployment secrets",
+          count: 3,
+          examples: ["Development mode enabled"],
+        },
+        {
           code: "weak_security_defaults",
           severity: "info",
           title: "Weak defaults",
@@ -117,6 +125,8 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByText("Audit log hash-chain gap detected")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "SSH host-key trust posture" })).toBeInTheDocument();
     expect(screen.getByText("Strict host-key checking disabled")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Deployment secret posture" })).toBeInTheDocument();
+    expect(screen.getByText("Development mode enabled")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
     const riskSummarySection = riskSummaryTitle.closest("section");

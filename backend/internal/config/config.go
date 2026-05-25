@@ -12,30 +12,30 @@ import (
 )
 
 type Config struct {
-	ListenAddr                string
-	DBType                    string
-	SQLitePath                string
-	PostgresDSN               string
-	JWTSecret                 string
-	JWTTTL                    time.Duration
-	RsyncBinary               string
-	TaskTrafficRetentionDays  int
-	TaskRunRetentionDays      int
-	AllowedOrigins            []string
-	WSAllowEmptyOrigin        bool
-	LoginRateLimit            int
-	LoginRateWindow           time.Duration
-	LoginFailLockThreshold    int
-	LoginFailLockDuration     time.Duration
-	NodeProbeInterval         time.Duration
-	NodeProbeFailThreshold    int
-	NodeProbeConcurrency      int
-	RetentionCheckInterval    time.Duration
-	BackupStorageMinFreeGB    int
-	BackupStorageMaxUsagePct  int
-	MetricsToken              string
-	MetricsRateLimit          int
-	MetricsRateWindow         time.Duration
+	ListenAddr               string
+	DBType                   string
+	SQLitePath               string
+	PostgresDSN              string
+	JWTSecret                string
+	JWTTTL                   time.Duration
+	RsyncBinary              string
+	TaskTrafficRetentionDays int
+	TaskRunRetentionDays     int
+	AllowedOrigins           []string
+	WSAllowEmptyOrigin       bool
+	LoginRateLimit           int
+	LoginRateWindow          time.Duration
+	LoginFailLockThreshold   int
+	LoginFailLockDuration    time.Duration
+	NodeProbeInterval        time.Duration
+	NodeProbeFailThreshold   int
+	NodeProbeConcurrency     int
+	RetentionCheckInterval   time.Duration
+	BackupStorageMinFreeGB   int
+	BackupStorageMaxUsagePct int
+	MetricsToken             string
+	MetricsRateLimit         int
+	MetricsRateWindow        time.Duration
 }
 
 func Load() (Config, error) {
@@ -55,14 +55,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddr:     util.GetEnvOrDefault("SERVER_ADDR", ":8080"),
-		DBType:         strings.ToLower(util.GetEnvOrDefault("DB_TYPE", "sqlite")),
-		SQLitePath:     util.GetEnvOrDefault("SQLITE_PATH", "./xirang.db"),
-		PostgresDSN:    util.GetEnvOrDefault("DB_DSN", ""),
-		JWTSecret:      jwtSecret,
-		RsyncBinary:    util.GetEnvOrDefault("RSYNC_BINARY", "rsync"),
+		ListenAddr:               util.GetEnvOrDefault("SERVER_ADDR", ":8080"),
+		DBType:                   strings.ToLower(util.GetEnvOrDefault("DB_TYPE", "sqlite")),
+		SQLitePath:               util.GetEnvOrDefault("SQLITE_PATH", "./xirang.db"),
+		PostgresDSN:              util.GetEnvOrDefault("DB_DSN", ""),
+		JWTSecret:                jwtSecret,
+		RsyncBinary:              util.GetEnvOrDefault("RSYNC_BINARY", "rsync"),
 		TaskTrafficRetentionDays: 8,
-		AllowedOrigins: splitCSV(allowedOriginsRaw),
+		AllowedOrigins:           splitCSV(allowedOriginsRaw),
 	}
 
 	retentionDaysRaw := util.GetEnvOrDefault("TASK_TRAFFIC_RETENTION_DAYS", "8")
@@ -193,11 +193,11 @@ func Load() (Config, error) {
 	}
 
 	if !util.IsDevelopmentEnv() {
-		if isWeakJWTSecret(cfg.JWTSecret) {
+		if IsWeakJWTSecret(cfg.JWTSecret) {
 			return Config{}, fmt.Errorf("必须配置强 JWT_SECRET（仅 APP_ENV=development 可使用默认值）")
 		}
 		encryptionKey := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_KEY"))
-		if isWeakDataEncryptionKey(encryptionKey) {
+		if IsWeakDataEncryptionKey(encryptionKey) {
 			return Config{}, fmt.Errorf("必须配置强 DATA_ENCRYPTION_KEY（仅 APP_ENV=development 可省略）")
 		}
 	}
@@ -227,36 +227,36 @@ func splitCSV(raw string) []string {
 
 // isProductionEnv 和 isDevelopmentEnv 已迁移至 util.IsProductionEnv / util.IsDevelopmentEnv
 
-func isWeakJWTSecret(value string) bool {
+func IsWeakJWTSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || len(trimmed) < 16 {
 		return true
 	}
 	weakSet := map[string]struct{}{
-		"xirang-dev-secret":                    {},
-		"xirang-docker-secret":                 {},
-		"change-me":                            {},
-		"change-me-in-production":              {},
-		"replace-with-a-strong-random-secret":  {},
-		"please-change-this-jwt-secret":        {},
-		"CHANGE-ME-use-a-strong-jwt-secret":    {},
+		"xirang-dev-secret":                   {},
+		"xirang-docker-secret":                {},
+		"change-me":                           {},
+		"change-me-in-production":             {},
+		"replace-with-a-strong-random-secret": {},
+		"please-change-this-jwt-secret":       {},
+		"CHANGE-ME-use-a-strong-jwt-secret":   {},
 	}
 	_, weak := weakSet[trimmed]
 	return weak
 }
 
-func isWeakDataEncryptionKey(value string) bool {
+func IsWeakDataEncryptionKey(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || len(trimmed) < 16 {
 		return true
 	}
 	weakSet := map[string]struct{}{
-		"xirang-dev-encryption-key-change-me":      {},
-		"change-me":                                {},
-		"change-me-encryption-key":                 {},
-		"replace-with-32-byte-base64-key":          {},
-		"please-change-this-encryption-key":        {},
-		"CHANGE-ME-use-a-strong-encryption-key":    {},
+		"xirang-dev-encryption-key-change-me":   {},
+		"change-me":                             {},
+		"change-me-encryption-key":              {},
+		"replace-with-32-byte-base64-key":       {},
+		"please-change-this-encryption-key":     {},
+		"CHANGE-ME-use-a-strong-encryption-key": {},
 	}
 	_, weak := weakSet[trimmed]
 	return weak

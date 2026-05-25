@@ -2606,6 +2606,10 @@ const zh = {
             title: "SSH 主机密钥信任姿态",
             description: "SSH 主机密钥校验应保持启用，并谨慎评估首次连接自动接受未知主机密钥的部署边界。",
           },
+          deployment_secret_posture: {
+            title: "部署密钥姿态",
+            description: "个人或小团队部署也应在暴露控制面前明确运行环境，并使用强随机密钥。",
+          },
           weak_security_defaults: {
             title: "弱安全默认项",
             description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",

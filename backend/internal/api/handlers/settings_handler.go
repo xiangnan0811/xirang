@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
@@ -253,6 +254,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		privilegedAuthItem,
 		auditIntegrityItem,
 		hostKeyTrustItem,
+		deploymentSecretPostureRiskItem(),
 		weakItem,
 	}, nil
 }
@@ -695,6 +697,55 @@ func (h *SettingsHandler) sshHostKeyTrustPostureRiskItem() securityRiskItem {
 		item.Severity = "info"
 	}
 	return item
+}
+
+func deploymentSecretPostureRiskItem() securityRiskItem {
+	findings := []deploymentSecretPostureFinding{
+		{risky: util.IsDevelopmentEnv(), label: "运行环境仍处于开发模式"},
+		{risky: config.IsWeakJWTSecret(os.Getenv("JWT_SECRET")), label: "JWT 签名密钥缺失或强度不足"},
+		{risky: config.IsWeakDataEncryptionKey(os.Getenv("DATA_ENCRYPTION_KEY")), label: "数据加密密钥缺失或强度不足"},
+		{risky: isPlaceholderAdminInitialPassword(os.Getenv("ADMIN_INITIAL_PASSWORD")), label: "初始管理员密码仍为占位值"},
+		{risky: strings.TrimSpace(os.Getenv("APP_ENV")) == "", label: "APP_ENV 未明确声明运行环境"},
+	}
+
+	examples := make([]string, 0, maxSecurityRiskExamples)
+	var count int64
+	for _, finding := range findings {
+		if !finding.risky {
+			continue
+		}
+		count++
+		if len(examples) < maxSecurityRiskExamples {
+			examples = append(examples, finding.label)
+		}
+	}
+
+	item := securityRiskItem{
+		Code:        "deployment_secret_posture",
+		Severity:    "warning",
+		Title:       "部署密钥姿态",
+		Description: "个人或小团队部署也应使用明确环境和强随机密钥，避免以开发默认值暴露控制面。",
+		Count:       count,
+		Examples:    examples,
+	}
+	if item.Count == 0 {
+		item.Severity = "info"
+	}
+	return item
+}
+
+type deploymentSecretPostureFinding struct {
+	risky bool
+	label string
+}
+
+func isPlaceholderAdminInitialPassword(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "change-me", "change-me-admin-password", "admin", "password", "please-change-me":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *SettingsHandler) weakSecurityDefaultsRiskItem() securityRiskItem {
