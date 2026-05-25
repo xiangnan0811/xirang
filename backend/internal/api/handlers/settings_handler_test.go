@@ -224,8 +224,15 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["privileged_users_without_totp"].Count != 2 || !strings.Contains(privilegedExamples, "risk-admin") || !strings.Contains(privilegedExamples, "risk-operator") || strings.Contains(privilegedExamples, "risk-viewer") || strings.Contains(privilegedExamples, "risk-ready-admin") {
 		t.Fatalf("高权限用户强认证风险不符合预期: %+v", byCode["privileged_users_without_totp"])
 	}
-	if byCode["weak_security_defaults"].Count == 0 {
-		t.Fatalf("弱安全默认项应至少包含测试环境设置，实际: %+v", byCode["weak_security_defaults"])
+	hostKeyExamples := strings.Join(byCode["ssh_host_key_trust_posture"].Examples, ",")
+	if byCode["ssh_host_key_trust_posture"].Count != 1 || !strings.Contains(hostKeyExamples, "SSH 主机密钥校验已关闭") {
+		t.Fatalf("SSH 主机密钥信任姿态风险不符合预期: %+v", byCode["ssh_host_key_trust_posture"])
+	}
+	if strings.Contains(hostKeyExamples, "10.10.0.") || strings.Contains(hostKeyExamples, "/") || strings.Contains(hostKeyExamples, "SHA256:") {
+		t.Fatalf("SSH 主机密钥信任姿态不应暴露主机、路径或指纹: %+v", byCode["ssh_host_key_trust_posture"])
+	}
+	if strings.Contains(strings.Join(byCode["weak_security_defaults"].Examples, ","), "SSH 主机密钥") {
+		t.Fatalf("弱安全默认项不应重复 SSH 主机密钥姿态: %+v", byCode["weak_security_defaults"])
 	}
 	body := resp.Body.String()
 	for _, forbidden := range []string{

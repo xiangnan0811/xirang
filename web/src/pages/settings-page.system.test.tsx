@@ -71,6 +71,14 @@ describe("SystemTab security risk summary", () => {
           examples: ["admin（admin）", "operator（operator）"],
         },
         {
+          code: "ssh_host_key_trust_posture",
+          severity: "warning",
+          title: "SSH host-key trust posture",
+          description: "host-key posture",
+          count: 1,
+          examples: ["Strict host-key checking disabled"],
+        },
+        {
           code: "weak_security_defaults",
           severity: "info",
           title: "Weak defaults",
@@ -97,6 +105,8 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByRole("heading", { name: "Privileged users without 2FA" })).toBeInTheDocument();
     expect(screen.getByText("admin（admin）")).toBeInTheDocument();
     expect(screen.getByText("operator（operator）")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "SSH host-key trust posture" })).toBeInTheDocument();
+    expect(screen.getByText("Strict host-key checking disabled")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
     expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

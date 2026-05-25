@@ -94,13 +94,13 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 	rawPath := strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts"))
 	knownHostsPath, err := util.ExpandHomePath(rawPath)
 	if err != nil {
-		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败: path=%s, err=%v", rawPath, err)
+		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
 	}
 	if strings.TrimSpace(knownHostsPath) == "" {
 		return nil, fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
 	}
 	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
-		return nil, fmt.Errorf("准备 known_hosts 失败: path=%s, err=%v", knownHostsPath, err)
+		return nil, fmt.Errorf("准备 known_hosts 失败")
 	}
 
 	callback, err := knownhosts.New(knownHostsPath)
@@ -113,20 +113,23 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
 				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
 				if !autoAccept {
-					return fmt.Errorf("未知主机密钥被拒绝(host=%s)，当前已禁用自动接受(SSH_AUTO_ACCEPT_NEW_HOSTS=false)", hostname)
+					return fmt.Errorf("未知主机密钥被拒绝，当前已禁用自动接受(SSH_AUTO_ACCEPT_NEW_HOSTS=false)")
 				}
-				log.Printf("info: 自动接受未知主机密钥(host=%s)，已写入 known_hosts；如需禁用可设置 SSH_AUTO_ACCEPT_NEW_HOSTS=false", hostname)
+				log.Printf("info: 自动接受未知主机密钥并写入 known_hosts；如需禁用可设置 SSH_AUTO_ACCEPT_NEW_HOSTS=false")
 				if appendErr := AppendKnownHost(knownHostsPath, hostname, key); appendErr != nil {
-					return fmt.Errorf("knownhosts: accept new host failed: %w", appendErr)
+					return fmt.Errorf("knownhosts: accept new host failed")
 				}
 				refreshedCallback, refreshErr := knownhosts.New(knownHostsPath)
 				if refreshErr != nil {
 					return fmt.Errorf("加载 known_hosts 失败")
 				}
 				callback = refreshedCallback
-				return callback(hostname, remote, key)
+				if verifyErr := callback(hostname, remote, key); verifyErr != nil {
+					return fmt.Errorf("knownhosts: host key verification failed")
+				}
+				return nil
 			}
-			return callbackErr
+			return fmt.Errorf("knownhosts: host key verification failed")
 		}
 		return nil
 	}, nil

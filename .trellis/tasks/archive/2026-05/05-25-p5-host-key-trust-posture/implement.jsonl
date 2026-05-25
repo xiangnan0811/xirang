@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/05-25-p5-host-key-trust-posture/prd.md","reason":"Scope boundaries, acceptance criteria, and selected host-key posture MVP."}
+{"file":".trellis/tasks/05-25-p5-host-key-trust-posture/research/host-key-trust-posture.md","reason":"Code evidence and research mapping for env/file-backed host-key trust posture."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Backend response behavior and sensitive diagnostic disclosure constraints."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"No forbidden sensitive material in logs or audit output."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend Settings risk-code mapper and normalization contracts."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Accessible Settings advisory rendering baseline."}

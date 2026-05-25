@@ -2598,6 +2598,10 @@ const zh = {
             title: "高权限用户未启用两步验证",
             description: "管理员和操作员账号应启用两步验证，降低账号凭据泄露后的控制面风险。",
           },
+          ssh_host_key_trust_posture: {
+            title: "SSH 主机密钥信任姿态",
+            description: "SSH 主机密钥校验应保持启用，并谨慎评估首次连接自动接受未知主机密钥的部署边界。",
+          },
           weak_security_defaults: {
             title: "弱安全默认项",
             description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",

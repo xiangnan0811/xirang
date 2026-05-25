@@ -698,3 +698,36 @@ Audited P5 architecture security candidates and implemented the first behavior-c
 ### Next Steps
 
 - None - task complete
+
+
+## Session 80: P5 host-key trust posture
+
+**Date**: 2026-05-25
+**Task**: P5 host-key trust posture
+**Branch**: `security/p5-host-key-trust-posture`
+
+### Summary
+
+Added a report-only SSH host-key trust posture item to the Settings security-risk summary, removed duplicate SSH weak-default examples, sanitized host-key verification errors/logs, updated frontend mappings/i18n/tests, and validated backend/frontend checks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b77abb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
