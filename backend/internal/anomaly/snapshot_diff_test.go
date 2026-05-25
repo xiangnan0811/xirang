@@ -1,13 +1,17 @@
 package anomaly
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"strings"
 	"testing"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
+
+	"github.com/rs/zerolog"
 )
 
 func TestCountRansomSuffixHits(t *testing.T) {
@@ -322,6 +326,53 @@ func TestShellEscapeArg(t *testing.T) {
 				t.Errorf("shellEscapeArg(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResticSnapshotsJSONParseFailureLogHidesRawOutput(t *testing.T) {
+	var buf bytes.Buffer
+	previous := logger.Log
+	logger.Log = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { logger.Log = previous })
+
+	rawOutput := strings.Join([]string{
+		"Fatal: unable to open repo sftp://FAKE_ANOMALY_TOKEN_FOR_TEST_ONLY@fake-host-for-test-only.example/srv/backups/FAKE_ANOMALY_PATH_FOR_TEST_ONLY",
+		"repository password FAKE_ANOMALY_PASSWORD_FOR_TEST_ONLY rejected",
+		"RESTIC_PASSWORD=FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY",
+	}, "\n")
+	_, err := parseResticSnapshotsJSON(rawOutput)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+
+	logResticSnapshotsJSONParseFailure(42, err, rawOutput)
+	logOutput := buf.String()
+
+	for _, forbidden := range []string{
+		"FAKE_ANOMALY_TOKEN_FOR_TEST_ONLY",
+		"fake-host-for-test-only.example",
+		"/srv/backups/FAKE_ANOMALY_PATH_FOR_TEST_ONLY",
+		"FAKE_ANOMALY_PASSWORD_FOR_TEST_ONLY",
+		"FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY",
+		"sftp://",
+		"RESTIC_PASSWORD=",
+		"Fatal: unable to open repo",
+	} {
+		if strings.Contains(logOutput, forbidden) {
+			t.Fatalf("parse failure log must not contain raw output fragment %q: %s", forbidden, logOutput)
+		}
+	}
+	for _, want := range []string{
+		`"module":"anomaly"`,
+		`"task_id":42`,
+		`"stage":"snapshots_json_parse"`,
+		`"output_present":true`,
+		`"error":"解析 restic snapshots JSON 失败`,
+		`"message":"解析 restic snapshots JSON 失败"`,
+	} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("parse failure log missing safe field %s: %s", want, logOutput)
+		}
 	}
 }
 

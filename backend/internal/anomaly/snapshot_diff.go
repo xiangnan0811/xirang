@@ -264,6 +264,15 @@ func parseResticSnapshotsJSON(output string) ([]string, error) {
 	return ids, nil
 }
 
+func logResticSnapshotsJSONParseFailure(taskID uint, parseErr error, output string) {
+	logger.Module("anomaly").Debug().
+		Uint("task_id", taskID).
+		Str("stage", "snapshots_json_parse").
+		Bool("output_present", strings.TrimSpace(output) != "").
+		Err(parseErr).
+		Msg("解析 restic snapshots JSON 失败")
+}
+
 // shellEscapeArg 将字符串包裹在单引号中，防止 shell 注入。
 func shellEscapeArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
@@ -319,11 +328,7 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 	snapIDs, err := parseResticSnapshotsJSON(snapOutput)
 	if err != nil {
 		// JSON 解析失败说明仓库可能为空或输出非预期 — 静默跳过
-		logger.Module("anomaly").Debug().
-			Uint("task_id", task.ID).
-			Err(err).
-			Str("output", snapOutput).
-			Msg("解析 restic snapshots JSON 失败")
+		logResticSnapshotsJSONParseFailure(task.ID, err, snapOutput)
 		return nil, nil
 	}
 	if len(snapIDs) < 2 {
