@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 84
+- **Total Sessions**: 85
 - **Last Active**: 2026-05-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~868 | Active |
+| `journal-2.md` | ~901 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 85 | 2026-05-25 | P5 risk summary usability | `7bd6f6a` | `security/p5-risk-summary-usability` |
 | 84 | 2026-05-25 | P5 admin recovery posture | `2dc1faf` | `security/p5-emergency-access-posture` |
 | 83 | 2026-05-25 | P5 backup restore posture | `9dca922` | `security/p5-backup-restore-posture` |
 | 82 | 2026-05-25 | Report deployment secret posture | `6031366` | `security/p5-small-team-roadmap-adjustment` |
