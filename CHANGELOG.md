@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.30](https://github.com/xiangnan0811/xirang/compare/v0.43.29...v0.43.30) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report audit log integrity posture ([#263](https://github.com/xiangnan0811/xirang/issues/263)) ([ac720bc](https://github.com/xiangnan0811/xirang/commit/ac720bc6db7b11b312787fd80d3f6db15d380f66))
+
 ## [0.43.29](https://github.com/xiangnan0811/xirang/compare/v0.43.28...v0.43.29) (2026-05-25)
 
 
