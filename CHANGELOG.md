@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.32](https://github.com/xiangnan0811/xirang/compare/v0.43.31...v0.43.32) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report backup restore posture ([#267](https://github.com/xiangnan0811/xirang/issues/267)) ([6eb146c](https://github.com/xiangnan0811/xirang/commit/6eb146c2544fbc8d1fb52016976ae97261de1239))
+
 ## [0.43.31](https://github.com/xiangnan0811/xirang/compare/v0.43.30...v0.43.31) (2026-05-25)
 
 
