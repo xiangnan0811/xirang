@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/prd.md","reason":"Verify implementation matches the single selected slice and excludes documented non-goals."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/frontend-residual-closeout.md","reason":"Verify the raw private-key state residual is fixed without changing visible behavior."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/backend-residual-closeout.md","reason":"Verify backend candidates were not accidentally pulled into this frontend-only slice."}
+{"file":".trellis/tasks/05-25-p4-closeout-residual-security-review/research/credential-executor-closeout.md","reason":"Verify architecture-level exclusions and closeout recommendation remain respected."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check state cleanup, late async callback guards, and browser storage safety."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check TypeScript typing and test fixtures for safe fake secret material."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check component lifecycle behavior and focused tests."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check dialog close/reset behavior preserves accessibility."}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle2, FileUp, Upload, XCircle } from "lucide-react";
 import { toast } from "@/components/ui/toast-sonner";
@@ -28,7 +28,6 @@ interface ParsedEntry {
   name: string;
   username: string;
   keyType: string;
-  privateKey: string;
   disabled: boolean;
   expiresAt: string;
   allowedPurposes: string;
@@ -51,10 +50,11 @@ interface SSHKeyBatchImportDialogProps {
 function validateEntries(
   raw: unknown,
   existingNames: Set<string>,
-): ParsedEntry[] {
-  if (!Array.isArray(raw)) return [];
+): { entries: ParsedEntry[]; privateKeys: Map<number, string> } {
+  if (!Array.isArray(raw)) return { entries: [], privateKeys: new Map() };
 
-  return raw.map((item, idx): ParsedEntry => {
+  const privateKeys = new Map<number, string>();
+  const entries = raw.map((item, idx): ParsedEntry => {
     const index = idx + 1;
 
     // 基本类型校验
@@ -64,7 +64,6 @@ function validateEntries(
         name: "",
         username: "",
         keyType: "",
-        privateKey: "",
         disabled: false,
         expiresAt: "",
         allowedPurposes: "",
@@ -92,7 +91,6 @@ function validateEntries(
         name,
         username,
         keyType,
-        privateKey,
         disabled,
         expiresAt,
         allowedPurposes,
@@ -109,7 +107,6 @@ function validateEntries(
         name,
         username,
         keyType,
-        privateKey,
         disabled,
         expiresAt,
         allowedPurposes,
@@ -119,12 +116,13 @@ function validateEntries(
       };
     }
 
+    privateKeys.set(index, privateKey);
+
     return {
       index,
       name,
       username,
       keyType,
-      privateKey,
       disabled,
       expiresAt,
       allowedPurposes,
@@ -133,6 +131,8 @@ function validateEntries(
       status: "valid",
     };
   });
+
+  return { entries, privateKeys };
 }
 
 // ── 组件 ──
@@ -151,24 +151,88 @@ export function SSHKeyBatchImportDialog({
   const [entries, setEntries] = useState<ParsedEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [parseError, setParseError] = useState("");
+  const privateKeysRef = useRef<Map<number, string>>(new Map());
+  const fileReaderSequenceRef = useRef(0);
+  const activeReaderRef = useRef<FileReader | null>(null);
+  const openRef = useRef(open);
+  const resetTimerRef = useRef<number | null>(null);
 
-  // 打开时重置所有状态
-  useEffect(() => {
-    if (open) {
-      setPhase("idle");
-      setEntries([]);
-      setDragOver(false);
-      setParseError("");
+  const cancelScheduledReset = useCallback(() => {
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
     }
-  }, [open]);
+  }, []);
 
-  const existingNamesSet = new Set(existingKeyNames);
+  const discardActiveReader = useCallback(() => {
+    fileReaderSequenceRef.current += 1;
+
+    const activeReader = activeReaderRef.current;
+    if (activeReader && activeReader.readyState === FileReader.LOADING) {
+      activeReader.abort();
+    }
+    activeReaderRef.current = null;
+  }, []);
+
+  const clearParsedState = useCallback(() => {
+    privateKeysRef.current.clear();
+    setPhase("idle");
+    setEntries([]);
+    setDragOver(false);
+    setParseError("");
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const resetState = useCallback(() => {
+    cancelScheduledReset();
+    discardActiveReader();
+    clearParsedState();
+  }, [cancelScheduledReset, clearParsedState, discardActiveReader]);
+
+  useEffect(() => {
+    openRef.current = open;
+
+    if (open) {
+      return;
+    }
+
+    discardActiveReader();
+    privateKeysRef.current.clear();
+    resetTimerRef.current = window.setTimeout(() => {
+      resetTimerRef.current = null;
+      clearParsedState();
+    }, 0);
+  }, [cancelScheduledReset, clearParsedState, discardActiveReader, open]);
+
+  useEffect(() => () => {
+    openRef.current = false;
+    cancelScheduledReset();
+    discardActiveReader();
+  }, [cancelScheduledReset, discardActiveReader]);
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        openRef.current = false;
+        resetState();
+      }
+      onOpenChange(nextOpen);
+    },
+    [onOpenChange, resetState],
+  );
+
+  const existingNamesSet = useMemo(() => new Set(existingKeyNames), [existingKeyNames]);
   const validEntries = entries.filter((e) => e.status === "valid");
 
   // ── 文件处理 ──
 
   const processFile = useCallback(
     (file: File) => {
+      discardActiveReader();
+      const requestSequence = fileReaderSequenceRef.current;
       setParseError("");
 
       if (!file.name.endsWith(".json")) {
@@ -182,31 +246,43 @@ export function SSHKeyBatchImportDialog({
       }
 
       const reader = new FileReader();
+      activeReaderRef.current = reader;
+
+      const shouldIgnoreReaderResult = () => (
+        !openRef.current ||
+        fileReaderSequenceRef.current !== requestSequence ||
+        activeReaderRef.current !== reader
+      );
+
       reader.onload = (e) => {
+        if (shouldIgnoreReaderResult()) return;
+
+        activeReaderRef.current = null;
         const text = e.target?.result;
         if (typeof text !== "string") return;
 
         try {
           const parsed: unknown = JSON.parse(text);
           const result = validateEntries(parsed, existingNamesSet);
-          if (result.length === 0) {
+          if (result.entries.length === 0) {
             setParseError(t("sshKeys.formatError"));
             return;
           }
-          setEntries(result);
+          privateKeysRef.current = result.privateKeys;
+          setEntries(result.entries);
           setPhase("preview");
         } catch {
           setParseError(t("sshKeys.formatError"));
         }
       };
       reader.onerror = () => {
+        if (shouldIgnoreReaderResult()) return;
+        activeReaderRef.current = null;
         setParseError(t("sshKeys.fileReadFailed"));
       };
       reader.readAsText(file);
     },
-    // existingNamesSet 每次渲染都是新引用，用 existingKeyNames 作为依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, existingKeyNames],
+    [discardActiveReader, existingNamesSet, t],
   );
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -242,7 +318,7 @@ export function SSHKeyBatchImportDialog({
       name: e.name,
       username: e.username,
       keyType: parseSSHKeyType(e.keyType),
-      privateKey: e.privateKey,
+      privateKey: privateKeysRef.current.get(e.index) ?? "",
       disabled: e.disabled,
       expiresAt: e.expiresAt,
       allowedPurposes: e.allowedPurposes,
@@ -254,9 +330,8 @@ export function SSHKeyBatchImportDialog({
       const results = await createSSHKeysApi().batchCreate(token, keys);
       const created = results.filter((r) => r.status === "created").length;
       toast.success(t("sshKeys.importSuccess", { count: created }));
-      setPhase("done");
       onImportComplete();
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("common.operationFailed"));
       // 回退到预览状态以便用户重试
@@ -295,7 +370,7 @@ export function SSHKeyBatchImportDialog({
   // ── 渲染 ──
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{t("sshKeys.batchImportTitle")}</DialogTitle>
@@ -407,10 +482,7 @@ export function SSHKeyBatchImportDialog({
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                  onClick={() => {
-                    setPhase("idle");
-                    setEntries([]);
-                  }}
+                  onClick={resetState}
                 >
                   <FileUp className="size-3.5" aria-hidden />
                   {t("sshKeys.dropOrUpload")}
@@ -421,7 +493,7 @@ export function SSHKeyBatchImportDialog({
         </DialogBody>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("common.cancel")}
           </Button>
           {(phase === "preview" || phase === "importing") && (
