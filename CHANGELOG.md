@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.35](https://github.com/xiangnan0811/xirang/compare/v0.43.34...v0.43.35) (2026-05-25)
+
+
+### 🐛 Bug Fixes
+
+* **security:** report weak local hardening defaults ([#273](https://github.com/xiangnan0811/xirang/issues/273)) ([cd71bdc](https://github.com/xiangnan0811/xirang/commit/cd71bdc65057c397bbef1f5cf5bb1ddd0f305f56))
+
 ## [0.43.34](https://github.com/xiangnan0811/xirang/compare/v0.43.33...v0.43.34) (2026-05-25)
 
 
