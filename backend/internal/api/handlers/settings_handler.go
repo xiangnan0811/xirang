@@ -231,6 +231,10 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	privilegedAuthItem, err := h.privilegedUsersWithoutTOTPRiskItem()
+	if err != nil {
+		return nil, err
+	}
 	weakItem := h.weakSecurityDefaultsRiskItem()
 	return []securityRiskItem{
 		rootItem,
@@ -241,6 +245,7 @@ func (h *SettingsHandler) securityRiskItems() ([]securityRiskItem, error) {
 		expiredInUseItem,
 		staleItem,
 		credentialOpsItem,
+		privilegedAuthItem,
 		weakItem,
 	}, nil
 }
@@ -428,6 +433,42 @@ func (h *SettingsHandler) staleSSHKeyRiskItem() (securityRiskItem, error) {
 			break
 		}
 		item.Examples = append(item.Examples, sshKeyNameExample(key))
+	}
+	return item, nil
+}
+
+func (h *SettingsHandler) privilegedUsersWithoutTOTPRiskItem() (securityRiskItem, error) {
+	item := securityRiskItem{
+		Code:        "privileged_users_without_totp",
+		Severity:    "warning",
+		Title:       "高权限用户未启用两步验证",
+		Description: "管理员和操作员账号应启用两步验证，以降低账号凭据泄露后的控制面风险。",
+	}
+	type privilegedUserRow struct {
+		ID       uint
+		Username string
+		Role     string
+	}
+	privilegedWithoutTOTP := func(db *gorm.DB) *gorm.DB {
+		return db.Model(&model.User{}).
+			Where("role IN ? AND totp_enabled = ?", []string{"admin", "operator"}, false)
+	}
+	if err := privilegedWithoutTOTP(h.db).Count(&item.Count).Error; err != nil {
+		return item, err
+	}
+	var rows []privilegedUserRow
+	if err := privilegedWithoutTOTP(h.db).
+		Select("id", "username", "role").
+		Order("id asc").
+		Limit(maxSecurityRiskExamples).
+		Find(&rows).Error; err != nil {
+		return item, err
+	}
+	for _, row := range rows {
+		item.Examples = append(item.Examples, privilegedUserExample(row.ID, row.Username, row.Role))
+	}
+	if item.Count == 0 {
+		item.Severity = "info"
 	}
 	return item, nil
 }
@@ -623,4 +664,12 @@ func keyUsageExample(keyID uint, keyName string, nodeCount int64) string {
 		name = fmt.Sprintf("SSH Key #%d", keyID)
 	}
 	return util.SanitizeMessage(fmt.Sprintf("%s（%d 个节点）", name, nodeCount))
+}
+
+func privilegedUserExample(userID uint, username string, role string) string {
+	name := strings.TrimSpace(username)
+	if name == "" {
+		name = fmt.Sprintf("User #%d", userID)
+	}
+	return util.SanitizeMessage(fmt.Sprintf("%s（%s）", name, role))
 }

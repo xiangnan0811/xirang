@@ -2594,6 +2594,10 @@ const zh = {
             title: "近期高风险凭据操作",
             description: "近期存在 SSH Key 导出、终端或批量任务等凭据使用事件，请结合审计记录复核。",
           },
+          privileged_users_without_totp: {
+            title: "高权限用户未启用两步验证",
+            description: "管理员和操作员账号应启用两步验证，降低账号凭据泄露后的控制面风险。",
+          },
           weak_security_defaults: {
             title: "弱安全默认项",
             description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",

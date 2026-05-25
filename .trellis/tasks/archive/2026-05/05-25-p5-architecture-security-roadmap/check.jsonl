@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/prd.md","reason":"Acceptance criteria and out-of-scope boundaries to verify."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/secret-broker-vault-kms.md","reason":"Confirm non-selected secret-custody directions remain roadmap follow-ups."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/ssh-session-command-controls.md","reason":"Confirm non-selected SSH/session/command directions remain roadmap follow-ups."}
+{"file":".trellis/tasks/05-25-p5-architecture-security-roadmap/research/strong-auth-device-policy.md","reason":"Verify selected strong-auth posture slice matches research recommendation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check backend response behavior and sensitive error exclusions."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check no forbidden sensitive material is logged or returned."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check mapper normalization and Settings risk-code behavior."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check rendered Settings advisory remains accessible."}

@@ -65,12 +65,22 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("migrate security risk tables: %v", err)
 	}
 	now := time.Now().UTC()
 	old := now.Add(-120 * 24 * time.Hour)
 	expiredAt := now.Add(-24 * time.Hour)
+	for _, user := range []model.User{
+		{Username: "risk-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: false, TOTPSecret: "FAKE_TOTP_SECRET_FOR_TEST_ONLY", RecoveryCodes: "FAKE_RECOVERY_CODE_FOR_TEST_ONLY"},
+		{Username: "risk-operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: false},
+		{Username: "risk-viewer", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "viewer", TOTPEnabled: false},
+		{Username: "risk-ready-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TOTPEnabled: true},
+	} {
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建用户失败: %v", err)
+		}
+	}
 	key := model.SSHKey{
 		Name:            "risk-shared-key",
 		Username:        "root",
@@ -210,6 +220,10 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	if byCode["recent_credential_operations"].Count != 6 || !strings.Contains(recentExamples, "SSH Key 导出") || !strings.Contains(recentExamples, "节点文件预览") || !strings.Contains(recentExamples, "Docker 卷发现") {
 		t.Fatalf("近期凭据操作风险不符合预期: %+v", byCode["recent_credential_operations"])
 	}
+	privilegedExamples := strings.Join(byCode["privileged_users_without_totp"].Examples, ",")
+	if byCode["privileged_users_without_totp"].Count != 2 || !strings.Contains(privilegedExamples, "risk-admin") || !strings.Contains(privilegedExamples, "risk-operator") || strings.Contains(privilegedExamples, "risk-viewer") || strings.Contains(privilegedExamples, "risk-ready-admin") {
+		t.Fatalf("高权限用户强认证风险不符合预期: %+v", byCode["privileged_users_without_totp"])
+	}
 	if byCode["weak_security_defaults"].Count == 0 {
 		t.Fatalf("弱安全默认项应至少包含测试环境设置，实际: %+v", byCode["weak_security_defaults"])
 	}
@@ -217,6 +231,8 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	for _, forbidden := range []string{
 		"PrivateKey",
 		"FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
+		"FAKE_TOTP_SECRET_FOR_TEST_ONLY",
+		"FAKE_RECOVERY_CODE_FOR_TEST_ONLY",
 		"FAKE_FILE_NAME_FOR_TEST_ONLY",
 		"FAKE_FILE_CONTENT_FOR_TEST_ONLY",
 		"FAKE_SFTP_OUTPUT_FOR_TEST_ONLY",
