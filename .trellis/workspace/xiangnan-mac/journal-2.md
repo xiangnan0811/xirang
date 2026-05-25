@@ -778,7 +778,10 @@ Adjusted the remaining P5 roadmap for personal/small-team users and shipped a re
 
 ### Main Changes
 
-(Add details)
+- Re-ranked the remaining P5 roadmap for personal and small-team deployments.
+- Added the `deployment_secret_posture` Settings security-risk summary item with bounded generic examples.
+- Reused backend config weak-secret checks and added backend/frontend coverage for the new advisory card.
+- Corrected the PR title to Conventional Commits format after the initial CI title check used the original non-conforming title.
 
 ### Git Commits
 
