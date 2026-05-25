@@ -2622,7 +2622,7 @@ const zh = {
           },
           weak_security_defaults: {
             title: "弱安全默认项",
-            description: "这些开关仅作为建议提示；请结合部署环境评估是否需要收紧。",
+            description: "这些本地硬化提示仅作为建议；请结合部署环境评估是否需要收紧。",
           },
         },
       },

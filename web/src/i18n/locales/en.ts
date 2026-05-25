@@ -2622,7 +2622,7 @@ const en = {
           },
           weak_security_defaults: {
             title: "Weak security defaults",
-            description: "These switches are advisory only; tighten them according to your deployment boundary.",
+            description: "These local-hardening hints are advisory only; tighten them according to your deployment boundary.",
           },
         },
       },

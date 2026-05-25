@@ -50,7 +50,7 @@ describe("SystemTab security risk summary", () => {
     apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
-      summary: { totalRisks: 17, categories: 8 },
+      summary: { totalRisks: 19, categories: 9 },
       items: [
         {
           code: "root_ssh_users",
@@ -118,11 +118,11 @@ describe("SystemTab security risk summary", () => {
         },
         {
           code: "weak_security_defaults",
-          severity: "info",
+          severity: "warning",
           title: "Weak defaults",
           description: "defaults",
-          count: 0,
-          examples: [],
+          count: 2,
+          examples: ["Metrics scraping endpoint lacks token protection", "JWT session lifetime is long"],
         },
       ],
     });
@@ -154,11 +154,12 @@ describe("SystemTab security risk summary", () => {
     expect(screen.getByRole("heading", { name: "Backup restore posture" })).toBeInTheDocument();
     expect(screen.getByText("No successful backup evidence")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Weak defaults" })).toBeInTheDocument();
-    expect(screen.getByText("settings.system.securityRisk.noExamples")).toBeInTheDocument();
+    expect(screen.getByText("Metrics scraping endpoint lacks token protection")).toBeInTheDocument();
+    expect(screen.getByText("JWT session lifetime is long")).toBeInTheDocument();
     const riskSummarySection = riskSummaryTitle.closest("section");
     expect(riskSummarySection).not.toBeNull();
     const riskSummary = within(riskSummarySection as HTMLElement);
-    expect(riskSummary.getByText(/^summary:17:8 · generated:/)).toBeInTheDocument();
+    expect(riskSummary.getByText(/^summary:19:9 · generated:/)).toBeInTheDocument();
     const headings = riskSummary.getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent);
     expect(headings).toEqual([
       "Backup restore posture",
@@ -166,10 +167,10 @@ describe("SystemTab security risk summary", () => {
       "Deployment secret posture",
       "Root SSH users",
       "Privileged users without 2FA",
+      "Weak defaults",
       "Broad scope SSH keys",
       "Admin recovery posture",
       "SSH host-key trust posture",
-      "Weak defaults",
     ]);
     expect(riskSummary.queryByRole("link")).not.toBeInTheDocument();
     expect(riskSummary.queryByRole("button")).not.toBeInTheDocument();

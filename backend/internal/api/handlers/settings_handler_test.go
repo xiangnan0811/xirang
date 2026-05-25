@@ -441,6 +441,40 @@ func TestSettingsSecurityRiskSummaryAdminRecoveryPostureInfoWhenHealthy(t *testi
 	}
 }
 
+func TestSettingsSecurityRiskSummaryWeakSecurityDefaultsReportsLocalHardeningSignals(t *testing.T) {
+	t.Setenv("WS_ALLOW_EMPTY_ORIGIN", "false")
+	t.Setenv("LOGIN_CAPTCHA_ENABLED", "true")
+	t.Setenv("LOGIN_SECOND_CAPTCHA_ENABLED", "true")
+	t.Setenv("METRICS_TOKEN", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "*")
+	t.Setenv("JWT_TTL", "72h")
+
+	item := NewSettingsHandler(nil, nil).weakSecurityDefaultsRiskItem()
+	examples := strings.Join(item.Examples, ",")
+	if item.Severity != "warning" || item.Count != 3 || !strings.Contains(examples, "Metrics 抓取端点未配置 token 保护") || !strings.Contains(examples, "CORS 允许来源包含通配符") || !strings.Contains(examples, "JWT 会话有效期偏长") {
+		t.Fatalf("弱安全默认项本地硬化信号不符合预期: %+v", item)
+	}
+	for _, forbidden := range []string{"*", "72h", "FAKE_METRICS_TOKEN_FOR_TEST_ONLY", "https://admin.example.com"} {
+		if strings.Contains(examples, forbidden) {
+			t.Fatalf("弱安全默认项不应暴露原始配置值 %q: %+v", forbidden, item)
+		}
+	}
+}
+
+func TestSettingsSecurityRiskSummaryWeakSecurityDefaultsInfoWhenHardened(t *testing.T) {
+	t.Setenv("WS_ALLOW_EMPTY_ORIGIN", "false")
+	t.Setenv("LOGIN_CAPTCHA_ENABLED", "true")
+	t.Setenv("LOGIN_SECOND_CAPTCHA_ENABLED", "true")
+	t.Setenv("METRICS_TOKEN", "FAKE_METRICS_TOKEN_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://admin.example.com")
+	t.Setenv("JWT_TTL", "8h")
+
+	item := NewSettingsHandler(nil, nil).weakSecurityDefaultsRiskItem()
+	if item.Severity != "info" || item.Count != 0 || len(item.Examples) != 0 {
+		t.Fatalf("健康弱安全默认项应为 info 且无风险: %+v", item)
+	}
+}
+
 func TestSettingsSecurityRiskSummaryBackupRestorePostureWarningWhenNoPolicies(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
 	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
