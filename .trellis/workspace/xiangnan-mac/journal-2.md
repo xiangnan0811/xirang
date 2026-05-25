@@ -800,3 +800,36 @@ Adjusted the remaining P5 roadmap for personal/small-team users and shipped a re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 83: P5 backup restore posture
+
+**Date**: 2026-05-25
+**Task**: P5 backup restore posture
+**Branch**: `security/p5-backup-restore-posture`
+
+### Summary
+
+Implemented a report-only backup_restore_posture Settings security-risk card for personal/small-team backup recoverability posture, backed by generic aggregate backup confidence and restore drill evidence. Verified backend tests/build, frontend check, Trellis review, and dev-server response smoke.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9dca922` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
