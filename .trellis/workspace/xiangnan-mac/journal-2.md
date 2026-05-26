@@ -932,3 +932,36 @@ Enhanced the existing weak_security_defaults Settings risk summary with report-o
 ### Next Steps
 
 - None - task complete
+
+
+## Session 87: P5 misoperation guardrails
+
+**Date**: 2026-05-26
+**Task**: P5 misoperation guardrails
+**Branch**: `security/p5-misoperation-guardrails`
+
+### Summary
+
+Added lightweight frontend guardrails for batch command execution and SSH key rotation, including impact reviews, typed count acknowledgements, generic destructive-command warnings, i18n updates, tests, Trellis check fixes, and frontend/UI validation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ff2f8c0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -87,7 +87,7 @@ describe("BatchCommandDialog", () => {
     useStepUpActionMock.lastOptions = undefined;
   });
 
-  it("requests node-scoped grant before creating a batch command without storing command material", async () => {
+  it("requires impact review acknowledgement before requesting grant and creating a multi-node command", async () => {
     const user = userEvent.setup();
     render(
       <BatchCommandDialog
@@ -102,6 +102,20 @@ describe("BatchCommandDialog", () => {
 
     await user.type(screen.getByLabelText("命令"), "df -h");
     await user.click(screen.getByRole("button", { name: "执行" }));
+
+    expect(screen.getByText("执行前复核影响")).toBeInTheDocument();
+    expect(screen.getByText("node-a")).toBeInTheDocument();
+    expect(screen.getByText("node-b")).toBeInTheDocument();
+    expect(requestBatchCommandCredentialGrantMock).not.toHaveBeenCalled();
+    expect(createBatchCommandMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+    expect(screen.getByText("请输入 2 以确认选中节点数。")).toBeInTheDocument();
+    expect(requestBatchCommandCredentialGrantMock).not.toHaveBeenCalled();
+    expect(createBatchCommandMock).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("输入 2 以确认选中节点数"), "2");
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
 
     await waitFor(() => expect(requestBatchCommandCredentialGrantMock).toHaveBeenCalledTimes(1));
     expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
@@ -127,5 +141,38 @@ describe("BatchCommandDialog", () => {
     expect(browserStorage).not.toContain("df -h");
     expect(browserStorage).not.toContain("step-up-marker");
     expect(browserStorage).not.toContain("active");
+  });
+
+  it("shows generic dangerous-command warnings without blocking confirmed execution", async () => {
+    const user = userEvent.setup();
+    render(
+      <BatchCommandDialog
+        open
+        onOpenChange={onOpenChangeMock}
+        nodes={nodes}
+        token="auth-marker"
+        defaultNodeIds={[1]}
+        onSuccess={onSuccessMock}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("命令"), "rm -rf /tmp/cache");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+
+    expect(screen.getByText("检测到的风险信号")).toBeInTheDocument();
+    expect(screen.getByText("递归或强制删除文件")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/确认选中节点数/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+
+    await waitFor(() => expect(createBatchCommandMock).toHaveBeenCalledTimes(1));
+    expect(apiClient.createBatchCommand).toHaveBeenCalledWith(
+      "auth-marker",
+      [1],
+      "rm -rf /tmp/cache",
+      undefined,
+      false,
+      "step-up-marker",
+    );
   });
 });

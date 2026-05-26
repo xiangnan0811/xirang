@@ -57,6 +57,7 @@ export function SSHKeyRotationWizard({
   const [results, setResults] = useState<NodeVerifyResult[]>([]);
   const [newFingerprint, setNewFingerprint] = useState("");
   const [rotationError, setRotationError] = useState<string | null>(null);
+  const [rotationAcknowledgement, setRotationAcknowledgement] = useState("");
 
   // keys that have at least one associated node
   const rotatableKeys = sshKeys.filter(
@@ -73,6 +74,7 @@ export function SSHKeyRotationWizard({
     setResults([]);
     setNewFingerprint("");
     setRotationError(null);
+    setRotationAcknowledgement("");
 
     if (preselectedKey) {
       setSelectedKey(preselectedKey);
@@ -182,7 +184,7 @@ export function SSHKeyRotationWizard({
       setStep(2);
     } else if (step === 2 && newPrivateKey.trim()) {
       setStep(3);
-    } else if (step === 3) {
+    } else if (step === 3 && rotationAcknowledgement.trim() === String(affectedNodes.length)) {
       setStep(4);
       void executeRotation();
     }
@@ -192,6 +194,7 @@ export function SSHKeyRotationWizard({
     if (step === 2 && !preselectedKey) {
       setStep(1);
     } else if (step === 3) {
+      setRotationAcknowledgement("");
       setStep(2);
     }
   };
@@ -202,6 +205,7 @@ export function SSHKeyRotationWizard({
   };
 
   const handleRetry = () => {
+    setRotationAcknowledgement("");
     setStep(3);
     setRotationError(null);
   };
@@ -264,6 +268,8 @@ export function SSHKeyRotationWizard({
         <RotationProgress
           selectedKey={selectedKey}
           affectedNodes={affectedNodes}
+          acknowledgement={rotationAcknowledgement}
+          onAcknowledgementChange={setRotationAcknowledgement}
           onBack={handleBack}
           onNext={handleNext}
         />
