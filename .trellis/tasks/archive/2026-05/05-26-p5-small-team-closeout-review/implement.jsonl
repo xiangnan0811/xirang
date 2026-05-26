@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-26-p5-small-team-closeout-review/prd.md","reason":"Defines the P5 closeout review scope, acceptance criteria, and out-of-scope boundaries."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Settings security-risk summary review must check bounded advisory posture semantics and sensitive-data constraints."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend risk and guardrail review must check typed API mapping and safe UI data handling."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Guardrail and Settings review must check accessibility of warnings, dialogs, labels, and validation feedback."}

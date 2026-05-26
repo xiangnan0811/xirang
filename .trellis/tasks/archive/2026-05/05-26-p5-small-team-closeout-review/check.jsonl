@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/05-26-p5-small-team-closeout-review/prd.md","reason":"Validate review evidence and closeout recommendation against P5 scope and acceptance criteria."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend advisory risk output remains bounded, report-only, and non-sensitive."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check frontend review findings against safe typed mapping and UI data handling expectations."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check warning/review UI findings against accessibility expectations."}
