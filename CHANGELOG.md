@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.36](https://github.com/xiangnan0811/xirang/compare/v0.43.35...v0.43.36) (2026-05-26)
+
+
+### 🐛 Bug Fixes
+
+* **security:** add misoperation guardrails ([#275](https://github.com/xiangnan0811/xirang/issues/275)) ([a60d6e4](https://github.com/xiangnan0811/xirang/commit/a60d6e422c726306c00e8ee521fe95b022977fd0))
+
 ## [0.43.35](https://github.com/xiangnan0811/xirang/compare/v0.43.34...v0.43.35) (2026-05-25)
 
 
