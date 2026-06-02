@@ -13,19 +13,19 @@ func resetCryptoKeyState() {
 	keyErr = nil
 }
 
-func TestEncryptStringRejectsMissingKeyInDevMode(t *testing.T) {
+func TestEncryptStringAllowsDevModeWithGeneratedKey(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 	t.Setenv("DATA_ENCRYPTION_KEY", "")
 	resetCryptoKeyState()
 
-	_, err := EncryptString("hello")
-	if err == nil {
-		t.Fatalf("开发环境下未设置 DATA_ENCRYPTION_KEY 应返回错误，不应自动使用硬编码密钥")
+	result, err := EncryptString("hello")
+	if err != nil {
+		t.Fatalf("dev mode should generate temp key and work: %v", err)
 	}
-	if !strings.Contains(err.Error(), "DATA_ENCRYPTION_KEY") {
-		t.Fatalf("错误信息应包含 DATA_ENCRYPTION_KEY，实际: %v", err)
+	if !IsEncrypted(result) {
+		t.Fatalf("encrypted result should have prefix, got: %s", result)
 	}
 }
 
