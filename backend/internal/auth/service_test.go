@@ -66,9 +66,14 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	user := model.User{Username: "locktest", PasswordHash: passwordHash, Role: "admin"}
 	db.Create(&user)
 
+	// 使用可控时钟避免 time.Sleep，大幅缩减测试耗时。
+	testNow := time.Now()
+	clock := func() time.Time { return testNow }
+
 	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
 		FailLockThreshold: 2,
-		FailLockDuration:  2 * time.Second, // 需大于 bcrypt 执行耗时
+		FailLockDuration:  100 * time.Millisecond,
+		Now:               clock,
 	})
 
 	// 触发锁定
@@ -81,8 +86,8 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 		t.Fatalf("应处于锁定状态")
 	}
 
-	// 等待锁定过期
-	time.Sleep(2100 * time.Millisecond)
+	// 推进时钟到锁定过期之后
+	testNow = testNow.Add(200 * time.Millisecond)
 
 	// 锁定应过期
 	_, err = service.Login("locktest", "Correct1!", "10.0.0.1")

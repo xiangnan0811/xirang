@@ -296,6 +296,8 @@ func TestRemoteWriteSink_BearerTokenHeader(t *testing.T) {
 }
 
 func TestRemoteWriteSink_TimeoutReturnsError(t *testing.T) {
+	// 该 time.Sleep 在 httptest.Server handler goroutine 内执行，模拟超时 server。
+	// sink 使用 50ms 超时的 context → server sleep 500ms 远超 client 超时。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)

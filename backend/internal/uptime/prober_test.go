@@ -431,6 +431,8 @@ func TestProbeOne_DisabledMonitorSkipped(t *testing.T) {
 }
 
 func TestProbeHTTP_Timeout(t *testing.T) {
+	// 该 time.Sleep 在 httptest.Server handler goroutine 内，模拟超时 server。
+	// Monitor 的 TimeoutSeconds=1，server sleep 2s 远超 client 超时。
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
 		w.WriteHeader(http.StatusOK)

@@ -603,7 +603,9 @@ func TestScheduler_Run_ExitsOnContextCancel(t *testing.T) {
 	cancel()
 	s := NewScheduler(db)
 	go s.Run(ctx)
-	// Give the goroutine a moment to observe the cancellation.
+	// 给 goroutine 一个调度窗口观察到 ctx 取消。
+	// Run() 内部使用 select-case ctx.Done() 检查取消，goroutine 调度依赖
+	// Go runtime 协作抢占而非同步 channel。20ms 是合理的调度裕量。
 	time.Sleep(20 * time.Millisecond)
 	// If we reach here without hanging, Run() works correctly.
 }
@@ -640,7 +642,9 @@ func TestReportDispatcher_ShutdownWaitsForInFlight(t *testing.T) {
 		select {
 		case <-time.After(100 * time.Millisecond):
 		case <-d.ctx.Done():
-			// 收到取消也要继续 sleep 模拟 SMTP 协商必须跑完不可截断
+			// Shutdown 收到取消后仍需继续模拟 SMTP 协商耗时的等待。
+			// 该 time.Sleep 模拟真实 SMTP/TLS 握手耗时，是验证 Shutdown
+			// 正确等待 inflight 工作的必要条件，不可用 channel 替代。
 			time.Sleep(80 * time.Millisecond)
 		}
 		close(workFinished)

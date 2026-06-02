@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,8 @@ const stepUpTestJWTSecret = "step-up-test-signing-marker"
 func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
