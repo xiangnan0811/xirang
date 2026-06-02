@@ -1,3 +1,6 @@
+// Package config 负责加载和验证应用配置。
+// 注意：Load() 在 logger.Init() 之前运行，因此本包使用标准库 log.Printf
+// 输出早期启动警告，而非 zerolog。
 package config
 
 import (

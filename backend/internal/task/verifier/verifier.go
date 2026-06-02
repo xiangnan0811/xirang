@@ -297,7 +297,7 @@ func remoteFileCount(ctx context.Context, sshClient *ssh.Client, path string) (i
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null | wc -l", shellQuote(path)))
+	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null | wc -l", executor.ShellEscape(path)))
 	if err != nil {
 		return 0, err
 	}
@@ -305,7 +305,7 @@ func remoteFileCount(ctx context.Context, sshClient *ssh.Client, path string) (i
 }
 
 func localFileCount(ctx context.Context, path string) (int, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("find %s -type f 2>/dev/null | wc -l", shellQuote(path)))
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("find %s -type f 2>/dev/null | wc -l", executor.ShellEscape(path)))
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, err
@@ -317,7 +317,7 @@ func remoteDirectorySize(ctx context.Context, sshClient *ssh.Client, path string
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("du -sb %s 2>/dev/null | awk '{print $1}'", shellQuote(path)))
+	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("du -sb %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(path)))
 	if err != nil {
 		return 0, err
 	}
@@ -325,7 +325,7 @@ func remoteDirectorySize(ctx context.Context, sshClient *ssh.Client, path string
 }
 
 func localDirectorySize(ctx context.Context, path string) (int64, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("du -sb %s 2>/dev/null | awk '{print $1}'", shellQuote(path)))
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("du -sb %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(path)))
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, err
@@ -335,7 +335,7 @@ func localDirectorySize(ctx context.Context, path string) (int64, error) {
 
 func sampleChecksum(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath string, sampleRate, totalFiles int, logf func(level, msg string)) (int, int, error) {
 	// 获取源端文件列表
-	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null", shellQuote(srcPath)))
+	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null", executor.ShellEscape(srcPath)))
 	if err != nil {
 		return 0, 0, fmt.Errorf("获取源端文件列表失败: %w", err)
 	}
@@ -378,7 +378,7 @@ func sampleChecksum(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath
 		}
 
 		// 远程 checksum
-		srcChecksum, srcErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", shellQuote(file)))
+		srcChecksum, srcErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(file)))
 		if srcErr != nil {
 			continue
 		}
@@ -388,7 +388,7 @@ func sampleChecksum(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath
 		if !strings.HasPrefix(filepath.Clean(dstFile), filepath.Clean(dstPath)) {
 			continue // skip path traversal attempts
 		}
-		cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", shellQuote(dstFile)))
+		cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(dstFile)))
 		dstOutput, dstErr := cmd.Output()
 		if dstErr != nil {
 			mismatched++
@@ -410,7 +410,7 @@ func sampleChecksum(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath
 // 与 sampleChecksum 不同，这里 source 和 target 都在远程节点上。
 func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, dstPath string, sampleRate, totalFiles int, logf func(level, msg string)) (int, int, error) {
 	// 获取源端文件列表（远程）
-	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null", shellQuote(srcPath)))
+	output, err := runRemoteCommand(ctx, sshClient, fmt.Sprintf("find %s -type f 2>/dev/null", executor.ShellEscape(srcPath)))
 	if err != nil {
 		return 0, 0, fmt.Errorf("获取源端文件列表失败: %w", err)
 	}
@@ -453,14 +453,14 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 		}
 
 		// 源端 checksum（远程）
-		srcChecksum, srcErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", shellQuote(file)))
+		srcChecksum, srcErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(file)))
 		if srcErr != nil {
 			continue
 		}
 
 		// 目标端 checksum（也是远程）
 		dstFile := filepath.Join(dstPath, relPath)
-		dstChecksum, dstErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", shellQuote(dstFile)))
+		dstChecksum, dstErr := runRemoteCommand(ctx, sshClient, fmt.Sprintf("sha256sum %s 2>/dev/null | awk '{print $1}'", executor.ShellEscape(dstFile)))
 		if dstErr != nil {
 			mismatched++
 			sampled++
@@ -508,7 +508,7 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	}()
 	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
-	checkCmd := fmt.Sprintf("restic %s check -r %s 2>&1", pwFileArg, shellQuote(repo))
+	checkCmd := fmt.Sprintf("restic %s check -r %s 2>&1", pwFileArg, executor.ShellEscape(repo))
 
 	logf("info", "执行 restic check")
 	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
@@ -537,7 +537,7 @@ func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
 	}
 
-	checkCmd := fmt.Sprintf("rclone check %s %s 2>&1", shellQuote(source), shellQuote(remote))
+	checkCmd := fmt.Sprintf("rclone check %s %s 2>&1", executor.ShellEscape(source), executor.ShellEscape(remote))
 	logf("info", "执行 rclone check")
 	output, err := runRemoteCommand(ctx, sshClient, checkCmd)
 	if err != nil {
@@ -547,10 +547,6 @@ func VerifyRclone(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	}
 	logf("info", sanitizeVerifierRuntimeEvidence(strings.TrimSpace(output)))
 	return Result{Status: "passed", Message: "rclone check 通过"}
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func abs(x int) int {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -76,6 +77,10 @@ func main() {
 	}
 	bootstrap.SeedPolicyTemplates(db)
 
+	if err := alerting.ValidateConfig(); err != nil {
+		log.Fatal().Err(err).Msg("alerting 配置校验失败")
+	}
+
 	// 自动将 v1（SHA-256 KDF）加密数据迁移到 v2（Argon2id KDF）
 	if bootstrap.HasV1EncryptedData(db) {
 		if err := bootstrap.MigrateEncryptionV1ToV2(db); err != nil {
@@ -126,7 +131,9 @@ func main() {
 			}
 			var node model.Node
 			if alert.NodeID > 0 {
-				_ = db.First(&node, alert.NodeID).Error
+				if err := db.First(&node, alert.NodeID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Module("alerting").Warn().Err(err).Uint("node_id", alert.NodeID).Msg("静默检查时查询节点失败")
+			}
 			}
 			return alerting.MatchSilence(alert, node, sils, time.Now())
 		},

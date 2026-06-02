@@ -28,6 +28,7 @@ type Prober struct {
 	metricRetentionDays int
 	metricAuditMu       sync.Mutex
 	metricAuditFailures map[string]int
+	cancelMu            sync.Mutex
 	cancel              context.CancelFunc
 	done                chan struct{}
 }
@@ -50,7 +51,9 @@ func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency i
 // Start begins the periodic probe loop in a background goroutine.
 func (p *Prober) Start(ctx context.Context) {
 	probeCtx, cancel := context.WithCancel(ctx)
+	p.cancelMu.Lock()
 	p.cancel = cancel
+	p.cancelMu.Unlock()
 	go p.run(probeCtx)
 }
 
@@ -63,8 +66,12 @@ func (p *Prober) Run(ctx context.Context) {
 
 // Shutdown signals the prober to stop and waits for completion.
 func (p *Prober) Shutdown(ctx context.Context) error {
-	if p.cancel != nil {
-		p.cancel()
+	p.cancelMu.Lock()
+	cancel := p.cancel
+	p.cancel = nil
+	p.cancelMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	select {
 	case <-p.done:

@@ -22,10 +22,13 @@ var backoffTable = []time.Duration{
 
 const maxAttempts = 4
 
-func init() {
+// ValidateConfig verifies package-level constants are in sync.
+// Call once at startup before starting RetryWorker.
+func ValidateConfig() error {
 	if maxAttempts != len(backoffTable) {
-		panic("alerting: maxAttempts must equal len(backoffTable)")
+		return errors.New("alerting: maxAttempts must equal len(backoffTable)")
 	}
+	return nil
 }
 
 func backoffDuration(attempt int) time.Duration {

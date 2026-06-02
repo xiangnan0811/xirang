@@ -9,8 +9,8 @@ import (
 	"xirang/backend/internal/ws"
 )
 
-func (m *Manager) startLogWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (m *Manager) startLogWorker(parentCtx context.Context) {
+	ctx, cancel := context.WithCancel(parentCtx)
 	m.logWorkerCancel = cancel
 	go m.runLogWorker(ctx)
 }

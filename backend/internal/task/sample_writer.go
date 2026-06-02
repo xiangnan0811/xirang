@@ -9,8 +9,8 @@ import (
 	"xirang/backend/internal/task/executor"
 )
 
-func (m *Manager) startSampleWorker() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (m *Manager) startSampleWorker(parentCtx context.Context) {
+	ctx, cancel := context.WithCancel(parentCtx)
 	m.sampleWorkerCancel = cancel
 	go m.runSampleWorker(ctx)
 }

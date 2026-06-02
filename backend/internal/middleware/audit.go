@@ -5,11 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -51,7 +51,7 @@ func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 		}
 		record.CreatedAt = time.Now().UTC()
 		if err := SaveAuditLogWithHashChain(db, &record); err != nil {
-			log.Printf("审计日志写入失败: %v", err)
+			logger.Module("audit").Warn().Err(err).Msg("审计日志写入失败")
 		}
 	}
 }
