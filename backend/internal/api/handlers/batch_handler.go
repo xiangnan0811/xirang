@@ -97,9 +97,19 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	// Batch query to avoid N+1
+	var dbNodes []model.Node
+	if err := h.db.Select("id", "name").Where("id IN ?", req.NodeIDs).Find(&dbNodes).Error; err != nil {
+		respondInternalError(c, fmt.Errorf("查询节点失败: %w", err))
+		return
+	}
+	dbNodeMap := make(map[uint]string, len(dbNodes))
+	for _, n := range dbNodes {
+		dbNodeMap[n.ID] = n.Name
+	}
 	for _, nodeID := range req.NodeIDs {
-		var node model.Node
-		if err := h.db.Select("id", "name").First(&node, nodeID).Error; err != nil {
+		nodeName, ok := dbNodeMap[nodeID]
+		if !ok {
 			respondBadRequest(c, fmt.Sprintf("节点 %d 不存在", nodeID))
 			return
 		}
@@ -107,9 +117,8 @@ func (h *BatchHandler) Create(c *gin.Context) {
 			respondForbidden(c, "无权访问该节点")
 			return
 		}
-		nodes = append(nodes, batchNode{ID: node.ID, Name: node.Name})
+		nodes = append(nodes, batchNode{ID: nodeID, Name: nodeName})
 	}
-
 	if !EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run") {
 		return
 	}

@@ -61,6 +61,7 @@ func TestMigration045_BackfillSLOID(t *testing.T) {
 	}
 	insert("XR-SLO-7")   // well-formed, expect slo_id=7
 	insert("XR-SLO-abc") // malformed, expect slo_id=NULL
+	insert("XR-SLO-5abc") // malformed (digit then non-digit tail), expect slo_id=NULL
 	insert("XR-NODE-3")  // non-SLO, expect slo_id=NULL
 
 	// Read and execute the 000045 up migration. The path is computed
@@ -86,8 +87,8 @@ func TestMigration045_BackfillSLOID(t *testing.T) {
 	if err := db.Raw(`SELECT error_code, slo_id FROM alerts ORDER BY id`).Scan(&rows).Error; err != nil {
 		t.Fatalf("select: %v", err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(rows))
 	}
 	if !rows[0].SLOID.Valid || rows[0].SLOID.Int64 != 7 {
 		t.Fatalf("XR-SLO-7: expected slo_id=7, got valid=%v val=%d", rows[0].SLOID.Valid, rows[0].SLOID.Int64)
@@ -96,7 +97,10 @@ func TestMigration045_BackfillSLOID(t *testing.T) {
 		t.Fatalf("XR-SLO-abc: expected slo_id=NULL, got %d", rows[1].SLOID.Int64)
 	}
 	if rows[2].SLOID.Valid {
-		t.Fatalf("XR-NODE-3: expected slo_id=NULL, got %d", rows[2].SLOID.Int64)
+		t.Fatalf("XR-SLO-5abc: expected slo_id=NULL, got %d", rows[2].SLOID.Int64)
+	}
+	if rows[3].SLOID.Valid {
+		t.Fatalf("XR-NODE-3: expected slo_id=NULL, got %d", rows[3].SLOID.Int64)
 	}
 }
 

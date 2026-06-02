@@ -42,3 +42,4 @@ CREATE INDEX IF NOT EXISTS idx_restore_drill_evidences_task ON restore_drill_evi
 CREATE INDEX IF NOT EXISTS idx_restore_drill_evidences_sandbox_node ON restore_drill_evidences(sandbox_node_id);
 CREATE INDEX IF NOT EXISTS idx_restore_drill_evidences_status ON restore_drill_evidences(status);
 CREATE INDEX IF NOT EXISTS idx_restore_drill_evidences_policy_created ON restore_drill_evidences(policy_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_restore_drill_evidences_source_task_run ON restore_drill_evidences(source_task_run_id);

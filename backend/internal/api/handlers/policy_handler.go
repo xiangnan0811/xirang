@@ -91,6 +91,9 @@ type policyRequest struct {
 // @Failure      401  {object}  handlers.Response
 // @Router       /policies [get]
 func (h *PolicyHandler) List(c *gin.Context) {
+	// TODO: Preloading full Nodes is wasteful — buildPolicyResponse only uses node IDs.
+	// Replace Preload("Nodes") with a lighter query on policy_nodes to collect policy_id → []nodeID
+	// maps, then pass those maps into buildPolicyResponse instead of p.Nodes.
 	query := h.db.Preload("Nodes").Order("id asc")
 
 	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {

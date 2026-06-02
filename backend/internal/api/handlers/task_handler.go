@@ -719,9 +719,20 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	successCount := 0
 	failureCount := 0
 	blockedCount := 0
+
+	// Batch query to avoid N+1
+	var tasks []model.Task
+	if lookupErr := h.db.Select("id", "node_id").Where("id IN ?", req.TaskIDs).Find(&tasks).Error; lookupErr != nil {
+		respondInternalError(c, lookupErr)
+		return
+	}
+	taskMap := make(map[uint]model.Task, len(tasks))
+	for _, t := range tasks {
+		taskMap[t.ID] = t
+	}
 	for _, tid := range req.TaskIDs {
-		var t model.Task
-		if lookupErr := h.db.Select("id", "node_id").First(&t, tid).Error; lookupErr != nil {
+		t, found := taskMap[tid]
+		if !found {
 			failureCount++
 			results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
 			continue
