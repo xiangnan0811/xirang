@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -120,6 +120,7 @@ export function SetupWizard() {
 
   const [showDialog, setShowDialog] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const dialogContentRef = useRef<HTMLDivElement | null>(null);
 
   // 首次登录延迟弹出
   useEffect(() => {
@@ -202,9 +203,12 @@ export function SetupWizard() {
     [markOnboarded, navigate, setWizardState],
   );
 
-  // 键盘导航
+  // 键盘导航（仅在对话框内容区域聚焦时响应）
   useEffect(() => {
     if (!showDialog) return;
+
+    const el = dialogContentRef.current;
+    if (!el) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft" && !isWelcome) {
@@ -220,8 +224,8 @@ export function SetupWizard() {
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    el.addEventListener("keydown", handleKeyDown);
+    return () => el.removeEventListener("keydown", handleKeyDown);
   }, [showDialog, isWelcome, isComplete, handlePrevious, handleNext, handleFinish]);
 
   // 已完成或已跳过则不渲染
@@ -231,7 +235,7 @@ export function SetupWizard() {
 
   return (
     <Dialog open={showDialog} onOpenChange={handleDialogClose}>
-      <DialogContent size="md" className="sm:max-w-xl glass-panel border-border/70 overflow-hidden">
+      <DialogContent ref={dialogContentRef} size="md" className="sm:max-w-xl glass-panel border-border/70 overflow-hidden">
         {/* 欢迎页 / 完成页渐变背景 */}
         {(isWelcome || isComplete) && (
           <div className="absolute inset-0 z-0 bg-gradient-to-br from-primary/10 via-background to-secondary/5 pointer-events-none" />

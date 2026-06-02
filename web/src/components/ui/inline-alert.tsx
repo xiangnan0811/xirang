@@ -10,7 +10,10 @@ interface InlineAlertProps {
   icon?: ReactNode;
   children: ReactNode;
   className?: string;
-  /** 仅用于动态紧急告警；静态提示不应设为 true */
+  /**
+   * 显式控制 aria 角色：true → role="alert"（即时播报），false → 无 role。
+   * 不传时自动根据 tone 决定：critical/warning → "alert"，info/success → "status"。
+   */
   live?: boolean;
 }
 
@@ -32,8 +35,17 @@ export function InlineAlert({
   const s = toneMap[tone];
   const Icon = s.defaultIcon;
 
+  const role =
+    live !== undefined
+      ? live
+        ? "alert"
+        : undefined
+      : tone === "critical" || tone === "warning"
+        ? "alert"
+        : "status";
+
   return (
-    <div {...(live ? { role: "alert" } : undefined)} className={cn("rounded-lg border border-border bg-card overflow-hidden relative group p-3 transition-colors", className)}>
+    <div role={role} className={cn("rounded-lg border border-border bg-card overflow-hidden relative group p-3 transition-colors", className)}>
       <div className={cn("absolute top-0 left-0 w-1 h-full opacity-60 group-hover:opacity-100 transition-opacity", s.line)} />
       <div className="flex items-start gap-3 pl-2">
         <div className={cn("flex items-center justify-center rounded-lg p-2 shrink-0", s.bg, s.text)}>

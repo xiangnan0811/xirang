@@ -1,4 +1,4 @@
-import React, { Suspense } from "react";
+import React, { Suspense, useMemo } from "react";
 import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
@@ -80,6 +80,86 @@ function AppShellInner() {
     logout();
     navigate("/login", { replace: true });
   };
+
+  const sharedContextValue = useMemo(() => ({
+    loading: consoleData.loading,
+    warning: consoleData.warning,
+    lastSyncedAt: consoleData.lastSyncedAt,
+    refreshVersion: consoleData.refreshVersion,
+    globalSearch: consoleData.globalSearch,
+    setGlobalSearch: consoleData.setGlobalSearch,
+    refresh: consoleData.refresh,
+    overview: consoleData.overview,
+    fetchOverviewTraffic: consoleData.fetchOverviewTraffic,
+    fetchHealthIncidentTimeline: consoleData.fetchHealthIncidentTimeline,
+  }), [consoleData.loading, consoleData.warning, consoleData.lastSyncedAt, consoleData.refreshVersion, consoleData.globalSearch, consoleData.setGlobalSearch, consoleData.refresh, consoleData.overview, consoleData.fetchOverviewTraffic, consoleData.fetchHealthIncidentTimeline]);
+
+  const nodesContextValue = useMemo(() => ({
+    nodes: consoleData.nodes,
+    refreshNodes: consoleData.refreshNodes,
+    createNode: consoleData.createNode,
+    updateNode: consoleData.updateNode,
+    deleteNode: consoleData.deleteNode,
+    deleteNodes: consoleData.deleteNodes,
+    testNodeConnection: consoleData.testNodeConnection,
+    triggerNodeBackup: consoleData.triggerNodeBackup,
+  }), [consoleData.nodes, consoleData.refreshNodes, consoleData.createNode, consoleData.updateNode, consoleData.deleteNode, consoleData.deleteNodes, consoleData.testNodeConnection, consoleData.triggerNodeBackup]);
+
+  const tasksContextValue = useMemo(() => ({
+    tasks: consoleData.tasks,
+    refreshTasks: consoleData.refreshTasks,
+    createTask: consoleData.createTask,
+    updateTask: consoleData.updateTask,
+    deleteTask: consoleData.deleteTask,
+    triggerTask: consoleData.triggerTask,
+    cancelTask: consoleData.cancelTask,
+    retryTask: consoleData.retryTask,
+    pauseTask: consoleData.pauseTask,
+    resumeTask: consoleData.resumeTask,
+    skipNextTask: consoleData.skipNextTask,
+    refreshTask: consoleData.refreshTask,
+    fetchTaskLogs: consoleData.fetchTaskLogs,
+  }), [consoleData.tasks, consoleData.refreshTasks, consoleData.createTask, consoleData.updateTask, consoleData.deleteTask, consoleData.triggerTask, consoleData.cancelTask, consoleData.retryTask, consoleData.pauseTask, consoleData.resumeTask, consoleData.skipNextTask, consoleData.refreshTask, consoleData.fetchTaskLogs]);
+
+  const policiesContextValue = useMemo(() => ({
+    policies: consoleData.policies,
+    refreshPolicies: consoleData.refreshPolicies,
+    createPolicy: consoleData.createPolicy,
+    updatePolicy: consoleData.updatePolicy,
+    deletePolicy: consoleData.deletePolicy,
+    togglePolicy: consoleData.togglePolicy,
+    updatePolicySchedule: consoleData.updatePolicySchedule,
+  }), [consoleData.policies, consoleData.refreshPolicies, consoleData.createPolicy, consoleData.updatePolicy, consoleData.deletePolicy, consoleData.togglePolicy, consoleData.updatePolicySchedule]);
+
+  const alertsContextValue = useMemo(() => ({
+    alerts: consoleData.alerts,
+    retryAlert: consoleData.retryAlert,
+    acknowledgeAlert: consoleData.acknowledgeAlert,
+    resolveAlert: consoleData.resolveAlert,
+    fetchAlertDeliveries: consoleData.fetchAlertDeliveries,
+    fetchAlertDeliveryStats: consoleData.fetchAlertDeliveryStats,
+    retryAlertDelivery: consoleData.retryAlertDelivery,
+    retryFailedAlertDeliveries: consoleData.retryFailedAlertDeliveries,
+  }), [consoleData.alerts, consoleData.retryAlert, consoleData.acknowledgeAlert, consoleData.resolveAlert, consoleData.fetchAlertDeliveries, consoleData.fetchAlertDeliveryStats, consoleData.retryAlertDelivery, consoleData.retryFailedAlertDeliveries]);
+
+  const integrationsContextValue = useMemo(() => ({
+    integrations: consoleData.integrations,
+    refreshIntegrations: consoleData.refreshIntegrations,
+    addIntegration: consoleData.addIntegration,
+    removeIntegration: consoleData.removeIntegration,
+    toggleIntegration: consoleData.toggleIntegration,
+    updateIntegration: consoleData.updateIntegration,
+    patchIntegration: consoleData.patchIntegration,
+    testIntegration: consoleData.testIntegration,
+  }), [consoleData.integrations, consoleData.refreshIntegrations, consoleData.addIntegration, consoleData.removeIntegration, consoleData.toggleIntegration, consoleData.updateIntegration, consoleData.patchIntegration, consoleData.testIntegration]);
+
+  const sshKeysContextValue = useMemo(() => ({
+    sshKeys: consoleData.sshKeys,
+    refreshSSHKeys: consoleData.refreshSSHKeys,
+    createSSHKey: consoleData.createSSHKey,
+    updateSSHKey: consoleData.updateSSHKey,
+    deleteSSHKey: consoleData.deleteSSHKey,
+  }), [consoleData.sshKeys, consoleData.refreshSSHKeys, consoleData.createSSHKey, consoleData.updateSSHKey, consoleData.deleteSSHKey]);
 
   return (
     <div className="min-h-screen app-shell-bg overflow-x-hidden">
@@ -215,79 +295,13 @@ function AppShellInner() {
                 {consoleData.warning}
               </div>
             ) : null}
-            <SharedContextProvider value={{
-              loading: consoleData.loading,
-              warning: consoleData.warning,
-              lastSyncedAt: consoleData.lastSyncedAt,
-              refreshVersion: consoleData.refreshVersion,
-              globalSearch: consoleData.globalSearch,
-              setGlobalSearch: consoleData.setGlobalSearch,
-              refresh: consoleData.refresh,
-              overview: consoleData.overview,
-              fetchOverviewTraffic: consoleData.fetchOverviewTraffic,
-              fetchHealthIncidentTimeline: consoleData.fetchHealthIncidentTimeline,
-            }}>
-            <NodesContextProvider value={{
-              nodes: consoleData.nodes,
-              refreshNodes: consoleData.refreshNodes,
-              createNode: consoleData.createNode,
-              updateNode: consoleData.updateNode,
-              deleteNode: consoleData.deleteNode,
-              deleteNodes: consoleData.deleteNodes,
-              testNodeConnection: consoleData.testNodeConnection,
-              triggerNodeBackup: consoleData.triggerNodeBackup,
-            }}>
-            <TasksContextProvider value={{
-              tasks: consoleData.tasks,
-              refreshTasks: consoleData.refreshTasks,
-              createTask: consoleData.createTask,
-              updateTask: consoleData.updateTask,
-              deleteTask: consoleData.deleteTask,
-              triggerTask: consoleData.triggerTask,
-              cancelTask: consoleData.cancelTask,
-              retryTask: consoleData.retryTask,
-              pauseTask: consoleData.pauseTask,
-              resumeTask: consoleData.resumeTask,
-              skipNextTask: consoleData.skipNextTask,
-              refreshTask: consoleData.refreshTask,
-              fetchTaskLogs: consoleData.fetchTaskLogs,
-            }}>
-            <PoliciesContextProvider value={{
-              policies: consoleData.policies,
-              refreshPolicies: consoleData.refreshPolicies,
-              createPolicy: consoleData.createPolicy,
-              updatePolicy: consoleData.updatePolicy,
-              deletePolicy: consoleData.deletePolicy,
-              togglePolicy: consoleData.togglePolicy,
-              updatePolicySchedule: consoleData.updatePolicySchedule,
-            }}>
-            <AlertsContextProvider value={{
-              alerts: consoleData.alerts,
-              retryAlert: consoleData.retryAlert,
-              acknowledgeAlert: consoleData.acknowledgeAlert,
-              resolveAlert: consoleData.resolveAlert,
-              fetchAlertDeliveries: consoleData.fetchAlertDeliveries,
-              fetchAlertDeliveryStats: consoleData.fetchAlertDeliveryStats,
-              retryAlertDelivery: consoleData.retryAlertDelivery,
-              retryFailedAlertDeliveries: consoleData.retryFailedAlertDeliveries,
-            }}>
-            <IntegrationsContextProvider value={{
-              integrations: consoleData.integrations,
-              refreshIntegrations: consoleData.refreshIntegrations,
-              addIntegration: consoleData.addIntegration,
-              removeIntegration: consoleData.removeIntegration,
-              toggleIntegration: consoleData.toggleIntegration,
-              updateIntegration: consoleData.updateIntegration,
-              patchIntegration: consoleData.patchIntegration,
-              testIntegration: consoleData.testIntegration,
-            }}>
-            <SSHKeysContextProvider value={{
-              sshKeys: consoleData.sshKeys,
-              refreshSSHKeys: consoleData.refreshSSHKeys,
-              createSSHKey: consoleData.createSSHKey,
-              updateSSHKey: consoleData.updateSSHKey,
-              deleteSSHKey: consoleData.deleteSSHKey,
-            }}>
+            <SharedContextProvider value={sharedContextValue}>
+            <NodesContextProvider value={nodesContextValue}>
+            <TasksContextProvider value={tasksContextValue}>
+            <PoliciesContextProvider value={policiesContextValue}>
+            <AlertsContextProvider value={alertsContextValue}>
+            <IntegrationsContextProvider value={integrationsContextValue}>
+            <SSHKeysContextProvider value={sshKeysContextValue}>
               <ErrorBoundary>
                 <AnimatedOutlet />
               </ErrorBoundary>

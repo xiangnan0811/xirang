@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import type { ElementType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 type DataSurfaceProps = {
   children: ReactNode;
   className?: string;
   variant?: "default" | "flat";
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
 };
 
 type DataSurfaceSectionProps = {
@@ -17,9 +19,11 @@ type DataSurfaceHeaderProps = {
   description?: ReactNode;
   actions?: ReactNode;
   className?: string;
+  /** 控制标题的 heading 级别，默认为 h2 */
+  headingLevel?: "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
 };
 
-export function DataSurface({ children, className, variant = "default" }: DataSurfaceProps) {
+export function DataSurface({ children, className, variant = "default", ...aria }: DataSurfaceProps) {
   return (
     <section
       className={cn(
@@ -28,6 +32,7 @@ export function DataSurface({ children, className, variant = "default" }: DataSu
         className
       )}
       data-variant={variant}
+      {...aria}
     >
       {children}
     </section>
@@ -39,10 +44,13 @@ export function DataSurfaceHeader({
   description,
   actions,
   className,
+  headingLevel = "h2",
 }: DataSurfaceHeaderProps) {
   if (!title && !description && !actions) {
     return null;
   }
+
+  const HeadingTag = headingLevel as ElementType;
 
   return (
     <div
@@ -53,9 +61,9 @@ export function DataSurfaceHeader({
     >
       <div className="min-w-0">
         {title ? (
-          <h2 className="text-sm font-semibold leading-tight text-foreground">
+          <HeadingTag className="text-sm font-semibold leading-tight text-foreground">
             {title}
-          </h2>
+          </HeadingTag>
         ) : null}
         {description ? (
           <p className="mt-1 text-xs text-muted-foreground">

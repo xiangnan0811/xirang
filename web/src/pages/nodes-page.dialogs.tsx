@@ -2,6 +2,7 @@ import React, { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 const NodeEditorDialog = React.lazy(() =>
   import("@/components/node-editor-dialog").then(m => ({ default: m.NodeEditorDialog }))
@@ -134,12 +135,14 @@ export function NodesPageDialogs({
           <div className="flex-1 overflow-hidden px-4 pb-4">
             {terminalNode !== null && token !== null && (
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("nodes.terminalLoading")}</div>}>
-                <WebTerminal
-                  key={terminalKey}
-                  nodeId={terminalNode.id}
-                  token={token}
-                  onDisconnect={() => setTerminalNode(null)}
-                />
+                <ErrorBoundary>
+                  <WebTerminal
+                    key={terminalKey}
+                    nodeId={terminalNode.id}
+                    token={token}
+                    onDisconnect={() => setTerminalNode(null)}
+                  />
+                </ErrorBoundary>
               </Suspense>
             )}
           </div>
@@ -188,67 +191,73 @@ export function NodesPageDialogs({
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 thin-scrollbar">
-              {fileBrowserTab === "files" ? (
-                <FileBrowser
-                  rootPath={
-                    fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
-                      ? fileBrowserNode.basePath
-                      : fileBrowserNode.username === "root"
-                        ? "/root"
-                        : `/home/${fileBrowserNode.username}`
-                  }
-                  fetchDir={(path, signal) =>
-                    filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
-                  }
-                  fetchContent={(path, signal) =>
-                    filesApi.getNodeFileContent(token, fileBrowserNode.id, path, { signal })
-                  }
-                />
-              ) : (
-                <DockerVolumesPanel
-                  nodeId={fileBrowserNode.id}
-                  token={token}
-                />
-              )}
+              <ErrorBoundary>
+                {fileBrowserTab === "files" ? (
+                  <FileBrowser
+                    rootPath={
+                      fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
+                        ? fileBrowserNode.basePath
+                        : fileBrowserNode.username === "root"
+                          ? "/root"
+                          : `/home/${fileBrowserNode.username}`
+                    }
+                    fetchDir={(path, signal) =>
+                      filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
+                    }
+                    fetchContent={(path, signal) =>
+                      filesApi.getNodeFileContent(token, fileBrowserNode.id, path, { signal })
+                    }
+                  />
+                ) : (
+                  <DockerVolumesPanel
+                    nodeId={fileBrowserNode.id}
+                    token={token}
+                  />
+                )}
+              </ErrorBoundary>
             </div>
           </DialogContent>
         </Dialog>
       )}
 
       {token && (
-        <>
-          <BatchCommandDialog
-            open={batchCmdOpen}
-            onOpenChange={setBatchCmdOpen}
-            nodes={nodes}
-            token={token}
-            defaultNodeIds={selectedNodeIds}
-            onSuccess={(result) => {
-              setBatchResultId(result.batchId);
-              setBatchRetain(result.retain);
-            }}
-          />
-          <BatchResultDialog
-            open={batchResultId !== null}
-            onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
-            batchId={batchResultId}
-            retain={batchRetain}
-            token={token}
-          />
-        </>
+        <ErrorBoundary>
+          <>
+            <BatchCommandDialog
+              open={batchCmdOpen}
+              onOpenChange={setBatchCmdOpen}
+              nodes={nodes}
+              token={token}
+              defaultNodeIds={selectedNodeIds}
+              onSuccess={(result) => {
+                setBatchResultId(result.batchId);
+                setBatchRetain(result.retain);
+              }}
+            />
+            <BatchResultDialog
+              open={batchResultId !== null}
+              onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
+              batchId={batchResultId}
+              retain={batchRetain}
+              token={token}
+            />
+          </>
+        </ErrorBoundary>
       )}
 
       {/* 迁移节点向导 */}
       {token && migrateSourceNode !== null && (
         <Suspense fallback={null}>
-          <NodeMigrateWizard
-            open
-            onOpenChange={(open) => { if (!open) setMigrateSourceNode(null); }}
+          <ErrorBoundary>
+            <NodeMigrateWizard
+              open
+              onOpenChange={(open) => { if (!open) setMigrateSourceNode(null); }}
             sourceNode={migrateSourceNode}
             nodes={nodes}
             token={token}
             onSuccess={() => { setMigrateSourceNode(null); void refreshNodes(); }}
           />
+          </ErrorBoundary>
         </Suspense>
       )}
 

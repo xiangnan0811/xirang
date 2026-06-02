@@ -198,12 +198,12 @@ export function LoginPage() {
             <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</h1>
             {requires2FA ? (
               <>
-                <CardTitle className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
+                <CardTitle as="h2" className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
                 <CardDescription className="text-base">{t("login.twoFactorDesc")}</CardDescription>
               </>
             ) : (
               <>
-                <CardTitle className="text-2xl font-bold">{t("login.welcomeTitle")}</CardTitle>
+                <CardTitle as="h2" className="text-2xl font-bold">{t("login.welcomeTitle")}</CardTitle>
                 <CardDescription className="text-base">{t("login.welcomeDesc")}</CardDescription>
               </>
             )}
@@ -223,7 +223,7 @@ export function LoginPage() {
                     autoComplete="one-time-code"
                     placeholder={t("login.totpPlaceholder")}
                     aria-invalid={Boolean(error)}
-                    aria-describedby={error ? errorId : undefined}
+                    aria-errormessage={error ? errorId : undefined}
                     required
                   />
                 </div>
@@ -273,7 +273,7 @@ export function LoginPage() {
                     autoComplete="username"
                     placeholder={t("login.usernamePlaceholder")}
                     aria-invalid={Boolean(error)}
-                    aria-describedby={error ? errorId : undefined}
+                    aria-errormessage={error ? errorId : undefined}
                     required
                   />
                 </div>
@@ -290,7 +290,7 @@ export function LoginPage() {
                     autoComplete="current-password"
                     placeholder={t("login.passwordPlaceholder")}
                     aria-invalid={Boolean(error)}
-                    aria-describedby={error ? errorId : undefined}
+                    aria-errormessage={error ? errorId : undefined}
                     required
                   />
                 </div>

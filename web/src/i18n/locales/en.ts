@@ -2336,6 +2336,7 @@ const en = {
   notificationBell: {
     label: "Notifications",
     labelWithCount: "Notifications ({{count}} unread)",
+    labelWithCountSeverity: "Notifications ({{count}} unread, {{critical}} critical, {{warning}} warning)",
     noUnread: "No unread alerts",
     viewAll: "View all notifications",
     minutesAgo: "{{count}}m ago",

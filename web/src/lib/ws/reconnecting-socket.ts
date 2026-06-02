@@ -57,6 +57,11 @@ export type ReconnectingSocketOptions = {
   onError?: (event: Event) => void;
   /** 达到 maxRetries 后停止重连时触发，调用方可显示永久错误 */
   onGiveUp?: () => void;
+  /**
+   * 标签页从隐藏恢复可见时触发（在 reconnect 逻辑之后）。
+   * 调用方可在此回调中刷新数据，避免展示陈旧信息。
+   */
+  onVisibilityRestore?: () => void;
 };
 
 const DEFAULT_BASE_DELAY = 2500;
@@ -92,6 +97,7 @@ export class ReconnectingSocket {
       | "onClose"
       | "onError"
       | "onGiveUp"
+      | "onVisibilityRestore"
     >
   > &
     Pick<
@@ -107,6 +113,7 @@ export class ReconnectingSocket {
       | "onClose"
       | "onError"
       | "onGiveUp"
+      | "onVisibilityRestore"
     >;
 
   constructor(options: ReconnectingSocketOptions) {
@@ -129,6 +136,7 @@ export class ReconnectingSocket {
       onClose: options.onClose,
       onError: options.onError,
       onGiveUp: options.onGiveUp,
+      onVisibilityRestore: options.onVisibilityRestore,
     };
   }
 
@@ -150,8 +158,7 @@ export class ReconnectingSocket {
       return false;
     }
     try {
-      // WebSocket.send 的多个重载在 lib.dom.d.ts 中是分别声明的；这里 narrow 一下
-      this.socket.send(data as never);
+      this.socket.send(data as Parameters<WebSocket["send"]>[0]);
       return true;
     } catch {
       return false;
@@ -305,7 +312,7 @@ export class ReconnectingSocket {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
       try {
         const payload = this.opts.heartbeatPing!();
-        this.socket.send(payload as never);
+        this.socket.send(payload as Parameters<WebSocket["send"]>[0]);
       } catch {
         // send 失败会触发 onclose，无需额外处理
       }
@@ -350,6 +357,8 @@ export class ReconnectingSocket {
     this.removeVisibilityListener();
     this.visibilityHandler = () => {
       if (document.visibilityState !== "visible" || this.manuallyClosed) return;
+      // 标签页恢复可见，通知调用方刷新数据（避免展示陈旧信息）
+      this.opts.onVisibilityRestore?.();
       // 已放弃重连：标签页恢复时重置计数尝试一次
       if (this.gaveUp) {
         this.gaveUp = false;

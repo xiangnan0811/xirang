@@ -44,9 +44,9 @@ function LoadingState({
 
       <div className="space-y-2">
         {skeletonRows.map((row) => (
-          <div
+          <Skeleton
             key={row.id}
-            className="h-2.5 animate-pulse rounded-md bg-secondary"
+            className="h-2.5"
             style={{ width: row.width }}
           />
         ))}

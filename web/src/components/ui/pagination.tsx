@@ -33,7 +33,8 @@ export function Pagination({
   const hasNext = page < totalPages;
 
   return (
-    <div
+    <nav
+      aria-label="Pagination"
       className={cn(
         "flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground",
         className,
@@ -75,6 +76,6 @@ export function Pagination({
           {t("common.nextPage")}
         </Button>
       </div>
-    </div>
+    </nav>
   );
 }

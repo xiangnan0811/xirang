@@ -41,6 +41,14 @@ export function NotificationBell({ token }: NotificationBellProps) {
 
   const countLabel = unreadCount.total > 99 ? "99+" : String(unreadCount.total);
 
+  const ariaLabel = unreadCount.total > 0
+    ? t('notificationBell.labelWithCountSeverity', {
+        count: unreadCount.total,
+        critical: unreadCount.critical,
+        warning: unreadCount.warning,
+      })
+    : t('notificationBell.label');
+
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
@@ -48,7 +56,7 @@ export function NotificationBell({ token }: NotificationBellProps) {
           variant="ghost"
           size="icon"
           className="relative size-8 text-muted-foreground hover:text-foreground !transition-none"
-          aria-label={unreadCount.total > 0 ? t('notificationBell.labelWithCount', { count: unreadCount.total }) : t('notificationBell.label')}
+          aria-label={ariaLabel}
         >
           <Bell className="size-4" />
           {unreadCount.total > 0 ? (

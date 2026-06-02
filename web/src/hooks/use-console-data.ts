@@ -124,6 +124,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
   const taskVersionRef = useRef(0);
+  const refreshNodesAbortRef = useRef<AbortController | null>(null);
+  const refreshPoliciesAbortRef = useRef<AbortController | null>(null);
+  const refreshTasksAbortRef = useRef<AbortController | null>(null);
+  const refreshSSHKeysAbortRef = useRef<AbortController | null>(null);
+  const refreshIntegrationsAbortRef = useRef<AbortController | null>(null);
 
   const markInventoryMutated = useCallback(() => {
     inventoryVersionRef.current += 1;
@@ -229,7 +234,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {
     if (!token) return;
+    refreshNodesAbortRef.current?.abort();
     const controller = new AbortController();
+    refreshNodesAbortRef.current = controller;
     const inventoryVersionAtStart = inventoryVersionRef.current;
     try {
       const result = await apiClient.getNodes(token, { signal: controller.signal });
@@ -243,6 +250,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const refreshPolicies = useCallback(async () => {
     if (!token) return;
+    refreshPoliciesAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshPoliciesAbortRef.current = controller;
     try {
       const result = await apiClient.getPolicies(token);
       setPolicies(result);
@@ -253,6 +263,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const refreshTasks = useCallback(async (_options?: { limit?: number; offset?: number }) => {
     if (!token) return;
+    refreshTasksAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshTasksAbortRef.current = controller;
     const taskVersionAtStart = taskVersionRef.current;
     try {
       const result = await apiClient.getTasks(token);
@@ -266,6 +279,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const refreshSSHKeys = useCallback(async () => {
     if (!token) return;
+    refreshSSHKeysAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshSSHKeysAbortRef.current = controller;
     const inventoryVersionAtStart = inventoryVersionRef.current;
     try {
       const result = await apiClient.getSSHKeys(token);
@@ -279,6 +295,9 @@ export function useConsoleData(token: string | null): ConsoleDataState {
 
   const refreshIntegrations = useCallback(async () => {
     if (!token) return;
+    refreshIntegrationsAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshIntegrationsAbortRef.current = controller;
     try {
       const result = await apiClient.getIntegrations(token);
       setIntegrations(result);
