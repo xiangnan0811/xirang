@@ -2,6 +2,8 @@ services:
   xirang:
     image: linnea7171/xirang:${IMAGE_TAG:-latest}
     container_name: xirang
+    # 复制 .env.deploy 为 .env 并修改必改项（ADMIN_INITIAL_PASSWORD / JWT_SECRET / DATA_ENCRYPTION_KEY）
+    # 若不提供 .env，容器将使用环境默认值启动（生产环境不推荐）
     env_file:
       - .env
     environment:
@@ -19,3 +21,8 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
