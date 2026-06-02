@@ -998,3 +998,36 @@ Completed a read-only closeout review of the released P5 small-team security roa
 ### Next Steps
 
 - None - task complete
+
+
+## Session 89: 升级 Trellis 配置到 0.6.0-beta.21
+
+**Date**: 2026-06-02
+**Task**: 升级 Trellis 配置到 0.6.0-beta.21
+**Branch**: `chore/trellis-upgrade-0.6.0`
+
+### Summary
+
+trellis update --migrate --force 升级项目 Trellis 配置文件从 0.5.15 到 0.6.0-beta.21，更新 81 个文件（新增 trellis-spec-bootstarp 技能、更新 scripts/hooks/agents/skills/config）。修改 .gitignore 取消 .claude/ .codex/ 的忽略。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b558876` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

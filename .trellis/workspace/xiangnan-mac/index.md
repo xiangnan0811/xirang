@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 88
-- **Last Active**: 2026-05-26
+- **Total Sessions**: 89
+- **Last Active**: 2026-06-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1000 | Active |
+| `journal-2.md` | ~1033 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 89 | 2026-06-02 | 升级 Trellis 配置到 0.6.0-beta.21 | `b558876` | `chore/trellis-upgrade-0.6.0` |
 | 88 | 2026-05-26 | P5 small-team closeout review | `4dafbcf` | `security/p5-closeout-review` |
 | 87 | 2026-05-26 | P5 misoperation guardrails | `ff2f8c0` | `security/p5-misoperation-guardrails` |
 | 86 | 2026-05-25 | P5 dangerous defaults posture | `b38d8e8` | `security/p5-dangerous-defaults-posture` |
