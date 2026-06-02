@@ -5,7 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
@@ -33,6 +37,7 @@ func ValidateTOTP(secret, code string) bool {
 }
 
 // GenerateRecoveryCodes 生成 8 个随机恢复码，每个 8 位大写字母数字。
+// 返回明文恢复码，仅在生成后向用户展示一次。
 func GenerateRecoveryCodes() ([]string, error) {
 	codes := make([]string, recoveryCodeCount)
 	alphabetLen := big.NewInt(int64(len(recoveryCodeAlphabet)))
@@ -50,22 +55,55 @@ func GenerateRecoveryCodes() ([]string, error) {
 	return codes, nil
 }
 
+// HashRecoveryCodes 使用 bcrypt 哈希恢复码，用于安全存储。
+// 返回与 codes 顺序一致的 bcrypt 哈希字符串列表。
+func HashRecoveryCodes(codes []string) ([]string, error) {
+	hashed := make([]string, len(codes))
+	for i, code := range codes {
+		hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("哈希恢复码失败: %w", err)
+		}
+		hashed[i] = string(hash)
+	}
+	return hashed, nil
+}
+
 // ValidateAndConsumeRecoveryCode 验证恢复码并消费（删除）已使用的码。
-// 返回剩余的恢复码列表和是否验证成功。
+// storedJSON 是 JSON 数组，包含 bcrypt 哈希（新格式，以 "$2" 开头）或旧版明文恢复码。
+// 返回剩余码列表（保持原有存储格式不变）及验证是否成功。
 func ValidateAndConsumeRecoveryCode(storedJSON, code string) ([]string, bool) {
-	var codes []string
-	if err := json.Unmarshal([]byte(storedJSON), &codes); err != nil {
+	var stored []string
+	if err := json.Unmarshal([]byte(storedJSON), &stored); err != nil {
 		return nil, false
 	}
-	remaining := make([]string, 0, len(codes))
+	if len(stored) == 0 {
+		return nil, false
+	}
+
+	remaining := make([]string, 0, len(stored))
 	found := false
-	for _, c := range codes {
-		if subtle.ConstantTimeCompare([]byte(c), []byte(code)) == 1 {
+	for _, s := range stored {
+		var matched bool
+		if strings.HasPrefix(s, "$2") {
+			// bcrypt 哈希格式（新版存储方式）
+			if bcrypt.CompareHashAndPassword([]byte(s), []byte(code)) == nil {
+				matched = true
+			}
+		} else {
+			// 旧版明文存储方式，保持兼容但打印警告
+			if subtle.ConstantTimeCompare([]byte(s), []byte(code)) == 1 {
+				matched = true
+				log.Println("WARNING: 检测到旧版明文恢复码，请重新生成恢复码")
+			}
+		}
+		if matched {
 			found = true
 			continue
 		}
-		remaining = append(remaining, c)
+		remaining = append(remaining, s)
 	}
+
 	if !found {
 		return nil, false
 	}

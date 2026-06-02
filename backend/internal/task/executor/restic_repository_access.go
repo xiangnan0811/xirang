@@ -1,7 +1,10 @@
 package executor
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 
 	"xirang/backend/internal/sshutil"
 )
@@ -57,11 +60,31 @@ func (access ResticRepositoryAccess) Password() string {
 	return access.password
 }
 
-func BuildResticEnvPrefix(access ResticRepositoryAccess) string {
-	if access.password == "" {
-		return "RESTIC_PASSWORD=''"
-	}
-	return "RESTIC_PASSWORD=" + ShellEscape(access.password)
+// BuildResticPasswordFilePath 生成一个唯一的 restic 密码临时文件路径。
+// 使用 crypto/rand 生成随机后缀，避免可预测的路径名。
+func BuildResticPasswordFilePath() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("/tmp/xirang_restic_pw_%s", hex.EncodeToString(b))
+}
+
+// BuildResticPasswordFileArg 返回 restic 命令使用的 --password-file 参数。
+func BuildResticPasswordFileArg(passwordFilePath string) string {
+	return "--password-file " + ShellEscape(passwordFilePath)
+}
+
+// BuildCreateResticPasswordFileCmd 返回在远程节点上创建 restic 密码文件的命令。
+// 密码写入临时文件并设置 chmod 600，确保只有文件所有者可读。
+func BuildCreateResticPasswordFileCmd(passwordFilePath string, access ResticRepositoryAccess) string {
+	pw := access.Password()
+	pwEscaped := ShellEscape(pw)
+	pathEscaped := ShellEscape(passwordFilePath)
+	return fmt.Sprintf("printf '%%s' %s > %s && chmod 600 %s", pwEscaped, pathEscaped, pathEscaped)
+}
+
+// BuildCleanupResticPasswordFileCmd 返回删除远程节点上 restic 密码临时文件的命令。
+func BuildCleanupResticPasswordFileCmd(passwordFilePath string) string {
+	return "rm -f " + ShellEscape(passwordFilePath)
 }
 
 func parseResticConfigWithRepositoryAccess(raw string) (ResticConfig, ResticRepositoryAccess, error) {

@@ -493,8 +493,22 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 	}
 
 	access := executor.ResolveResticRepositoryAccessOrEmpty(task.ExecutorConfig)
-	envPrefix := executor.BuildResticEnvPrefix(access)
-	checkCmd := fmt.Sprintf("%s restic check -r %s 2>&1", envPrefix, shellQuote(repo))
+
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := runRemoteCommand(ctx, sshClient, createPwCmd); err != nil {
+		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段创建密码临时文件失败: %v", err))
+		logf("warn", message)
+		return Result{Status: "warning", Message: message}
+	}
+	defer func() {
+		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = runRemoteCommand(context.Background(), sshClient, cleanupCmd)
+	}()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
+
+	checkCmd := fmt.Sprintf("restic %s check -r %s 2>&1", pwFileArg, shellQuote(repo))
 
 	logf("info", "执行 restic check")
 	output, err := runRemoteCommand(ctx, sshClient, checkCmd)

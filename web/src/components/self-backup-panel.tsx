@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { BackupEntry } from "@/lib/api/system-api";
-import { formatBytes, getErrorMessage } from "@/lib/utils";
+import { formatBytes, getErrorMessage, safeLog } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
 import { toast } from "sonner";
 
@@ -27,8 +27,8 @@ export function SelfBackupPanel() {
       }
     } catch (err) {
       if (signal?.aborted) return;
-      // 静默处理列表加载失败
-      console.warn(t('selfBackup.listLoadFailed'), err);
+      // 静默处理列表加载失败，生产环境不记录原始错误对象
+      safeLog("warn", t('selfBackup.listLoadFailed'), getErrorMessage(err));
     } finally {
       if (!signal?.aborted) {
         setLoadingList(false);

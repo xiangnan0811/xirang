@@ -13,30 +13,19 @@ func resetCryptoKeyState() {
 	keyErr = nil
 }
 
-func TestEncryptStringAllowsDevDefaultKey(t *testing.T) {
+func TestEncryptStringRejectsMissingKeyInDevMode(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("GIN_MODE", "")
 	t.Setenv("DATA_ENCRYPTION_KEY", "")
 	resetCryptoKeyState()
 
-	encrypted, err := EncryptString("hello")
-	if err != nil {
-		t.Fatalf("开发环境应允许默认密钥，实际错误: %v", err)
+	_, err := EncryptString("hello")
+	if err == nil {
+		t.Fatalf("开发环境下未设置 DATA_ENCRYPTION_KEY 应返回错误，不应自动使用硬编码密钥")
 	}
-	if !IsEncrypted(encrypted) {
-		t.Fatalf("期望返回加密字符串")
-	}
-	if !strings.HasPrefix(encrypted, encryptedPrefixV2) {
-		t.Fatalf("期望 v2 加密前缀，实际: %s", encrypted[:10])
-	}
-
-	plain, err := DecryptString(encrypted)
-	if err != nil {
-		t.Fatalf("解密失败: %v", err)
-	}
-	if plain != "hello" {
-		t.Fatalf("解密内容不匹配，期望 hello，实际: %s", plain)
+	if !strings.Contains(err.Error(), "DATA_ENCRYPTION_KEY") {
+		t.Fatalf("错误信息应包含 DATA_ENCRYPTION_KEY，实际: %v", err)
 	}
 }
 

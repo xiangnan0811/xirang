@@ -61,9 +61,9 @@
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `SSH_STRICT_HOST_KEY_CHECKING` | bool | `true` | 否 | 严格校验远端主机指纹（`.env.example` 开发值 `false`，生产建议 `true`） |
+| `SSH_STRICT_HOST_KEY_CHECKING` | bool | `true` | 否 | 严格校验远端主机指纹，配合 known_hosts 校验主机指纹（生产建议 `true`） |
 | `SSH_KNOWN_HOSTS_PATH` | string | `~/.ssh/known_hosts` | 否 | known_hosts 文件路径 |
-| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `true` | 否 | 严格校验开启时，是否自动接受首次出现的主机指纹（设为 `false` 可禁用） |
+| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 是否自动接受首次出现的主机指纹并写入 known_hosts（设为 `true` 可启用，生产建议 `false`） |
 
 **读取位置**：`backend/internal/sshutil/ssh_auth.go` 和 `backend/internal/task/executor/executor.go`。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使自动接受的新主机指纹随数据卷持久化。
 
@@ -183,7 +183,8 @@ All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761
 | 变量 | 代码默认值 | `.env.example` | `.env.production.example` |
 |------|-----------|----------------|--------------------------|
 | `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | `true` | `false` | `true` |
-| `SSH_STRICT_HOST_KEY_CHECKING` | `true` | `false` | `true` |
+
+> 注意：`SSH_STRICT_HOST_KEY_CHECKING` 和 `SSH_AUTO_ACCEPT_NEW_HOSTS` 已在 v0.44+ 统一为安全默认值（code、`.env.example`、`.env.production.example` 均为 `true` / `false`），不再纳入不一致清单。生产环境启动时若 `SSH_STRICT_HOST_KEY_CHECKING=false` 会记录 warn 日志。
 
 ## 13. 版本检查与系统备份
 

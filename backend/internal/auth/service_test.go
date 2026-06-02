@@ -180,3 +180,135 @@ func openAuthServiceTestDB(t *testing.T) *gorm.DB {
 	}
 	return db
 }
+
+// TestGlobalLoginLock blocks a username after global threshold failures from different IPs.
+func TestGlobalLoginLock(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+		t.Fatalf("初始化表失败: %v", err)
+	}
+
+	passwordHash, err := HashPassword("Correct1!")
+	if err != nil {
+		t.Fatalf("生成密码哈希失败: %v", err)
+	}
+	user := model.User{Username: "globaltest", PasswordHash: passwordHash, Role: "admin"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
+		FailLockThreshold:       3,  // low per-IP threshold
+		FailLockDuration:        time.Minute,
+		GlobalFailLockThreshold: 10, // higher global threshold
+		GlobalFailLockDuration:  time.Minute,
+	})
+
+	// Each IP sends fewer than per-IP threshold, but cumulatively they should trigger global lock.
+	ips := []string{"10.0.1.1", "10.0.2.1", "10.0.3.1", "10.0.4.1"}
+	attempts := 0
+	lockedIP := ""
+	for attempts < 12 { // exceed global threshold of 10
+		for _, ip := range ips {
+			_, err := service.Login("globaltest", "wrong-password", ip)
+			if err != nil {
+				if _, ok := IsLoginLocked(err); ok {
+					lockedIP = ip
+					break
+				}
+			}
+			attempts++
+		}
+		if lockedIP != "" {
+			break
+		}
+	}
+	if lockedIP == "" {
+		t.Fatalf("globaltest 应该在全局阈值触发后被锁定")
+	}
+
+	// Now all IPs should be rejected — verify a fresh IP is also locked.
+	_, err = service.Login("globaltest", "Correct1!", "10.0.99.99")
+	if err == nil {
+		t.Fatalf("全局锁定后新 IP 也应被拒绝")
+	}
+	if _, ok := IsLoginLocked(err); !ok {
+		t.Fatalf("期望返回登录锁定错误，实际错误: %v", err)
+	}
+}
+
+// TestGlobalLoginLockResetOnSuccess clears global counter on successful login.
+func TestGlobalLoginLockResetOnSuccess(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+		t.Fatalf("初始化表失败: %v", err)
+	}
+
+	passwordHash, err := HashPassword("Correct1!")
+	if err != nil {
+		t.Fatalf("生成密码哈希失败: %v", err)
+	}
+	user := model.User{Username: "resetuser", PasswordHash: passwordHash, Role: "admin"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
+		FailLockThreshold:       5,
+		FailLockDuration:        time.Minute,
+		GlobalFailLockThreshold: 10,
+		GlobalFailLockDuration:  time.Minute,
+	})
+
+	// Accumulate some global failures (below threshold)
+	for i := 0; i < 4; i++ {
+		_, _ = service.Login("resetuser", "wrong-pwd", "10.0.0.1")
+	}
+
+	// Successful login should reset global counter
+	_, err = service.Login("resetuser", "Correct1!", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("正确密码应登录成功，实际错误: %v", err)
+	}
+
+	// Verify global counter is reset: accumulate failures across different IPs
+	// to avoid triggering per-IP lockout (threshold=5)
+	for i := 0; i < 9; i++ {
+		ip := fmt.Sprintf("10.0.1.%d", i)
+		_, err := service.Login("resetuser", "wrong-pwd", ip)
+		if err != nil {
+			if _, ok := IsLoginLocked(err); ok {
+				t.Fatalf("全局计数器应已重置，但触发了锁定 (attempt %d, ip %s)", i, ip)
+			}
+		}
+	}
+}
+
+// TestGlobalLoginLockWithDefaults verifies zero-value global config uses sensible defaults.
+func TestGlobalLoginLockWithDefaults(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+		t.Fatalf("初始化表失败: %v", err)
+	}
+
+	passwordHash, _ := HashPassword("Correct1!")
+	db.Create(&model.User{Username: "defaults", PasswordHash: passwordHash, Role: "admin"})
+
+	// zero values for global config should still work (defaults: 50 threshold, 15m duration)
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
+		FailLockThreshold: 3,
+		FailLockDuration:  time.Minute,
+	})
+
+	// A few failures below default global threshold (50) from different IPs
+	for i := 0; i < 5; i++ {
+		ip := fmt.Sprintf("10.0.%d.%d", i, i)
+		_, _ = service.Login("defaults", "wrong", ip)
+	}
+
+	// Should NOT be globally locked yet (5 << 50)
+	_, err := service.Login("defaults", "Correct1!", "10.0.99.99")
+	if err != nil {
+		t.Fatalf("低于默认全局阈值时不应锁定，实际错误: %v", err)
+	}
+}

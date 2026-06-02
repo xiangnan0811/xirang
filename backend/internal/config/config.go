@@ -27,6 +27,8 @@ type Config struct {
 	LoginRateWindow          time.Duration
 	LoginFailLockThreshold   int
 	LoginFailLockDuration    time.Duration
+	LoginGlobalFailLockThreshold   int
+	LoginGlobalFailLockDuration    time.Duration
 	NodeProbeInterval        time.Duration
 	NodeProbeFailThreshold   int
 	NodeProbeConcurrency     int
@@ -36,6 +38,8 @@ type Config struct {
 	MetricsToken             string
 	MetricsRateLimit         int
 	MetricsRateWindow        time.Duration
+	SSHStrictHostKeyChecking bool
+	SSHAutoAcceptNewHosts    bool
 }
 
 func Load() (Config, error) {
@@ -114,6 +118,20 @@ func Load() (Config, error) {
 	}
 	cfg.LoginFailLockDuration = failLockDuration
 
+	failGlobalLockThresholdRaw := util.GetEnvOrDefault("LOGIN_GLOBAL_FAIL_LOCK_THRESHOLD", "50")
+	failGlobalLockThreshold, err := strconv.Atoi(failGlobalLockThresholdRaw)
+	if err != nil || failGlobalLockThreshold <= 0 {
+		return Config{}, fmt.Errorf("解析 LOGIN_GLOBAL_FAIL_LOCK_THRESHOLD 失败")
+	}
+	cfg.LoginGlobalFailLockThreshold = failGlobalLockThreshold
+
+	failGlobalLockDurationRaw := util.GetEnvOrDefault("LOGIN_GLOBAL_FAIL_LOCK_DURATION", "15m")
+	failGlobalLockDuration, err := time.ParseDuration(failGlobalLockDurationRaw)
+	if err != nil || failGlobalLockDuration <= 0 {
+		return Config{}, fmt.Errorf("解析 LOGIN_GLOBAL_FAIL_LOCK_DURATION 失败: %w", err)
+	}
+	cfg.LoginGlobalFailLockDuration = failGlobalLockDuration
+
 	probeIntervalRaw := util.GetEnvOrDefault("NODE_PROBE_INTERVAL", "5m")
 	probeInterval, err := time.ParseDuration(probeIntervalRaw)
 	if err != nil || probeInterval < 30*time.Second {
@@ -178,6 +196,22 @@ func Load() (Config, error) {
 	}
 	cfg.MetricsRateWindow = metricsRateWindow
 
+	sshStrict, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SSHStrictHostKeyChecking = sshStrict
+
+	sshAutoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SSHAutoAcceptNewHosts = sshAutoAccept
+
+	if !cfg.SSHStrictHostKeyChecking && !util.IsDevelopmentEnv() {
+		log.Printf("warn: SSH_STRICT_HOST_KEY_CHECKING 已关闭，生产环境建议开启以防御中间人攻击")
+	}
+
 	if len(cfg.AllowedOrigins) == 0 {
 		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，仅同主机（忽略端口）Origin 会被放行")
 	}
@@ -229,7 +263,7 @@ func splitCSV(raw string) []string {
 
 func IsWeakJWTSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || len(trimmed) < 16 {
+	if trimmed == "" || len(trimmed) < 32 {
 		return true
 	}
 	weakSet := map[string]struct{}{
@@ -241,8 +275,29 @@ func IsWeakJWTSecret(value string) bool {
 		"please-change-this-jwt-secret":       {},
 		"CHANGE-ME-use-a-strong-jwt-secret":   {},
 	}
-	_, weak := weakSet[trimmed]
-	return weak
+	if _, weak := weakSet[trimmed]; weak {
+		return true
+	}
+	return hasLowEntropy(trimmed)
+}
+
+// hasLowEntropy returns true if any single character appears in more than 50% of the string,
+// indicating insufficient randomness for a cryptographic secret.
+func hasLowEntropy(s string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	counts := make(map[rune]int)
+	for _, ch := range s {
+		counts[ch]++
+	}
+	threshold := len(s) / 2 // >50% means strictly greater than half
+	for _, c := range counts {
+		if c > threshold {
+			return true
+		}
+	}
+	return false
 }
 
 func IsWeakDataEncryptionKey(value string) bool {

@@ -162,16 +162,28 @@ func TestResolveResticRepositoryAccessForIndex_WithPassword(t *testing.T) {
 	}
 }
 
-func TestBuildResticEnvPrefixForIndex_EmptyPassword(t *testing.T) {
-	result := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess(""))
-	if result != "RESTIC_PASSWORD=''" {
-		t.Fatalf("期望空访问口令，实际: %s", result)
+func TestBuildResticPasswordFileArgForIndex_EmptyPassword(t *testing.T) {
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
+	if !strings.HasPrefix(pwFileArg, "--password-file ") {
+		t.Fatalf("期望 --password-file 前缀，实际: %s", pwFileArg)
+	}
+	// 密码为空时创建命令仍然生成
+	createCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, executor.NewResticRepositoryAccess(""))
+	if !strings.Contains(createCmd, "chmod 600") {
+		t.Fatalf("期望创建命令包含 chmod 600，实际: %s", createCmd)
 	}
 }
 
-func TestBuildResticEnvPrefixForIndex_WithPassword(t *testing.T) {
-	result := executor.BuildResticEnvPrefix(executor.NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY"))
-	if result == "" || result == "RESTIC_PASSWORD=''" || !strings.HasPrefix(result, "RESTIC_PASSWORD=") {
-		t.Fatalf("期望访问口令被设置，实际: %s", result)
+func TestBuildResticPasswordFileArgForIndex_WithPassword(t *testing.T) {
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
+	if !strings.HasPrefix(pwFileArg, "--password-file ") {
+		t.Fatalf("期望 --password-file 前缀，实际: %s", pwFileArg)
+	}
+	// 密码非空时创建命令包含密码
+	createCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, executor.NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY"))
+	if !strings.Contains(createCmd, "chmod 600") {
+		t.Fatalf("期望创建命令包含 chmod 600，实际: %s", createCmd)
 	}
 }

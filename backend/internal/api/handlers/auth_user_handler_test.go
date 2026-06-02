@@ -247,7 +247,11 @@ func TestAuthHandlerTOTPLoginConsumesRecoveryCodeBeforeIssuingToken(t *testing.T
 		"FAKE_RECOVERY_CODE_ONE_FOR_TEST_ONLY",
 		"FAKE_RECOVERY_CODE_TWO_FOR_TEST_ONLY",
 	}
-	recoveryJSON, err := json.Marshal(recoveryCodes)
+	hashedRecoveryCodes, err := auth.HashRecoveryCodes(recoveryCodes)
+	if err != nil {
+		t.Fatalf("哈希恢复码失败: %v", err)
+	}
+	recoveryJSON, err := json.Marshal(hashedRecoveryCodes)
 	if err != nil {
 		t.Fatalf("序列化恢复码失败: %v", err)
 	}
@@ -282,8 +286,12 @@ func TestAuthHandlerTOTPLoginConsumesRecoveryCodeBeforeIssuingToken(t *testing.T
 	if err := json.Unmarshal([]byte(user.RecoveryCodes), &remaining); err != nil {
 		t.Fatalf("解析剩余恢复码失败: %v", err)
 	}
-	if len(remaining) != 1 || remaining[0] != "FAKE_RECOVERY_CODE_TWO_FOR_TEST_ONLY" {
-		t.Fatalf("期望只保留未使用恢复码，实际: %v", remaining)
+	if len(remaining) != 1 {
+		t.Fatalf("期望保留 1 个未使用恢复码，实际: %d", len(remaining))
+	}
+	// 剩余恢复码应为 bcrypt 哈希格式
+	if !strings.HasPrefix(remaining[0], "$2") {
+		t.Fatalf("剩余恢复码应为 bcrypt 哈希格式，实际: %s", remaining[0])
 	}
 }
 
@@ -294,7 +302,11 @@ func TestAuthHandlerTOTPLoginRejectsWhenRecoveryCodeCannotBeSaved(t *testing.T) 
 	}
 	user := seedAuthUser(t, db, "admin", "admin", "FAKE_AdminPass2026!_FOR_TEST_ONLY")
 	recoveryCodes := []string{"FAKE_RECOVERY_CODE_FOR_TEST_ONLY"}
-	recoveryJSON, err := json.Marshal(recoveryCodes)
+	hashedRecoveryCodes, err := auth.HashRecoveryCodes(recoveryCodes)
+	if err != nil {
+		t.Fatalf("哈希恢复码失败: %v", err)
+	}
+	recoveryJSON, err := json.Marshal(hashedRecoveryCodes)
 	if err != nil {
 		t.Fatalf("序列化恢复码失败: %v", err)
 	}

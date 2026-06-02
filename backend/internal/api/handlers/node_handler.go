@@ -921,6 +921,18 @@ func validateNodeHostPort(host string, port int) error {
 		if ip.IsLoopback() {
 			return fmt.Errorf("不允许将回环地址添加为节点")
 		}
+		if ip.IsUnspecified() {
+			return fmt.Errorf("不允许使用未指定地址（0.0.0.0/::）作为节点主机")
+		}
+		if ip.IsLinkLocalUnicast() {
+			return fmt.Errorf("不允许使用链路本地地址作为节点主机")
+		}
+		if ip.IsMulticast() {
+			return fmt.Errorf("不允许使用组播地址作为节点主机")
+		}
+		if ip.IsInterfaceLocalMulticast() {
+			return fmt.Errorf("不允许使用组播地址作为节点主机")
+		}
 	} else {
 		// 不是 IP，检查是否是合法的 hostname
 		if len(trimmedHost) > 253 {

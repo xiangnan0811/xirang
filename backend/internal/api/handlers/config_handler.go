@@ -294,6 +294,93 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return
 	}
 
+	// 导入前校验节点数据：host 合法性、base_path 绝对路径
+	var importErrList []importValidationError
+	for i, nodeData := range data.Nodes {
+		if errs := validateNodeImportData(nodeData, i); len(errs) > 0 {
+			importErrList = append(importErrList, errs...)
+		}
+	}
+	// 校验策略路径
+	for i, policyData := range data.Policies {
+		name, _ := policyData["name"].(string)
+		if src, ok := policyData["source_path"].(string); ok && src != "" {
+			if err := validateImportPath(src); err != nil {
+				importErrList = append(importErrList, importValidationError{
+					Resource: "policies",
+					Index:    i,
+					Name:     name,
+					Field:    "source_path",
+					Message:  err.Error(),
+				})
+			}
+		}
+		if tgt, ok := policyData["target_path"].(string); ok && tgt != "" {
+			if err := validateImportPath(tgt); err != nil {
+				importErrList = append(importErrList, importValidationError{
+					Resource: "policies",
+					Index:    i,
+					Name:     name,
+					Field:    "target_path",
+					Message:  err.Error(),
+				})
+			}
+		}
+	}
+	// 校验任务路径
+	for i, taskData := range data.Tasks {
+		name, _ := taskData["name"].(string)
+		if src, ok := taskData["rsync_source"].(string); ok && src != "" {
+			if err := validateImportPath(src); err != nil {
+				importErrList = append(importErrList, importValidationError{
+					Resource: "tasks",
+					Index:    i,
+					Name:     name,
+					Field:    "rsync_source",
+					Message:  err.Error(),
+				})
+			}
+		}
+		if tgt, ok := taskData["rsync_target"].(string); ok && tgt != "" {
+			if err := validateImportPath(tgt); err != nil {
+				importErrList = append(importErrList, importValidationError{
+					Resource: "tasks",
+					Index:    i,
+					Name:     name,
+					Field:    "rsync_target",
+					Message:  err.Error(),
+				})
+			}
+		}
+	}
+
+	if len(importErrList) > 0 {
+		for _, ve := range importErrList {
+			logger.Module("config").Warn().
+				Str("resource", ve.Resource).
+				Int("index", ve.Index).
+				Str("name", ve.Name).
+				Str("field", ve.Field).
+				Str("message", ve.Message).
+				Msg("配置导入校验失败")
+		}
+		// 构建人类可读的错误消息
+		errDetail := make([]string, 0, len(importErrList))
+		for _, ve := range importErrList {
+			label := fmt.Sprintf("#%d", ve.Index+1)
+			if ve.Name != "" {
+				label = ve.Name
+			}
+			errDetail = append(errDetail, fmt.Sprintf("%s.%s: %s", label, ve.Field, ve.Message))
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":  fmt.Sprintf("导入数据校验失败（共 %d 项），请修复后重试", len(importErrList)),
+			"detail": errDetail,
+			"items":  importErrList,
+		})
+		return
+	}
+
 	var importedNodes, importedKeys, importedPolicies, importedTasks, importedSettings int
 
 	importErr := h.db.Transaction(func(tx *gorm.DB) error {
@@ -383,6 +470,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					existing.BasePath = basePath
 				}
 				if err := validateNodeHostPort(existing.Host, existing.Port); err != nil {
+					logger.Module("config").Warn().
+						Str("node", name).
+						Str("host", existing.Host).
+						Err(err).
+						Msg("导入节点覆盖时 host 校验失败，跳过")
 					continue
 				}
 				if err := tx.Save(&existing).Error; err == nil {
@@ -419,12 +511,24 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					newNode.PrivateKey = privateKey
 				}
 				if newNode.Username == "" {
+					logger.Module("config").Warn().
+						Str("node", name).
+						Msg("导入节点缺少用户名，跳过")
 					continue
 				}
 				if newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key" {
+					logger.Module("config").Warn().
+						Str("node", name).
+						Str("auth_type", newNode.AuthType).
+						Msg("导入节点认证类型无效，跳过")
 					continue
 				}
 				if err := validateNodeHostPort(newNode.Host, newNode.Port); err != nil {
+					logger.Module("config").Warn().
+						Str("node", name).
+						Str("host", newNode.Host).
+						Err(err).
+						Msg("导入新节点时 host 校验失败，跳过")
 					continue
 				}
 				if err := tx.Create(&newNode).Error; err == nil {
@@ -456,6 +560,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				if cron, ok := policyData["cron_spec"].(string); ok {
 					if err := validateCronSpec(cron); err != nil {
+						logger.Module("config").Warn().
+							Str("policy", name).
+							Str("cron_spec", cron).
+							Err(err).
+							Msg("导入策略覆盖时 cron spec 校验失败，跳过")
 						continue
 					}
 					existing.CronSpec = cron
@@ -487,6 +596,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				if cron, ok := policyData["cron_spec"].(string); ok {
 					if err := validateCronSpec(cron); err != nil {
+						logger.Module("config").Warn().
+							Str("policy", name).
+							Str("cron_spec", cron).
+							Err(err).
+							Msg("导入新策略时 cron spec 校验失败，跳过")
 						continue
 					}
 					newPolicy.CronSpec = cron
@@ -558,9 +672,17 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 			}
 			if err := validateTaskRequest(req); err != nil {
+				logger.Module("config").Warn().
+					Str("task", req.Name).
+					Err(err).
+					Msg("导入任务校验失败，跳过")
 				continue
 			}
 			if err := validateTaskRefsWithDB(tx, req, 0); err != nil {
+				logger.Module("config").Warn().
+					Str("task", req.Name).
+					Err(err).
+					Msg("导入任务引用校验失败，跳过")
 				continue
 			}
 			taskKey := buildImportTaskKey(req.Name, req.NodeID)
@@ -646,9 +768,17 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				CronSpec:        current.CronSpec,
 			}
 			if err := validateTaskRefsWithDB(tx, req, current.ID); err != nil {
+				logger.Module("config").Warn().
+					Str("task", current.Name).
+					Err(err).
+					Msg("导入任务依赖更新校验失败，跳过")
 				continue
 			}
 			if err := tx.Model(&current).Update("depends_on_task_id", dependencyID).Error; err != nil {
+				logger.Module("config").Warn().
+					Str("task", current.Name).
+					Err(err).
+					Msg("导入任务依赖关系更新失败，跳过")
 				continue
 			}
 		}
@@ -740,6 +870,65 @@ func decodeConfigImportData(body []byte) (configImportData, error) {
 		return configImportData{}, err
 	}
 	return direct, nil
+}
+
+// importValidationError 导入数据校验错误
+type importValidationError struct {
+	Resource string `json:"resource"` // nodes / policies / tasks
+	Index    int    `json:"index"`
+	Name     string `json:"name"`
+	Field    string `json:"field"`
+	Message  string `json:"message"`
+}
+
+// validateNodeImportData 校验导入的节点数据：host 有效且无可疑地址，base_path 为绝对路径。
+func validateNodeImportData(nodeData map[string]interface{}, idx int) []importValidationError {
+	var errs []importValidationError
+	name, _ := nodeData["name"].(string)
+
+	host, _ := nodeData["host"].(string)
+	port := 22
+	if p, ok := nodeData["port"].(float64); ok {
+		port = int(p)
+	}
+	if err := validateNodeHostPort(host, port); err != nil {
+		errs = append(errs, importValidationError{
+			Resource: "nodes",
+			Index:    idx,
+			Name:     name,
+			Field:    "host",
+			Message:  err.Error(),
+		})
+	}
+
+	if basePath, ok := nodeData["base_path"].(string); ok && basePath != "" {
+		if err := validateImportPath(basePath); err != nil {
+			errs = append(errs, importValidationError{
+				Resource: "nodes",
+				Index:    idx,
+				Name:     name,
+				Field:    "base_path",
+				Message:  err.Error(),
+			})
+		}
+	}
+
+	return errs
+}
+
+// validateImportPath 校验导入路径必须是绝对路径（以 / 开头），防止路径遍历注入。
+func validateImportPath(p string) error {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return nil // 空路径视为未设置，不报错
+	}
+	if !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("路径必须是绝对路径（以 / 开头）: %s", p)
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("路径不能包含 ..（路径遍历检测）: %s", p)
+	}
+	return nil
 }
 
 func readStringField(values map[string]interface{}, key string) string {

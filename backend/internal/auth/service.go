@@ -49,8 +49,10 @@ func IsLoginLocked(err error) (*LoginLockedError, bool) {
 }
 
 type LoginSecurityConfig struct {
-	FailLockThreshold int
-	FailLockDuration  time.Duration
+	FailLockThreshold       int
+	FailLockDuration        time.Duration
+	GlobalFailLockThreshold int
+	GlobalFailLockDuration  time.Duration
 }
 
 type Service struct {
@@ -60,7 +62,7 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg LoginSecurityConfig) *Service {
-	locker := NewLoginFailureLocker(db, settingsSvc, cfg.FailLockThreshold, cfg.FailLockDuration)
+	locker := NewLoginFailureLocker(db, settingsSvc, cfg.FailLockThreshold, cfg.FailLockDuration, cfg.GlobalFailLockThreshold, cfg.GlobalFailLockDuration)
 	locker.StartCleanup(context.Background(), 5*time.Minute)
 	return &Service{
 		db:            db,

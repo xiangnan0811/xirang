@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import i18next from "i18next";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { safeLog } from "@/lib/utils";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -24,8 +25,9 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // ErrorBoundary 是合理的 console.error 使用场景，用于记录未捕获的渲染错误
-    console.error("ErrorBoundary caught:", error, errorInfo);
+    // ErrorBoundary 是合理的日志场景，用于记录未捕获的渲染错误
+    // 生产环境仅记录错误信息，避免泄漏敏感数据
+    safeLog("error", "ErrorBoundary caught:", error.message, errorInfo.componentStack);
   }
 
   private handleReset = () => {

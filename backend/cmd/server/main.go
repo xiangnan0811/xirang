@@ -235,8 +235,10 @@ func main() {
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)
 	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
-		FailLockThreshold: cfg.LoginFailLockThreshold,
-		FailLockDuration:  cfg.LoginFailLockDuration,
+		FailLockThreshold:       cfg.LoginFailLockThreshold,
+		FailLockDuration:        cfg.LoginFailLockDuration,
+		GlobalFailLockThreshold: cfg.LoginGlobalFailLockThreshold,
+		GlobalFailLockDuration:  cfg.LoginGlobalFailLockDuration,
 	})
 
 	router := api.NewRouter(api.Dependencies{
@@ -284,6 +286,9 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
 	}
+
+	// 清理 SSH 密钥临时目录，避免 crash 后残留的密钥文件泄漏
+	executor.CleanupTempKeyDir()
 
 	// LIFO drain: workers started last finish first to invert the dependency
 	// stack. Errors are logged but never abort -- we want every worker to
