@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/util"
 )
 
+// Config holds all application configuration loaded from environment variables.
 type Config struct {
 	ListenAddr               string
 	DBType                   string
@@ -45,6 +46,10 @@ type Config struct {
 	SSHAutoAcceptNewHosts    bool
 }
 
+// Load reads environment variables and returns a validated Config. It exits early
+// with descriptive errors when required variables are missing or malformed. In
+// development mode some security checks are relaxed; in production mode additional
+// hardening checks are enforced.
 func Load() (Config, error) {
 	allowedOriginsRaw, hasAllowedOrigins := os.LookupEnv("CORS_ALLOWED_ORIGINS")
 	if !hasAllowedOrigins {
@@ -249,6 +254,8 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// splitCSV splits a comma-separated string into a trimmed slice, discarding
+// empty entries.
 func splitCSV(raw string) []string {
 	parts := strings.Split(raw, ",")
 	items := make([]string, 0, len(parts))
@@ -264,6 +271,9 @@ func splitCSV(raw string) []string {
 
 // isProductionEnv 和 isDevelopmentEnv 已迁移至 util.IsProductionEnv / util.IsDevelopmentEnv
 
+// IsWeakJWTSecret returns true if the secret is too short, matches a known weak
+// value, or has insufficient entropy (a single character appearing in >50% of
+// the string).
 func IsWeakJWTSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || len(trimmed) < 32 {
@@ -303,6 +313,8 @@ func hasLowEntropy(s string) bool {
 	return false
 }
 
+// IsWeakDataEncryptionKey returns true if the key is too short or matches a
+// known weak placeholder value.
 func IsWeakDataEncryptionKey(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || len(trimmed) < 16 {

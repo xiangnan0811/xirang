@@ -242,7 +242,7 @@ scrape_configs:
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `TZ` | string | All-in-One 镜像默认 `Asia/Shanghai` | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`、`UTC`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换 |
+| `TZ` | string | 未设置时使用系统默认（通常 UTC）；All-in-One 镜像默认 `Asia/Shanghai` | 否 | 容器与应用使用的 IANA 时区（例如 `Asia/Shanghai`、`UTC`）。生产建议显式设置，确保备份文件名、日志时间戳与运维一致。`deploy/allinone/Dockerfile` 已预装 `tzdata`，仅需通过环境变量切换。源码运行时不设置则使用宿主机系统时区 |
 | `LOG_FILE` | string | All-in-One 镜像默认 `/logs/xirang.log` | 否 | 设置后应用日志同时写入该文件（保留 stdout 输出供 docker logs/journald 收集）。源码运行留空时仅 stdout |
 | `TASK_MAX_EXECUTION_SECONDS` | int | `86400` | 否 | 单次任务执行的全局最大秒数兜底，防 executor 卡死导致 goroutine 泄漏。Policy 级 `max_execution_seconds` >0 时优先于本变量。超时后任务被强制中止并 status=failed，last_error 含"超时"字样 |
 
