@@ -224,7 +224,7 @@ func TestRBAC_ErrorResponseBody(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	msg, ok := body["error"].(string)
 	if !ok || msg != "权限不足" {
 		t.Errorf("期望错误信息 '权限不足'，实际 %v", body["error"])
@@ -240,7 +240,7 @@ func TestRequireRole_ErrorResponseBody(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	msg, ok := body["error"].(string)
 	if !ok || msg != "权限不足" {
 		t.Errorf("期望错误信息 '权限不足'，实际 %v", body["error"])

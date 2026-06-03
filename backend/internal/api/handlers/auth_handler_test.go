@@ -119,14 +119,7 @@ func jsonRequest(t *testing.T, router *gin.Engine, method, path, token, body str
 	return resp
 }
 
-func parseAuthResponse(t *testing.T, resp *httptest.ResponseRecorder) Response {
-	t.Helper()
-	var r Response
-	if err := json.Unmarshal(resp.Body.Bytes(), &r); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-	return r
-}
+
 
 // ---------- Login ----------
 

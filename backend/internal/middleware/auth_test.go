@@ -78,7 +78,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if uid, ok := body["userID"].(float64); !ok || uint(uid) != user.ID {
 		t.Errorf("期望 userID=%d，实际 %v", user.ID, body["userID"])
 	}
@@ -185,7 +185,7 @@ func TestAuthMiddleware_TokenVersionMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 SQLite 内存数据库失败: %v", err)
 	}
-	db.AutoMigrate(&model.User{})
+	_ = db.AutoMigrate(&model.User{})
 
 	// 插入用户，token_version=5
 	db.Create(&model.User{ID: 1, Username: "admin", Role: "admin", TokenVersion: 5})
@@ -208,7 +208,7 @@ func TestAuthMiddleware_UserNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 SQLite 内存数据库失败: %v", err)
 	}
-	db.AutoMigrate(&model.User{})
+	_ = db.AutoMigrate(&model.User{})
 
 	m := newTestJWTManager()
 	// 生成 token 指向不存在的用户
@@ -228,7 +228,7 @@ func TestAuthMiddleware_WithDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 SQLite 内存数据库失败: %v", err)
 	}
-	db.AutoMigrate(&model.User{})
+	_ = db.AutoMigrate(&model.User{})
 
 	// 插入用户
 	db.Create(&model.User{ID: 1, Username: "admin", Role: "admin", TokenVersion: 3})
@@ -246,7 +246,7 @@ func TestAuthMiddleware_WithDatabase(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["username"] != "admin" {
 		t.Errorf("期望 username='admin'，实际 %v", body["username"])
 	}
