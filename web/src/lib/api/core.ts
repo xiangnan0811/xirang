@@ -7,12 +7,14 @@ const DEV_DIRECT_API_BASE_URL = import.meta.env.VITE_DEV_API_DIRECT_URL ?? "http
 export class ApiError extends Error {
   status: number;
   detail?: unknown;
+  retryAfter?: number;
 
-  constructor(status: number, message: string, detail?: unknown) {
+  constructor(status: number, message: string, detail?: unknown, retryAfter?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.retryAfter = retryAfter;
   }
 }
 

@@ -24,6 +24,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryAfter, setRetryAfter] = useState(0);
 
   // 验证码状态
   const [captchaId, setCaptchaId] = useState<string | null>(null);
@@ -37,6 +38,26 @@ export function LoginPage() {
   const totpInputRef = useRef<HTMLInputElement | null>(null);
 
   const errorId = "login-form-error";
+
+  // Countdown timer for login lockout
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const timer = setInterval(() => {
+      setRetryAfter(prev => {
+        if (prev <= 1) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retryAfter]);
+
+  const formatRetryTime = (seconds: number) => {
+    if (seconds >= 60) {
+      const min = Math.ceil(seconds / 60);
+      return t("login.lockedMinutes", { minutes: min });
+    }
+    return t("login.lockedSeconds", { seconds });
+  };
 
   const fetchCaptcha = async () => {
     try {
@@ -112,6 +133,14 @@ export function LoginPage() {
         }
         if (error.status === 404) {
           setError(t("login.errorNotFound"));
+          return;
+        }
+        if (error.status === 423 && error.retryAfter) {
+          setRetryAfter(error.retryAfter);
+          setError(t("login.errorLocked", {
+            seconds: error.retryAfter,
+            formatted: formatRetryTime(error.retryAfter),
+          }));
           return;
         }
 
