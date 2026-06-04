@@ -3,14 +3,23 @@ import * as SwitchPrimitive from "@radix-ui/react-switch";
 import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
+type SwitchProps = React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root> & {
+  /** 当提供时，自动生成 htmlFor/id 关联，并为 Switch 添加 aria-label */
+  label?: string;
+};
+
 const Switch = React.forwardRef<
   React.ComponentRef<typeof SwitchPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>
->(({ className, ...props }, ref) => {
+  SwitchProps
+>(({ className, label, id, ...props }, ref) => {
   const reduced = useReducedMotion();
-  return (
+  const autoId = React.useId();
+  const resolvedId = id ?? autoId;
+
+  const switchElement = (
     <SwitchPrimitive.Root
       ref={ref}
+      id={resolvedId}
       className={cn(
         "group peer inline-flex h-[22px] w-[38px] shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent p-[2px]",
         "bg-muted data-[state=checked]:bg-primary",
@@ -18,6 +27,7 @@ const Switch = React.forwardRef<
         "disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
+      aria-label={label ?? props["aria-label"]}
       {...props}
     >
       <SwitchPrimitive.Thumb asChild>
@@ -29,6 +39,17 @@ const Switch = React.forwardRef<
       </SwitchPrimitive.Thumb>
     </SwitchPrimitive.Root>
   );
+
+  if (label) {
+    return (
+      <label htmlFor={resolvedId} className="inline-flex items-center gap-2 cursor-pointer">
+        {switchElement}
+        <span className="text-sm select-none">{label}</span>
+      </label>
+    );
+  }
+
+  return switchElement;
 });
 Switch.displayName = SwitchPrimitive.Root.displayName;
 

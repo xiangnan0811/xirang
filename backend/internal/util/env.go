@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+// ReadBoolEnv reads a boolean environment variable, returning defaultValue
+// when the variable is empty. Returns an error for non-boolean values.
 func ReadBoolEnv(key string, defaultValue bool) (bool, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -20,6 +22,8 @@ func ReadBoolEnv(key string, defaultValue bool) (bool, error) {
 	return value, nil
 }
 
+// ExpandHomePath expands a leading ~ or ~/ in path to the user's home
+// directory. Returns the path unchanged if no expansion is needed.
 func ExpandHomePath(path string) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -42,6 +46,8 @@ func ExpandHomePath(path string) (string, error) {
 	return trimmed, nil
 }
 
+// GetEnvOrDefault returns the trimmed value of the given environment variable,
+// or fallback if the variable is unset or empty (after trimming).
 func GetEnvOrDefault(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -50,6 +56,8 @@ func GetEnvOrDefault(key, fallback string) string {
 	return value
 }
 
+// IsDevelopmentEnv returns true when APP_ENV, ENVIRONMENT, or GIN_MODE
+// indicates a development/debug runtime.
 func IsDevelopmentEnv() bool {
 	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
@@ -57,6 +65,8 @@ func IsDevelopmentEnv() bool {
 	return appEnv == "development" || environment == "development" || ginMode == "debug"
 }
 
+// IsProductionEnv returns true when APP_ENV, ENVIRONMENT, or GIN_MODE
+// indicates a production/release runtime.
 func IsProductionEnv() bool {
 	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))

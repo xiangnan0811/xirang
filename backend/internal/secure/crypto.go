@@ -14,13 +14,13 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/util"
 )
 
 const (
 	encryptedPrefixV1 = "enc:v1:"
 	encryptedPrefixV2 = "enc:v2:"
-	defaultDevKey     = "xirang-dev-encryption-key-change-me"
 )
 
 // argon2id 参数（OWASP 推荐的最低配置）
@@ -47,7 +47,19 @@ func loadKey() {
 			keyErr = fmt.Errorf("必须设置 DATA_ENCRYPTION_KEY（仅 APP_ENV=development 可省略）")
 			return
 		}
-		raw = defaultDevKey
+		// 开发环境下未设置 DATA_ENCRYPTION_KEY：生成随机密钥并 WARNING 提示。
+		// 使用此密钥加密的数据在重启后无法解密，因此开发环境建议显式设置。
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			keyErr = fmt.Errorf("生成临时加密密钥失败: %w", err)
+			return
+		}
+		generated := base64.StdEncoding.EncodeToString(buf)
+		raw = generated
+		logger.Log.Warn().
+			Str("hint", "set DATA_ENCRYPTION_KEY to a stable value for data persistence across restarts").
+			Str("generated_key", generated).
+			Msg("开发环境未设置 DATA_ENCRYPTION_KEY，已生成临时密钥，重启后数据将不可解密")
 	}
 
 	primary, legacy, err := deriveKeyPair(raw)

@@ -49,23 +49,34 @@ func IsLoginLocked(err error) (*LoginLockedError, bool) {
 }
 
 type LoginSecurityConfig struct {
-	FailLockThreshold int
-	FailLockDuration  time.Duration
+	FailLockThreshold       int
+	FailLockDuration        time.Duration
+	GlobalFailLockThreshold int
+	GlobalFailLockDuration  time.Duration
+	// Now is the clock function used during Login(). If nil, time.Now is used.
+	// Tests may inject a controlled clock to avoid time.Sleep.
+	Now func() time.Time
 }
 
 type Service struct {
 	db            *gorm.DB
 	jwt           *JWTManager
 	failureLocker *LoginFailureLocker
+	nowFunc       func() time.Time
 }
 
 func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg LoginSecurityConfig) *Service {
-	locker := NewLoginFailureLocker(db, settingsSvc, cfg.FailLockThreshold, cfg.FailLockDuration)
+	locker := NewLoginFailureLocker(db, settingsSvc, cfg.FailLockThreshold, cfg.FailLockDuration, cfg.GlobalFailLockThreshold, cfg.GlobalFailLockDuration)
 	locker.StartCleanup(context.Background(), 5*time.Minute)
+	nowFunc := cfg.Now
+	if nowFunc == nil {
+		nowFunc = time.Now
+	}
 	return &Service{
 		db:            db,
 		jwt:           jwt,
 		failureLocker: locker,
+		nowFunc:       nowFunc,
 	}
 }
 
@@ -78,7 +89,7 @@ type LoginResult struct {
 }
 
 func (s *Service) Login(username, password, clientIP string) (*LoginResult, error) {
-	now := time.Now()
+	now := s.nowFunc()
 	if lockedUntil, locked := s.failureLocker.IsLocked(username, clientIP, now); locked {
 		return nil, &LoginLockedError{Until: lockedUntil}
 	}

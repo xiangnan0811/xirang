@@ -65,7 +65,7 @@ describe("NotificationBell", () => {
     renderBell();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "通知（3 条未读）" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "通知（3 条未读，严重 1，警告 2）" })).toBeInTheDocument();
     });
 
     expect(screen.getByText("3")).toBeInTheDocument();
@@ -77,7 +77,7 @@ describe("NotificationBell", () => {
     renderBell();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "通知（120 条未读）" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "通知（120 条未读，严重 100，警告 20）" })).toBeInTheDocument();
     });
 
     expect(screen.getByText("99+")).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe("NotificationBell", () => {
       expect(getAlertUnreadCountMock).toHaveBeenCalled();
     });
 
-    await user.click(screen.getByRole("button", { name: "通知（2 条未读）" }));
+    await user.click(screen.getByRole("button", { name: "通知（2 条未读，严重 1，警告 1）" }));
 
     await waitFor(() => {
       expect(getRecentAlertsMock).toHaveBeenCalledWith("test-token", { limit: 10 });

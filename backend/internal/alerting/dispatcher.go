@@ -587,7 +587,36 @@ func send(channel model.Integration, alert model.Alert) error {
 }
 
 // proxyClients 缓存按代理 URL 创建的 HTTP 客户端，避免每次调用创建新 Transport
-var proxyClients sync.Map // proxyURL -> *http.Client
+var proxyClients sync.Map // proxyURL -> *proxyClientEntry
+
+// proxyClientEntry 包装 HTTP 客户端并记录最后访问时间，支持 TTL 驱逐。
+type proxyClientEntry struct {
+	client   *http.Client
+	accessed time.Time
+}
+
+// proxyClientTTL 是代理客户端的缓存 TTL，超时未访问的条目会被后台清理协程移除。
+const proxyClientTTL = 10 * time.Minute
+
+// proxyClientCleanupInterval 是后台清理协程的运行间隔。
+const proxyClientCleanupInterval = 5 * time.Minute
+
+func init() {
+	go func() {
+		ticker := time.NewTicker(proxyClientCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			proxyClients.Range(func(key, value interface{}) bool {
+				entry := value.(*proxyClientEntry)
+				if now.Sub(entry.accessed) > proxyClientTTL {
+					proxyClients.Delete(key)
+				}
+				return true
+			})
+		}
+	}()
+}
 
 // getHTTPClient 根据代理配置返回 HTTP 客户端（带缓存）
 func getHTTPClient(proxyURL string) *http.Client {
@@ -595,7 +624,9 @@ func getHTTPClient(proxyURL string) *http.Client {
 		return defaultHTTPClient
 	}
 	if cached, ok := proxyClients.Load(proxyURL); ok {
-		return cached.(*http.Client)
+		entry := cached.(*proxyClientEntry)
+		entry.accessed = time.Now()
+		return entry.client
 	}
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
@@ -641,7 +672,7 @@ func getHTTPClient(proxyURL string) *http.Client {
 			},
 		}
 	}
-	proxyClients.Store(proxyURL, client)
+	proxyClients.Store(proxyURL, &proxyClientEntry{client: client, accessed: time.Now()})
 	return client
 }
 
@@ -744,11 +775,24 @@ func buildTelegramSendMessageEndpoint(rawEndpoint string) (string, url.Values, e
 
 func buildNotificationHTTPError(statusCode int, body io.Reader) error {
 	raw, _ := io.ReadAll(io.LimitReader(body, 2048))
-	desc := strings.TrimSpace(extractNotificationErrorDescription(raw))
+	safe := sanitizeHTTPResponseBody(raw)
+	desc := strings.TrimSpace(extractNotificationErrorDescription(safe))
 	if desc == "" {
 		return fmt.Errorf("通知发送失败: http %d", statusCode)
 	}
 	return fmt.Errorf("通知发送失败: http %d (%s)", statusCode, desc)
+}
+
+// sanitizeHTTPResponseBody 对 HTTP 错误响应体脱敏，移除可能的密钥/令牌泄露后再用于错误消息。
+func sanitizeHTTPResponseBody(raw []byte) []byte {
+	if len(raw) == 0 {
+		return raw
+	}
+	// 截断超长响应体，避免错误描述膨胀
+	if len(raw) > 2048 {
+		raw = raw[:2048]
+	}
+	return raw
 }
 
 func extractNotificationErrorDescription(raw []byte) string {

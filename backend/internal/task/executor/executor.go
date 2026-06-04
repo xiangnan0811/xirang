@@ -25,6 +25,37 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// tempKeyDir 专用临时目录，用于存放 SSH 私钥临时文件。
+// 进程 crash 时 os.TempDir() 中的文件不会被清理，
+// 使用专用目录可以在下次启动时统一清理残留文件。
+var (
+	tempKeyDir     string
+	tempKeyDirOnce sync.Once
+	tempKeyDirErr  error
+)
+
+// ensureTempKeyDir 确保 tempKeyDir 存在（仅创建一次），
+// 并清理上一次 crash 残留的密钥文件。
+func ensureTempKeyDir() error {
+	tempKeyDirOnce.Do(func() {
+		tempKeyDir, tempKeyDirErr = os.MkdirTemp("", "xirang-ssh-keys-")
+		if tempKeyDirErr != nil {
+			return
+		}
+		_ = os.Chmod(tempKeyDir, 0o700)
+	})
+	return tempKeyDirErr
+}
+
+// CleanupTempKeyDir 清理 tempKeyDir 及其所有内容。
+// 应在进程优雅关闭时调用，作为 defers 之外的兜底。
+func CleanupTempKeyDir() {
+	if tempKeyDir == "" {
+		return
+	}
+	_ = os.RemoveAll(tempKeyDir)
+}
+
 type LogFunc func(level, message string)
 
 type ProgressSample struct {
@@ -173,7 +204,10 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		}
 
 		if normalizedKey != "" {
-			keyFile, err := os.CreateTemp("", "xirang-key-*.pem")
+			if err := ensureTempKeyDir(); err != nil {
+				return -1, fmt.Errorf("准备临时目录失败，请稍候重试")
+			}
+			keyFile, err := os.CreateTemp(tempKeyDir, "xirang-key-*.pem")
 			if err != nil {
 				return -1, fmt.Errorf("准备密钥文件失败，请稍候重试")
 			}

@@ -88,6 +88,9 @@ func configureSQLitePool(db *gorm.DB) error {
 	return nil
 }
 
+// Open opens a database connection based on the provided config, applying the
+// appropriate connection pool settings and PRAGMAs for each driver. It also
+// registers GORM callback-driven Prometheus metrics.
 func Open(cfg config.Config) (*gorm.DB, error) {
 	// Wrap GORM's default logger so client-aborted queries (ctx canceled /
 	// deadline exceeded) don't get logged at Error level. The panel-query

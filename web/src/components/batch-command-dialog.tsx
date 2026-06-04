@@ -55,6 +55,7 @@ export function BatchCommandDialog({
   const [reviewing, setReviewing] = useState(false);
   const [acknowledgement, setAcknowledgement] = useState("");
   const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
+  const batchErrorId = "batch-command-error";
 
   useEffect(() => {
     if (open) {
@@ -181,7 +182,7 @@ export function BatchCommandDialog({
       ) : null}
     >
       {error && (
-        <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div id={batchErrorId} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -310,6 +311,8 @@ export function BatchCommandDialog({
               placeholder={t("batchCommand.commandPlaceholder")}
               value={command}
               onChange={(e) => setCommand(e.target.value)}
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? batchErrorId : undefined}
             />
             <p className="mt-1 text-xs text-muted-foreground">
               {t("batchCommand.commandMaxHint")}

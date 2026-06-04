@@ -17,7 +17,7 @@ func setupDispatcherTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	// Use a unique named in-memory DB per test with cache=shared so that
 	// GORM's connection pool uses the same database for all connections.
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s?mode=memory&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)

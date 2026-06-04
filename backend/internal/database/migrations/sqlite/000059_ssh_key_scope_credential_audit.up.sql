@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS credential_audit_events (
     metadata TEXT NOT NULL DEFAULT '{}',
     client_ip TEXT NOT NULL DEFAULT '',
     user_agent TEXT NOT NULL DEFAULT '',
-    created_at DATETIME NOT NULL
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_credential_audit_events_user_id ON credential_audit_events(user_id);

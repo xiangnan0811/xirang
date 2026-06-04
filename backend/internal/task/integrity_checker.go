@@ -68,11 +68,23 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 	}
 
 	access := executor.ResolveResticRepositoryAccessOrEmpty(task.ExecutorConfig)
-	envPrefix := executor.BuildResticEnvPrefix(access)
+
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 完整性检查: 创建密码临时文件失败")
+		return
+	}
+	defer func() {
+		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
+	}()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 	cmd := fmt.Sprintf("%s %s check -r %s --json 2>&1",
-		envPrefix, resticBin, shellEscape(repo))
+		pwFileArg, resticBin, shellEscape(repo))
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {

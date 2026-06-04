@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useMemo } from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +9,8 @@ export interface EmptyStateProps
   title: React.ReactNode;
   description?: React.ReactNode;
   action?: React.ReactNode;
+  /** 标题使用的 HTML 元素，默认 h3 */
+  as?: "h2" | "h3" | "h4";
 }
 
 export function EmptyState({
@@ -16,10 +19,11 @@ export function EmptyState({
   title,
   description,
   action,
+  as: Heading = "h3",
   ...props
 }: EmptyStateProps) {
   // Handle both LucideIcon (component type, incl. forwardRef) and ReactNode (element)
-  const resolvedIcon = React.useMemo(() => {
+  const resolvedIcon = useMemo(() => {
     if (!icon) return null;
     if (React.isValidElement(icon)) return icon;
     // Treat anything else callable/forwardRef as a component type
@@ -41,7 +45,7 @@ export function EmptyState({
           {resolvedIcon}
         </div>
       ) : null}
-      <div className="text-sm font-semibold text-foreground">{title}</div>
+      <Heading className="text-sm font-semibold text-foreground">{title}</Heading>
       {description ? (
         <div className="mx-auto mt-1 max-w-[260px] text-xs text-muted-foreground">{description}</div>
       ) : null}

@@ -73,7 +73,7 @@ function TreeItem({
     : <File className="size-4 shrink-0 text-muted-foreground" />;
 
   return (
-    <div role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={isSelected}>
+    <div role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={isSelected} aria-level={depth + 1}>
       <button
         type="button"
         className={cn(

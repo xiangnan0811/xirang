@@ -57,6 +57,20 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := BuildResticPasswordFilePath()
+	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	// 确保函数退出时清理远程节点上的密码临时文件
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
+	}()
+
 	bin := e.resticBinary()
 
 	// 检查 restic 是否安装
@@ -65,7 +79,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 	}
 
 	repoArg := ShellEscape(repo)
-	cmdPrefix := e.buildCommandPrefix(task.Node, access)
+	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 
 	// 初始化仓库（若不存在）
 	checkCmd := fmt.Sprintf("%s snapshots -r %s --json 2>&1", cmdPrefix, repoArg)
@@ -142,8 +156,21 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := BuildResticPasswordFilePath()
+	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
+	}()
+
 	repoArg := ShellEscape(repo)
-	cmdPrefix := e.buildCommandPrefix(task.Node, access)
+	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 
 	restoreCmd := fmt.Sprintf("%s restore latest -r %s --target %s --json 2>&1",
 		cmdPrefix, repoArg, ShellEscape(targetPath))
@@ -296,7 +323,20 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, access)
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := BuildResticPasswordFilePath()
+	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
+	}()
+
+	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -324,7 +364,20 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, access)
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := BuildResticPasswordFilePath()
+	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
+	}()
+
+	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	lsPath := "/"
 	if path != "" {
 		lsPath = path
@@ -367,7 +420,20 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	cmdPrefix := e.buildCommandPrefix(task.Node, access)
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := BuildResticPasswordFilePath()
+	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
+	}()
+
+	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	includeArgs := ""
 	for _, inc := range includes {
 		includeArgs += " --include " + ShellEscape(inc)
@@ -391,15 +457,15 @@ func parseResticConfig(raw string) (ResticConfig, error) {
 	return cfg, nil
 }
 
-// buildCommandPrefix 构造 restic 命令前缀（含环境变量和可选 sudo）。
-func (e *ResticExecutor) buildCommandPrefix(node model.Node, access ResticRepositoryAccess) string {
-	envPrefix := BuildResticEnvPrefix(access)
+// buildCommandPrefix 构造 restic 命令前缀（含 --password-file 和可选 sudo）。
+func (e *ResticExecutor) buildCommandPrefix(node model.Node, passwordFilePath string) string {
+	pwFileArg := BuildResticPasswordFileArg(passwordFilePath)
 	bin := e.resticBinary()
 	if NeedsSudo(node) {
-		// sudo env RESTIC_PASSWORD=xxx restic ...
-		return fmt.Sprintf("sudo env %s %s", envPrefix, bin)
+		// sudo restic --password-file /tmp/xirang_restic_pw_XXXX ...
+		return fmt.Sprintf("sudo %s %s", bin, pwFileArg)
 	}
-	return fmt.Sprintf("%s %s", envPrefix, bin)
+	return fmt.Sprintf("%s %s", bin, pwFileArg)
 }
 
 func buildResticExcludeArgs(patterns []string) string {

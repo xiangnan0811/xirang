@@ -210,6 +210,19 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
+	// 检查关联节点是否存在（Preload 时 Node 可能为 nil，如节点已被删除）
+	if taskEntity.Node.ID == 0 {
+		m.emitLog(taskID, runIDPtr, "error", "关联节点不存在，跳过执行", taskEntity.Status)
+		now := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &now,
+			"last_error":  "关联节点不存在",
+		})
+		runCompleted = true
+		return
+	}
+
 	// 检查节点是否已归档
 	if taskEntity.Node.Archived {
 		m.emitLog(taskID, runIDPtr, "warn", "节点已归档，跳过执行", taskEntity.Status)
@@ -331,10 +344,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				"last_error":  errorMsg,
 			})
 			runCompleted = true
-			m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
+			if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
 				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  errorMsg,
-			})
+			}); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in pre-hook error path")
+			}
 			m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 			return
 		}
@@ -363,10 +378,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{ //nolint:errcheck // best-effort status update during timeout handling
+		if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
 			"last_error":  errorMsg,
-		})
+		}); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in timeout error path")
+		}
 		m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 		return
 	}
@@ -423,10 +440,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
 				m.emitLog(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
-				m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
+				if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 					"next_run_at": nextCronRun(taskEntity.CronSpec),
 					"last_error":  "任务已取消",
-				})
+				}); err != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in verify-cancel error path")
+				}
 				finishedAt := time.Now()
 				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 					"status":      "canceled",
@@ -441,12 +460,14 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 			if result.Status == "warning" || result.Status == "failed" {
 				verifyMessage := sanitizeTaskLastError(result.Message)
-				m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{ //nolint:errcheck // best-effort status update during error handling
+				if err := m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{
 					"retry_count":   0,
 					"next_run_at":   nextCronRun(taskEntity.CronSpec),
 					"last_error":    verifyMessage,
 					"verify_status": verifyStatus,
-				})
+				}); err != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in verify-warning error path")
+				}
 				finishedAt := time.Now()
 				duration := finishedAt.Sub(now).Milliseconds()
 				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
@@ -587,6 +608,16 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		}
 		timer := time.AfterFunc(delay, func() {
 			m.retryTimers.Delete(taskID)
+			// 二次确认：任务状态是否仍为 retrying（可能已被取消/暂停）
+			var current struct{ Status string }
+			if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试定时器回调：加载任务状态失败")
+				return
+			}
+			if ParseStatus(current.Status) != StatusRetrying {
+				logger.Module("task").Info().Uint("task_id", taskID).Str("status", current.Status).Msg("重试定时器回调：任务状态已变更，跳过重试")
+				return
+			}
 			if _, err := m.trigger(taskID, "retry"); err != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试触发失败")
 			}

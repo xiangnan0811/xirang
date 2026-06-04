@@ -357,13 +357,18 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		respondInternalError(c, fmt.Errorf("生成恢复码失败: %w", err))
 		return
 	}
-	recoveryJSON, err := json.Marshal(recoveryCodes)
+	hashedRecoveryCodes, err := auth.HashRecoveryCodes(recoveryCodes)
+	if err != nil {
+		respondInternalError(c, fmt.Errorf("哈希恢复码失败: %w", err))
+		return
+	}
+	hashedRecoveryJSON, err := json.Marshal(hashedRecoveryCodes)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("序列化恢复码失败: %w", err))
 		return
 	}
 	user.TOTPEnabled = true
-	user.RecoveryCodes = string(recoveryJSON)
+	user.RecoveryCodes = string(hashedRecoveryJSON)
 	if err := h.db.Save(&user).Error; err != nil {
 		respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
 		return

@@ -125,6 +125,9 @@ type Manager struct {
 
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
 
+	rootCtx   context.Context    // worker goroutines 的父级 context
+	rootCancel context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
+
 	shuttingDown atomic.Bool
 }
 
@@ -153,8 +156,9 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	m.drillSSHScriptFunc = m.runDrillSSHScript
 	m.drillRestoreFunc = m.restoreBackupToSandbox
 	m.ensureRemoteTargetReadyFunc = executor.EnsureRemoteTargetReady
-	m.startLogWorker()
-	m.startSampleWorker()
+	m.rootCtx, m.rootCancel = context.WithCancel(context.Background())
+	m.startLogWorker(m.rootCtx)
+	m.startSampleWorker(m.rootCtx)
 	return m
 }
 
@@ -366,11 +370,20 @@ func (m *Manager) Cancel(taskID uint) error {
 				cancelFn()
 			}
 		}
-		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-			"last_error":  "任务已取消",
-		}); err != nil {
+		// 二次确认 runTask 确实收到了取消信号：等待一小段时间后检查 runTask 是否已将状态从 running 变更为 canceled。
+		// 若 runTask 已自行完成（不再是 running），则不再覆盖状态，避免并发写。
+		time.Sleep(100 * time.Millisecond)
+		var current struct{ Status string }
+		if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
 			return err
+		}
+		// 只有在 runTask 尚未处理取消（状态仍为 running）时才主动写入 canceled。
+		// runTask 检测到 ctx 取消后会将状态更新为 canceled，此处作为 fallback。
+		if ParseStatus(current.Status) == StatusRunning {
+			_ = m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
+				"next_run_at": nextCronRun(taskEntity.CronSpec),
+				"last_error":  "任务已取消",
+			})
 		}
 		m.emitLog(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
@@ -532,6 +545,9 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	if m.rootCancel != nil {
+		m.rootCancel()
 	}
 	return nil
 }

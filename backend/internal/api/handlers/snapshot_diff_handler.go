@@ -114,13 +114,25 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	envPrefix := executor.BuildResticEnvPrefix(access)
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		respondInternalError(c, fmt.Errorf("创建 restic 密码临时文件失败: %w", err))
+		return
+	}
+	defer func() {
+		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
+	}()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
+
 	resticBin := "restic"
 	repoArg := "'" + strings.ReplaceAll(repo, "'", "'\\''") + "'"
 	snap1Arg := "'" + strings.ReplaceAll(snap1, "'", "'\\''") + "'"
 	snap2Arg := "'" + strings.ReplaceAll(snap2, "'", "'\\''") + "'"
 
-	cmd := fmt.Sprintf("%s %s diff %s %s -r %s 2>&1", envPrefix, resticBin, snap1Arg, snap2Arg, repoArg)
+	cmd := fmt.Sprintf("%s %s diff %s %s -r %s 2>&1", pwFileArg, resticBin, snap1Arg, snap2Arg, repoArg)
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("执行 restic diff 失败: %w", err))

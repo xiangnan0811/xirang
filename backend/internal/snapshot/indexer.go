@@ -182,14 +182,26 @@ func indexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snapshotID
 	}
 
 	resticBin := resolveResticBinary()
-	envPrefix := executor.BuildResticEnvPrefix(access)
+
+	// 生成唯一的密码临时文件路径，并在远程节点上创建
+	pwFilePath := executor.BuildResticPasswordFilePath()
+	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
+		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
+	}()
+	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
+
 	repoArg := executor.ShellEscape(task.RsyncTarget)
 	snapArg := executor.ShellEscape(snapshotID)
 
 	// 使用 restic find --json --long 递归列出快照中所有文件。
 	// find 命令天然递归整个快照树，无需手动遍历目录。
 	cmd := fmt.Sprintf("%s %s find --json --long --path=/ %s -r %s 2>&1",
-		envPrefix, resticBin, snapArg, repoArg)
+		pwFileArg, resticBin, snapArg, repoArg)
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {

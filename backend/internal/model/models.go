@@ -424,7 +424,7 @@ type AuditLog struct {
 type CredentialAuditEvent struct {
 	ID               uint      `gorm:"primaryKey" json:"id"`
 	UserID           uint      `gorm:"index" json:"user_id"`
-	Username         string    `gorm:"size:64;index" json:"username"`
+	Username         string    `gorm:"size:64;not null;index" json:"username"`
 	Role             string    `gorm:"size:32;index" json:"role"`
 	Action           string    `gorm:"size:64;not null;index" json:"action"`
 	Purpose          string    `gorm:"size:64;not null;index" json:"purpose"`
@@ -438,9 +438,9 @@ type CredentialAuditEvent struct {
 	Outcome          string    `gorm:"size:16;not null;index" json:"outcome"`
 	ErrorMessage     string    `gorm:"type:text;not null;default:''" json:"error_message,omitempty"`
 	Metadata         string    `gorm:"type:text;not null;default:'{}'" json:"metadata,omitempty"`
-	ClientIP         string    `gorm:"size:64" json:"client_ip"`
-	UserAgent        string    `gorm:"size:255" json:"user_agent"`
-	CreatedAt        time.Time `gorm:"index" json:"created_at"`
+	ClientIP         string    `gorm:"size:64;not null;default:''" json:"client_ip"`
+	UserAgent        string    `gorm:"size:255;not null;default:''" json:"user_agent"`
+	CreatedAt        time.Time `gorm:"not null;index" json:"created_at"`
 }
 
 // CredentialAccessGrant stores a short-lived, operation-bound JIT grant for

@@ -7,6 +7,7 @@ import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
 import { SnapshotSearch } from "@/components/snapshot-search";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 const TaskEditorDialog = React.lazy(() =>
   import("@/components/task-create-dialog").then(m => ({ default: m.TaskEditorDialog }))
@@ -215,33 +216,43 @@ export function TasksPageDialogs({
           </DialogHeader>
           <DialogBody>
             {historyTask && authToken && showSnapshots ? (
-              <SnapshotBrowser
-                taskId={historyTask.id}
-                token={authToken}
-                initialSnapshotId={navigateToSnapshotId}
-                initialPath={navigateToPath}
-              />
-            ) : historyTask && authToken && showDiff ? (
-              <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
-            ) : historyTask && authToken && showSearch ? (
-              <SnapshotSearch
-                taskId={historyTask.id}
-                token={authToken}
-                onNavigateToFile={handleNavigateToFile}
-              />
-            ) : historyTask && authToken && (
-              selectedRun ? (
-                <TaskRunDetail
-                  run={selectedRun}
-                  token={authToken}
-                  onBack={() => setSelectedRun(null)}
-                />
-              ) : (
-                <TaskRunHistory
+              <ErrorBoundary>
+                <SnapshotBrowser
                   taskId={historyTask.id}
                   token={authToken}
-                  onSelectRun={setSelectedRun}
+                  initialSnapshotId={navigateToSnapshotId}
+                  initialPath={navigateToPath}
                 />
+              </ErrorBoundary>
+            ) : historyTask && authToken && showDiff ? (
+              <ErrorBoundary>
+                <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
+              </ErrorBoundary>
+            ) : historyTask && authToken && showSearch ? (
+              <ErrorBoundary>
+                <SnapshotSearch
+                  taskId={historyTask.id}
+                  token={authToken}
+                  onNavigateToFile={handleNavigateToFile}
+                />
+              </ErrorBoundary>
+            ) : historyTask && authToken && (
+              selectedRun ? (
+                <ErrorBoundary>
+                  <TaskRunDetail
+                    run={selectedRun}
+                    token={authToken}
+                    onBack={() => setSelectedRun(null)}
+                  />
+                </ErrorBoundary>
+              ) : (
+                <ErrorBoundary>
+                  <TaskRunHistory
+                    taskId={historyTask.id}
+                    token={authToken}
+                    onSelectRun={setSelectedRun}
+                  />
+                </ErrorBoundary>
               )
             )}
           </DialogBody>
@@ -249,7 +260,7 @@ export function TasksPageDialogs({
       </Dialog>
 
       {authToken && (
-        <>
+        <ErrorBoundary>
           <BatchCommandDialog
             open={batchDialogOpen}
             onOpenChange={(open) => {
@@ -271,7 +282,7 @@ export function TasksPageDialogs({
             retain={batchRetain}
             token={authToken}
           />
-        </>
+        </ErrorBoundary>
       )}
 
       <Dialog
@@ -306,20 +317,22 @@ export function TasksPageDialogs({
       </Dialog>
 
       {authToken && historyTask && (
-        <RestoreConfirmDialog
-          open={restoreDialogOpen}
-          onOpenChange={setRestoreDialogOpen}
-          taskId={historyTask.id}
-          taskName={historyTask.name ?? historyTask.policyName ?? ""}
-          rsyncSource={historyTask.rsyncSource}
-          rsyncTarget={historyTask.rsyncTarget}
-          token={authToken}
-          onSuccess={(runId) => {
-            setRestoreDialogOpen(false);
-            toast.success(t("tasks.restoreSuccess", { runId }));
-            onRestoreTriggered?.();
-          }}
-        />
+        <ErrorBoundary>
+          <RestoreConfirmDialog
+            open={restoreDialogOpen}
+            onOpenChange={setRestoreDialogOpen}
+            taskId={historyTask.id}
+            taskName={historyTask.name ?? historyTask.policyName ?? ""}
+            rsyncSource={historyTask.rsyncSource}
+            rsyncTarget={historyTask.rsyncTarget}
+            token={authToken}
+            onSuccess={(runId) => {
+              setRestoreDialogOpen(false);
+              toast.success(t("tasks.restoreSuccess", { runId }));
+              onRestoreTriggered?.();
+            }}
+          />
+        </ErrorBoundary>
       )}
     </>
   );

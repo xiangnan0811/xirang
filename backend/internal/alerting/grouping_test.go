@@ -36,6 +36,8 @@ func TestGrouping_DifferentKeysDoNotCollide(t *testing.T) {
 func TestGrouping_WindowExpiryResetsKey(t *testing.T) {
 	g := NewGrouping(10 * time.Millisecond)
 	_ = g.ShouldSend("x")
+	// time.Sleep 等待 10ms 窗口过期；Grouping.ShouldSend 内部直接调用
+	// time.Now()，无可注入时钟接口。25ms > 窗口 + 调度抖动，充足裕量。
 	time.Sleep(25 * time.Millisecond)
 	if !g.ShouldSend("x") {
 		t.Fatal("after window expired, next alert must send as first again")

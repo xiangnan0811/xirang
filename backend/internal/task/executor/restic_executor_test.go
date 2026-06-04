@@ -78,7 +78,8 @@ func TestInitCommandWithoutAppendOnly(t *testing.T) {
 	cfg := ResticConfig{AppendOnly: false}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	cmdPrefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
+	pwFilePath := BuildResticPasswordFilePath()
+	cmdPrefix := exec.buildCommandPrefix(node, pwFilePath)
 	initFlags := ""
 	if cfg.AppendOnly {
 		initFlags = " --repository-version 2"
@@ -95,10 +96,10 @@ func TestInitCommandWithoutAppendOnly(t *testing.T) {
 
 func TestInitCommandWithAppendOnly(t *testing.T) {
 	exec := &ResticExecutor{}
-	cfg := ResticConfig{AppendOnly: true}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	cmdPrefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
+	pwFilePath := BuildResticPasswordFilePath()
+	cmdPrefix := exec.buildCommandPrefix(node, pwFilePath)
 	initFlags := " --repository-version 2"
 	initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, ShellEscape("/backup/repo"))
 
@@ -157,10 +158,6 @@ func TestShellEscapeDoesNotMutateSimplePath(t *testing.T) {
 
 func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
 	exec := &ResticExecutor{binary: "restic"}
-	cfg := ResticConfig{
-		RepositoryPassword: "FAKE_PASSWORD_FOR_TEST_ONLY",
-		AppendOnly:         true,
-	}
 	node := model.Node{
 		Host:     "10.0.0.1",
 		Port:     22,
@@ -168,11 +165,11 @@ func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
 		AuthType: "key",
 	}
 
-	prefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
+	pwFilePath := BuildResticPasswordFilePath()
+	prefix := exec.buildCommandPrefix(node, pwFilePath)
 
-	expectedEnv := "RESTIC_PASSWORD=" + ShellEscape(cfg.RepositoryPassword)
-	if !strings.Contains(prefix, expectedEnv) {
-		t.Fatalf("期望命令前缀包含转义后的 RESTIC_PASSWORD，实际: %s", prefix)
+	if !strings.Contains(prefix, "--password-file") {
+		t.Fatalf("期望命令前缀包含 --password-file，实际: %s", prefix)
 	}
 	if !strings.Contains(prefix, "restic") {
 		t.Fatalf("期望命令前缀包含 restic 二进制名称，实际: %s", prefix)
@@ -185,13 +182,16 @@ func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
 
 func TestBuildCommandPrefixWithoutPassword(t *testing.T) {
 	exec := &ResticExecutor{binary: "restic"}
-	cfg := ResticConfig{AppendOnly: false, RepositoryPassword: ""}
 	node := model.Node{Host: "10.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
-	prefix := exec.buildCommandPrefix(node, NewResticRepositoryAccess(cfg.RepositoryPassword))
+	pwFilePath := BuildResticPasswordFilePath()
+	prefix := exec.buildCommandPrefix(node, pwFilePath)
 
-	if !strings.Contains(prefix, "RESTIC_PASSWORD=''") {
-		t.Fatalf("期望密码为空时前缀包含空密码，实际: %s", prefix)
+	if !strings.Contains(prefix, "--password-file") {
+		t.Fatalf("期望前缀包含 --password-file，实际: %s", prefix)
+	}
+	if !strings.Contains(prefix, pwFilePath) {
+		t.Fatalf("期望前缀包含密码文件路径 %s，实际: %s", pwFilePath, prefix)
 	}
 }
 
@@ -204,21 +204,37 @@ func TestBuildCommandPrefixWithSudoPreservesEnvWrapping(t *testing.T) {
 		AuthType: "key",
 		UseSudo:  true,
 	}
-	access := NewResticRepositoryAccess("FAKE_PASSWORD_WITH_QUOTE_'_FOR_TEST_ONLY")
 
-	prefix := exec.buildCommandPrefix(node, access)
-	expected := "sudo env " + BuildResticEnvPrefix(access) + " /usr/local/bin/restic"
+	pwFilePath := BuildResticPasswordFilePath()
+	prefix := exec.buildCommandPrefix(node, pwFilePath)
+	expected := fmt.Sprintf("sudo /usr/local/bin/restic --password-file %s", ShellEscape(pwFilePath))
 	if prefix != expected {
-		t.Fatalf("sudo env 前缀不等价，期望 %q，实际 %q", expected, prefix)
+		t.Fatalf("sudo 前缀不等价，期望 %q，实际 %q", expected, prefix)
 	}
 }
 
-func TestBuildResticEnvPrefixEscapesNonEmptyPassword(t *testing.T) {
+func TestBuildResticPasswordFileArgContainsPasswordFileFlag(t *testing.T) {
 	access := NewResticRepositoryAccess("FAKE_PASSWORD_WITH_QUOTE_'_FOR_TEST_ONLY")
-	got := BuildResticEnvPrefix(access)
-	expected := "RESTIC_PASSWORD=" + ShellEscape(access.Password())
-	if got != expected {
-		t.Fatalf("RESTIC_PASSWORD 转义不等价，期望 %q，实际 %q", expected, got)
+	pwFilePath := BuildResticPasswordFilePath()
+	pwFileArg := BuildResticPasswordFileArg(pwFilePath)
+
+	if !strings.HasPrefix(pwFileArg, "--password-file ") {
+		t.Fatalf("期望 --password-file 前缀，实际: %q", pwFileArg)
+	}
+
+	// 验证密码文件创建命令包含正确的密码
+	createCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
+	if !strings.Contains(createCmd, pwFilePath) {
+		t.Fatalf("期望创建命令包含密码文件路径 %s，实际: %s", pwFilePath, createCmd)
+	}
+	if !strings.Contains(createCmd, "chmod 600") {
+		t.Fatalf("期望创建命令包含 chmod 600，实际: %s", createCmd)
+	}
+
+	// 验证清理命令
+	cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
+	if !strings.HasPrefix(cleanupCmd, "rm -f ") {
+		t.Fatalf("期望清理命令以 rm -f 开头，实际: %s", cleanupCmd)
 	}
 }
 

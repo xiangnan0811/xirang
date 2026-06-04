@@ -1,19 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export function useClientPagination<T>(items: T[], defaultPageSize = 20) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSizeRaw] = useState(defaultPageSize);
+  const prevItemsRef = useRef<T[]>(items);
 
   const total = items.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safeTotalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
 
   // 当 items 变化导致当前页超出范围时，自动回退到最后一页
+  // 使用 ref 比较 items 身份，避免 totalPages 变化导致的无限循环
   useEffect(() => {
-    if (page > totalPages) {
+    if (prevItemsRef.current === items) return;
+    prevItemsRef.current = items;
+    if (page > safeTotalPages) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPage(totalPages);
+      setPage(safeTotalPages);
     }
-  }, [page, totalPages]);
+  }, [items, page, safeTotalPages]);
 
   const setPageSize = (size: number) => {
     setPageSizeRaw(size);

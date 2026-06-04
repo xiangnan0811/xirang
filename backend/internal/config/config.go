@@ -1,3 +1,6 @@
+// Package config 负责加载和验证应用配置。
+// 注意：Load() 在 logger.Init() 之前运行，因此本包使用标准库 log.Printf
+// 输出早期启动警告，而非 zerolog。
 package config
 
 import (
@@ -11,6 +14,7 @@ import (
 	"xirang/backend/internal/util"
 )
 
+// Config holds all application configuration loaded from environment variables.
 type Config struct {
 	ListenAddr               string
 	DBType                   string
@@ -27,6 +31,8 @@ type Config struct {
 	LoginRateWindow          time.Duration
 	LoginFailLockThreshold   int
 	LoginFailLockDuration    time.Duration
+	LoginGlobalFailLockThreshold   int
+	LoginGlobalFailLockDuration    time.Duration
 	NodeProbeInterval        time.Duration
 	NodeProbeFailThreshold   int
 	NodeProbeConcurrency     int
@@ -36,8 +42,14 @@ type Config struct {
 	MetricsToken             string
 	MetricsRateLimit         int
 	MetricsRateWindow        time.Duration
+	SSHStrictHostKeyChecking bool
+	SSHAutoAcceptNewHosts    bool
 }
 
+// Load reads environment variables and returns a validated Config. It exits early
+// with descriptive errors when required variables are missing or malformed. In
+// development mode some security checks are relaxed; in production mode additional
+// hardening checks are enforced.
 func Load() (Config, error) {
 	allowedOriginsRaw, hasAllowedOrigins := os.LookupEnv("CORS_ALLOWED_ORIGINS")
 	if !hasAllowedOrigins {
@@ -114,6 +126,20 @@ func Load() (Config, error) {
 	}
 	cfg.LoginFailLockDuration = failLockDuration
 
+	failGlobalLockThresholdRaw := util.GetEnvOrDefault("LOGIN_GLOBAL_FAIL_LOCK_THRESHOLD", "50")
+	failGlobalLockThreshold, err := strconv.Atoi(failGlobalLockThresholdRaw)
+	if err != nil || failGlobalLockThreshold <= 0 {
+		return Config{}, fmt.Errorf("解析 LOGIN_GLOBAL_FAIL_LOCK_THRESHOLD 失败")
+	}
+	cfg.LoginGlobalFailLockThreshold = failGlobalLockThreshold
+
+	failGlobalLockDurationRaw := util.GetEnvOrDefault("LOGIN_GLOBAL_FAIL_LOCK_DURATION", "15m")
+	failGlobalLockDuration, err := time.ParseDuration(failGlobalLockDurationRaw)
+	if err != nil || failGlobalLockDuration <= 0 {
+		return Config{}, fmt.Errorf("解析 LOGIN_GLOBAL_FAIL_LOCK_DURATION 失败: %w", err)
+	}
+	cfg.LoginGlobalFailLockDuration = failGlobalLockDuration
+
 	probeIntervalRaw := util.GetEnvOrDefault("NODE_PROBE_INTERVAL", "5m")
 	probeInterval, err := time.ParseDuration(probeIntervalRaw)
 	if err != nil || probeInterval < 30*time.Second {
@@ -178,6 +204,22 @@ func Load() (Config, error) {
 	}
 	cfg.MetricsRateWindow = metricsRateWindow
 
+	sshStrict, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SSHStrictHostKeyChecking = sshStrict
+
+	sshAutoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SSHAutoAcceptNewHosts = sshAutoAccept
+
+	if !cfg.SSHStrictHostKeyChecking && !util.IsDevelopmentEnv() {
+		log.Printf("warn: SSH_STRICT_HOST_KEY_CHECKING 已关闭，生产环境建议开启以防御中间人攻击")
+	}
+
 	if len(cfg.AllowedOrigins) == 0 {
 		log.Printf("warn: CORS_ALLOWED_ORIGINS 为空，仅同主机（忽略端口）Origin 会被放行")
 	}
@@ -212,6 +254,8 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// splitCSV splits a comma-separated string into a trimmed slice, discarding
+// empty entries.
 func splitCSV(raw string) []string {
 	parts := strings.Split(raw, ",")
 	items := make([]string, 0, len(parts))
@@ -227,9 +271,12 @@ func splitCSV(raw string) []string {
 
 // isProductionEnv 和 isDevelopmentEnv 已迁移至 util.IsProductionEnv / util.IsDevelopmentEnv
 
+// IsWeakJWTSecret returns true if the secret is too short, matches a known weak
+// value, or has insufficient entropy (a single character appearing in >50% of
+// the string).
 func IsWeakJWTSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || len(trimmed) < 16 {
+	if trimmed == "" || len(trimmed) < 32 {
 		return true
 	}
 	weakSet := map[string]struct{}{
@@ -241,10 +288,33 @@ func IsWeakJWTSecret(value string) bool {
 		"please-change-this-jwt-secret":       {},
 		"CHANGE-ME-use-a-strong-jwt-secret":   {},
 	}
-	_, weak := weakSet[trimmed]
-	return weak
+	if _, weak := weakSet[trimmed]; weak {
+		return true
+	}
+	return hasLowEntropy(trimmed)
 }
 
+// hasLowEntropy returns true if any single character appears in more than 50% of the string,
+// indicating insufficient randomness for a cryptographic secret.
+func hasLowEntropy(s string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	counts := make(map[rune]int)
+	for _, ch := range s {
+		counts[ch]++
+	}
+	threshold := len(s) / 2 // >50% means strictly greater than half
+	for _, c := range counts {
+		if c > threshold {
+			return true
+		}
+	}
+	return false
+}
+
+// IsWeakDataEncryptionKey returns true if the key is too short or matches a
+// known weak placeholder value.
 func IsWeakDataEncryptionKey(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || len(trimmed) < 16 {

@@ -32,6 +32,19 @@ if [[ ! -f "${backup_file}" ]]; then
   exit 1
 fi
 
+# 验证备份完整性：若存在 .sha256 校验文件则校验，否则警告后继续
+if [[ -f "${backup_file}.sha256" ]]; then
+  echo "🔍 验证备份完整性..."
+  if ! sha256sum -c "${backup_file}.sha256" --status 2>/dev/null; then
+    echo "❌ 备份文件校验失败，拒绝恢复！请确认备份文件未被篡改或损坏。" >&2
+    sha256sum -c "${backup_file}.sha256" 2>/dev/null || true
+    exit 1
+  fi
+  echo "✅ 校验通过"
+else
+  echo "⚠️  未找到校验文件（${backup_file}.sha256），跳过完整性检查"
+fi
+
 if [[ "${db_type}" == "sqlite" ]]; then
   sqlite_path="${SQLITE_PATH:-./backend/xirang.db}"
   mkdir -p "$(dirname "${sqlite_path}")"

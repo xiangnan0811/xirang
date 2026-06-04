@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/slo"
 
 	"gorm.io/driver/sqlite"
@@ -329,6 +330,8 @@ func TestDispatch_FailedSendIsMarkedRetrying(t *testing.T) {
 func openAlertingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
+	secure.ResetForTesting()
+	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmIh")
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -750,6 +753,8 @@ func TestDispatch_SlowChannelDoesNotBlockMainPath(t *testing.T) {
 	t.Cleanup(func() { fastWaitTimeout = prevTimeout })
 
 	// 慢通道：response 阻塞 1s（远大于 fastWaitTimeout），模拟代理超时场景
+	// 该 time.Sleep 在 httptest.Server handler goroutine 内执行，是模拟网络延迟
+	// 的必要手段，不可用 channel 替代——测试目标是验证 slow channel 不阻塞主路径。
 	slowSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1 * time.Second)
 		w.WriteHeader(http.StatusOK)
@@ -786,7 +791,10 @@ func TestDispatch_SlowChannelDoesNotBlockMainPath(t *testing.T) {
 		t.Logf("warn: 调度耗时 %v 异常快，请检查测试 fixture", elapsed)
 	}
 
-	// 给后台 goroutine 1.5s 跑完慢通道 send → 应有 1 条 sent 投递记录
+	// 给后台 goroutine 1.5s 跑完慢通道 send → 应有 1 条 sent 投递记录。
+	// 这里等待的是一个独立后台 goroutine 完成 HTTP send（包含 1s 模拟延迟），
+	// 没有 done channel 可订阅，需要 time.Sleep 等待。慢通道本身是测试目标，
+	// 用 channel 同步会改变被测代码的行为路径。
 	time.Sleep(1500 * time.Millisecond)
 	var count int64
 	db.Model(&model.AlertDelivery{}).Where("alert_id = ?", alert.ID).Count(&count)

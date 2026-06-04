@@ -38,6 +38,8 @@ type client struct {
 	access        AccessScope
 	taskAccessMu  sync.RWMutex
 	taskAccess    map[uint]taskAccessEntry
+	closedMu      sync.Mutex
+	closed        bool
 }
 
 type taskAccessEntry struct {
@@ -102,6 +104,7 @@ func (h *Hub) Run(ctx context.Context) {
 			h.mu.Lock()
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
+				c.markClosed()
 				close(c.send)
 			}
 			h.mu.Unlock()
@@ -113,10 +116,18 @@ func (h *Hub) Run(ctx context.Context) {
 				if !h.clientCanAccessTask(c, event.TaskID) {
 					continue
 				}
+				if c.isClosed() {
+					continue
+				}
 				select {
 				case c.send <- event:
 				default:
-					go func(cc *client) { h.unregister <- cc }(c)
+					select {
+					case h.unregister <- c:
+					default:
+						c.markClosed()
+						close(c.send)
+					}
 				}
 			}
 		}
@@ -212,6 +223,7 @@ func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
+		log.Printf("debug: ws handshake read error: %v", err)
 		_ = conn.Close()
 		return
 	}
@@ -418,6 +430,20 @@ func parseUint(raw string) uint {
 		return 0
 	}
 	return uint(parsed)
+}
+
+// isClosed 检查客户端是否已被标记为关闭。
+func (c *client) isClosed() bool {
+	c.closedMu.Lock()
+	defer c.closedMu.Unlock()
+	return c.closed
+}
+
+// markClosed 标记客户端为关闭状态。必须在此之后才能安全地 close(c.send)。
+func (c *client) markClosed() {
+	c.closedMu.Lock()
+	c.closed = true
+	c.closedMu.Unlock()
 }
 
 func (c *client) writePump(onClose func()) {

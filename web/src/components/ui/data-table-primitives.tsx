@@ -25,11 +25,23 @@ export function TableHeaderRow({ className, ...p }: React.HTMLAttributes<HTMLDiv
   );
 }
 
-export function TableRow({ className, ...p }: React.HTMLAttributes<HTMLDivElement>) {
+export function TableRow({ className, onClick, onKeyDown, ...p }: React.HTMLAttributes<HTMLDivElement>) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key === "Enter" || e.key === " ") && onClick) {
+      e.preventDefault();
+      onClick(e as unknown as React.MouseEvent<HTMLDivElement>);
+    }
+    onKeyDown?.(e);
+  };
+
   return (
     <div
+      tabIndex={0}
+      role="button"
+      onKeyDown={handleKeyDown}
       className={cn(
         "grid items-center border-b border-border/70 px-4 py-2.5 text-sm text-foreground transition-colors hover:bg-secondary/60 last:border-b-0",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
         className,
       )}
       {...p}

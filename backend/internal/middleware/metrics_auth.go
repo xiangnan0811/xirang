@@ -24,11 +24,13 @@ var defaultMetricsAuthState = &metricsAuthState{warnIntervalS: 600}
 // MetricsAuth 返回一个守卫 /metrics 端点的中间件。
 //
 // 行为：
-//   - token == ""：放行，但首次请求 + 每 10 分钟在 logger 打 warning，
-//     提示生产环境应该设置 METRICS_TOKEN（兼容现有公开行为）。
+//   - token == ""：放行所有请求（by design——兼容 Prometheus 默认无认证的抓取行为），
+//     但首次请求 + 每 10 分钟在 logger 打 warning，提示生产环境应该设置 METRICS_TOKEN。
 //   - token != ""：要求 Authorization: Bearer <token> 头匹配，否则返回 401。
 //
 // Prometheus 抓取支持 bearer_token / bearer_token_file 配置，与本中间件兼容。
+// 生产环境强烈建议设置 METRICS_TOKEN 环境变量以保护 /metrics 端点，
+// 暴露的指标可能包含主机信息等敏感数据。
 func MetricsAuth(token string) gin.HandlerFunc {
 	expected := strings.TrimSpace(token)
 	state := defaultMetricsAuthState

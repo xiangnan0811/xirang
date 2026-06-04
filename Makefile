@@ -1,4 +1,4 @@
-.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean swag-init
+.PHONY: backend-run backend-test backend-build web-dev web-test web-build install-web dev prod-pull prod-up prod-down e2e-alert-demo e2e-check docker-build docker-push docker-buildx deploy-init setup-hooks swag-init clean lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -54,7 +54,6 @@ setup-hooks:
 	@echo "✅ Git hooks 已配置为 .githooks/ 目录"
 
 # ── Quality & Testing ──
-.PHONY: lint lint-backend lint-frontend coverage coverage-backend coverage-frontend check test build clean
 
 lint: lint-backend lint-frontend ## Run all linters
 
@@ -94,6 +93,7 @@ DOCKER_TAG_ARGS += -t $(DOCKER_FULL_IMAGE):latest
 endif
 
 docker-build:
+# Builds for the current platform only; use docker-buildx for multi-arch (linux/amd64,linux/arm64)
 	docker build -f deploy/allinone/Dockerfile \
 		$(DOCKER_TAG_ARGS) .
 

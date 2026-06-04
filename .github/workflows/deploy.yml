@@ -57,8 +57,45 @@ jobs:
             i=$((i + 1))
           done
 
+      - name: Backup database before upgrade
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ vars.DEPLOY_SSH_PORT || secrets.DEPLOY_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            if [ -f backups/db-backup-$(date +%Y%m%d-%H%M%S).sqlite ]; then
+              echo "Backup already exists, skipping"
+              exit 0
+            fi
+
+            mkdir -p backups
+
+            container_id=$(docker inspect xirang --format='{{.Id}}' 2>/dev/null || echo "")
+            if [ -n "${container_id}" ] && [ "$(docker inspect xirang --format='{{.State.Running}}' 2>/dev/null)" = "true" ]; then
+              timestamp=$(date +%Y%m%d-%H%M%S)
+              # Try to copy the database file from the container; fall back to
+              # the named volume path if the container path doesn't exist.
+              backup_file="backups/db-backup-${timestamp}.sqlite"
+              if docker cp xirang:/app/data/xirang.db "${backup_file}" 2>/dev/null; then
+                echo "Database backup created: ${backup_file}"
+              elif [ -f data/xirang.db ]; then
+                cp data/xirang.db "${backup_file}"
+                echo "Database backup created (volume path): ${backup_file}"
+              else
+                echo "Warning: could not locate database file to back up" >&2
+              fi
+            else
+              echo "Container not running, skipping database backup"
+            fi
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}

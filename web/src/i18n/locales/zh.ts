@@ -2336,6 +2336,7 @@ const zh = {
   notificationBell: {
     label: "通知",
     labelWithCount: "通知（{{count}} 条未读）",
+    labelWithCountSeverity: "通知（{{count}} 条未读，严重 {{critical}}，警告 {{warning}}）",
     noUnread: "暂无未读告警",
     viewAll: "查看全部通知",
     minutesAgo: "{{count}} 分钟前",

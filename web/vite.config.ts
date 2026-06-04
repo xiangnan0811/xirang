@@ -1,11 +1,27 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 
 const proxyTarget = process.env.VITE_PROXY_TARGET ?? "http://127.0.0.1:8080";
 
-export default defineConfig({
-  plugins: [react()],
+function demoModeGuard(): Plugin {
+  return {
+    name: "demo-mode-guard",
+    buildStart() {
+      const isDemo = process.env.VITE_ENABLE_DEMO_MODE === "true";
+      if (isDemo) {
+        this.error(
+          "VITE_ENABLE_DEMO_MODE=true is not allowed in production builds. " +
+            "Demo mode is a development-only feature that bypasses authentication."
+        );
+      }
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => ({
+  plugins: mode === "production" ? [react(), demoModeGuard()] : [react()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src")
@@ -45,4 +61,5 @@ export default defineConfig({
       reportsDirectory: "coverage",
     },
   }
-});
+})
+);

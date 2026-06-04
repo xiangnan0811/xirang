@@ -40,3 +40,19 @@ export function getErrorMessage(error: unknown, fallback = i18n.t("common.operat
   }
   return fallback;
 }
+
+/**
+ * Production-safe console logger.
+ * In production builds, only logs the message string (not raw error objects)
+ * to avoid leaking sensitive data through console.error/warn.
+ * In development, logs normally for debugging.
+ */
+function safeConsole(level: 'error' | 'warn', message: string, ...args: unknown[]): void {
+  if (import.meta.env.PROD) {
+    console[level](message);
+    return;
+  }
+  console[level](message, ...args);
+}
+
+export { safeConsole as safeLog };

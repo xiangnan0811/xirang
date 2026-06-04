@@ -84,7 +84,8 @@ describe("SettingsPageEscalation", () => {
 
     await waitFor(() => screen.getByText("策略A"));
     expect(screen.getByText("策略B")).toBeTruthy();
-    expect(screen.getByText("warning")).toBeTruthy();
+    const warningElements = screen.getAllByText("warning");
+    expect(warningElements.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("critical")).toBeTruthy();
   });
 
