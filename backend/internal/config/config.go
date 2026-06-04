@@ -1,4 +1,25 @@
 // Package config 负责加载和验证应用配置。
+//
+// Config holds startup-critical settings from environment variables. These are
+// immutable after Load(). Runtime-configurable settings belong to
+// settings.Service (see internal/settings/service.go).
+//
+// Two-tier configuration model:
+//
+//   - Config (this package): boot-time env vars — DB connection, JWT secrets,
+//     listen address, SSH host-key policy. Fixed for the lifetime of the
+//     process; changing them requires a restart.
+//
+//   - settings.Service: runtime-configurable values stored in the database.
+//     Settings changed via API take effect immediately (with optional caching).
+//     Values override Config env vars where both exist — the precedence is
+//     DB value > env var > code default.
+//
+// Fields marked with an "Overlap note" comment exist in both Config and
+// settings.Service. Config provides the boot-time default; settings.Service
+// can override them at runtime. Code that needs the live value should prefer
+// settings.Service.GetEffective().
+//
 // 注意：Load() 在 logger.Init() 之前运行，因此本包使用标准库 log.Printf
 // 输出早期启动警告，而非 zerolog。
 package config
@@ -22,22 +43,58 @@ type Config struct {
 	PostgresDSN              string
 	JWTSecret                string
 	JWTTTL                   time.Duration
-	RsyncBinary              string
+	RsyncBinary string
+	// Overlap note: TaskTrafficRetentionDays is also defined in
+	// settings.Service as "retention.task_traffic_days". Config provides the
+	// default at startup; settings.Service can override at runtime.
 	TaskTrafficRetentionDays int
-	TaskRunRetentionDays     int
+	// Overlap note: TaskRunRetentionDays is also defined in settings.Service
+	// as "retention.task_run_days". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	TaskRunRetentionDays int
 	AllowedOrigins           []string
 	WSAllowEmptyOrigin       bool
-	LoginRateLimit           int
-	LoginRateWindow          time.Duration
-	LoginFailLockThreshold   int
-	LoginFailLockDuration    time.Duration
+	// Overlap note: LoginRateLimit is also defined in settings.Service as
+	// "login.rate_limit". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	LoginRateLimit  int
+	// Overlap note: LoginRateWindow is also defined in settings.Service as
+	// "login.rate_window". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	LoginRateWindow time.Duration
+	// Overlap note: LoginFailLockThreshold is also defined in settings.Service
+	// as "login.fail_lock_threshold". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	LoginFailLockThreshold int
+	// Overlap note: LoginFailLockDuration is also defined in settings.Service
+	// as "login.fail_lock_duration". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	LoginFailLockDuration          time.Duration
 	LoginGlobalFailLockThreshold   int
 	LoginGlobalFailLockDuration    time.Duration
-	NodeProbeInterval        time.Duration
-	NodeProbeFailThreshold   int
+	// Overlap note: NodeProbeInterval is also defined in settings.Service as
+	// "node.probe_interval". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	NodeProbeInterval time.Duration
+	// Overlap note: NodeProbeFailThreshold is also defined in settings.Service
+	// as "node.probe_fail_threshold". Config provides the default at startup;
+	// settings.Service can override at runtime.
+	NodeProbeFailThreshold int
+	// Overlap note: NodeProbeConcurrency is also defined in settings.Service as
+	// "node.probe_concurrency". Config provides the default at startup;
+	// settings.Service can override at runtime.
 	NodeProbeConcurrency     int
+	// Overlap note: RetentionCheckInterval is also defined in settings.Service
+	// as "retention.check_interval". Config provides the default at startup;
+	// settings.Service can override at runtime.
 	RetentionCheckInterval   time.Duration
+	// Overlap note: BackupStorageMinFreeGB is also defined in settings.Service
+	// as "storage.min_free_gb". Config provides the default at startup;
+	// settings.Service can override at runtime.
 	BackupStorageMinFreeGB   int
+	// Overlap note: BackupStorageMaxUsagePct is also defined in
+	// settings.Service as "storage.max_usage_pct". Config provides the default
+	// at startup; settings.Service can override at runtime.
 	BackupStorageMaxUsagePct int
 	MetricsToken             string
 	MetricsRateLimit         int

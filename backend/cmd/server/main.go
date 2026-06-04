@@ -59,6 +59,12 @@ func main() {
 		Str("built", version.BuildTime).
 		Msg("Xirang 启动")
 
+	// Two-tier configuration model:
+	//   - config.Config (below): startup-critical env vars, immutable after Load().
+	//     These are the "hard" boot defaults (DB, JWT, listen addr, SSH policy).
+	//   - settings.Service: runtime-configurable DB-backed values, mutable via API.
+	//     Resolution: DB value > env var > code default.
+	//     See internal/settings/service.go for the full registry and precedence.
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("加载配置失败")

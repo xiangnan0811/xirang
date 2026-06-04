@@ -1,3 +1,24 @@
+// Package settings provides runtime-configurable system settings.
+//
+// Service manages settings stored in the database (system_settings table).
+// Settings changed via the API take effect immediately without restarting the
+// server. TTL-based caching (30s) ensures reads stay fast even under frequent
+// calls to GetEffective().
+//
+// Two-tier configuration model:
+//
+//   - config.Config (internal/config): boot-time env vars, immutable after
+//     Load(). Provides startup defaults for DB connection, JWT secrets, listen
+//     address, etc.
+//
+//   - Service (this package): runtime-configurable values persisted to DB.
+//     Resolution precedence is: DB value > env var > code default. This means
+//     a DB override always wins, even when the corresponding env var is set.
+//
+// Settings whose EnvVar matches a config.Config field are documented with an
+// "Overlap note" comment: config.Config provides the boot-time default;
+// Service can override at runtime. Consumers that need the live value should
+// call GetEffective() rather than reading the env var directly.
 package settings
 
 import (
@@ -70,19 +91,56 @@ func NewService(db *gorm.DB) *Service {
 
 // registry lists all dynamic settings definitions.
 var registry = []SettingDef{
+	// Overlap note: login.rate_limit is also defined in config.Config as
+	// LoginRateLimit. Config provides the default at startup;
+	// settings.Service can override at runtime.
 	{Key: "login.rate_limit", EnvVar: "LOGIN_RATE_LIMIT", CodeDefault: "10", Type: TypeInt, Category: "security", Description: "登录接口每窗口最大请求数", Min: "5", Max: "1000"},
+	// Overlap note: login.rate_window is also defined in config.Config as
+	// LoginRateWindow. Config provides the default at startup;
+	// settings.Service can override at runtime.
 	{Key: "login.rate_window", EnvVar: "LOGIN_RATE_WINDOW", CodeDefault: "1m", Type: TypeDuration, Category: "security", Description: "登录限流时间窗口", MinDuration: "10s"},
+	// Overlap note: login.fail_lock_threshold is also defined in
+	// config.Config as LoginFailLockThreshold. Config provides the default
+	// at startup; settings.Service can override at runtime.
 	{Key: "login.fail_lock_threshold", EnvVar: "LOGIN_FAIL_LOCK_THRESHOLD", CodeDefault: "5", Type: TypeInt, Category: "security", Description: "连续登录失败锁定阈值", Min: "3", Max: "100"},
+	// Overlap note: login.fail_lock_duration is also defined in
+	// config.Config as LoginFailLockDuration. Config provides the default
+	// at startup; settings.Service can override at runtime.
 	{Key: "login.fail_lock_duration", EnvVar: "LOGIN_FAIL_LOCK_DURATION", CodeDefault: "15m", Type: TypeDuration, Category: "security", Description: "登录锁定持续时间", MinDuration: "1m"},
 	{Key: "login.captcha_enabled", EnvVar: "LOGIN_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录验证码"},
 	{Key: "login.second_captcha_enabled", EnvVar: "LOGIN_SECOND_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录二次验证码"},
+	// Overlap note: node.probe_interval is also defined in config.Config as
+	// NodeProbeInterval. Config provides the default at startup;
+	// settings.Service can override at runtime. RequiresRestart: true.
 	{Key: "node.probe_interval", EnvVar: "NODE_PROBE_INTERVAL", CodeDefault: "5m", Type: TypeDuration, Category: "node_monitor", Description: "节点探测间隔", RequiresRestart: true},
+	// Overlap note: node.probe_fail_threshold is also defined in
+	// config.Config as NodeProbeFailThreshold. Config provides the default
+	// at startup; settings.Service can override at runtime.
+	// RequiresRestart: true.
 	{Key: "node.probe_fail_threshold", EnvVar: "NODE_PROBE_FAIL_THRESHOLD", CodeDefault: "3", Type: TypeInt, Category: "node_monitor", Description: "节点探测失败阈值", Min: "1", Max: "100", RequiresRestart: true},
+	// Overlap note: node.probe_concurrency is also defined in config.Config
+	// as NodeProbeConcurrency. Config provides the default at startup;
+	// settings.Service can override at runtime. RequiresRestart: true.
 	{Key: "node.probe_concurrency", EnvVar: "NODE_PROBE_CONCURRENCY", CodeDefault: "10", Type: TypeInt, Category: "node_monitor", Description: "节点探测并发数", Min: "1", Max: "100", RequiresRestart: true},
+	// Overlap note: retention.task_traffic_days is also defined in
+	// config.Config as TaskTrafficRetentionDays. Config provides the
+	// default at startup; settings.Service can override at runtime.
 	{Key: "retention.task_traffic_days", EnvVar: "TASK_TRAFFIC_RETENTION_DAYS", CodeDefault: "8", Type: TypeInt, Category: "retention", Description: "任务流量数据保留天数", Min: "1", Max: "365"},
+	// Overlap note: retention.task_run_days is also defined in
+	// config.Config as TaskRunRetentionDays. Config provides the default at
+	// startup; settings.Service can override at runtime.
 	{Key: "retention.task_run_days", EnvVar: "TASK_RUN_RETENTION_DAYS", CodeDefault: "90", Type: TypeInt, Category: "retention", Description: "任务执行记录保留天数", Min: "1", Max: "3650"},
+	// Overlap note: retention.check_interval is also defined in
+	// config.Config as RetentionCheckInterval. Config provides the default
+	// at startup; settings.Service can override at runtime.
 	{Key: "retention.check_interval", EnvVar: "RETENTION_CHECK_INTERVAL", CodeDefault: "6h", Type: TypeDuration, Category: "retention", Description: "保留策略检查间隔"},
+	// Overlap note: storage.min_free_gb is also defined in config.Config as
+	// BackupStorageMinFreeGB. Config provides the default at startup;
+	// settings.Service can override at runtime.
 	{Key: "storage.min_free_gb", EnvVar: "BACKUP_STORAGE_MIN_FREE_GB", CodeDefault: "10", Type: TypeInt, Category: "storage", Description: "备份存储最小可用空间 (GB)", Min: "0", Max: "10000"},
+	// Overlap note: storage.max_usage_pct is also defined in
+	// config.Config as BackupStorageMaxUsagePct. Config provides the
+	// default at startup; settings.Service can override at runtime.
 	{Key: "storage.max_usage_pct", EnvVar: "BACKUP_STORAGE_MAX_USAGE_PCT", CodeDefault: "90", Type: TypeInt, Category: "storage", Description: "备份存储最大使用率 (%)", Min: "0", Max: "100"},
 	{Key: "alert.dedup_window", EnvVar: "ALERT_DEDUP_WINDOW", CodeDefault: "10m", Type: TypeDuration, Category: "alert", Description: "告警去重时间窗口"},
 	{Key: "logs.retention_days_default", EnvVar: "LOG_RETENTION_DAYS_DEFAULT", CodeDefault: "30", Type: TypeInt, Category: "logs", Description: "节点日志默认保留天数（节点未单独配置时生效）", Min: "1", Max: "365"},
