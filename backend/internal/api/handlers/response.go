@@ -1,12 +1,9 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 
 	"xirang/backend/internal/logger"
-
-	"xirang/backend/internal/apperr"
 
 	"github.com/gin-gonic/gin"
 )
@@ -85,23 +82,6 @@ func respondServiceUnavailable(c *gin.Context, msg string) {
 
 func respondNotImplemented(c *gin.Context, msg string) {
 	c.JSON(http.StatusNotImplemented, Response{Code: http.StatusNotImplemented, Message: msg, Data: nil})
-}
-
-// httpStatusFromError maps sentinel errors to the appropriate HTTP status code.
-// Services should wrap domain errors with apperr sentinels so handlers can classify them.
-func httpStatusFromError(err error) int {
-	switch {
-	case errors.Is(err, apperr.ErrDuplicate):
-		return http.StatusConflict
-	case errors.Is(err, apperr.ErrNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, apperr.ErrValidation):
-		return http.StatusBadRequest
-	case errors.Is(err, apperr.ErrConflict):
-		return http.StatusConflict
-	default:
-		return http.StatusInternalServerError
-	}
 }
 
 func respondInternalError(c *gin.Context, err error) {
