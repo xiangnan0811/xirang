@@ -100,8 +100,8 @@ func TestPolicyUpdateWarningUsesEnvelope(t *testing.T) {
 		t.Fatalf("解析响应失败: %v, body=%s", err, resp.Body.String())
 	}
 
-	if envelope.Code != 0 {
-		t.Fatalf("期望 envelope code=0，实际: %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("期望 envelope code=200，实际: %d", envelope.Code)
 	}
 	if envelope.Data == nil {
 		t.Fatalf("envelope.data 不应为空，body=%s", resp.Body.String())

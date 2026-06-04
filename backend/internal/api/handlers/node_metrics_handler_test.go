@@ -73,8 +73,8 @@ func TestNodeMetricsHandler_Status(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("expected envelope code 200, got %d", envelope.Code)
 	}
 	if !envelope.Data.Online {
 		t.Fatalf("expected online")
@@ -147,8 +147,8 @@ func TestNodeMetricsHandler_Metrics_AutoPicksHourlyFor7d(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("expected envelope code 200, got %d", envelope.Code)
 	}
 	if envelope.Data.Granularity != "hourly" {
 		t.Fatalf("expected hourly, got %s", envelope.Data.Granularity)
@@ -236,8 +236,8 @@ func TestNodeMetricsHandler_DiskForecast_HighConfidence(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("expected envelope code 200, got %d", envelope.Code)
 	}
 	if envelope.Data.Forecast.Confidence != "high" {
 		t.Fatalf("expected confidence=high, got %s", envelope.Data.Forecast.Confidence)
@@ -280,8 +280,8 @@ func TestNodeMetricsHandler_DiskForecast_Insufficient(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("expected envelope code 200, got %d", envelope.Code)
 	}
 	if envelope.Data.Forecast.Confidence != "insufficient" {
 		t.Fatalf("expected insufficient, got %s", envelope.Data.Forecast.Confidence)

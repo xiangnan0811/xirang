@@ -68,8 +68,8 @@ func TestDrillTriggerSuccess(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("期望 code=0，实际: %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("期望 code=200，实际: %d", envelope.Code)
 	}
 
 	data, ok := envelope.Data.(map[string]interface{})

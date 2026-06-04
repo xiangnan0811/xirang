@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"errors"
 	"strings"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/model"
 
@@ -134,9 +136,8 @@ func (h *AutomationRuleHandler) Create(c *gin.Context) {
 		Enabled:      enabled,
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") ||
-			strings.Contains(err.Error(), "duplicate key") ||
-			strings.Contains(err.Error(), "SQLSTATE 23505") {
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
 			respondConflict(c, "规则名称已存在")
 			return
 		}
@@ -215,9 +216,8 @@ func (h *AutomationRuleHandler) Update(c *gin.Context) {
 	item.ActionConfig = config
 
 	if err := h.db.Save(&item).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") ||
-			strings.Contains(err.Error(), "duplicate key") ||
-			strings.Contains(err.Error(), "SQLSTATE 23505") {
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
 			respondConflict(c, "规则名称已存在")
 			return
 		}

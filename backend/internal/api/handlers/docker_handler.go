@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -70,10 +72,13 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 
 	volumes, warning, err := listDockerVolumes(sshClient)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
-		h.writeDockerVolumeAudit(c, node, credential, credentialaudit.OutcomeFailure, "list", err, 0, false)
-		respondOK(c, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
-		return
+		if !errors.Is(err, apperr.ErrNotFound) {
+			logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
+			h.writeDockerVolumeAudit(c, node, credential, credentialaudit.OutcomeFailure, "list", err, 0, false)
+			respondOK(c, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
+			return
+		}
+		// Docker 未安装 — 使用 warning 继续
 	}
 
 	volumeOutcome := credentialaudit.OutcomeSuccess
@@ -155,7 +160,7 @@ func listDockerVolumes(client *ssh.Client) ([]DockerVolume, string, error) {
 		outStr := strings.TrimSpace(string(output))
 		// Docker 未安装或无权限
 		if strings.Contains(outStr, "command not found") || strings.Contains(outStr, "not found") {
-			return []DockerVolume{}, "Docker 未安装或不在 PATH 中", nil
+			return []DockerVolume{}, "Docker 未安装或不在 PATH 中", apperr.ErrNotFound
 		}
 		if strings.Contains(outStr, "permission denied") || strings.Contains(outStr, "Cannot connect") {
 			return []DockerVolume{}, "无权访问 Docker（当前用户可能不在 docker 组中）", nil

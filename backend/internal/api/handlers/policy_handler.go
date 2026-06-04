@@ -845,7 +845,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		// 旧的 {data, warning} 顶层结构会让 mapPolicy 收到嵌套对象、字段全部 undefined，
 		// 进而触发 describeCron(undefined) 崩溃。
 		c.JSON(http.StatusOK, Response{
-			Code:    0,
+			Code:    http.StatusOK,
 			Message: fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
 			Data:    buildPolicyResponse(p, nil),
 		})

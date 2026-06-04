@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
@@ -278,11 +280,12 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	}
 	node.BackupDir = req.BackupDir
 	if err := h.db.Create(&node).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
-			respondBadRequest(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
+			respondConflict(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
 			return
 		}
-		respondBadRequest(c, err.Error())
+		respondInternalError(c, err)
 		return
 	}
 
@@ -418,11 +421,12 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		node.UseSudo = *req.UseSudo
 	}
 	if err := h.db.Save(&node).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "duplicate") {
-			respondBadRequest(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
+			respondConflict(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
 			return
 		}
-		respondBadRequest(c, err.Error())
+		respondInternalError(c, err)
 		return
 	}
 

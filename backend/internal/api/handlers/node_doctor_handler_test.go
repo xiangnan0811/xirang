@@ -107,7 +107,7 @@ func TestNodeDoctorAuthFailureSkipsSSHDependentChecks(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if envelope.Code != 0 || envelope.Data.NodeID != node.ID {
+	if envelope.Code != http.StatusOK || envelope.Data.NodeID != node.ID {
 		t.Fatalf("响应信封不符合预期: %+v", envelope)
 	}
 	statuses := make(map[string]doctorCheckStatus)

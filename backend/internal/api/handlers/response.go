@@ -26,24 +26,24 @@ type PaginatedResponse struct {
 }
 
 func respondOK(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "ok", Data: data})
 }
 
 func respondCreated(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusCreated, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusCreated, Response{Code: http.StatusCreated, Message: "ok", Data: data})
 }
 
 func respondAccepted(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusAccepted, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "ok", Data: data})
 }
 
 func respondMessage(c *gin.Context, msg string) {
-	c.JSON(http.StatusOK, Response{Code: 0, Message: msg, Data: nil})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: msg, Data: nil})
 }
 
 func respondPaginated(c *gin.Context, data interface{}, total int64, page, pageSize int) {
 	c.JSON(http.StatusOK, PaginatedResponse{
-		Code:     0,
+		Code:     http.StatusOK,
 		Message:  "ok",
 		Data:     data,
 		Total:    total,

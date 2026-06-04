@@ -39,6 +39,12 @@ func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 
 		c.Next()
 
+		userIDVal, exists := c.Get(CtxUserID)
+		if !exists || userIDVal == nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "audit log missing user context"})
+			return
+		}
+
 		record := model.AuditLog{
 			UserID:     extractUserIDFromContext(c),
 			Username:   c.GetString(CtxUsername),
