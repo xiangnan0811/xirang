@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	pathpkg "path"
 	"strings"
 	"time"
 
@@ -29,6 +28,7 @@ type PolicyHandler struct {
 	db             *gorm.DB
 	runner         policy.TaskRunner
 	drillTriggerer drillTriggerer
+	svc            *policy.PolicyService
 }
 
 func NewPolicyHandler(db *gorm.DB, runner policy.TaskRunner) *PolicyHandler {
@@ -37,6 +37,21 @@ func NewPolicyHandler(db *gorm.DB, runner policy.TaskRunner) *PolicyHandler {
 		dt = t
 	}
 	return &PolicyHandler{db: db, runner: runner, drillTriggerer: dt}
+}
+
+// WithPolicyService injects a PolicyService for business logic delegation.
+func (h *PolicyHandler) WithPolicyService(svc *policy.PolicyService) *PolicyHandler {
+	h.svc = svc
+	return h
+}
+
+// service returns the injected PolicyService, or lazily creates one
+// from the handler's db and runner (backward-compatible with tests).
+func (h *PolicyHandler) service() *policy.PolicyService {
+	if h.svc != nil {
+		return h.svc
+	}
+	return policy.NewPolicyService(h.db, h.runner)
 }
 
 type policyRequest struct {
@@ -206,13 +221,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		}
 	}
 	if req.PreHook != "" {
-		if err := validateHookCommand(req.PreHook); err != nil {
+		if err := policy.ValidateHookCommand(req.PreHook); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
 	}
 	if req.PostHook != "" {
-		if err := validateHookCommand(req.PostHook); err != nil {
+		if err := policy.ValidateHookCommand(req.PostHook); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
@@ -315,7 +330,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 				return
 			}
 		}
-		if err := validateDrillRestorePath(drillRestorePath); err != nil {
+		if err := policy.ValidateDrillRestorePath(drillRestorePath); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
@@ -542,13 +557,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		}
 	}
 	if req.PreHook != "" {
-		if err := validateHookCommand(req.PreHook); err != nil {
+		if err := policy.ValidateHookCommand(req.PreHook); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
 	}
 	if req.PostHook != "" {
-		if err := validateHookCommand(req.PostHook); err != nil {
+		if err := policy.ValidateHookCommand(req.PostHook); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
@@ -662,7 +677,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				}
 			}
 		}
-		if err := validateDrillRestorePath(drillPathUpdate); err != nil {
+		if err := policy.ValidateDrillRestorePath(drillPathUpdate); err != nil {
 			respondBadRequest(c, err.Error())
 			return
 		}
@@ -968,62 +983,6 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 	respondOK(c, gin.H{"task_run_id": taskRunID, "message": "恢复演练已触发"})
 }
 
-// validateHookCommand 校验 hook 命令的安全性（白名单：禁止 shell 元字符 + 危险程序名）。
-// validateDrillRestorePath 校验 drill 恢复路径的安全性。
-// 要求绝对路径，不含 ..，禁止恢复到系统关键目录。
-func validateDrillRestorePath(path string) error {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return nil
-	}
-	if !strings.HasPrefix(trimmed, "/") {
-		return fmt.Errorf("drill_restore_path 必须是绝对路径")
-	}
-	if strings.Contains(trimmed, "..") {
-		return fmt.Errorf("drill_restore_path 不能包含 \"..\"")
-	}
-	if strings.ContainsAny(trimmed, ";|&$`\\\"'(){}[]<>!#~*?\n\r") {
-		return fmt.Errorf("drill_restore_path 包含非法字符")
-	}
-	// 禁止恢复到系统关键目录及其子路径；与任务执行层保持同一安全边界。
-	cleanPath := pathpkg.Clean(trimmed)
-	forbidden := []string{"/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys", "/run", "/var/run"}
-	for _, p := range forbidden {
-		if cleanPath == p || strings.HasPrefix(cleanPath, p+"/") {
-			return fmt.Errorf("drill_restore_path 禁止恢复到系统目录: %s", p)
-		}
-	}
-	return nil
-}
-
-func validateHookCommand(cmd string) error {
-	if len(cmd) > 2048 {
-		return fmt.Errorf("hook 命令长度不能超过 2048 个字符")
-	}
-	// 禁止 shell 元字符，防止命令注入
-	for _, ch := range []string{";", "|", "&", "`", "$", "(", ")", "{", "}", "<", ">", "!", "\\", "\n", "\r"} {
-		if strings.Contains(cmd, ch) {
-			return fmt.Errorf("hook 命令包含不允许的字符: %s", ch)
-		}
-	}
-	// 按命令名（basename）阻止已知危险程序
-	blocked := map[string]bool{
-		"curl": true, "wget": true, "nc": true, "ncat": true,
-		"python": true, "python3": true, "perl": true, "ruby": true,
-		"bash": true, "sh": true, "zsh": true, "php": true, "node": true,
-		"ssh": true, "scp": true, "telnet": true, "base64": true,
-	}
-	for _, part := range strings.Fields(strings.ToLower(cmd)) {
-		base := part
-		if idx := strings.LastIndex(part, "/"); idx >= 0 {
-			base = part[idx+1:]
-		}
-		if blocked[base] {
-			return fmt.Errorf("hook 命令包含不允许的程序: %s", base)
-		}
-	}
-	return nil
-}
 
 type latestDrillSummary struct {
 	TaskRunID          uint       `json:"task_run_id"`
@@ -1208,66 +1167,19 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		return
 	}
 
-	var tmpl model.Policy
-	if err := h.db.Preload("Nodes").First(&tmpl, id).Error; err != nil {
-		respondNotFound(c, "模板策略不存在")
-		return
-	}
-	if !tmpl.IsTemplate {
-		respondBadRequest(c, "该策略不是模板")
-		return
-	}
-
-	newPolicy := model.Policy{
-		Name:              tmpl.Name + " (副本)",
-		Description:       tmpl.Description,
-		SourcePath:        tmpl.SourcePath,
-		TargetPath:        config.BackupRoot,
-		CronSpec:          tmpl.CronSpec,
-		ExcludeRules:      tmpl.ExcludeRules,
-		BwLimit:           tmpl.BwLimit,
-		BandwidthSchedule: tmpl.BandwidthSchedule,
-		RetentionDays:     tmpl.RetentionDays,
-		MaxConcurrent:     tmpl.MaxConcurrent,
-		Enabled:           false,
-		VerifyEnabled:     tmpl.VerifyEnabled,
-		VerifySampleRate:  tmpl.VerifySampleRate,
-		IsTemplate:        false,
-		DrillEnabled:      false,
-		DrillCron:         tmpl.DrillCron,
-		DrillTargetNodeID: tmpl.DrillTargetNodeID,
-		DrillRestorePath:  tmpl.DrillRestorePath,
-		DrillPreVerify:    tmpl.DrillPreVerify,
-		DrillVerify:       tmpl.DrillVerify,
-		DrillPostVerify:   tmpl.DrillPostVerify,
-		DrillAutoCleanup:  tmpl.DrillAutoCleanup,
-		RPOMinutes:        tmpl.RPOMinutes,
-		RTOMinutes:        tmpl.RTOMinutes,
-		RetentionMode:     tmpl.RetentionMode,
-		KeepDaily:         tmpl.KeepDaily,
-		KeepWeekly:        tmpl.KeepWeekly,
-		KeepMonthly:       tmpl.KeepMonthly,
-		KeepYearly:        tmpl.KeepYearly,
-	}
-
-	err := h.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&newPolicy).Error; err != nil {
-			return err
-		}
-		// 复制模板的节点关联
-		for _, n := range tmpl.Nodes {
-			pn := model.PolicyNode{PolicyID: newPolicy.ID, NodeID: n.ID}
-			if err := tx.Create(&pn).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	// Delegate to PolicyService for business logic.
+	newPolicy, err := h.service().CloneFromTemplate(id)
 	if err != nil {
-		respondBadRequest(c, err.Error())
+		switch {
+		case errors.Is(err, policy.ErrTemplateNotFound):
+			respondNotFound(c, err.Error())
+		case errors.Is(err, policy.ErrNotTemplate):
+			respondBadRequest(c, err.Error())
+		default:
+			respondBadRequest(c, err.Error())
+		}
 		return
 	}
 
-	h.db.Preload("Nodes").First(&newPolicy, newPolicy.ID)
-	respondCreated(c, buildPolicyResponse(newPolicy, nil))
+	respondCreated(c, buildPolicyResponse(*newPolicy, nil))
 }

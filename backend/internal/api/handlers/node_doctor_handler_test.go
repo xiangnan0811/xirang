@@ -11,6 +11,7 @@ import (
 
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	nodePkg "xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 
@@ -36,7 +37,7 @@ func TestNodeDoctorRejectsCustomInput(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/doctor", handler.RunDoctor)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/doctor", node.ID), strings.NewReader(`{"command":"whoami"}`))
@@ -54,7 +55,7 @@ func TestNodeDoctorRejectsCustomInput(t *testing.T) {
 
 func TestNodeDoctorRejectsChunkedCustomInput(t *testing.T) {
 	r := gin.New()
-	handler := NewNodeHandler(openNodeHandlerTestDB(t), nil)
+	handler := NewNodeHandler(openNodeHandlerTestDB(t), nil, nodePkg.NewNodeService(openNodeHandlerTestDB(t)))
 	r.POST("/nodes/:id/doctor", handler.RunDoctor)
 
 	req := httptest.NewRequest(http.MethodPost, "/nodes/1/doctor", strings.NewReader(`{"checks":["ssh"]}`))
@@ -87,7 +88,7 @@ func TestNodeDoctorAuthFailureSkipsSSHDependentChecks(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/doctor", handler.RunDoctor)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/doctor", node.ID), nil)
@@ -144,7 +145,7 @@ func TestNodeDoctorWritesSafeCredentialAuditForBlockedDiagnostics(t *testing.T) 
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/doctor", func(c *gin.Context) {
 		c.Set("userID", uint(101))
 		c.Set("username", "alice")

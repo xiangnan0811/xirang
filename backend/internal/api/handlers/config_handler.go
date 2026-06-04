@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
-	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
+	taskPkg "xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -469,7 +469,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if basePath, ok := nodeData["base_path"].(string); ok {
 					existing.BasePath = basePath
 				}
-				if err := validateNodeHostPort(existing.Host, existing.Port); err != nil {
+				if err := node.ValidateNodeHostPort(existing.Host, existing.Port); err != nil {
 					logger.Module("config").Warn().
 						Str("node", name).
 						Str("host", existing.Host).
@@ -523,7 +523,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 						Msg("导入节点认证类型无效，跳过")
 					continue
 				}
-				if err := validateNodeHostPort(newNode.Host, newNode.Port); err != nil {
+				if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
 					logger.Module("config").Warn().
 						Str("node", name).
 						Str("host", newNode.Host).
@@ -644,7 +644,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				policyID = &id
 			}
 
-			req := taskRequest{
+			req := taskPkg.CreateTaskInput{
 				Name:            name,
 				NodeID:          nodeID,
 				PolicyID:        policyID,
@@ -658,27 +658,22 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			}
 			dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
 			explicitCronSpec := req.CronSpec
-			hydrateTaskDefaultsFromPolicy(tx, &req)
-			trimTaskRequest(&req)
-			inferTaskExecutor(&req, "")
-			ensureNodeTargetPrefix(tx, &req)
+			taskPkg.HydrateTaskDefaultsFromPolicy(tx, &req)
+			taskPkg.TrimTaskInput(&req)
+			taskPkg.InferTaskExecutor(&req, "")
+			taskPkg.EnsureNodeTargetPrefix(tx, &req)
 			if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
 				req.CronSpec = ""
 			}
-			if (req.ExecutorType == "rsync" || req.ExecutorType == "restic") && req.RsyncTarget == "" {
-				var node model.Node
-				if err := tx.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
-					req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-				}
-			}
-			if err := validateTaskRequest(req); err != nil {
+			taskPkg.AutoGenerateTarget(tx, &req)
+			if err := taskPkg.ValidateTaskInput(req); err != nil {
 				logger.Module("config").Warn().
 					Str("task", req.Name).
 					Err(err).
 					Msg("导入任务校验失败，跳过")
 				continue
 			}
-			if err := validateTaskRefsWithDB(tx, req, 0); err != nil {
+			if err := taskPkg.ValidateTaskRefs(tx, req, 0); err != nil {
 				logger.Module("config").Warn().
 					Str("task", req.Name).
 					Err(err).
@@ -755,7 +750,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if err := tx.First(&current, update.taskID).Error; err != nil {
 				continue
 			}
-			req := taskRequest{
+			req := taskPkg.CreateTaskInput{
 				Name:            current.Name,
 				NodeID:          current.NodeID,
 				PolicyID:        current.PolicyID,
@@ -767,7 +762,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				ExecutorConfig:  current.ExecutorConfig,
 				CronSpec:        current.CronSpec,
 			}
-			if err := validateTaskRefsWithDB(tx, req, current.ID); err != nil {
+			if err := taskPkg.ValidateTaskRefs(tx, req, current.ID); err != nil {
 				logger.Module("config").Warn().
 					Str("task", current.Name).
 					Err(err).
@@ -891,7 +886,7 @@ func validateNodeImportData(nodeData map[string]interface{}, idx int) []importVa
 	if p, ok := nodeData["port"].(float64); ok {
 		port = int(p)
 	}
-	if err := validateNodeHostPort(host, port); err != nil {
+	if err := node.ValidateNodeHostPort(host, port); err != nil {
 		errs = append(errs, importValidationError{
 			Resource: "nodes",
 			Index:    idx,
