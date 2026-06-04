@@ -27,6 +27,8 @@ function LoadingState({
     <div
       role="status"
       aria-live="polite"
+      aria-busy="true"
+      aria-label="Loading"
       className={cn("space-y-3 p-4", className)}
     >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -56,7 +58,7 @@ function LoadingState({
 }
 
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("animate-pulse rounded-md bg-secondary", className)} {...props} />;
+  return <div className={cn("animate-pulse rounded-md bg-muted", className)} {...props} />;
 }
 
 export { LoadingState };
