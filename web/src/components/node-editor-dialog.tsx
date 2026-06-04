@@ -442,6 +442,7 @@ export function NodeEditorDialog({
         <div>
           <label htmlFor="node-edit-maint-start" className="mb-1 block text-sm font-medium">{t('nodeEditor.maintenanceStart')}</label>
           <Input id="node-edit-maint-start" type="datetime-local"
+            aria-describedby="node-edit-maint-hint"
             value={draft.maintenanceStart}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, maintenanceStart: event.target.value }))
@@ -451,6 +452,7 @@ export function NodeEditorDialog({
         <div>
           <label htmlFor="node-edit-maint-end" className="mb-1 block text-sm font-medium">{t('nodeEditor.maintenanceEnd')}</label>
           <Input id="node-edit-maint-end" type="datetime-local"
+            aria-describedby="node-edit-maint-hint"
             value={draft.maintenanceEnd}
             onChange={(event) =>
               setDraft((prev) => ({ ...prev, maintenanceEnd: event.target.value }))
@@ -458,7 +460,7 @@ export function NodeEditorDialog({
           />
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">{t('nodeEditor.maintenanceHint')}</p>
+      <p id="node-edit-maint-hint" className="text-xs text-muted-foreground">{t('nodeEditor.maintenanceHint')}</p>
     </FormDialog>
   );
 }
