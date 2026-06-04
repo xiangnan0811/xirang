@@ -131,7 +131,7 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 			"skip_next":   false,
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
 		})
-		m.emitLog(taskID, nil, "info", "本次定时执行已跳过（用户设置跳过下次）", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, nil, "info", "本次定时执行已跳过（用户设置跳过下次）", taskEntity.Status)
 		return 0, nil
 	}
 
@@ -205,13 +205,13 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("加载任务失败: %v", err), "")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("加载任务失败: %v", err), "")
 		return
 	}
 
 	// 检查关联节点是否存在（Preload 时 Node 可能为 nil，如节点已被删除）
 	if taskEntity.Node.ID == 0 {
-		m.emitLog(taskID, runIDPtr, "error", "关联节点不存在，跳过执行", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", "关联节点不存在，跳过执行", taskEntity.Status)
 		now := time.Now()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 			"status":      "failed",
@@ -224,7 +224,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	// 检查节点是否已归档
 	if taskEntity.Node.Archived {
-		m.emitLog(taskID, runIDPtr, "warn", "节点已归档，跳过执行", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "节点已归档，跳过执行", taskEntity.Status)
 		canceledAt := time.Now()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 			"status":      "canceled",
@@ -246,13 +246,13 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"last_error":  "节点处于维护窗口",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "节点处于维护窗口，跳过执行", "")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "节点处于维护窗口，跳过执行", "")
 		return
 	}
 
 	currentStatus := ParseStatus(taskEntity.Status)
 	if currentStatus == StatusRunning {
-		m.emitLog(taskID, runIDPtr, "warn", "任务已在运行，忽略重复触发", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务已在运行，忽略重复触发", taskEntity.Status)
 		return
 	}
 
@@ -268,38 +268,37 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
 		nLock.Unlock()
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("校验互斥冲突失败: %v", err), taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("校验互斥冲突失败: %v", err), taskEntity.Status)
 		return
 	}
 	if conflicted {
 		nLock.Unlock()
-		m.emitLog(taskID, runIDPtr, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "同节点有任务正在运行，忽略重复执行", taskEntity.Status)
 		return
 	}
 	if m.isNodeRestoring(taskEntity.NodeID) {
 		nLock.Unlock()
-		m.emitLog(taskID, runIDPtr, "warn", "同节点有恢复任务正在运行，忽略执行", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "同节点有恢复任务正在运行，忽略执行", taskEntity.Status)
 		return
 	}
 
 	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled || currentStatus == StatusWarning {
 		if err := m.updateStatus(&taskEntity, StatusPending, map[string]interface{}{"last_error": ""}); err != nil {
 			nLock.Unlock()
-			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
 			return
 		}
 	}
 
 	now := time.Now().UTC()
-	m.lastSampleBucketByTask.Delete(taskID)
-	m.lastProgressBucketByTask.Delete(taskID)
+	m.sampleWriter.ResetThrottle(taskID)
 	if err := m.updateStatus(&taskEntity, StatusRunning, map[string]interface{}{
 		"last_run_at": now,
 		"next_run_at": nil,
 		"last_error":  "",
 	}); err != nil {
 		nLock.Unlock()
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
 		return
 	}
 	// 同步更新 TaskRun 为 running
@@ -311,7 +310,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	tasksActive.Inc()
 	defer tasksActive.Dec()
 
-	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
 
 	execTimeout := computeExecTimeout(taskEntity)
 	execCtx, cancel := context.WithTimeout(context.Background(), execTimeout)
@@ -319,8 +318,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		"operation":            "task_run",
 		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
 	})
-	m.runningCancels.Store(taskID, cancel)
-	defer m.runningCancels.Delete(taskID)
+	m.chainRunner.Store(taskID, cancel)
+	defer m.chainRunner.Delete(taskID)
 	defer cancel()
 
 	// Pre-hook 执行
@@ -330,12 +329,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			hookTimeout = 5 * time.Minute
 		}
 		hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
-		m.emitLog(taskID, runIDPtr, "info", "执行 pre-hook", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行 pre-hook", taskEntity.Status)
 		hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PreHook)
 		hookCancel()
 		if hookErr != nil {
 			errorMsg := sanitizeTaskLastError(fmt.Sprintf("pre-hook 执行失败: %v", hookErr))
-			m.emitLog(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 			failedAt := time.Now()
 			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 				"status":      "failed",
@@ -352,24 +351,24 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 			return
 		}
-		m.emitLog(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
 	}
 
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
 	runStartedAt := now
 	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
-		m.emitLog(taskID, runIDPtr, level, message, string(StatusRunning))
+		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
-		m.emitTrafficSample(taskID, taskEntity.NodeID, runStartedAt, sample)
+		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
 		if sample.Percent > 0 {
-			m.emitProgress(taskID, runID, sample.Percent)
+			m.sampleWriter.WriteProgress(taskID, runID, sample.Percent)
 		}
 	})
 
 	wasTimeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded)
 	if wasTimeout {
 		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
-		m.emitLog(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 		failedAt := time.Now()
 		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
 			"status":      "failed",
@@ -394,7 +393,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				"next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error":  "任务已取消",
 			}); statusErr != nil {
-				m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
 				return
 			}
 		}
@@ -405,7 +404,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"last_error":  "任务已取消",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "任务执行已取消，进程已中断", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务执行已取消，进程已中断", taskEntity.Status)
 		return
 	}
 
@@ -417,13 +416,13 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				hookTimeout = 5 * time.Minute
 			}
 			hookCtx, hookCancel := context.WithTimeout(execCtx, hookTimeout)
-			m.emitLog(taskID, runIDPtr, "info", "执行 post-hook", taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行 post-hook", taskEntity.Status)
 			hookErr := m.hookRunFunc(hookCtx, taskEntity, taskEntity.Policy.PostHook)
 			hookCancel()
 			if hookErr != nil {
-				m.emitLog(taskID, runIDPtr, "warn", sanitizeTaskLastError("post-hook 失败（不影响备份结果）: "+hookErr.Error()), taskEntity.Status)
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", sanitizeTaskLastError("post-hook 失败（不影响备份结果）: "+hookErr.Error()), taskEntity.Status)
 			} else {
-				m.emitLog(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
 			}
 		}
 
@@ -431,14 +430,14 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 		// 检查关联策略是否启用校验
 		if taskEntity.Policy != nil && taskEntity.Policy.VerifyEnabled {
-			m.emitLog(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
-				m.emitLog(taskID, runIDPtr, level, msg, string(StatusRunning))
+				m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, string(StatusRunning))
 			}, false)
 
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
-				m.emitLog(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
 				if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 					"next_run_at": nextCronRun(taskEntity.CronSpec),
 					"last_error":  "任务已取消",
@@ -478,12 +477,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 					"progress":      100,
 				})
 				runCompleted = true
-				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+verifyMessage, taskEntity.Status)
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份校验未通过: "+verifyMessage, taskEntity.Status)
 				m.alertDispatcher.RaiseVerificationFailure(taskEntity, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
-			m.emitLog(taskID, runIDPtr, "info", "备份完整性校验通过", taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "备份完整性校验通过", taskEntity.Status)
 		}
 
 		if statusErr := m.updateStatus(&taskEntity, StatusSuccess, map[string]interface{}{
@@ -492,7 +491,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"last_error":    "",
 			"verify_status": verifyStatus,
 		}); statusErr != nil {
-			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
 			return
 		}
 		// 计算本次执行的平均吞吐量
@@ -519,7 +518,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &backupAt)
 		}
 		backupLastSuccess.WithLabelValues(taskEntity.Name).SetToCurrentTime()
-		m.emitLog(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
 		if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "任务恢复成功"); resolveErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 		}
@@ -595,10 +594,10 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			"next_run_at": &nextRun,
 			"last_error":  errorMsg,
 		}); statusErr != nil {
-			m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
 			return
 		}
-		m.emitLog(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Local().Format(config.DisplayTimeFormatTZ)), taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Local().Format(config.DisplayTimeFormatTZ)), taskEntity.Status)
 		// 保存链路上下文，重试时由 trigger() 恢复
 		m.retryChainContexts.Store(taskID, chainContext{chainRunID: chainRunID})
 		delay := time.Until(nextRun)
@@ -630,10 +629,10 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		"next_run_at": nextCronRun(taskEntity.CronSpec),
 		"last_error":  errorMsg,
 	}); statusErr != nil {
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
 		return
 	}
-	m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
 	if raiseErr := m.alertDispatcher.RaiseTaskFailure(taskEntity, runIDPtr, errorMsg); raiseErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
 	}
@@ -653,13 +652,13 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	execCtx = m.withTaskCredentialAuditContext(execCtx, restoreTask, runID, "restore", map[string]any{
 		"operation": "restore_task",
 	})
-	m.runningCancels.Store(taskID, cancel)
-	defer m.runningCancels.Delete(taskID)
+	m.chainRunner.Store(taskID, cancel)
+	defer m.chainRunner.Delete(taskID)
 	defer cancel()
 
 	// restoreNodes 已在 TriggerRestore 同步路径中注册，此处仅负责清理
 	defer m.restoreNodes.Delete(restoreTask.NodeID)
-	m.lastProgressBucketByTask.Delete(taskID)
+	m.sampleWriter.ResetThrottle(taskID)
 
 	runCompleted := false
 	defer func() {
@@ -724,10 +723,10 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"started_at": &now,
 	})
 
-	m.emitLog(taskID, runIDPtr, "info", "开始恢复任务", "")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
 	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
-	m.emitLog(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
 	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
 		// 区分取消与真实失败
 		if execCtx.Err() != nil {
@@ -738,7 +737,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 				"last_error":  "恢复任务已取消",
 			})
 			runCompleted = true
-			m.emitLog(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
 			return
 		}
 		errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
@@ -751,11 +750,11 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
 		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
-	m.emitLog(taskID, runIDPtr, "info", "恢复前检查通过", "")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复前检查通过", "")
 
 	// 通过 RestoreExecutor 接口在远程节点上执行恢复
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
@@ -771,16 +770,16 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
 		return
 	}
 
 	_, err := restoreExec.RunRestore(execCtx, restoreTask, func(level, message string) {
-		m.emitLog(taskID, runIDPtr, level, message, "running")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, "running")
 	}, func(sample executor.ProgressSample) {
-		m.emitTrafficSample(taskID, restoreTask.NodeID, now, sample)
+		m.sampleWriter.Write(taskID, restoreTask.NodeID, now, sample)
 		if sample.Percent > 0 {
-			m.emitProgress(taskID, runID, sample.Percent)
+			m.sampleWriter.WriteProgress(taskID, runID, sample.Percent)
 		}
 	})
 
@@ -794,7 +793,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  "恢复任务已取消",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复任务已取消", "canceled")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复任务已取消", "canceled")
 		return
 	}
 
@@ -809,7 +808,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  errorMsg,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
 		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
@@ -821,9 +820,9 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		sampleRate = restoreTask.Policy.VerifySampleRate
 	}
 
-	m.emitLog(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复后完整性校验（采样率 %d%%）", sampleRate), "")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", fmt.Sprintf("开始恢复后完整性校验（采样率 %d%%）", sampleRate), "")
 	result := verifier.Verify(execCtx, restoreTask, sampleRate, m.db, func(level, msg string) {
-		m.emitLog(taskID, runIDPtr, level, msg, "")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, "")
 	}, true)
 
 	// 校验期间可能被取消
@@ -835,7 +834,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"last_error":  "恢复任务已取消",
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "canceled")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "canceled")
 		return
 	}
 
@@ -854,11 +853,11 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 			"progress":      100,
 		})
 		runCompleted = true
-		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
 		m.alertDispatcher.RaiseVerificationFailure(restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
-	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
 
 	finishedAt := time.Now()
 	duration := finishedAt.Sub(now).Milliseconds()
@@ -871,7 +870,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"progress":      100,
 	})
 	runCompleted = true
-	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
+	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
 	if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "恢复任务成功"); resolveErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 	}
@@ -973,7 +972,7 @@ func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRun
 		"last_error": skipReason,
 	})
 	runIDPtr := run.ID
-	m.emitLog(taskEntity.ID, &runIDPtr, "warn", skipReason, string(StatusSkipped))
+	m.logDispatcher.Dispatch(taskEntity.ID, &runIDPtr, "warn", skipReason, string(StatusSkipped))
 	// 递归跳过下游任务
 	m.skipDownstreamIfAny(taskEntity, run.ID, chainRunID, skipReason)
 }

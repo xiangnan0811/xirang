@@ -91,7 +91,6 @@ type Manager struct {
 	drillSSHScriptFunc          func(ctx context.Context, node model.Node, script string) error  // 可测试注入
 	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
 	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
-	runningCancels              sync.Map
 	pendingRuns                 sync.Map
 	restoreNodes                sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
 	retryTimers                 sync.Map
@@ -99,22 +98,10 @@ type Manager struct {
 	semaphore                   chan struct{}
 	taskWG                      sync.WaitGroup
 
-	logQueue         chan queuedTaskLog
-	logBatchSize     int
-	logFlushInterval time.Duration
-	logWorkerCancel  context.CancelFunc
-	logWorkerDone    chan struct{}
-
-	sampleQueue              chan queuedTaskSample
-	sampleBatchSize          int
-	sampleFlushInterval      time.Duration
-	sampleWorkerCancel       context.CancelFunc
-	sampleWorkerDone         chan struct{}
-	lastSampleBucketByTask   sync.Map
-	lastProgressBucketByTask sync.Map
-	sampleRetentionDays      int
-	lastSampleCleanupAt      time.Time
-	sampleCleanupMu          sync.Mutex
+	// Sub-components extracted from the Manager god object.
+	logDispatcher *LogDispatcher
+	sampleWriter  *SampleWriter
+	chainRunner   *ChainRunner
 
 	taskRunRetentionDays int
 	lastTaskRunCleanupAt time.Time
@@ -146,15 +133,6 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		scheduler:            scheduler,
 		semaphore:            make(chan struct{}, 8),
 		hookRunFunc:          nil, // 初始化后设置为默认 runSSHHook
-		logQueue:             make(chan queuedTaskLog, defaultLogQueueCapacity),
-		logBatchSize:         defaultLogBatchSize,
-		logFlushInterval:     defaultLogFlushInterval,
-		logWorkerDone:        make(chan struct{}),
-		sampleQueue:          make(chan queuedTaskSample, defaultSampleQueueCapacity),
-		sampleBatchSize:      defaultSampleBatchSize,
-		sampleFlushInterval:  defaultSampleFlushInterval,
-		sampleWorkerDone:     make(chan struct{}),
-		sampleRetentionDays:  sampleRetentionDays,
 		taskRunRetentionDays: taskRunRetentionDays,
 		settingsSvc:          settingsSvc,
 		alertDispatcher:      alertDispatcher,
@@ -164,8 +142,15 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	m.drillRestoreFunc = m.restoreBackupToSandbox
 	m.ensureRemoteTargetReadyFunc = executor.EnsureRemoteTargetReady
 	m.rootCtx, m.rootCancel = context.WithCancel(context.Background())
-	m.startLogWorker(m.rootCtx)
-	m.startSampleWorker(m.rootCtx)
+
+	// Create and start sub-components.
+	m.logDispatcher = NewLogDispatcher(db, hub)
+	m.sampleWriter = NewSampleWriter(db, sampleRetentionDays)
+	m.chainRunner = NewChainRunner()
+
+	m.logDispatcher.Start(m.rootCtx, m.cleanupExpiredTaskRuns)
+	m.sampleWriter.Start(m.rootCtx)
+
 	return m
 }
 
@@ -368,14 +353,12 @@ func (m *Manager) Cancel(taskID uint) error {
 		}); err != nil {
 			return err
 		}
-		m.emitLog(taskID, nil, "warn", "任务已取消", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", taskEntity.Status)
 		return nil
 	case StatusRunning:
 		m.stopRetryTimer(taskID)
-		if cancelRaw, ok := m.runningCancels.Load(taskID); ok {
-			if cancelFn, castOK := cancelRaw.(context.CancelFunc); castOK {
-				cancelFn()
-			}
+		if cancelFn, ok := m.chainRunner.Load(taskID); ok {
+			cancelFn()
 		}
 		// 二次确认 runTask 确实收到了取消信号：等待一小段时间后检查 runTask 是否已将状态从 running 变更为 canceled。
 		// 若 runTask 已自行完成（不再是 running），则不再覆盖状态，避免并发写。
@@ -392,15 +375,13 @@ func (m *Manager) Cancel(taskID uint) error {
 				"last_error":  "任务已取消",
 			})
 		}
-		m.emitLog(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
 	default:
 		// 检查是否有恢复操作正在运行（恢复不改变 Task.Status，但会注册 cancel）
-		if cancelRaw, ok := m.runningCancels.Load(taskID); ok {
-			if cancelFn, castOK := cancelRaw.(context.CancelFunc); castOK {
-				cancelFn()
-			}
-			m.emitLog(taskID, nil, "warn", "恢复任务已取消", taskEntity.Status)
+		if cancelFn, ok := m.chainRunner.Load(taskID); ok {
+			cancelFn()
+			m.logDispatcher.Dispatch(taskID, nil, "warn", "恢复任务已取消", taskEntity.Status)
 			return nil
 		}
 		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")
@@ -436,7 +417,7 @@ func (m *Manager) Pause(taskID uint, cancelRunning bool) error {
 		_ = m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 			"last_error": "任务已暂停",
 		})
-		m.emitLog(taskID, nil, "warn", "任务已暂停，重试已取消", taskEntity.Status)
+		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已暂停，重试已取消", taskEntity.Status)
 	}
 
 	// 如果要求取消当前运行
@@ -444,7 +425,7 @@ func (m *Manager) Pause(taskID uint, cancelRunning bool) error {
 		_ = m.Cancel(taskID)
 	}
 
-	m.emitLog(taskID, nil, "info", "任务已暂停", taskEntity.Status)
+	m.logDispatcher.Dispatch(taskID, nil, "info", "任务已暂停", taskEntity.Status)
 	return nil
 }
 
@@ -472,7 +453,7 @@ func (m *Manager) Resume(taskID uint) error {
 		}
 	}
 
-	m.emitLog(taskID, nil, "info", "任务已恢复", taskEntity.Status)
+	m.logDispatcher.Dispatch(taskID, nil, "info", "任务已恢复", taskEntity.Status)
 	return nil
 }
 
@@ -494,7 +475,7 @@ func (m *Manager) SetSkipNext(taskID uint) error {
 	if err := m.db.Model(&taskEntity).Update("skip_next", true).Error; err != nil {
 		return err
 	}
-	m.emitLog(taskID, nil, "info", "已设置跳过下次执行", taskEntity.Status)
+	m.logDispatcher.Dispatch(taskID, nil, "info", "已设置跳过下次执行", taskEntity.Status)
 	return nil
 }
 
@@ -514,12 +495,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	m.shuttingDown.Store(true)
 	m.stopAllRetryTimers()
 
-	m.runningCancels.Range(func(_, value interface{}) bool {
-		if cancelFn, ok := value.(context.CancelFunc); ok {
-			cancelFn()
-		}
-		return true
-	})
+	m.chainRunner.CancelAll()
 
 	taskDone := make(chan struct{})
 	go func() {
@@ -533,25 +509,11 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	if m.logWorkerCancel != nil {
-		m.logWorkerCancel()
+	if err := m.logDispatcher.Stop(ctx); err != nil {
+		return err
 	}
-	if m.logWorkerDone != nil {
-		select {
-		case <-m.logWorkerDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	if m.sampleWorkerCancel != nil {
-		m.sampleWorkerCancel()
-	}
-	if m.sampleWorkerDone != nil {
-		select {
-		case <-m.sampleWorkerDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := m.sampleWriter.Stop(ctx); err != nil {
+		return err
 	}
 	if m.rootCancel != nil {
 		m.rootCancel()
@@ -598,4 +560,49 @@ func (m *Manager) dispatchDrillFailure(policyID, taskRunID uint) {
 			"task_run_id": taskRunID,
 		},
 	})
+}
+
+// cleanupExpiredTaskRuns removes TaskRun records older than taskRunRetentionDays.
+// Called periodically by LogDispatcher's worker tick.
+func (m *Manager) cleanupExpiredTaskRuns() {
+	if m.taskRunRetentionDays <= 0 || m.db == nil {
+		return
+	}
+
+	m.taskRunCleanupMu.Lock()
+	defer m.taskRunCleanupMu.Unlock()
+
+	now := time.Now().UTC()
+	if !m.lastTaskRunCleanupAt.IsZero() && now.Sub(m.lastTaskRunCleanupAt) < defaultSampleCleanupInterval {
+		return
+	}
+
+	cutoff := now.AddDate(0, 0, -m.taskRunRetentionDays)
+	for {
+		var ids []uint
+		if err := m.db.Model(&model.TaskRun{}).Where("created_at < ?", cutoff).Order("id asc").Limit(defaultSampleCleanupBatchSize).Pluck("id", &ids).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("查询过期执行记录失败")
+			return
+		}
+		if len(ids) == 0 {
+			break
+		}
+		// 级联清理：删除关联 TaskLog，清除关联 Alert 的 run 引用
+		if err := m.db.Where("task_run_id IN ?", ids).Delete(&model.TaskLog{}).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录关联日志失败")
+			return
+		}
+		if err := m.db.Model(&model.Alert{}).Where("task_run_id IN ?", ids).Update("task_run_id", nil).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清除过期执行记录关联告警引用失败")
+			return
+		}
+		if err := m.db.Where("id IN ?", ids).Delete(&model.TaskRun{}).Error; err != nil {
+			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录失败")
+			return
+		}
+		if len(ids) < defaultSampleCleanupBatchSize {
+			break
+		}
+	}
+	m.lastTaskRunCleanupAt = now
 }

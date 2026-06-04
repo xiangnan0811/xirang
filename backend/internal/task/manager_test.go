@@ -540,7 +540,7 @@ func TestEmitLogWritesTaskRunID(t *testing.T) {
 	runID := uint(42)
 
 	// 直接调用 emitLog
-	m.emitLog(taskEntity.ID, &runID, "info", "test message", "running")
+	m.logDispatcher.Dispatch(taskEntity.ID, &runID, "info", "test message", "running")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -564,7 +564,7 @@ func TestEmitLogSanitizesTaskRuntimeEvidence(t *testing.T) {
 	runID := uint(43)
 	message := `执行命令: curl https://hooks.example.test/services/FAKE_TASK_LOG_TOKEN_FOR_TEST_ONLY?secret=FAKE_QUERY_FOR_TEST_ONLY && rsync /srv/private/source root@db.internal.example:/backup/tenant-a`
 
-	m.emitLog(taskEntity.ID, &runID, "info", message, "running")
+	m.logDispatcher.Dispatch(taskEntity.ID, &runID, "info", message, "running")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -726,11 +726,11 @@ func TestMaintenanceMessagesSanitizeRuntimeEvidence(t *testing.T) {
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	retentionErr := sanitizeTaskLastError(`restic 保留清理失败: remove /srv/private/repo on backup.internal.example token=FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
-	m.emitLog(0, nil, "error", retentionErr, "")
+	m.logDispatcher.Dispatch(0, nil, "error", retentionErr, "")
 	_ = alerting.RaiseRetentionFailure(db, 7, "policy-runtime", "node-runtime", 9, retentionErr)
 
 	integrityErr := sanitizeTaskLastError(`rclone 完整性检查失败: compare /srv/private/source to s3:tenant/private on integrity.internal.example token=FAKE_INTEGRITY_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
-	m.emitLog(0, nil, "error", integrityErr, "")
+	m.logDispatcher.Dispatch(0, nil, "error", integrityErr, "")
 	_ = alerting.RaiseIntegrityCheckFailure(db, 8, "policy-runtime", "node-runtime", 10, integrityErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

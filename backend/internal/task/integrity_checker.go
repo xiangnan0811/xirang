@@ -89,12 +89,12 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 	if err != nil {
 		errMsg := sanitizeTaskLastError(fmt.Sprintf("restic 完整性检查失败: %v, 输出: %s", err, output))
 		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("restic check 执行失败")
-		m.emitLog(0, nil, "error", errMsg, "")
+		m.logDispatcher.Dispatch(0, nil, "error", errMsg, "")
 		_ = m.alertDispatcher.RaiseIntegrityCheckFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
 		msg := "restic 完整性检查通过"
 		log.Info().Uint("task_id", task.ID).Msg("restic 完整性检查通过")
-		m.emitLog(0, nil, "info", msg, "")
+		m.logDispatcher.Dispatch(0, nil, "info", msg, "")
 	}
 }
 
@@ -125,11 +125,11 @@ func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 	if err != nil {
 		errMsg := sanitizeTaskLastError(fmt.Sprintf("rclone 完整性检查失败: %v, 输出: %s", err, output))
 		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("rclone check 执行失败")
-		m.emitLog(0, nil, "error", errMsg, "")
+		m.logDispatcher.Dispatch(0, nil, "error", errMsg, "")
 		_ = m.alertDispatcher.RaiseIntegrityCheckFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
 		msg := "rclone 完整性检查通过"
 		log.Info().Uint("task_id", task.ID).Msg("rclone 完整性检查通过")
-		m.emitLog(0, nil, "info", msg, "")
+		m.logDispatcher.Dispatch(0, nil, "info", msg, "")
 	}
 }
