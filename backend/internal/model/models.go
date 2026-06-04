@@ -997,7 +997,7 @@ type AutomationRule struct {
 	EventFilter  string    `gorm:"type:text;not null;default:'{}'" json:"event_filter"` // JSON
 	ActionType   string    `gorm:"size:64;not null" json:"action_type"`
 	ActionConfig string    `gorm:"type:text;not null;default:'{}'" json:"action_config"` // JSON
-	Enabled      bool      `gorm:"not null;default:true" json:"enabled"`
+	Enabled      bool      `gorm:"not null" json:"enabled"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
