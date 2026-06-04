@@ -14,6 +14,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	taskPkg "xirang/backend/internal/task"
@@ -384,6 +385,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	var importedNodes, importedKeys, importedPolicies, importedTasks, importedSettings int
 
 	importErr := h.db.Transaction(func(tx *gorm.DB) error {
+	// Create repos from tx for task helper functions.
+	importNodeRepo := gormrepo.NewNodeRepository(tx)
+	importPolicyRepo := gormrepo.NewPolicyRepository(tx)
+	importTaskRepo := gormrepo.NewTaskRepository(tx)
+
 		resolvedTaskIDs := make(map[importTaskKey]uint)
 		type taskDependencyUpdate struct {
 			taskID        uint
@@ -658,14 +664,14 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			}
 			dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
 			explicitCronSpec := req.CronSpec
-			taskPkg.HydrateTaskDefaultsFromPolicy(tx, &req)
+			taskPkg.HydrateTaskDefaultsFromPolicy(c.Request.Context(), importPolicyRepo, importNodeRepo, &req)
 			taskPkg.TrimTaskInput(&req)
 			taskPkg.InferTaskExecutor(&req, "")
-			taskPkg.EnsureNodeTargetPrefix(tx, &req)
+			taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
 			if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
 				req.CronSpec = ""
 			}
-			taskPkg.AutoGenerateTarget(tx, &req)
+			taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
 			if err := taskPkg.ValidateTaskInput(req); err != nil {
 				logger.Module("config").Warn().
 					Str("task", req.Name).
@@ -673,7 +679,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					Msg("导入任务校验失败，跳过")
 				continue
 			}
-			if err := taskPkg.ValidateTaskRefs(tx, req, 0); err != nil {
+			if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
 				logger.Module("config").Warn().
 					Str("task", req.Name).
 					Err(err).
@@ -762,7 +768,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				ExecutorConfig:  current.ExecutorConfig,
 				CronSpec:        current.CronSpec,
 			}
-			if err := taskPkg.ValidateTaskRefs(tx, req, current.ID); err != nil {
+			if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
 				logger.Module("config").Warn().
 					Str("task", current.Name).
 					Err(err).

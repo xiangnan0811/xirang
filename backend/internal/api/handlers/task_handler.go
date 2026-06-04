@@ -8,6 +8,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 
@@ -34,7 +35,25 @@ type TaskHandler struct {
 }
 
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
-	return &TaskHandler{db: db, runner: runner, svc: task.NewTaskApiService(db, runner)}
+	return &TaskHandler{db: db, runner: runner}
+}
+
+// WithTaskApiService injects a TaskApiService for business logic delegation.
+func (h *TaskHandler) WithTaskApiService(svc *task.TaskApiService) *TaskHandler {
+	h.svc = svc
+	return h
+}
+
+// service returns the injected TaskApiService, or lazily creates one
+// from the handler's db and runner (backward-compatible with tests).
+func (h *TaskHandler) service() *task.TaskApiService {
+	if h.svc != nil {
+		return h.svc
+	}
+	nodeRepo := gormrepo.NewNodeRepository(h.db)
+	policyRepo := gormrepo.NewPolicyRepository(h.db)
+	taskRepo := gormrepo.NewTaskRepository(h.db)
+	return task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, h.runner)
 }
 
 func (h *TaskHandler) WithJWTManager(jwtManager *auth.JWTManager) *TaskHandler {
@@ -241,7 +260,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	taskEntity, err := h.svc.CreateTask(task.CreateTaskInput{
+	taskEntity, err := h.service().CreateTask(c.Request.Context(), task.CreateTaskInput{
 		Name:            req.Name,
 		NodeID:          req.NodeID,
 		PolicyID:        req.PolicyID,
@@ -297,7 +316,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	taskEntity, err := h.svc.UpdateTask(id, task.CreateTaskInput{
+	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, task.CreateTaskInput{
 		Name:            req.Name,
 		NodeID:          req.NodeID,
 		PolicyID:        req.PolicyID,
@@ -379,7 +398,7 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	auditMetadata := taskCredentialAuditMetadata("manual", auditTask, hasAuditTask)
 	nodeID := taskCredentialAuditNodeID(auditTask, hasAuditTask)
 
-	runID, err := h.svc.TriggerTask(id)
+	runID, err := h.service().TriggerTask(id)
 	if err != nil {
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:       "task.manual_trigger",
@@ -637,7 +656,7 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 	}
 
 	if len(tasksToTrigger) > 0 {
-		svcResults := h.svc.BulkTriggerTasks(tasksToTrigger)
+		svcResults := h.service().BulkTriggerTasks(c.Request.Context(), tasksToTrigger)
 		for _, r := range svcResults {
 			if r.Error != "" {
 				failureCount++

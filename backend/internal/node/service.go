@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"regexp"
@@ -9,8 +10,7 @@ import (
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
-
-	"gorm.io/gorm"
+	"xirang/backend/internal/repository"
 )
 
 var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
@@ -18,12 +18,12 @@ var consecutiveDashRegexp = regexp.MustCompile(`-{2,}`)
 
 // NodeService encapsulates business logic for node CRUD operations.
 type NodeService struct {
-	db *gorm.DB
+	repo repository.NodeRepository
 }
 
-// NewNodeService creates a new NodeService backed by the given database.
-func NewNodeService(db *gorm.DB) *NodeService {
-	return &NodeService{db: db}
+// NewNodeService creates a new NodeService backed by the given repository.
+func NewNodeService(repo repository.NodeRepository) *NodeService {
+	return &NodeService{repo: repo}
 }
 
 // CreateNodeInput is the input payload for creating or updating a node.
@@ -53,7 +53,7 @@ func validationError(msg string) error {
 
 // Create validates the input and creates a new node. It returns the created
 // node with SSHKey preloaded, or an error.
-func (s *NodeService) Create(input CreateNodeInput) (*model.Node, error) {
+func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model.Node, error) {
 	// Set defaults
 	if input.Port == 0 {
 		input.Port = 22
@@ -72,7 +72,7 @@ func (s *NodeService) Create(input CreateNodeInput) (*model.Node, error) {
 	if err := ValidateNodeHostPort(input.Host, input.Port); err != nil {
 		return nil, validationError(err.Error())
 	}
-	if err := s.validateSSHRef(input); err != nil {
+	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, validationError(err.Error())
 	}
 
@@ -120,24 +120,25 @@ func (s *NodeService) Create(input CreateNodeInput) (*model.Node, error) {
 
 	applyOptionalFields(&node, input)
 
-	if err := s.db.Create(&node).Error; err != nil {
+	if err := s.repo.Create(ctx, &node); err != nil {
 		err = apperr.WrapDBError(err)
 		return nil, err
 	}
 
 	// Reload with associations
-	if err := s.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
+	nodePtr, err := s.repo.FindByIDWithSSHKey(ctx, node.ID)
+	if err != nil {
 		return nil, err
 	}
-	return &node, nil
+	return nodePtr, nil
 }
 
 // Update validates the input and updates an existing node. It returns the
 // updated node (with SSHKey preloaded) and the previous backup directory
 // identifier (for change-warning messages), or an error.
-func (s *NodeService) Update(id uint, input CreateNodeInput) (*model.Node, string, error) {
-	var node model.Node
-	if err := s.db.First(&node, id).Error; err != nil {
+func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput) (*model.Node, string, error) {
+	node, err := s.repo.FindByID(ctx, id)
+	if err != nil {
 		return nil, "", err
 	}
 
@@ -179,7 +180,7 @@ func (s *NodeService) Update(id uint, input CreateNodeInput) (*model.Node, strin
 	if err := ValidateNodeHostPort(input.Host, input.Port); err != nil {
 		return nil, "", validationError(err.Error())
 	}
-	if err := s.validateSSHRef(input); err != nil {
+	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, "", validationError(err.Error())
 	}
 
@@ -209,113 +210,36 @@ func (s *NodeService) Update(id uint, input CreateNodeInput) (*model.Node, strin
 		}
 	}
 
-	applyOptionalFields(&node, input)
+	applyOptionalFields(node, input)
 
-	if err := s.db.Save(&node).Error; err != nil {
+	if err := s.repo.Update(ctx, node); err != nil {
 		err = apperr.WrapDBError(err)
 		return nil, "", err
 	}
 
 	// Reload with associations
-	if err := s.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
+	nodePtr, err := s.repo.FindByIDWithSSHKey(ctx, node.ID)
+	if err != nil {
 		return nil, "", err
 	}
-	return &node, oldBackupDir, nil
+	return nodePtr, oldBackupDir, nil
 }
 
 // Delete deletes a node and its associated policy links, tasks, and alerts in
 // a single transaction.
-func (s *NodeService) Delete(id uint) error {
-	tx := s.db.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	var node model.Node
-	if err := tx.First(&node, id).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	if err := tx.Where("node_id = ?", id).Delete(&model.PolicyNode{}).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Where("node_id = ?", id).Delete(&model.Task{}).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Where("node_id = ?", id).Delete(&model.Alert{}).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Delete(&model.Node{}, id).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	return tx.Commit().Error
+func (s *NodeService) Delete(ctx context.Context, id uint) error {
+	return s.repo.DeleteWithAssociations(ctx, id)
 }
 
 // BatchDelete deletes multiple nodes and their associated records. It returns
 // the number of deleted records and the list of IDs that were not found.
-func (s *NodeService) BatchDelete(ids []uint) (int64, []uint, error) {
-	tx := s.db.Begin()
-	if tx.Error != nil {
-		return 0, nil, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	var existingIDs []uint
-	if err := tx.Model(&model.Node{}).Where("id IN ?", ids).Pluck("id", &existingIDs).Error; err != nil {
-		tx.Rollback()
-		return 0, nil, err
-	}
-
-	notFoundIDs := diffNodeIDs(ids, existingIDs)
-	if len(existingIDs) == 0 {
-		tx.Rollback()
-		return 0, notFoundIDs, nil
-	}
-
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.PolicyNode{}).Error; err != nil {
-		tx.Rollback()
-		return 0, nil, err
-	}
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Task{}).Error; err != nil {
-		tx.Rollback()
-		return 0, nil, err
-	}
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Alert{}).Error; err != nil {
-		tx.Rollback()
-		return 0, nil, err
-	}
-
-	deleteResult := tx.Where("id IN ?", existingIDs).Delete(&model.Node{})
-	if deleteResult.Error != nil {
-		tx.Rollback()
-		return 0, nil, deleteResult.Error
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		return 0, nil, err
-	}
-
-	return deleteResult.RowsAffected, notFoundIDs, nil
+func (s *NodeService) BatchDelete(ctx context.Context, ids []uint) (int64, []uint, error) {
+	return s.repo.BatchDeleteWithAssociations(ctx, ids)
 }
 
 // --- validation helpers ---
 
-func (s *NodeService) validateSSHRef(input CreateNodeInput) error {
+func (s *NodeService) validateSSHRef(ctx context.Context, input CreateNodeInput) error {
 	switch input.AuthType {
 	case "password":
 		if input.Password == "" {
@@ -327,8 +251,8 @@ func (s *NodeService) validateSSHRef(input CreateNodeInput) error {
 			return fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
 		}
 		if input.SSHKeyID != nil {
-			var key model.SSHKey
-			if err := s.db.First(&key, *input.SSHKeyID).Error; err != nil {
+			_, err := s.repo.FindSSHKeyByID(ctx, *input.SSHKeyID)
+			if err != nil {
 				return fmt.Errorf("所选密钥不存在，请重新选择")
 			}
 		}

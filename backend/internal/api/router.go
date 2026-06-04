@@ -12,6 +12,7 @@ import (
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/policy"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
@@ -95,11 +96,16 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)
 	backupConfidenceHandler := handlers.NewBackupConfidenceHandler(dep.DB)
 	storageUsageHandler := handlers.NewStorageUsageHandler(dep.DB)
-	nodeSvc := node.NewNodeService(dep.DB)
+	nodeRepo := gormrepo.NewNodeRepository(dep.DB)
+	policyRepo := gormrepo.NewPolicyRepository(dep.DB)
+	taskRepo := gormrepo.NewTaskRepository(dep.DB)
+
+	nodeSvc := node.NewNodeService(nodeRepo)
 	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager, nodeSvc).WithSettingsService(dep.SettingsService).WithAlertDispatcher(dep.AlertDispatcher)
-	policySvc := policy.NewPolicyService(dep.DB, dep.TaskManager)
+	policySvc := policy.NewPolicyService(policyRepo, dep.TaskManager)
 	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager).WithPolicyService(policySvc)
-	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithJWTManager(dep.JWTManager)
+	taskSvc := task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, dep.TaskManager)
+	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithTaskApiService(taskSvc).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
