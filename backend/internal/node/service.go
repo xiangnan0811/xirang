@@ -452,22 +452,6 @@ func applyOptionalFields(node *model.Node, input CreateNodeInput) {
 	}
 }
 
-func uniqueNodeIDs(ids []uint) []uint {
-	seen := make(map[uint]struct{}, len(ids))
-	result := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}
-
 func diffNodeIDs(source []uint, existing []uint) []uint {
 	exists := make(map[uint]struct{}, len(existing))
 	for _, id := range existing {
