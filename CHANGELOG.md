@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.37](https://github.com/xiangnan0811/xirang/compare/v0.43.36...v0.43.37) (2026-06-04)
+
+
+### 🐛 Bug Fixes
+
+* 全方位代码审查问题修复（安全/质量/前端/数据库/测试/部署/文档） ([1a9b9f7](https://github.com/xiangnan0811/xirang/commit/1a9b9f7fae4e0c2c174041c5681ccf3931ec4199))
+
 ## [0.43.36](https://github.com/xiangnan0811/xirang/compare/v0.43.35...v0.43.36) (2026-05-26)
 
 
