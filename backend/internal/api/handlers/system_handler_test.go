@@ -124,7 +124,7 @@ func TestSystemHandlerBackupDBUsesSQLiteByDefault(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if resp.Code != 0 || resp.Data.Filename == "" || resp.Data.Path == "" || resp.Data.Size <= 0 || resp.Data.SHA256 == "" {
+	if resp.Code != http.StatusOK || resp.Data.Filename == "" || resp.Data.Path == "" || resp.Data.Size <= 0 || resp.Data.SHA256 == "" {
 		t.Fatalf("备份响应缺少必要字段: %+v", resp)
 	}
 

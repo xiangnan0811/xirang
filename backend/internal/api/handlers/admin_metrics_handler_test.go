@@ -39,8 +39,8 @@ func TestAdminMetricsHandlerRollupStatusReturnsEnvelope(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if envelope.Code != 0 {
-		t.Fatalf("expected envelope code 0, got %d", envelope.Code)
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("expected envelope code %d, got %d", http.StatusOK, envelope.Code)
 	}
 	if envelope.Data.Hourly == nil || envelope.Data.Daily == nil {
 		t.Fatalf("expected hourly and daily rollup data, got %+v", envelope.Data)

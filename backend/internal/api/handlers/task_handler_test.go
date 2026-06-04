@@ -91,7 +91,7 @@ func TestTaskTriggerReturnsAcceptedEnvelope(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if envelope.Code != 0 || envelope.Data.Message != "triggered" || envelope.Data.RunID != 42 {
+	if envelope.Code != http.StatusAccepted || envelope.Data.Message != "triggered" || envelope.Data.RunID != 42 {
 		t.Fatalf("期望标准 202 信封响应，实际: %+v", envelope)
 	}
 }

@@ -31,8 +31,8 @@ func TestRespondOK(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("JSON 解析失败: %v", err)
 	}
-	if resp.Code != 0 {
-		t.Fatalf("期望 code=0，实际 %d", resp.Code)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 code=%d，实际 %d", http.StatusOK, resp.Code)
 	}
 	if resp.Message != "ok" {
 		t.Fatalf("期望 message=ok，实际 %s", resp.Message)
@@ -48,7 +48,7 @@ func TestRespondMessage(t *testing.T) {
 
 	var resp Response
 	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
-	if resp.Code != 0 || resp.Message != "删除成功" || resp.Data != nil {
+	if resp.Code != http.StatusOK || resp.Message != "删除成功" || resp.Data != nil {
 		t.Fatalf("响应不符合预期: %+v", resp)
 	}
 }
@@ -99,7 +99,7 @@ func TestRespondPaginated(t *testing.T) {
 
 	var resp PaginatedResponse
 	_ = json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
-	if resp.Code != 0 || resp.Total != 10 || resp.Page != 1 || resp.PageSize != 20 {
+	if resp.Code != http.StatusOK || resp.Total != 10 || resp.Page != 1 || resp.PageSize != 20 {
 		t.Fatalf("分页响应不符合预期: %+v", resp)
 	}
 }

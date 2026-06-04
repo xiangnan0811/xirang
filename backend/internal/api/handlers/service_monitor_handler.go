@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -177,9 +179,8 @@ func (h *ServiceMonitorHandler) Create(c *gin.Context) {
 		LastStatus:         "unknown",
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") ||
-			strings.Contains(err.Error(), "duplicate key") ||
-			strings.Contains(err.Error(), "SQLSTATE 23505") {
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
 			respondConflict(c, "服务监控名称已存在")
 			return
 		}
@@ -284,9 +285,8 @@ func (h *ServiceMonitorHandler) Update(c *gin.Context) {
 	item.HTTPHeaders = httpHeaders
 
 	if err := h.db.Save(&item).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") ||
-			strings.Contains(err.Error(), "duplicate key") ||
-			strings.Contains(err.Error(), "SQLSTATE 23505") {
+		err = apperr.WrapDBError(err)
+		if errors.Is(err, apperr.ErrDuplicate) {
 			respondConflict(c, "服务监控名称已存在")
 			return
 		}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
@@ -380,7 +381,7 @@ func classifyDoctorSudoEvidence(output string) string {
 	if strings.Contains(msg, "not in the sudoers") || strings.Contains(msg, "not allowed") || strings.Contains(msg, "permission denied") {
 		return "当前用户未授予 sudo 权限"
 	}
-	if strings.Contains(msg, "not found") || strings.Contains(msg, "command not found") {
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "command not found") || strings.Contains(msg, apperr.ErrNotFound.Error()) {
 		return "sudo 工具不可用"
 	}
 	return "sudo 非交互检查失败"

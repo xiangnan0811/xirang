@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"xirang/backend/internal/logger"
+
+	"xirang/backend/internal/apperr"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,24 +29,24 @@ type PaginatedResponse struct {
 }
 
 func respondOK(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "ok", Data: data})
 }
 
 func respondCreated(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusCreated, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusCreated, Response{Code: http.StatusCreated, Message: "ok", Data: data})
 }
 
 func respondAccepted(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusAccepted, Response{Code: 0, Message: "ok", Data: data})
+	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "ok", Data: data})
 }
 
 func respondMessage(c *gin.Context, msg string) {
-	c.JSON(http.StatusOK, Response{Code: 0, Message: msg, Data: nil})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: msg, Data: nil})
 }
 
 func respondPaginated(c *gin.Context, data interface{}, total int64, page, pageSize int) {
 	c.JSON(http.StatusOK, PaginatedResponse{
-		Code:     0,
+		Code:     http.StatusOK,
 		Message:  "ok",
 		Data:     data,
 		Total:    total,
@@ -82,6 +85,23 @@ func respondServiceUnavailable(c *gin.Context, msg string) {
 
 func respondNotImplemented(c *gin.Context, msg string) {
 	c.JSON(http.StatusNotImplemented, Response{Code: http.StatusNotImplemented, Message: msg, Data: nil})
+}
+
+// httpStatusFromError maps sentinel errors to the appropriate HTTP status code.
+// Services should wrap domain errors with apperr sentinels so handlers can classify them.
+func httpStatusFromError(err error) int {
+	switch {
+	case errors.Is(err, apperr.ErrDuplicate):
+		return http.StatusConflict
+	case errors.Is(err, apperr.ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, apperr.ErrValidation):
+		return http.StatusBadRequest
+	case errors.Is(err, apperr.ErrConflict):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func respondInternalError(c *gin.Context, err error) {

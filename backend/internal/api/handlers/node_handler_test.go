@@ -366,7 +366,7 @@ func TestMigrationPreflightResponseSanitizesDiagnosticFields(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if envelope.Code != 0 {
+	if envelope.Code != http.StatusOK {
 		t.Fatalf("响应信封不符合预期: %+v", envelope)
 	}
 	if envelope.Data.SourceNode.Host != "[HOST_REDACTED]" || envelope.Data.TargetNode.Host != "[HOST_REDACTED]" {
