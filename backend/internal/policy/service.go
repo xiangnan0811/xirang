@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	pathpkg "path"
@@ -9,8 +10,7 @@ import (
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
-
-	"gorm.io/gorm"
+	"xirang/backend/internal/repository"
 )
 
 // ErrTemplateNotFound is returned when a template policy is not found by ID.
@@ -21,22 +21,22 @@ var ErrNotTemplate = errors.New("该策略不是模板")
 
 // PolicyService provides policy-related business logic (validation, cloning, etc.).
 type PolicyService struct {
-	db     *gorm.DB
+	repo   repository.PolicyRepository
 	runner TaskRunner
 }
 
 // NewPolicyService creates a new PolicyService.
-func NewPolicyService(db *gorm.DB, runner TaskRunner) *PolicyService {
-	return &PolicyService{db: db, runner: runner}
+func NewPolicyService(repo repository.PolicyRepository, runner TaskRunner) *PolicyService {
+	return &PolicyService{repo: repo, runner: runner}
 }
 
 // CloneFromTemplate clones a template policy into a new non-template policy.
 // The new policy has Enabled=false, DrillEnabled=false, IsTemplate=false, and
 // TargetPath set to config.BackupRoot. Node associations are copied from the template.
-func (s *PolicyService) CloneFromTemplate(templateID uint) (*model.Policy, error) {
-	var tmpl model.Policy
-	if err := s.db.Preload("Nodes").First(&tmpl, templateID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+func (s *PolicyService) CloneFromTemplate(ctx context.Context, templateID uint) (*model.Policy, error) {
+	tmpl, err := s.repo.FindByIDWithNodes(ctx, templateID)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
 			return nil, ErrTemplateNotFound
 		}
 		return nil, apperr.WrapDBError(err)
@@ -77,13 +77,13 @@ func (s *PolicyService) CloneFromTemplate(templateID uint) (*model.Policy, error
 		KeepYearly:        tmpl.KeepYearly,
 	}
 
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&newPolicy).Error; err != nil {
+	err = s.repo.Transaction(ctx, func(txRepo repository.PolicyRepository) error {
+		if err := txRepo.Create(ctx, &newPolicy); err != nil {
 			return apperr.WrapDBError(err)
 		}
 		for _, n := range tmpl.Nodes {
 			pn := model.PolicyNode{PolicyID: newPolicy.ID, NodeID: n.ID}
-			if err := tx.Create(&pn).Error; err != nil {
+			if err := txRepo.CreatePolicyNode(ctx, &pn); err != nil {
 				return apperr.WrapDBError(err)
 			}
 		}
@@ -94,10 +94,11 @@ func (s *PolicyService) CloneFromTemplate(templateID uint) (*model.Policy, error
 	}
 
 	// Reload with node associations.
-	if err := s.db.Preload("Nodes").First(&newPolicy, newPolicy.ID).Error; err != nil {
+	result, err := s.repo.FindByIDWithNodes(ctx, newPolicy.ID)
+	if err != nil {
 		return nil, apperr.WrapDBError(err)
 	}
-	return &newPolicy, nil
+	return result, nil
 }
 
 // ValidateHookCommand validates a hook command for shell injection risks.

@@ -12,6 +12,7 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
 	"xirang/backend/internal/profile"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -51,7 +52,7 @@ func (h *PolicyHandler) service() *policy.PolicyService {
 	if h.svc != nil {
 		return h.svc
 	}
-	return policy.NewPolicyService(h.db, h.runner)
+	return policy.NewPolicyService(gormrepo.NewPolicyRepository(h.db), h.runner)
 }
 
 type policyRequest struct {
@@ -1168,7 +1169,7 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 	}
 
 	// Delegate to PolicyService for business logic.
-	newPolicy, err := h.service().CloneFromTemplate(id)
+	newPolicy, err := h.service().CloneFromTemplate(c.Request.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, policy.ErrTemplateNotFound):

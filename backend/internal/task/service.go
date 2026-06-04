@@ -1,6 +1,7 @@
 package task
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +11,8 @@ import (
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/repository"
 	"xirang/backend/internal/util"
-
-	"gorm.io/gorm"
 )
 
 const maxCommandLength = 4096
@@ -28,13 +28,25 @@ type TaskRunner interface {
 // It is separate from the runtime Manager; it handles input validation,
 // defaults hydration, DB persistence, and schedule sync.
 type TaskApiService struct {
-	db     *gorm.DB
-	runner TaskRunner
+	taskRepo   repository.TaskRepository
+	nodeRepo   repository.NodeRepository
+	policyRepo repository.PolicyRepository
+	runner     TaskRunner
 }
 
 // NewTaskApiService creates a new TaskApiService.
-func NewTaskApiService(db *gorm.DB, runner TaskRunner) *TaskApiService {
-	return &TaskApiService{db: db, runner: runner}
+func NewTaskApiService(
+	taskRepo repository.TaskRepository,
+	nodeRepo repository.NodeRepository,
+	policyRepo repository.PolicyRepository,
+	runner TaskRunner,
+) *TaskApiService {
+	return &TaskApiService{
+		taskRepo:   taskRepo,
+		nodeRepo:   nodeRepo,
+		policyRepo: policyRepo,
+		runner:     runner,
+	}
 }
 
 // CreateTaskInput is the input for creating or updating a task.
@@ -83,19 +95,19 @@ func newValidationError(message string) error {
 
 // CreateTask creates a new task from the given input. It handles defaults
 // hydration, validation, DB persistence, and cron schedule sync.
-func (s *TaskApiService) CreateTask(input CreateTaskInput) (model.Task, error) {
+func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) (model.Task, error) {
 	SanitizeCreateTaskInput(&input)
 
-	HydrateTaskDefaultsFromPolicy(s.db, &input)
+	HydrateTaskDefaultsFromPolicy(ctx, s.policyRepo, s.nodeRepo, &input)
 	InferTaskExecutor(&input, "")
 	TrimTaskInput(&input)
-	EnsureNodeTargetPrefix(s.db, &input)
-	AutoGenerateTarget(s.db, &input)
+	EnsureNodeTargetPrefix(ctx, s.nodeRepo, &input)
+	AutoGenerateTarget(ctx, s.nodeRepo, &input)
 
 	if err := ValidateTaskInput(input); err != nil {
 		return model.Task{}, err
 	}
-	if err := ValidateTaskRefs(s.db, input, 0); err != nil {
+	if err := ValidateTaskRefs(ctx, s.nodeRepo, s.policyRepo, s.taskRepo, input, 0); err != nil {
 		return model.Task{}, err
 	}
 
@@ -112,13 +124,13 @@ func (s *TaskApiService) CreateTask(input CreateTaskInput) (model.Task, error) {
 		CronSpec:        input.CronSpec,
 		Status:          string(StatusPending),
 	}
-	if err := s.db.Create(&taskEntity).Error; err != nil {
+	if err := s.taskRepo.Create(ctx, &taskEntity); err != nil {
 		return model.Task{}, apperr.WrapDBError(err)
 	}
 	if s.runner != nil {
 		if err := s.runner.SyncSchedule(taskEntity); err != nil {
 			s.runner.RemoveSchedule(taskEntity.ID)
-			if rollbackErr := s.db.Delete(&model.Task{}, taskEntity.ID).Error; rollbackErr != nil {
+			if rollbackErr := s.taskRepo.Delete(ctx, taskEntity.ID); rollbackErr != nil {
 				return model.Task{}, fmt.Errorf("任务调度同步失败且补偿删除失败: %w", rollbackErr)
 			}
 			return model.Task{}, newValidationError("任务调度失败，请检查 Cron 表达式是否正确")
@@ -133,18 +145,18 @@ func (s *TaskApiService) CreateTask(input CreateTaskInput) (model.Task, error) {
 
 // UpdateTask updates an existing task. It loads the current state, applies
 // defaults, validates, persists, and syncs the cron schedule.
-func (s *TaskApiService) UpdateTask(id uint, input CreateTaskInput) (model.Task, error) {
+func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTaskInput) (model.Task, error) {
 	SanitizeCreateTaskInput(&input)
 
-	var taskEntity model.Task
-	if err := s.db.First(&taskEntity, id).Error; err != nil {
+	taskEntity, err := s.taskRepo.FindByID(ctx, id)
+	if err != nil {
 		return model.Task{}, apperr.WrapDBError(err)
 	}
 	// Value copy for compensating rollback; the copy shares pointer fields
 	// (e.g. PolicyID) — callers must not mutate through *previous.PolicyID.
-	previous := taskEntity
+	previous := *taskEntity
 
-	HydrateTaskDefaultsFromPolicy(s.db, &input)
+	HydrateTaskDefaultsFromPolicy(ctx, s.policyRepo, s.nodeRepo, &input)
 	InferTaskExecutor(&input, taskEntity.ExecutorType)
 	TrimTaskInput(&input)
 
@@ -172,12 +184,11 @@ func (s *TaskApiService) UpdateTask(id uint, input CreateTaskInput) (model.Task,
 	}
 	input.ExecutorConfig = mergeTaskExecutorConfigForUpdate(taskEntity.ExecutorType, input.ExecutorType, taskEntity.ExecutorConfig, input.ExecutorConfig)
 
-	EnsureNodeTargetPrefix(s.db, &input)
+	EnsureNodeTargetPrefix(ctx, s.nodeRepo, &input)
 	// When node changes for rsync/restic tasks, regenerate target from new node.
 	if (input.ExecutorType == "rsync" || input.ExecutorType == "restic") &&
 		input.NodeID != 0 && input.NodeID != taskEntity.NodeID {
-		var node model.Node
-		if err := s.db.First(&node, input.NodeID).Error; err == nil && node.BackupDir != "" {
+		if node, err := s.nodeRepo.FindByID(ctx, input.NodeID); err == nil && node.BackupDir != "" {
 			input.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 		}
 	}
@@ -185,7 +196,7 @@ func (s *TaskApiService) UpdateTask(id uint, input CreateTaskInput) (model.Task,
 	if err := ValidateTaskInput(input); err != nil {
 		return model.Task{}, err
 	}
-	if err := ValidateTaskRefs(s.db, input, id); err != nil {
+	if err := ValidateTaskRefs(ctx, s.nodeRepo, s.policyRepo, s.taskRepo, input, id); err != nil {
 		return model.Task{}, err
 	}
 
@@ -200,13 +211,13 @@ func (s *TaskApiService) UpdateTask(id uint, input CreateTaskInput) (model.Task,
 	taskEntity.ExecutorConfig = input.ExecutorConfig
 	taskEntity.CronSpec = input.CronSpec
 
-	if err := s.db.Save(&taskEntity).Error; err != nil {
+	if err := s.taskRepo.Update(ctx, taskEntity); err != nil {
 		return model.Task{}, apperr.WrapDBError(err)
 	}
 	if s.runner != nil {
-		if err := s.runner.SyncSchedule(taskEntity); err != nil {
+		if err := s.runner.SyncSchedule(*taskEntity); err != nil {
 			s.runner.RemoveSchedule(taskEntity.ID)
-			if restoreErr := s.db.Save(&previous).Error; restoreErr != nil {
+			if restoreErr := s.taskRepo.Update(ctx, &previous); restoreErr != nil {
 				return model.Task{}, fmt.Errorf("任务调度同步失败且补偿回滚失败: %w", restoreErr)
 			}
 			if restoreScheduleErr := s.runner.SyncSchedule(previous); restoreScheduleErr != nil {
@@ -216,7 +227,7 @@ func (s *TaskApiService) UpdateTask(id uint, input CreateTaskInput) (model.Task,
 			return model.Task{}, newValidationError("任务调度失败，请检查 Cron 表达式是否正确")
 		}
 	}
-	return taskEntity, nil
+	return *taskEntity, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -237,12 +248,12 @@ func (s *TaskApiService) TriggerTask(id uint) (uint, error) {
 
 // BulkTriggerTasks triggers multiple tasks by their IDs. It looks up tasks
 // from the DB, reports not-found errors, and triggers each one sequentially.
-func (s *TaskApiService) BulkTriggerTasks(taskIDs []uint) []BulkTriggerResult {
+func (s *TaskApiService) BulkTriggerTasks(ctx context.Context, taskIDs []uint) []BulkTriggerResult {
 	results := make([]BulkTriggerResult, 0, len(taskIDs))
 
 	// Batch query to avoid N+1.
-	var tasks []model.Task
-	if err := s.db.Select("id", "node_id").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
+	tasks, err := s.taskRepo.FindByIDsFields(ctx, taskIDs, "id", "node_id")
+	if err != nil {
 		for _, tid := range taskIDs {
 			results = append(results, BulkTriggerResult{TaskID: tid, Error: err.Error()})
 		}
@@ -306,20 +317,19 @@ func InferTaskExecutor(req *CreateTaskInput, fallback string) {
 }
 
 // HydrateTaskDefaultsFromPolicy fills task defaults from the associated policy.
-func HydrateTaskDefaultsFromPolicy(db *gorm.DB, req *CreateTaskInput) {
+func HydrateTaskDefaultsFromPolicy(ctx context.Context, policyRepo repository.PolicyRepository, nodeRepo repository.NodeRepository, req *CreateTaskInput) {
 	if req.PolicyID == nil {
 		return
 	}
-	var p model.Policy
-	if err := db.First(&p, *req.PolicyID).Error; err != nil {
+	p, err := policyRepo.FindByID(ctx, *req.PolicyID)
+	if err != nil {
 		return
 	}
 	if strings.TrimSpace(req.RsyncSource) == "" {
 		req.RsyncSource = p.SourcePath
 	}
 	if strings.TrimSpace(req.RsyncTarget) == "" && req.NodeID != 0 {
-		var node model.Node
-		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+		if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
 			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 		}
 	}
@@ -331,7 +341,7 @@ func HydrateTaskDefaultsFromPolicy(db *gorm.DB, req *CreateTaskInput) {
 // EnsureNodeTargetPrefix ensures that policy-linked tasks have the node
 // subdirectory in RsyncTarget. When the target is exactly the backup root
 // (missing the node prefix), it appends the node's backupDir.
-func EnsureNodeTargetPrefix(db *gorm.DB, req *CreateTaskInput) {
+func EnsureNodeTargetPrefix(ctx context.Context, nodeRepo repository.NodeRepository, req *CreateTaskInput) {
 	if req.NodeID == 0 {
 		return
 	}
@@ -343,8 +353,7 @@ func EnsureNodeTargetPrefix(db *gorm.DB, req *CreateTaskInput) {
 	}
 	// If target is just the backup root without node subdirectory, append it.
 	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(config.BackupRoot, "/") {
-		var node model.Node
-		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+		if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
 			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 		}
 	}
@@ -352,12 +361,11 @@ func EnsureNodeTargetPrefix(db *gorm.DB, req *CreateTaskInput) {
 
 // AutoGenerateTarget generates a target path for rsync/restic tasks when
 // RsyncTarget is still empty after all other defaults have been applied.
-func AutoGenerateTarget(db *gorm.DB, req *CreateTaskInput) {
+func AutoGenerateTarget(ctx context.Context, nodeRepo repository.NodeRepository, req *CreateTaskInput) {
 	if (req.ExecutorType != "rsync" && req.ExecutorType != "restic") || strings.TrimSpace(req.RsyncTarget) != "" {
 		return
 	}
-	var node model.Node
-	if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
+	if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
 		req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
 	}
 }
@@ -499,22 +507,22 @@ func ValidateTaskInput(req CreateTaskInput) error {
 }
 
 // ValidateTaskRefs validates that referenced nodes, policies, and dependency tasks exist.
-func ValidateTaskRefs(db *gorm.DB, req CreateTaskInput, selfID uint) error {
+func ValidateTaskRefs(ctx context.Context, nodeRepo repository.NodeRepository, policyRepo repository.PolicyRepository, taskRepo repository.TaskRepository, req CreateTaskInput, selfID uint) error {
 	if req.NodeID != 0 {
-		var count int64
-		if err := db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
+		exists, err := nodeRepo.ExistsByID(ctx, req.NodeID)
+		if err != nil {
 			return fmt.Errorf("校验节点失败: %w", err)
 		}
-		if count == 0 {
+		if !exists {
 			return newValidationError("所选节点不存在，请重新选择")
 		}
 	}
 	if req.PolicyID != nil {
-		var count int64
-		if err := db.Model(&model.Policy{}).Where("id = ?", *req.PolicyID).Count(&count).Error; err != nil {
+		exists, err := policyRepo.ExistsByID(ctx, *req.PolicyID)
+		if err != nil {
 			return fmt.Errorf("校验策略失败: %w", err)
 		}
-		if count == 0 {
+		if !exists {
 			return newValidationError("所选策略不存在，请重新选择")
 		}
 	}
@@ -528,16 +536,16 @@ func ValidateTaskRefs(db *gorm.DB, req CreateTaskInput, selfID uint) error {
 			return newValidationError("任务不能依赖自身")
 		}
 		// Check that the dependency exists.
-		var count int64
-		if err := db.Model(&model.Task{}).Where("id = ?", *req.DependsOnTaskID).Count(&count).Error; err != nil {
+		exists, err := taskRepo.ExistsByID(ctx, *req.DependsOnTaskID)
+		if err != nil {
 			return fmt.Errorf("校验前置任务失败: %w", err)
 		}
-		if count == 0 {
+		if !exists {
 			return newValidationError("所选前置任务不存在，请重新选择")
 		}
 		// Cycle detection: trace upward from the dependency, max depth 10.
 		if selfID != 0 {
-			if err := detectDependencyCycle(db, selfID, *req.DependsOnTaskID, 10); err != nil {
+			if err := detectDependencyCycle(ctx, taskRepo, selfID, *req.DependsOnTaskID, 10); err != nil {
 				return err
 			}
 		}
@@ -547,11 +555,11 @@ func ValidateTaskRefs(db *gorm.DB, req CreateTaskInput, selfID uint) error {
 
 // detectDependencyCycle walks the depends_on_task_id chain from startID
 // upward. If it reaches selfID, a cycle exists.
-func detectDependencyCycle(db *gorm.DB, selfID, startID uint, maxDepth int) error {
+func detectDependencyCycle(ctx context.Context, taskRepo repository.TaskRepository, selfID, startID uint, maxDepth int) error {
 	current := startID
 	for i := 0; i < maxDepth; i++ {
-		var t model.Task
-		if err := db.Select("id", "depends_on_task_id").First(&t, current).Error; err != nil {
+		t, err := taskRepo.FindByIDFields(ctx, current, "id", "depends_on_task_id")
+		if err != nil {
 			return nil // task not found, cannot continue
 		}
 		if t.DependsOnTaskID == nil {

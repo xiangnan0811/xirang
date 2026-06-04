@@ -318,6 +318,7 @@ func validateCronSpec(raw string) error {
 	return nil
 }
 
+//nolint:unused // kept for future use in PR5
 func parseCSVEnvList(key string) []string {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -335,6 +336,7 @@ func parseCSVEnvList(key string) []string {
 	return result
 }
 
+//nolint:unused // kept for future use in PR5
 func validatePathByPrefix(path string, prefixes []string, label string) error {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {

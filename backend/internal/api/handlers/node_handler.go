@@ -164,7 +164,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	nodeObj, err := h.svc.Create(node.CreateNodeInput{
+	nodeObj, err := h.svc.Create(c.Request.Context(), node.CreateNodeInput{
 		Name:             req.Name,
 		Host:             req.Host,
 		Port:             req.Port,
@@ -216,7 +216,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	nodeObj, oldBackupDir, err := h.svc.Update(id, node.CreateNodeInput{
+	nodeObj, oldBackupDir, err := h.svc.Update(c.Request.Context(), id, node.CreateNodeInput{
 		Name:             req.Name,
 		Host:             req.Host,
 		Port:             req.Port,
@@ -338,7 +338,7 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		}
 	}
 
-	deleted, notFoundIDs, err := h.svc.BatchDelete(nodeIDs)
+	deleted, notFoundIDs, err := h.svc.BatchDelete(c.Request.Context(), nodeIDs)
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -377,7 +377,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.Delete(id); err != nil {
+	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondNotFound(c, "节点不存在")
 			return
