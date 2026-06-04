@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/logger"
@@ -121,6 +122,8 @@ type Manager struct {
 
 	settingsSvc *settings.Service
 
+	alertDispatcher *alerting.Dispatcher
+
 	anomalySink anomaly.AlertSink // optional; set via SetAnomalySink
 
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
@@ -131,7 +134,10 @@ type Manager struct {
 	shuttingDown atomic.Bool
 }
 
-func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
+func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, alertDispatcher *alerting.Dispatcher, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
+	if alertDispatcher == nil {
+		alertDispatcher = alerting.NewDispatcher(db, nil, nil)
+	}
 	m := &Manager{
 		db:                   db,
 		stateMachine:         NewStateMachine(),
@@ -151,6 +157,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		sampleRetentionDays:  sampleRetentionDays,
 		taskRunRetentionDays: taskRunRetentionDays,
 		settingsSvc:          settingsSvc,
+		alertDispatcher:      alertDispatcher,
 	}
 	m.hookRunFunc = m.runSSHHook
 	m.drillSSHScriptFunc = m.runDrillSSHScript

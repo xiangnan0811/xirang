@@ -30,9 +30,10 @@ type NodeTaskTrigger interface {
 }
 
 type NodeHandler struct {
-	db          *gorm.DB
-	trigger     NodeTaskTrigger
-	settingsSvc *settings.Service
+	db              *gorm.DB
+	trigger         NodeTaskTrigger
+	settingsSvc     *settings.Service
+	alertDispatcher *alerting.Dispatcher
 }
 
 func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger) *NodeHandler {
@@ -42,6 +43,18 @@ func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger) *NodeHandler {
 func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHandler {
 	h.settingsSvc = settingsSvc
 	return h
+}
+
+func (h *NodeHandler) WithAlertDispatcher(alertDispatcher *alerting.Dispatcher) *NodeHandler {
+	h.alertDispatcher = alertDispatcher
+	return h
+}
+
+func (h *NodeHandler) getAlertDispatcher() *alerting.Dispatcher {
+	if h.alertDispatcher == nil {
+		return alerting.NewDispatcher(h.db, nil, nil)
+	}
+	return h.alertDispatcher
 }
 
 type nodeRequest struct {
@@ -680,7 +693,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
 			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
 		}
-		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
@@ -714,7 +727,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
 			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
 		}
-		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
@@ -753,7 +766,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
 			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
 		}
-		if alertErr := alerting.RaiseNodeProbeFailure(h.db, node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
+		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
 			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
 		}
 		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
@@ -813,7 +826,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	if resolveErr := alerting.ResolveNodeAlerts(h.db, node.ID, "节点探测恢复正常"); resolveErr != nil {
+	if resolveErr := h.getAlertDispatcher().ResolveNodeAlerts(node.ID, "节点探测恢复正常"); resolveErr != nil {
 		log.Printf("恢复节点探测告警失败(node_id=%d): %v", node.ID, resolveErr)
 	}
 

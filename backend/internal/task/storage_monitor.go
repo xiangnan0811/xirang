@@ -5,7 +5,6 @@ import (
 	"strings"
 	"syscall"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
@@ -88,10 +87,10 @@ func (m *Manager) checkLocalStorageSpace() {
 
 		if overThreshold {
 			log.Warn().Str("path", sanitizeTaskLogMessage(path)).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
-			_ = alerting.RaiseStorageSpaceAlert(m.db, sanitizeTaskLogMessage(path), freeGB, totalGB, usagePct)
+			_ = m.alertDispatcher.RaiseStorageSpaceAlert(sanitizeTaskLogMessage(path), freeGB, totalGB, usagePct)
 		} else {
 			// 如果之前有告警，现在恢复了，按脱敏后的路径标识解除告警
-			_ = alerting.ResolveAlertsByErrorCode(m.db, "XR-STORAGE-LOW:"+sanitizeTaskLogMessage(path), "存储空间恢复正常")
+			_ = m.alertDispatcher.ResolveAlertsByErrorCode("XR-STORAGE-LOW:"+sanitizeTaskLogMessage(path), "存储空间恢复正常")
 		}
 	}
 }

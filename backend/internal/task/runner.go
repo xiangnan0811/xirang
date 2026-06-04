@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/config"
@@ -480,7 +479,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 				})
 				runCompleted = true
 				m.emitLog(taskID, runIDPtr, "warn", "备份校验未通过: "+verifyMessage, taskEntity.Status)
-				alerting.RaiseVerificationFailure(m.db, taskEntity, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
+				m.alertDispatcher.RaiseVerificationFailure(taskEntity, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
@@ -521,7 +520,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		}
 		backupLastSuccess.WithLabelValues(taskEntity.Name).SetToCurrentTime()
 		m.emitLog(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
-		if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "任务恢复成功"); resolveErr != nil {
+		if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "任务恢复成功"); resolveErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 		}
 
@@ -635,7 +634,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
-	if raiseErr := alerting.RaiseTaskFailure(m.db, taskEntity, runIDPtr, errorMsg); raiseErr != nil {
+	if raiseErr := m.alertDispatcher.RaiseTaskFailure(taskEntity, runIDPtr, errorMsg); raiseErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
 	}
 	m.skipDownstreamIfAny(taskEntity, runID, chainRunID, errorMsg)
@@ -753,7 +752,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "error", errorMsg, "failed")
-		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
+		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复前检查通过", "")
@@ -811,7 +810,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
-		alerting.RaiseTaskFailure(m.db, restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
+		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 
@@ -856,7 +855,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		})
 		runCompleted = true
 		m.emitLog(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
-		alerting.RaiseVerificationFailure(m.db, restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
+		m.alertDispatcher.RaiseVerificationFailure(restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
 	m.emitLog(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
@@ -873,7 +872,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	})
 	runCompleted = true
 	m.emitLog(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
-	if resolveErr := alerting.ResolveTaskAlerts(m.db, taskID, "恢复任务成功"); resolveErr != nil {
+	if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "恢复任务成功"); resolveErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
 	}
 }

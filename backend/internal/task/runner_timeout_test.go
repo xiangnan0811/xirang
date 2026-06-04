@@ -27,7 +27,7 @@ func TestRunTaskHonorsGlobalTimeout(t *testing.T) {
 
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor() // 永不 release，只能被 ctx 中断
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -63,7 +63,7 @@ func TestRunTaskHonorsPolicyTimeout(t *testing.T) {
 
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
-	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
 
 	// Policy 直接绑定到 task；MaxExecutionSeconds 单位是秒，最小整数为 1
 	policy := model.Policy{

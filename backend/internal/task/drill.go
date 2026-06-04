@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
@@ -270,7 +269,7 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		}
 		updateEvidence(updates)
 		m.emitLog(task.ID, runIDPtr, "error", sanitizedErr, "")
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, alertCode, sanitizedErr)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,alertCode, sanitizedErr)
 		m.dispatchDrillFailure(policy.ID, drillRunID)
 	}
 
@@ -499,14 +498,14 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		finalError = "演习 post_verify 失败: " + postVerifyError
 		failedStep = "post_verify"
 		confidenceEligible = false
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_post_verify_failed", finalError)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,"drill_post_verify_failed", finalError)
 	}
 	if cleanupStatus == "failed" {
 		finalStatus = "failed"
 		finalError = "演习清理失败: " + cleanupError
 		failedStep = "cleanup"
 		confidenceEligible = false
-		_ = alerting.RaiseDrillFailure(m.db, policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_cleanup_failed", finalError)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,"drill_cleanup_failed", finalError)
 	}
 
 	finishRun(finalStatus, finalError, finishedAt)

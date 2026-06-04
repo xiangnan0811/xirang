@@ -31,11 +31,15 @@ type Prober struct {
 	cancelMu            sync.Mutex
 	cancel              context.CancelFunc
 	done                chan struct{}
+	alertDispatcher     *alerting.Dispatcher
 }
 
 // NewProber creates a new Prober instance. Metric samples are written through
 // sink (typically a FanSink containing at least a DBSink); do not pass nil.
-func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency int, sink *metrics.FanSink) *Prober {
+func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency int, sink *metrics.FanSink, alertDispatcher *alerting.Dispatcher) *Prober {
+	if alertDispatcher == nil {
+		alertDispatcher = alerting.NewDispatcher(db, nil, nil)
+	}
 	return &Prober{
 		db:                  db,
 		sink:                sink,
@@ -45,6 +49,7 @@ func NewProber(db *gorm.DB, interval time.Duration, failThreshold, concurrency i
 		metricRetentionDays: 7,
 		metricAuditFailures: make(map[string]int),
 		done:                make(chan struct{}),
+		alertDispatcher:     alertDispatcher,
 	}
 }
 
@@ -173,7 +178,7 @@ func (p *Prober) probeNode(node model.Node) {
 		}
 
 		if newFailures >= p.failThreshold {
-			if alertErr := alerting.RaiseNodeProbeFailure(p.db, node, fmt.Sprintf("节点连续探测失败 %d 次: %v", newFailures, err)); alertErr != nil {
+			if alertErr := p.alertDispatcher.RaiseNodeProbeFailure(node, fmt.Sprintf("节点连续探测失败 %d 次: %v", newFailures, err)); alertErr != nil {
 				logger.Module("probe").Warn().Uint("node_id", node.ID).Err(alertErr).Msg("创建节点探测告警失败")
 			}
 		}
@@ -207,7 +212,7 @@ func (p *Prober) probeNode(node model.Node) {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(dbErr).Msg("更新节点探测状态失败")
 	}
 
-	if resolveErr := alerting.ResolveNodeAlerts(p.db, node.ID, "节点探测恢复正常"); resolveErr != nil {
+	if resolveErr := p.alertDispatcher.ResolveNodeAlerts(node.ID, "节点探测恢复正常"); resolveErr != nil {
 		logger.Module("probe").Warn().Uint("node_id", node.ID).Err(resolveErr).Msg("恢复节点探测告警失败")
 	}
 
@@ -257,7 +262,7 @@ func (p *Prober) collectAndSaveMetrics(node model.Node, probeLatencyMs int, disk
 	}
 
 	if nm.diskPct > 90 {
-		if alertErr := alerting.RaiseDiskUsageAlert(p.db, node, nm.diskPct); alertErr != nil {
+		if alertErr := p.alertDispatcher.RaiseDiskUsageAlert(node, nm.diskPct); alertErr != nil {
 			logger.Module("probe").Warn().Uint("node_id", node.ID).Err(alertErr).Msg("创建磁盘告警失败")
 		}
 	}

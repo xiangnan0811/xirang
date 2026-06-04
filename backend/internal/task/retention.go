@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -109,7 +108,7 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 				errMsg := sanitizeTaskLastError(fmt.Sprintf("清理过期备份目录失败: %s: %v", subdirPath, err))
 				log.Error().Str("error", sanitizeTaskRuntimeError(err)).Str("path", sanitizeTaskLogMessage(subdirPath)).Msg("清理过期备份目录失败")
 				m.emitLog(0, nil, "error", errMsg, "")
-				_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
+				_ = m.alertDispatcher.RaiseRetentionFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 			} else {
 				m.emitLog(0, nil, "info", fmt.Sprintf("已清理过期备份 (保留天数: %d)", policy.RetentionDays), "")
 			}
@@ -165,7 +164,7 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 		errMsg := sanitizeTaskLastError(fmt.Sprintf("restic 保留清理失败: %v, 输出: %s", err, output))
 		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("restic forget 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
-		_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
+		_ = m.alertDispatcher.RaiseRetentionFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
 		m.emitLog(0, nil, "info", fmt.Sprintf("restic 保留清理完成 (保留: %s)", keepArgs), "")
 	}
@@ -198,7 +197,7 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 		errMsg := sanitizeTaskLastError(fmt.Sprintf("rclone 保留清理失败: %v, 输出: %s", err, output))
 		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("rclone delete 执行失败")
 		m.emitLog(0, nil, "error", errMsg, "")
-		_ = alerting.RaiseRetentionFailure(m.db, policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
+		_ = m.alertDispatcher.RaiseRetentionFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
 	} else {
 		m.emitLog(0, nil, "info", fmt.Sprintf("rclone 保留清理完成 (最小年龄: %s)", minAge), "")
 	}

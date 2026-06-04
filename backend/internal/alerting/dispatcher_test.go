@@ -493,10 +493,10 @@ func TestRaiseAndDispatch_WithEscalation_SkipsImmediateDispatch(t *testing.T) {
 	db.Create(&model.Node{ID: 10, Name: "node-esc"})
 
 	// Install resolver: enabled policy, min_severity=warning; alert is critical → qualifies.
-	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return &EscalationPolicySummary{Enabled: true, MinSeverity: "warning"}, nil
-	})
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	}))
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	alert := &model.Alert{
 		NodeID:      10,
@@ -530,10 +530,10 @@ func TestRaiseAndDispatch_BelowMinSeverity_UsesLegacyPath(t *testing.T) {
 	db.Create(&model.Node{ID: 11, Name: "node-low"})
 
 	// Resolver: enabled policy requires critical; alert is only warning → below threshold.
-	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return &EscalationPolicySummary{Enabled: true, MinSeverity: "critical"}, nil
-	})
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	}))
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	alert := &model.Alert{
 		NodeID:      11,
@@ -567,10 +567,10 @@ func TestRaiseAndDispatch_DisabledPolicy_UsesLegacyPath(t *testing.T) {
 	db.Create(&model.Node{ID: 12, Name: "node-disabled"})
 
 	// Resolver: policy is disabled → legacy path.
-	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return &EscalationPolicySummary{Enabled: false, MinSeverity: "warning"}, nil
-	})
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	}))
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	alert := &model.Alert{
 		NodeID:      12,
@@ -604,10 +604,10 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 	db.Create(&model.Node{ID: 13, Name: "node-err"})
 
 	// Resolver: returns an error → fail-open, use legacy dispatch.
-	InitEscalationResolver(func(alert model.Alert) (*EscalationPolicySummary, error) {
+	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return nil, fmt.Errorf("resolver temporarily unavailable")
-	})
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	}))
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	alert := &model.Alert{
 		NodeID:      13,
@@ -639,8 +639,8 @@ func TestRaiseAnomalyAlert_NewAlert(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "10m")
 	db := openDispatcherDBForEscalation(t)
 	seedIntegrationAndNode(t, db)
-	InitEscalationResolver(nil)
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	SetDispatcher(nil)
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	id, raised, err := RaiseAnomalyAlert(db, AnomalyAlertInput{
 		NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
@@ -657,8 +657,8 @@ func TestRaiseAnomalyAlert_DedupReturnsExistingID(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "10m")
 	db := openDispatcherDBForEscalation(t)
 	seedIntegrationAndNode(t, db)
-	InitEscalationResolver(nil)
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	SetDispatcher(nil)
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	id1, raised1, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{
 		NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "first",
@@ -682,8 +682,8 @@ func TestRaiseAnomalyAlert_DifferentNodeDifferentAlert(t *testing.T) {
 	db := openDispatcherDBForEscalation(t)
 	seedIntegrationAndNode(t, db)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (2, 'n2', 'h2', 'u', '/b2')")
-	InitEscalationResolver(nil)
-	t.Cleanup(func() { InitEscalationResolver(nil) })
+	SetDispatcher(nil)
+	t.Cleanup(func() { SetDispatcher(nil) })
 
 	id1, r1, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{NodeID: 1, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-1", Message: "n1"})
 	id2, r2, _ := RaiseAnomalyAlert(db, AnomalyAlertInput{NodeID: 2, Severity: "warning", ErrorCode: "XR-ANOMALY-CPU-2", Message: "n2"})
