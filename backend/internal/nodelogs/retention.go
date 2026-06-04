@@ -3,7 +3,6 @@ package nodelogs
 import (
 	"context"
 	"strconv"
-	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
@@ -19,17 +18,17 @@ var _ retention.Worker = (*RetentionWorker)(nil)
 
 // RetentionWorker prunes node_logs older than each node's configured
 // retention. Embeds retention.Loop for the standard ticker + Shutdown
-// scaffold. Reads the global default via the module-level settings service
-// (injected by InitSettings; not constructor-injected).
+// scaffold.
 type RetentionWorker struct {
 	*retention.Loop
-	db *gorm.DB
+	db       *gorm.DB
+	settings *settings.Service
 }
 
 // NewRetentionWorker constructs the worker with a 1-hour default tick.
 // Test code can override the tick by reassigning w.Loop.Tick before Run.
-func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
-	w := &RetentionWorker{db: db}
+func NewRetentionWorker(db *gorm.DB, svc *settings.Service) *RetentionWorker {
+	w := &RetentionWorker{db: db, settings: svc}
 	w.Loop = &retention.Loop{
 		Tick:   time.Hour,
 		Pruner: w.prune,
@@ -42,34 +41,13 @@ func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
 // live ticker.
 func (w *RetentionWorker) SetTickInterval(d time.Duration) { w.Tick = d }
 
-// settingsSvc 模块级设置服务引用，由 InitSettings 注入
-var (
-	settingsSvc    *settings.Service
-	settingsInitMu sync.Mutex
-)
-
-// InitSettings 注入设置服务（在 main 中调用）
-func InitSettings(svc *settings.Service) {
-	settingsInitMu.Lock()
-	settingsSvc = svc
-	settingsInitMu.Unlock()
-}
-
-func getSettingsSvc() *settings.Service {
-	settingsInitMu.Lock()
-	svc := settingsSvc
-	settingsInitMu.Unlock()
-	return svc
-}
-
 // defaultDaysFromSettings returns the global default retention days.
-// Falls back to DefaultRetentionDays when service not injected or value invalid.
-var defaultDaysFromSettings = func(_ *gorm.DB) int {
-	svc := getSettingsSvc()
-	if svc == nil {
+// Falls back to DefaultRetentionDays when settings not injected or value invalid.
+func (w *RetentionWorker) defaultDaysFromSettings() int {
+	if w.settings == nil {
 		return DefaultRetentionDays
 	}
-	v := svc.GetEffective("logs.retention_days_default")
+	v := w.settings.GetEffective("logs.retention_days_default")
 	if v == "" {
 		return DefaultRetentionDays
 	}
@@ -89,7 +67,7 @@ func (w *RetentionWorker) Prune(ctx context.Context) (int64, error) {
 // prune is the Pruner closure for retention.Loop. Iterates all nodes,
 // applies per-node retention, returns the total rows deleted across nodes.
 func (w *RetentionWorker) prune(ctx context.Context) (int64, error) {
-	defaultDays := defaultDaysFromSettings(w.db)
+	defaultDays := w.defaultDaysFromSettings()
 	var nodes []model.Node
 	if err := w.db.WithContext(ctx).Find(&nodes).Error; err != nil {
 		logger.Module("nodelogs").Warn().Err(err).Msg("retention: load nodes failed")

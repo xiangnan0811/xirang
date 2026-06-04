@@ -35,27 +35,6 @@ var alertsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total alerts raised by severity",
 }, []string{"severity"})
 
-// settingsSvc 模块级设置服务引用，由 InitSettings 注入（sync.Once 保证并发安全）
-var (
-	settingsSvc    *settings.Service
-	settingsInitMu sync.Mutex
-)
-
-// InitSettings 注入设置服务（在 main 中调用，sync.Mutex 保证写入可见性）
-func InitSettings(svc *settings.Service) {
-	settingsInitMu.Lock()
-	settingsSvc = svc
-	settingsInitMu.Unlock()
-}
-
-// getSettingsSvc 安全读取设置服务引用
-func getSettingsSvc() *settings.Service {
-	settingsInitMu.Lock()
-	svc := settingsSvc
-	settingsInitMu.Unlock()
-	return svc
-}
-
 // EscalationPolicySummary is a view of an escalation policy sufficient for dispatcher routing.
 // Exported so main.go can construct resolver results without importing the escalation package.
 type EscalationPolicySummary struct {
@@ -67,22 +46,28 @@ type EscalationPolicySummary struct {
 // Injected from main.go (lives there to avoid import cycle with escalation package).
 type EscalationResolverFn func(alert model.Alert) (*EscalationPolicySummary, error)
 
-var (
-	escResolverMu sync.Mutex
-	escResolver   EscalationResolverFn
-)
-
-// InitEscalationResolver injects the resolver. Pass nil to disable (tests use this).
-func InitEscalationResolver(fn EscalationResolverFn) {
-	escResolverMu.Lock()
-	escResolver = fn
-	escResolverMu.Unlock()
+// Dispatcher handles alert creation, deduplication, and delivery to notification channels.
+// It replaces the previous package-level global state (settingsSvc, escResolver) with
+// explicit dependency injection.
+type Dispatcher struct {
+	DB                 *gorm.DB
+	Settings           *settings.Service
+	EscalationResolver EscalationResolverFn
 }
 
-func getEscalationResolver() EscalationResolverFn {
-	escResolverMu.Lock()
-	defer escResolverMu.Unlock()
-	return escResolver
+// NewDispatcher creates a Dispatcher with all required dependencies.
+func NewDispatcher(db *gorm.DB, svc *settings.Service, resolver EscalationResolverFn) *Dispatcher {
+	return &Dispatcher{DB: db, Settings: svc, EscalationResolver: resolver}
+}
+
+// defaultDispatcher is the package-level dispatcher instance used by exported shim
+// functions for backward compatibility with external callers.
+var defaultDispatcher *Dispatcher
+
+// SetDispatcher sets the package-level dispatcher used by exported shim functions.
+// This replaces the old InitSettings / InitEscalationResolver two-step injection.
+func SetDispatcher(d *Dispatcher) {
+	defaultDispatcher = d
 }
 
 var defaultHTTPClient = &http.Client{Timeout: 15 * time.Second}
@@ -99,7 +84,162 @@ type payload struct {
 	Triggered  time.Time `json:"triggered_at"`
 }
 
+// ---- exported shim functions (backward compat with external callers) ----
+// These delegate to defaultDispatcher (set via SetDispatcher in main.go).
+// When defaultDispatcher is nil or its DB differs from the passed-in db
+// (common in tests where each test has its own DB handle), a new Dispatcher
+// is created so alerts still flow correctly into the right database.
+
+// ensureDispatcher returns a Dispatcher that uses db. Lazily creates one
+// when defaultDispatcher is nil or its DB differs (e.g. across test cases).
+func ensureDispatcher(db *gorm.DB) *Dispatcher {
+	if defaultDispatcher != nil && defaultDispatcher.DB == db {
+		return defaultDispatcher
+	}
+	defaultDispatcher = NewDispatcher(db, nil, nil)
+	return defaultDispatcher
+}
+
+// RaiseTaskFailure emits a critical alert for a task execution failure.
 func RaiseTaskFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
+	return ensureDispatcher(db).RaiseTaskFailure(task, taskRunID, message)
+}
+
+// RaiseVerificationFailure emits a warning alert for a backup verification failure.
+func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
+	return ensureDispatcher(db).RaiseVerificationFailure(task, taskRunID, message)
+}
+
+// ResolveTaskAlerts resolves all open/acked alerts for the given task.
+func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
+	return ensureDispatcher(db).ResolveTaskAlerts(taskID, note)
+}
+
+// RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
+func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
+	return ensureDispatcher(db).RaiseNodeProbeFailure(node, message)
+}
+
+// RaiseDiskUsageAlert emits a warning alert when node disk usage exceeds threshold.
+func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
+	return ensureDispatcher(db).RaiseDiskUsageAlert(node, diskPct)
+}
+
+// RaiseNodeExpiryWarning emits a warning when a node is past or near its expiry date.
+func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error {
+	return ensureDispatcher(db).RaiseNodeExpiryWarning(node, message)
+}
+
+// RaiseRetentionFailure emits a warning alert for backup retention failures.
+func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+	return ensureDispatcher(db).RaiseRetentionFailure(policyID, policyName, nodeName, nodeID, message)
+}
+
+// RaiseIntegrityCheckFailure emits a warning alert for backup integrity check failures.
+func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+	return ensureDispatcher(db).RaiseIntegrityCheckFailure(policyID, policyName, nodeName, nodeID, message)
+}
+
+// RaiseDrillFailure 触发恢复演练相关的告警。
+// errorCode 必须是以下之一：
+//   - "drill_sandbox_unreachable" (severity=warning) — 沙箱节点离线
+//   - "drill_verify_failed" (severity=critical) — 校验脚本失败
+//   - "drill_restore_failed" (severity=critical) — 恢复本身失败
+func RaiseDrillFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, errorCode string, message string) error {
+	return ensureDispatcher(db).RaiseDrillFailure(policyID, policyName, nodeName, nodeID, errorCode, message)
+}
+
+// ResolveAlertsByErrorCode resolves all open/acked alerts matching the given error code.
+func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
+	return ensureDispatcher(db).ResolveAlertsByErrorCode(errorCode, note)
+}
+
+// RaiseStorageSpaceAlert emits an alert when local backup storage is low.
+func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
+	return ensureDispatcher(db).RaiseStorageSpaceAlert(targetPath, freeGB, totalGB, usagePct)
+}
+
+// ResolveNodeAlerts resolves all open/acked node-level (task_id IS NULL) alerts.
+func ResolveNodeAlerts(db *gorm.DB, nodeID uint, note string) error {
+	return ensureDispatcher(db).ResolveNodeAlerts(nodeID, note)
+}
+
+// SendProbe sends a connectivity test message through the given integration channel.
+func SendProbe(channel model.Integration) error {
+	d := defaultDispatcher
+	if d == nil {
+		d = &Dispatcher{}
+	}
+	return d.SendProbe(channel)
+}
+
+// SendAlert sends an alert through the given integration channel.
+func SendAlert(channel model.Integration, alert model.Alert) error {
+	d := defaultDispatcher
+	if d == nil {
+		d = &Dispatcher{}
+	}
+	return d.SendAlert(channel, alert)
+}
+
+// DispatchToIntegrations fan-outs an alert to the given integration IDs.
+// Exposed for the escalation engine; peer of the inline dispatch in raiseAndDispatch.
+func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
+	ensureDispatcher(db).DispatchToIntegrations(alert, ids)
+}
+
+// AnomalyAlertInput is the minimal payload needed to raise an anomaly alert.
+// Kept separate from task/SLO/node raises to avoid coupling the anomaly package
+// to every RaiseXxx signature.
+type AnomalyAlertInput struct {
+	NodeID    uint
+	NodeName  string
+	Severity  string
+	ErrorCode string
+	Message   string
+}
+
+// RaiseAnomalyAlert constructs and dispatches an Alert for an anomaly finding.
+func RaiseAnomalyAlert(db *gorm.DB, in AnomalyAlertInput) (uint, bool, error) {
+	return ensureDispatcher(db).RaiseAnomalyAlert(in)
+}
+
+// RaiseSLOBreach emits a platform-level alert for an SLO burn-rate breach.
+func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) error {
+	return ensureDispatcher(db).RaiseSLOBreach(def, c)
+}
+
+// ---- unexported shim functions (backward compat with same-package tests) ----
+
+func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
+	return ensureDispatcher(db).raiseAndDispatch(alert)
+}
+
+func inCooldown(db *gorm.DB, integrationID uint, cooldownMinutes int, now time.Time) bool {
+	return ensureDispatcher(db).inCooldown(integrationID, cooldownMinutes, now)
+}
+
+// send shim — used by retry.go.
+func send(channel model.Integration, alert model.Alert) error {
+	d := defaultDispatcher
+	if d == nil {
+		d = &Dispatcher{}
+	}
+	return d.send(channel, alert)
+}
+
+// smtpConfig shim — used by sendEmail (called from sender.go).
+func smtpConfig(key, envVar string) string {
+	if d := defaultDispatcher; d != nil {
+		return d.smtpConfig(key, envVar)
+	}
+	return strings.TrimSpace(os.Getenv(envVar))
+}
+
+// ---- Dispatcher methods ----
+
+// RaiseTaskFailure emits a critical alert for a task execution failure.
+func (d *Dispatcher) RaiseTaskFailure(task model.Task, taskRunID *uint, message string) error {
 	errorCode := fmt.Sprintf("XR-EXEC-%d", task.ID)
 	policyName := ""
 	if task.Policy != nil {
@@ -118,10 +258,11 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, taskRunID *uint, message str
 		Retryable:   true,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
+// RaiseVerificationFailure emits a warning alert for a backup verification failure.
+func (d *Dispatcher) RaiseVerificationFailure(task model.Task, taskRunID *uint, message string) error {
 	errorCode := fmt.Sprintf("XR-VRFY-%d", task.ID)
 	policyName := ""
 	if task.Policy != nil {
@@ -140,10 +281,11 @@ func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, mes
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
+// ResolveTaskAlerts resolves all open/acked alerts for the given task.
+func (d *Dispatcher) ResolveTaskAlerts(taskID uint, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",
 		"retryable":        false,
@@ -152,12 +294,13 @@ func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
 	if note != "" {
 		updates["message"] = note
 	}
-	return db.Model(&model.Alert{}).
+	return d.DB.Model(&model.Alert{}).
 		Where("task_id = ? AND status IN ?", taskID, []string{"open", "acked"}).
 		Updates(updates).Error
 }
 
-func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
+// RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
+func (d *Dispatcher) RaiseNodeProbeFailure(node model.Node, message string) error {
 	errorCode := fmt.Sprintf("XR-NODE-%d", node.ID)
 	alert := model.Alert{
 		NodeID:      node.ID,
@@ -171,10 +314,11 @@ func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
+// RaiseDiskUsageAlert emits a warning alert when node disk usage exceeds threshold.
+func (d *Dispatcher) RaiseDiskUsageAlert(node model.Node, diskPct float64) error {
 	alert := model.Alert{
 		NodeID:      node.ID,
 		NodeName:    node.Name,
@@ -187,10 +331,11 @@ func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error {
+// RaiseNodeExpiryWarning emits a warning when a node is past or near its expiry date.
+func (d *Dispatcher) RaiseNodeExpiryWarning(node model.Node, message string) error {
 	severity := "warning"
 	errorCode := fmt.Sprintf("XR-NODE-EXPIRY-%d", node.ID)
 	alert := model.Alert{
@@ -203,10 +348,11 @@ func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error 
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+// RaiseRetentionFailure emits a warning alert for backup retention failures.
+func (d *Dispatcher) RaiseRetentionFailure(policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
 	errorCode := fmt.Sprintf("XR-RETN-%d", policyID)
 	alert := model.Alert{
 		NodeID:      nodeID,
@@ -219,10 +365,11 @@ func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeNa
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
+// RaiseIntegrityCheckFailure emits a warning alert for backup integrity check failures.
+func (d *Dispatcher) RaiseIntegrityCheckFailure(policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
 	errorCode := fmt.Sprintf("XR-INTG-%d", policyID)
 	alert := model.Alert{
 		NodeID:      nodeID,
@@ -235,7 +382,7 @@ func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, n
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
 // RaiseDrillFailure 触发恢复演练相关的告警。
@@ -243,7 +390,7 @@ func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, n
 //   - "drill_sandbox_unreachable" (severity=warning) — 沙箱节点离线
 //   - "drill_verify_failed" (severity=critical) — 校验脚本失败
 //   - "drill_restore_failed" (severity=critical) — 恢复本身失败
-func RaiseDrillFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, errorCode string, message string) error {
+func (d *Dispatcher) RaiseDrillFailure(policyID uint, policyName string, nodeName string, nodeID uint, errorCode string, message string) error {
 	severity := "critical"
 	if errorCode == "drill_sandbox_unreachable" {
 		severity = "warning"
@@ -260,10 +407,11 @@ func RaiseDrillFailure(db *gorm.DB, policyID uint, policyName string, nodeName s
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
+// ResolveAlertsByErrorCode resolves all open/acked alerts matching the given error code.
+func (d *Dispatcher) ResolveAlertsByErrorCode(errorCode string, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",
 		"retryable":        false,
@@ -272,12 +420,13 @@ func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error 
 	if note != "" {
 		updates["message"] = note
 	}
-	return db.Model(&model.Alert{}).
+	return d.DB.Model(&model.Alert{}).
 		Where("error_code = ? AND status IN ?", errorCode, []string{"open", "acked"}).
 		Updates(updates).Error
 }
 
-func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
+// RaiseStorageSpaceAlert emits an alert when local backup storage is low.
+func (d *Dispatcher) RaiseStorageSpaceAlert(targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
 	severity := "warning"
 	if usagePct >= 95 {
 		severity = "critical"
@@ -293,10 +442,11 @@ func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, tota
 		Retryable:   false,
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, &alert)
+	return d.raiseAndDispatch(&alert)
 }
 
-func ResolveNodeAlerts(db *gorm.DB, nodeID uint, note string) error {
+// ResolveNodeAlerts resolves all open/acked node-level (task_id IS NULL) alerts.
+func (d *Dispatcher) ResolveNodeAlerts(nodeID uint, note string) error {
 	updates := map[string]interface{}{
 		"status":           "resolved",
 		"retryable":        false,
@@ -305,19 +455,20 @@ func ResolveNodeAlerts(db *gorm.DB, nodeID uint, note string) error {
 	if note != "" {
 		updates["message"] = note
 	}
-	return db.Model(&model.Alert{}).
+	return d.DB.Model(&model.Alert{}).
 		Where("node_id = ? AND task_id IS NULL AND status IN ?", nodeID, []string{"open", "acked"}).
 		Updates(updates).Error
 }
 
-func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
-	if deduped, err := inDedupWindow(db, *alert, time.Now()); err != nil {
+// raiseAndDispatch creates the alert in the database and dispatches it to integrations.
+func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
+	if deduped, err := d.inDedupWindow(*alert, time.Now()); err != nil {
 		return err
 	} else if deduped {
 		return nil
 	}
 
-	if err := db.Create(alert).Error; err != nil {
+	if err := d.DB.Create(alert).Error; err != nil {
 		return err
 	}
 	alertsTotal.WithLabelValues(alert.Severity).Inc()
@@ -325,7 +476,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	// Escalation split: if the alert is linked to an enabled policy whose min_severity
 	// is satisfied, defer first-level dispatch to the escalation engine (engine picks
 	// the alert up on next tick, ≤30s). Otherwise fall through to legacy dispatch.
-	if resolver := getEscalationResolver(); resolver != nil {
+	if resolver := d.EscalationResolver; resolver != nil {
 		if summary, rerr := resolver(*alert); rerr == nil && summary != nil && summary.Enabled {
 			if severityAtLeastForDispatch(alert.Severity, summary.MinSeverity) {
 				// Deferred; engine will dispatch and record AlertEscalationEvent.
@@ -335,7 +486,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	var integrations []model.Integration
-	if err := db.Where("enabled = ?", true).Find(&integrations).Error; err != nil {
+	if err := d.DB.Where("enabled = ?", true).Find(&integrations).Error; err != nil {
 		return err
 	}
 	if len(integrations) == 0 {
@@ -343,7 +494,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	var openCount int64
-	if err := db.Model(&model.Alert{}).
+	if err := d.DB.Model(&model.Alert{}).
 		Where("node_id = ? AND status = ?", alert.NodeID, "open").
 		Count(&openCount).Error; err != nil {
 		return err
@@ -359,7 +510,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	//   - transient DB error: return err so the dispatch is retried
 	var node model.Node
 	if alert.NodeID != 0 {
-		if err := db.First(&node, alert.NodeID).Error; err != nil {
+		if err := d.DB.First(&node, alert.NodeID).Error; err != nil {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				logger.Module("alerting").Warn().
 					Uint("alert_id", alert.ID).
@@ -380,7 +531,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	}
 
 	// 静默检查：若告警命中活跃静默规则，跳过所有通道投递
-	silences, _ := ActiveSilences(db, now)
+	silences, _ := d.ActiveSilences(now)
 	if len(silences) > 0 {
 		if matched := MatchSilence(*alert, node, silences, now); matched != nil {
 			logger.Module("alerting").Info().
@@ -422,33 +573,33 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 		if int(openCount) < channel.FailThreshold {
 			continue
 		}
-		if inCooldown(db, channel.ID, channel.CooldownMinutes, now) {
+		if d.inCooldown(channel.ID, channel.CooldownMinutes, now) {
 			continue
 		}
 
 		wg.Add(1)
 		go func(ch model.Integration) {
 			defer wg.Done()
-			err := send(ch, *alert)
-			d := model.AlertDelivery{
+			err := d.send(ch, *alert)
+			del := model.AlertDelivery{
 				AlertID:       alert.ID,
 				IntegrationID: ch.ID,
 				AttemptCount:  1,
 			}
 			if err == nil {
-				d.Status = "sent"
+				del.Status = "sent"
 			} else {
 				next := time.Now().Add(backoffDuration(1))
-				d.Status = "retrying"
-				d.NextRetryAt = &next
+				del.Status = "retrying"
+				del.NextRetryAt = &next
 				// Wave 2 (PR-C C6): 统一走 util.SanitizeError，与重试路径
 				// (retry.go) 共享同一过滤规则（URL/path/query/bot-token/
 				// token-secret-password 模式）。原来 util.SanitizeDeliveryError
 				// 仅 telegram 类型脱敏，导致 webhook/feishu/dingtalk 失败时
 				// LastError 直接含 bearer token / access_token。
-				d.LastError = util.SanitizeError(err)
+				del.LastError = util.SanitizeError(err)
 			}
-			if saveErr := db.Create(&d).Error; saveErr != nil {
+			if saveErr := d.DB.Create(&del).Error; saveErr != nil {
 				logger.Module("alerting").Warn().Uint("alert_id", alert.ID).Uint("integration_id", ch.ID).Err(saveErr).Msg("保存告警投递记录失败")
 			}
 		}(channel)
@@ -458,7 +609,7 @@ func raiseAndDispatch(db *gorm.DB, alert *model.Alert) error {
 	go func() {
 		wg.Wait()
 		close(deliveryDone)
-		updateLastNotifiedAt(db, alert)
+		d.updateLastNotifiedAt(alert)
 	}()
 
 	// 限时等待快路径完成；慢通道继续在后台跑，由 RetryWorker 兜底
@@ -484,9 +635,9 @@ var fastWaitTimeout = 500 * time.Millisecond
 // updateLastNotifiedAt 在所有 dispatch goroutine 完成后异步更新 alert 行的
 // last_notified_at。只要有 ≥ 1 条 sent 即更新；从 dispatcher 主路径剥离出来
 // 避免阻塞 task runner。
-func updateLastNotifiedAt(db *gorm.DB, alert *model.Alert) {
+func (d *Dispatcher) updateLastNotifiedAt(alert *model.Alert) {
 	var sentCount int64
-	if err := db.Model(&model.AlertDelivery{}).
+	if err := d.DB.Model(&model.AlertDelivery{}).
 		Where("alert_id = ? AND status = ?", alert.ID, "sent").
 		Count(&sentCount).Error; err != nil {
 		logger.Module("alerting").Warn().
@@ -500,7 +651,7 @@ func updateLastNotifiedAt(db *gorm.DB, alert *model.Alert) {
 	}
 	notifiedAt := time.Now()
 	alert.LastNotifiedAt = &notifiedAt
-	if err := db.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
+	if err := d.DB.Model(alert).Update("last_notified_at", &notifiedAt).Error; err != nil {
 		logger.Module("alerting").Warn().
 			Uint("alert_id", alert.ID).
 			Err(err).
@@ -508,13 +659,15 @@ func updateLastNotifiedAt(db *gorm.DB, alert *model.Alert) {
 	}
 }
 
-func inDedupWindow(db *gorm.DB, alert model.Alert, now time.Time) (bool, error) {
-	window := readAlertDedupWindow()
+// inDedupWindow checks whether an open/acked alert with the same node+error_code
+// already exists within the configured deduplication window.
+func (d *Dispatcher) inDedupWindow(alert model.Alert, now time.Time) (bool, error) {
+	window := d.dedupWindow()
 	if window <= 0 {
 		return false, nil
 	}
 
-	query := db.Model(&model.Alert{}).
+	query := d.DB.Model(&model.Alert{}).
 		Where("node_id = ? AND error_code = ? AND created_at >= ?", alert.NodeID, alert.ErrorCode, now.Add(-window)).
 		Where("status IN ?", []string{"open", "acked"})
 	if alert.TaskID == nil {
@@ -530,9 +683,10 @@ func inDedupWindow(db *gorm.DB, alert model.Alert, now time.Time) (bool, error) 
 	return count > 0, nil
 }
 
-func readAlertDedupWindow() time.Duration {
-	if svc := getSettingsSvc(); svc != nil {
-		raw := svc.GetEffective("alert.dedup_window")
+// dedupWindow reads the alert deduplication window from settings or env.
+func (d *Dispatcher) dedupWindow() time.Duration {
+	if d.Settings != nil {
+		raw := d.Settings.GetEffective("alert.dedup_window")
 		if raw != "" {
 			value, err := time.ParseDuration(raw)
 			if err == nil && value > 0 {
@@ -551,12 +705,14 @@ func readAlertDedupWindow() time.Duration {
 	return value
 }
 
-func inCooldown(db *gorm.DB, integrationID uint, cooldownMinutes int, now time.Time) bool {
+// inCooldown checks whether the integration is within its cooldown period after
+// the most recent successful delivery.
+func (d *Dispatcher) inCooldown(integrationID uint, cooldownMinutes int, now time.Time) bool {
 	if cooldownMinutes <= 0 {
 		return false
 	}
 	var latest model.AlertDelivery
-	err := db.Where("integration_id = ? AND status = ?", integrationID, "sent").
+	err := d.DB.Where("integration_id = ? AND status = ?", integrationID, "sent").
 		Order("created_at desc").
 		First(&latest).Error
 	if err != nil {
@@ -565,7 +721,8 @@ func inCooldown(db *gorm.DB, integrationID uint, cooldownMinutes int, now time.T
 	return now.Sub(latest.CreatedAt) < time.Duration(cooldownMinutes)*time.Minute
 }
 
-func send(channel model.Integration, alert model.Alert) error {
+// send delivers an alert through the given integration channel.
+func (d *Dispatcher) send(channel model.Integration, alert model.Alert) error {
 	body := payload{
 		Title:      "XiRang 告警通知",
 		Severity:   alert.Severity,
@@ -585,6 +742,8 @@ func send(channel model.Integration, alert model.Alert) error {
 	client := getHTTPClient(channel.ProxyURL)
 	return s.Send(client, channel.Endpoint, channel.Secret, body)
 }
+
+// ---- proxy client caching ----
 
 // proxyClients 缓存按代理 URL 创建的 HTTP 客户端，避免每次调用创建新 Transport
 var proxyClients sync.Map // proxyURL -> *proxyClientEntry
@@ -676,7 +835,8 @@ func getHTTPClient(proxyURL string) *http.Client {
 	return client
 }
 
-func SendProbe(channel model.Integration) error {
+// SendProbe sends a connectivity test message through the given integration channel.
+func (d *Dispatcher) SendProbe(channel model.Integration) error {
 	probe := model.Alert{
 		NodeName:    "XiRang Probe",
 		Severity:    "info",
@@ -685,30 +845,33 @@ func SendProbe(channel model.Integration) error {
 		Message:     "XiRang 通道连通性测试消息",
 		TriggeredAt: time.Now(),
 	}
-	return send(channel, probe)
+	return d.send(channel, probe)
 }
 
-func SendAlert(channel model.Integration, alert model.Alert) error {
-	return send(channel, alert)
+// SendAlert sends an alert through the given integration channel.
+func (d *Dispatcher) SendAlert(channel model.Integration, alert model.Alert) error {
+	return d.send(channel, alert)
 }
 
 // DispatchToIntegrations fan-outs an alert to the given integration IDs.
 // Exposed for the escalation engine; peer of the inline dispatch in raiseAndDispatch.
-func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
+func (d *Dispatcher) DispatchToIntegrations(alert model.Alert, ids []uint) {
 	if len(ids) == 0 {
 		return
 	}
 	var integrations []model.Integration
-	if err := db.Where("id IN ? AND enabled = ?", ids, true).Find(&integrations).Error; err != nil {
+	if err := d.DB.Where("id IN ? AND enabled = ?", ids, true).Find(&integrations).Error; err != nil {
 		logger.Module("alerting").Warn().Err(err).Msg("DispatchToIntegrations: load integrations failed")
 		return
 	}
 	for _, ch := range integrations {
-		if err := send(ch, alert); err != nil {
+		if err := d.send(ch, alert); err != nil {
 			logger.Module("alerting").Warn().Str("error", util.SanitizeError(err)).Uint("integration_id", ch.ID).Msg("send failed")
 		}
 	}
 }
+
+// ---- HTTP / notification helpers ----
 
 func postJSON(client *http.Client, targetURL string, body interface{}) error {
 	payloadBytes, err := json.Marshal(body)
@@ -818,11 +981,13 @@ func extractNotificationErrorDescription(raw []byte) string {
 	return text
 }
 
-// smtpConfig 从 settings 服务读取 SMTP 配置；service 为 nil（仅测试场景）时
-// 回退到 env vars，与 settings 注册表的 EnvVar 一致。
-func smtpConfig(key, envVar string) string {
-	if svc := getSettingsSvc(); svc != nil {
-		return strings.TrimSpace(svc.GetEffective(key))
+// ---- smtp helpers (used by sender.go via sendEmail) ----
+
+// smtpConfig reads an SMTP setting from the dispatcher's Settings service,
+// falling back to the given environment variable.
+func (d *Dispatcher) smtpConfig(key, envVar string) string {
+	if d.Settings != nil {
+		return strings.TrimSpace(d.Settings.GetEffective(key))
 	}
 	return strings.TrimSpace(os.Getenv(envVar))
 }
@@ -919,26 +1084,17 @@ func sendEmailWithTLS(addr, host, port string, auth smtp.Auth, from string, to [
 	return smtpSend(c, auth, from, to, msg)
 }
 
-// AnomalyAlertInput is the minimal payload needed to raise an anomaly alert.
-// Kept separate from task/SLO/node raises to avoid coupling the anomaly package
-// to every RaiseXxx signature.
-type AnomalyAlertInput struct {
-	NodeID    uint
-	NodeName  string
-	Severity  string
-	ErrorCode string
-	Message   string
-}
+// ---- RaiseAnomalyAlert / RaiseSLOBreach ----
 
 // RaiseAnomalyAlert constructs and dispatches an Alert for an anomaly finding.
 // Returns (alertID, raisedNew, error). When raisedNew is false, the alert was
 // deduped against an existing open alert (same NodeID+ErrorCode within the
 // alert.dedup_window); the returned alertID is the existing row's ID.
-func RaiseAnomalyAlert(db *gorm.DB, in AnomalyAlertInput) (uint, bool, error) {
+func (d *Dispatcher) RaiseAnomalyAlert(in AnomalyAlertInput) (uint, bool, error) {
 	nodeName := in.NodeName
 	if nodeName == "" && in.NodeID > 0 {
 		var n model.Node
-		if err := db.Select("id, name").First(&n, in.NodeID).Error; err == nil {
+		if err := d.DB.Select("id, name").First(&n, in.NodeID).Error; err == nil {
 			nodeName = n.Name
 		}
 	}
@@ -955,14 +1111,14 @@ func RaiseAnomalyAlert(db *gorm.DB, in AnomalyAlertInput) (uint, bool, error) {
 		LastLevelFired: -1,
 	}
 	// Pre-commit dedup check to return (existingID, false) without inserting.
-	existing, deduped, err := checkDedupWindow(db, alert)
+	existing, deduped, err := d.checkDedupWindow(alert)
 	if err != nil {
 		return 0, false, err
 	}
 	if deduped {
 		return existing, false, nil
 	}
-	if err := raiseAndDispatch(db, alert); err != nil {
+	if err := d.raiseAndDispatch(alert); err != nil {
 		return 0, false, err
 	}
 	return alert.ID, true, nil
@@ -970,11 +1126,11 @@ func RaiseAnomalyAlert(db *gorm.DB, in AnomalyAlertInput) (uint, bool, error) {
 
 // checkDedupWindow returns (existingID, true, nil) when an open alert with the
 // same NodeID+ErrorCode was created inside the current alert.dedup_window.
-func checkDedupWindow(db *gorm.DB, alert *model.Alert) (uint, bool, error) {
-	window := readAlertDedupWindow()
+func (d *Dispatcher) checkDedupWindow(alert *model.Alert) (uint, bool, error) {
+	window := d.dedupWindow()
 	now := time.Now()
 	var existing model.Alert
-	err := db.Where(
+	err := d.DB.Where(
 		"node_id = ? AND error_code = ? AND status = ? AND created_at >= ?",
 		alert.NodeID, alert.ErrorCode, "open", now.Add(-window),
 	).Order("created_at DESC").First(&existing).Error
@@ -990,7 +1146,7 @@ func checkDedupWindow(db *gorm.DB, alert *model.Alert) (uint, bool, error) {
 // RaiseSLOBreach emits a platform-level alert for an SLO burn-rate breach.
 // The alert flows through the standard silence/grouping/retry pipeline with
 // ErrorCode = "XR-SLO-<id>" and NodeID=0 sentinel for "platform" scope.
-func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) error {
+func (d *Dispatcher) RaiseSLOBreach(def *model.SLODefinition, c *slo.Compliance) error {
 	severity := "warning"
 	if c.ErrorBudgetRemainingPct <= 0 {
 		severity = "critical"
@@ -1009,7 +1165,16 @@ func RaiseSLOBreach(db *gorm.DB, def *model.SLODefinition, c *slo.Compliance) er
 		),
 		TriggeredAt: time.Now(),
 	}
-	return raiseAndDispatch(db, alert)
+	return d.raiseAndDispatch(alert)
+}
+
+// ---- ActiveSilences bridge ----
+
+// ActiveSilences loads active silence rules covering the given time, using the
+// dispatcher's DB handle. This is a Dispatcher-scoped wrapper around the
+// package-level ActiveSilences in silence.go, kept for method-based access.
+func (d *Dispatcher) ActiveSilences(now time.Time) ([]model.Silence, error) {
+	return ActiveSilences(d.DB, now)
 }
 
 // severityAtLeastForDispatch mirrors escalation.SeverityAtLeast without importing the escalation package

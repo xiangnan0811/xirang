@@ -37,6 +37,7 @@ type Dependencies struct {
 	LoginRateWindow   time.Duration
 	SettingsService   *settings.Service
 	RetryWorker       *alerting.RetryWorker
+	AlertDispatcher   *alerting.Dispatcher
 	MetricsToken      string
 	MetricsRateLimit  int
 	MetricsRateWindow time.Duration
@@ -92,7 +93,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)
 	backupConfidenceHandler := handlers.NewBackupConfidenceHandler(dep.DB)
 	storageUsageHandler := handlers.NewStorageUsageHandler(dep.DB)
-	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager).WithSettingsService(dep.SettingsService)
+	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager).WithSettingsService(dep.SettingsService).WithAlertDispatcher(dep.AlertDispatcher)
 	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)

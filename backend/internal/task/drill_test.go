@@ -46,7 +46,7 @@ func seedDrillNodeWithBackupDir(t *testing.T, db *gorm.DB, name, host, backupDir
 // TestValidateDrillConfigSandboxIsSourceNode 验证沙箱节点不能是备份源节点。
 func TestValidateDrillConfigSandboxIsSourceNode(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-src-node", "192.168.1.10", "drill-src-bd")
 
@@ -83,7 +83,7 @@ func TestValidateDrillConfigSandboxIsSourceNode(t *testing.T) {
 // TestValidateDrillConfigInvalidRestorePath 验证无效恢复路径被拒绝。
 func TestValidateDrillConfigInvalidRestorePath(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src", "192.168.1.10", "drill-src-bd-2")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sandbox", "192.168.1.20", "drill-sb-bd-2")
@@ -117,7 +117,7 @@ func TestValidateDrillConfigInvalidRestorePath(t *testing.T) {
 // TestValidateDrillConfigSystemDirectory 验证禁止恢复到系统目录。
 func TestValidateDrillConfigSystemDirectory(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src-sys", "192.168.1.10", "drill-src-bd-sys")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-sys", "192.168.1.20", "drill-sb-bd-sys")
@@ -151,7 +151,7 @@ func TestValidateDrillConfigSystemDirectory(t *testing.T) {
 // TestTransferFilesToSandboxBlocksCredentialSpreading 验证旧跨节点传输路径被阻断。
 func TestTransferFilesToSandboxBlocksCredentialSpreading(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 	srcNode := model.Node{
 		Name:       "drill-transfer-src",
 		Host:       "192.168.3.10",
@@ -177,7 +177,7 @@ func TestTransferFilesToSandboxBlocksCredentialSpreading(t *testing.T) {
 
 func TestRestoreBackupToSandboxBlocksBeforeRemoteMutation(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 	srcNode := model.Node{Name: "drill-restore-src", Host: "192.168.3.30", Port: 22, Username: "root", AuthType: "key"}
 	dstNode := model.Node{Name: "drill-restore-sandbox", Host: "192.168.3.40", Port: 22, Username: "root", AuthType: "key"}
 	srcTask := model.Task{
@@ -205,7 +205,7 @@ func TestRestoreBackupToSandboxBlocksBeforeRemoteMutation(t *testing.T) {
 
 func TestValidateDrillConfigSuccess(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src-ok", "192.168.1.10", "drill-src-bd-ok")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-ok", "192.168.1.20", "drill-sb-bd-ok")
@@ -235,7 +235,7 @@ func TestValidateDrillConfigSuccess(t *testing.T) {
 // TestTriggerDrillPolicyNotFound 测试策略不存在的场景。
 func TestTriggerDrillPolicyNotFound(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	_, err := m.TriggerDrill(99999)
 	if err == nil {
@@ -249,7 +249,7 @@ func TestTriggerDrillPolicyNotFound(t *testing.T) {
 // TestTriggerDrillNotEnabled 测试演习未启用的场景。
 func TestTriggerDrillNotEnabled(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	policy := model.Policy{
 		Name:         "policy-drill-disabled",
@@ -272,7 +272,7 @@ func TestTriggerDrillNotEnabled(t *testing.T) {
 // TestTriggerDrillNoSandbox 测试未配置沙箱节点的场景。
 func TestTriggerDrillNoSandbox(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	policy := model.Policy{
 		Name:              "policy-drill-nosandbox",
@@ -349,7 +349,7 @@ func TestDrillCronMatching(t *testing.T) {
 // TestFindTaskForPolicyNoTasks 测试策略无关联任务。
 func TestFindTaskForPolicyNoTasks(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	policy := model.Policy{
 		Name:       "policy-no-tasks",
@@ -371,7 +371,7 @@ func TestFindTaskForPolicyNoTasks(t *testing.T) {
 // TestFindTaskForPolicyWithTasks 测试有任务但无成功记录。
 func TestFindTaskForPolicyWithTasks(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-node", "192.168.1.10", "drill-node-bd")
 
@@ -404,7 +404,7 @@ func TestFindTaskForPolicyWithTasks(t *testing.T) {
 // TestFindTaskForPolicyPrefersSuccessful 测试优先返回有成功记录的任务。
 func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-node-pref", "192.168.1.10", "drill-node-pref-bd")
 
@@ -449,7 +449,7 @@ func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 // TestTriggerDrillSandboxNotFound 测试沙箱节点不存在。
 func TestTriggerDrillSandboxNotFound(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	invalidNodeID := uint(99998)
 	policy := model.Policy{
@@ -475,7 +475,7 @@ func TestTriggerDrillSandboxNotFound(t *testing.T) {
 // TestValidateDrillConfigMissingSandboxNode 测试沙箱节点为 nil。
 func TestValidateDrillConfigMissingSandboxNode(t *testing.T) {
 	db := openManagerTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	policy := model.Policy{
 		Name:             "policy-no-sandbox-validate",
@@ -497,7 +497,7 @@ func TestValidateDrillConfigMissingSandboxNode(t *testing.T) {
 // TestValidateDrillConfigNoTargetNodeID 测试未配置 DrillTargetNodeID。
 func TestValidateDrillConfigNoTargetNodeID(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-notarget", "192.168.1.20", "drill-sb-notarget-bd")
 
@@ -522,7 +522,7 @@ func TestValidateDrillConfigNoTargetNodeID(t *testing.T) {
 // 异步 goroutine 中的实际恢复会因为没有真实 SSH 而失败，但方法应立即返回成功。
 func TestTriggerDrillSuccessReturnsRunID(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-full-src", "192.168.1.100", "full-src-bd")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-full-sb", "192.168.1.200", "full-sb-bd")
@@ -639,7 +639,7 @@ func setupDrillEvidenceFixture(t *testing.T, db *gorm.DB) drillEvidenceFixture {
 	if err := db.Create(&previousRun).Error; err != nil {
 		t.Fatalf("创建成功执行记录失败: %v", err)
 	}
-	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 	manager.drillRestoreFunc = func(_ context.Context, _ model.Task, _ model.Node, _ string, logf func(string, string)) error {
 		logf("info", "restore-ok")
 		return nil
@@ -902,7 +902,7 @@ func TestExecuteDrillRejectsUnsafeCleanupBoundary(t *testing.T) {
 // TestTriggerDrillNoAssociatedTask 验证策略无关联备份任务时返回错误。
 func TestTriggerDrillNoAssociatedTask(t *testing.T) {
 	db := openDrillTestDB(t)
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, 8, 90)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-notask-src", "192.168.1.110", "notask-src-bd")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-notask-sb", "192.168.1.210", "notask-sb-bd")

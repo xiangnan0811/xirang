@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 )
@@ -40,7 +39,7 @@ func (m *Manager) checkNodeExpiry() {
 			var alertCount int64
 			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
 			if alertCount == 0 {
-				if err := alerting.RaiseNodeExpiryWarning(m.db, node, fmt.Sprintf("节点 %s 已过期并自动归档", node.Name)); err != nil {
+				if err := m.alertDispatcher.RaiseNodeExpiryWarning(node,fmt.Sprintf("节点 %s 已过期并自动归档", node.Name)); err != nil {
 					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
 				}
 			}
@@ -51,7 +50,7 @@ func (m *Manager) checkNodeExpiry() {
 			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
 			if alertCount == 0 {
 				msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，已触发紧急备份", node.Name, remaining.Hours())
-				if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
+				if err := m.alertDispatcher.RaiseNodeExpiryWarning(node,msg); err != nil {
 					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
 				}
 			}
@@ -79,7 +78,7 @@ func (m *Manager) checkNodeExpiry() {
 			m.db.Model(&model.Alert{}).Where("error_code = ? AND status IN ?", expiryCode, []string{"open", "acked"}).Count(&alertCount)
 			if alertCount == 0 {
 				msg := fmt.Sprintf("节点 %s 将在 %.0f 小时后过期，请及时处理", node.Name, remaining.Hours())
-				if err := alerting.RaiseNodeExpiryWarning(m.db, node, msg); err != nil {
+				if err := m.alertDispatcher.RaiseNodeExpiryWarning(node,msg); err != nil {
 					logger.Module("task").Warn().Uint("node_id", node.ID).Err(err).Msg("创建节点过期告警失败")
 				}
 			}

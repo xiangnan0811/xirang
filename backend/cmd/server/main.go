@@ -98,7 +98,6 @@ func main() {
 	defer cronScheduler.Stop()
 
 	settingsSvc := settings.NewService(db)
-	alerting.InitSettings(settingsSvc)
 	raiser := alerting.DefaultRaiser{DB: db}
 
 	// 自动化规则引擎 —— 在任务/异常事件发生时匹配规则并执行动作
@@ -106,8 +105,10 @@ func main() {
 
 	escSvc := escalation.NewService(db)
 
-	// Inject resolver into alerting so RaiseXxx functions know whether to defer to engine
-	alerting.InitEscalationResolver(func(alert model.Alert) (*alerting.EscalationPolicySummary, error) {
+	// alertDispatcher is the canonical Dispatcher — it bundles db, settings, and
+	// escalation resolver so that RaiseXxx calls no longer need to reach for
+	// package-level module vars. Callers receive it via constructors.
+	alertDispatcher := alerting.NewDispatcher(db, settingsSvc, func(alert model.Alert) (*alerting.EscalationPolicySummary, error) {
 		policy, err := escSvc.ResolvePolicyForAlert(hubCtx, alert)
 		if err != nil {
 			return nil, err
@@ -117,6 +118,7 @@ func main() {
 		}
 		return &alerting.EscalationPolicySummary{Enabled: policy.Enabled, MinSeverity: policy.MinSeverity}, nil
 	})
+	alerting.SetDispatcher(alertDispatcher)
 
 	// Engine
 	escEngine := escalation.NewEngine(
@@ -157,7 +159,7 @@ func main() {
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
 
 	executorFactory := executor.NewFactory(cfg.RsyncBinary)
-	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
+	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetAnomalySink(anomalySink)
 	taskManager.SetAutomationDispatcher(autoDispatcher)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
@@ -172,7 +174,7 @@ func main() {
 		sinks = append(sinks, rs)
 	}
 	metricSink := metrics.NewFanSink(sinks...)
-	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink)
+	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink, alertDispatcher)
 
 	uptimeProber := uptime.NewProber(db, 60*time.Second)
 	uptimeProber.SetAlertCallback(func(monitor model.ServiceMonitor, oldStatus, newStatus string) {
@@ -209,11 +211,10 @@ func main() {
 
 	sloEvaluator := slo.NewEvaluator(db, raiser)
 
-	nodelogs.InitSettings(settingsSvc)
 	nodeLogRunner := nodelogs.NewSSHRunner(db)
 	nodeLogScheduler := nodelogs.NewScheduler(db, nodeLogRunner)
 
-	nodeLogRetention := nodelogs.NewRetentionWorker(db)
+	nodeLogRetention := nodelogs.NewRetentionWorker(db, settingsSvc)
 
 	// LIFECYCLE PHASE: assemble workers in startup order, then start all.
 	workers := []lifecycle.Worker{
@@ -260,6 +261,7 @@ func main() {
 		LoginRateLimit:    cfg.LoginRateLimit,
 		LoginRateWindow:   cfg.LoginRateWindow,
 		RetryWorker:       retryWorker,
+		AlertDispatcher:   alertDispatcher,
 		MetricsToken:      cfg.MetricsToken,
 		MetricsRateLimit:  cfg.MetricsRateLimit,
 		MetricsRateWindow: cfg.MetricsRateWindow,

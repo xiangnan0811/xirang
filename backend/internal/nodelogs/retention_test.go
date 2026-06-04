@@ -29,7 +29,7 @@ func TestRetention_DeletesOldRowsPerNode(t *testing.T) {
 	db.Create(&model.NodeLog{NodeID: 1, Source: "file", Path: "/a", Timestamp: now, Message: "recent", CreatedAt: now})
 	db.Create(&model.NodeLog{NodeID: 1, Source: "file", Path: "/a", Timestamp: now, Message: "old", CreatedAt: now.Add(-30 * 24 * time.Hour)})
 
-	w := NewRetentionWorker(db)
+	w := NewRetentionWorker(db, nil)
 	w.pruneNode(model.Node{ID: 1, LogRetentionDays: 7}, 30)
 
 	var msgs []string
@@ -46,7 +46,7 @@ func TestRetention_FallsBackToGlobalDefault(t *testing.T) {
 	db.Create(&model.NodeLog{NodeID: 1, Source: "file", Path: "/a", Timestamp: now, Message: "recent", CreatedAt: now})
 	db.Create(&model.NodeLog{NodeID: 1, Source: "file", Path: "/a", Timestamp: now, Message: "old", CreatedAt: now.Add(-60 * 24 * time.Hour)})
 
-	w := NewRetentionWorker(db)
+	w := NewRetentionWorker(db, nil)
 	w.pruneNode(model.Node{ID: 1, LogRetentionDays: 0}, 30)
 
 	var count int64
@@ -63,7 +63,7 @@ func TestRetention_KeepsFresh(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		db.Create(&model.NodeLog{NodeID: 1, Source: "file", Path: "/a", Timestamp: now, Message: "m", CreatedAt: now.Add(-time.Duration(i) * time.Hour)})
 	}
-	w := NewRetentionWorker(db)
+	w := NewRetentionWorker(db, nil)
 	w.pruneNode(model.Node{ID: 1, LogRetentionDays: 30}, 30)
 
 	var count int64
