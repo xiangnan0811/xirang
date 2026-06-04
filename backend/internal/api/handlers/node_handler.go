@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 
@@ -36,10 +35,11 @@ type NodeHandler struct {
 	trigger         NodeTaskTrigger
 	settingsSvc     *settings.Service
 	alertDispatcher *alerting.Dispatcher
+	svc             *node.NodeService
 }
 
-func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger) *NodeHandler {
-	return &NodeHandler{db: db, trigger: trigger}
+func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger, svc *node.NodeService) *NodeHandler {
+	return &NodeHandler{db: db, trigger: trigger, svc: svc}
 }
 
 func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHandler {
@@ -84,9 +84,6 @@ type nodeBatchDeleteRequest struct {
 }
 
 const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
-
-var nodeHostnameRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
-var consecutiveDashRegexp = regexp.MustCompile(`-{2,}`)
 
 // List godoc
 // @Summary      列出节点
@@ -148,29 +145,6 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	respondOK(c, node.Sanitized())
 }
 
-func (h *NodeHandler) validateSSHRef(req nodeRequest) error {
-	switch req.AuthType {
-	case "password":
-		if req.Password == "" {
-			return fmt.Errorf("密码认证模式下请填写密码")
-		}
-		return nil
-	case "key":
-		if req.SSHKeyID == nil && req.PrivateKey == "" {
-			return fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
-		}
-		if req.SSHKeyID != nil {
-			var key model.SSHKey
-			if err := h.db.First(&key, *req.SSHKeyID).Error; err != nil {
-				return fmt.Errorf("所选密钥不存在，请重新选择")
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("不支持的认证方式")
-	}
-}
-
 // Create godoc
 // @Summary      创建节点
 // @Description  添加新的服务器节点
@@ -189,111 +163,32 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	if req.Port == 0 {
-		req.Port = 22
-	}
-	if req.AuthType == "" {
-		req.AuthType = "key"
-	}
-	if req.Status == "" {
-		req.Status = "offline"
-	}
-	// BasePath 不设置默认值 "/"，避免文件浏览器白名单开放整台机器
-	if err := validateNodeName(req.Name); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := h.validateSSHRef(req); err != nil {
-		respondBadRequest(c, err.Error())
+
+	nodeObj, err := h.svc.Create(node.CreateNodeInput{
+		Name:             req.Name,
+		Host:             req.Host,
+		Port:             req.Port,
+		Username:         req.Username,
+		AuthType:         req.AuthType,
+		Password:         req.Password,
+		PrivateKey:       req.PrivateKey,
+		SSHKeyID:         req.SSHKeyID,
+		Tags:             req.Tags,
+		Status:           req.Status,
+		BasePath:         req.BasePath,
+		BackupDir:        req.BackupDir,
+		MaintenanceStart: req.MaintenanceStart,
+		MaintenanceEnd:   req.MaintenanceEnd,
+		ExpiryDate:       req.ExpiryDate,
+		Archived:         req.Archived,
+		UseSudo:          req.UseSudo,
+	})
+	if err != nil {
+		handleNodeServiceError(c, err, req.BackupDir)
 		return
 	}
 
-	node := model.Node{
-		Name:        req.Name,
-		Host:        req.Host,
-		Port:        req.Port,
-		Username:    req.Username,
-		AuthType:    req.AuthType,
-		Tags:        req.Tags,
-		Status:      req.Status,
-		BasePath:    req.BasePath,
-		DiskTotalGB: 0,
-		DiskUsedGB:  0,
-	}
-
-	switch req.AuthType {
-	case "password":
-		node.Password = req.Password
-		node.SSHKeyID = nil
-		node.PrivateKey = ""
-	case "key":
-		node.Password = ""
-		node.SSHKeyID = req.SSHKeyID
-		if req.SSHKeyID == nil {
-			node.PrivateKey = req.PrivateKey
-		} else {
-			node.PrivateKey = ""
-		}
-	}
-	if req.MaintenanceStart != nil {
-		if *req.MaintenanceStart == "" {
-			node.MaintenanceStart = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
-			node.MaintenanceStart = &t
-		}
-	}
-	if req.MaintenanceEnd != nil {
-		if *req.MaintenanceEnd == "" {
-			node.MaintenanceEnd = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
-			node.MaintenanceEnd = &t
-		}
-	}
-	if req.ExpiryDate != nil {
-		if *req.ExpiryDate == "" {
-			node.ExpiryDate = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.ExpiryDate); err == nil {
-			node.ExpiryDate = &t
-		}
-	}
-	if req.Archived != nil {
-		node.Archived = *req.Archived
-	}
-	if req.UseSudo != nil {
-		node.UseSudo = *req.UseSudo
-	}
-	// BackupDir: auto-generate from name if empty
-	if strings.TrimSpace(req.BackupDir) == "" {
-		req.BackupDir = sanitizeBackupDir(req.Name)
-	}
-	if strings.TrimSpace(req.BackupDir) == "" {
-		respondBadRequest(c, "节点名称无法自动生成备份目录标识，请手动指定 backup_dir（仅允许英文字母、数字、连字符、下划线）")
-		return
-	}
-	if err := validateBackupDir(req.BackupDir); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	node.BackupDir = req.BackupDir
-	if err := h.db.Create(&node).Error; err != nil {
-		err = apperr.WrapDBError(err)
-		if errors.Is(err, apperr.ErrDuplicate) {
-			respondConflict(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
-			return
-		}
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondCreated(c, node.Sanitized())
+	respondCreated(c, nodeObj.Sanitized())
 }
 
 // Update godoc
@@ -320,155 +215,62 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	var node model.Node
-	if err := h.db.First(&node, id).Error; err != nil {
-		respondNotFound(c, "节点不存在")
+
+	nodeObj, oldBackupDir, err := h.svc.Update(id, node.CreateNodeInput{
+		Name:             req.Name,
+		Host:             req.Host,
+		Port:             req.Port,
+		Username:         req.Username,
+		AuthType:         req.AuthType,
+		Password:         req.Password,
+		PrivateKey:       req.PrivateKey,
+		SSHKeyID:         req.SSHKeyID,
+		Tags:             req.Tags,
+		Status:           req.Status,
+		BasePath:         req.BasePath,
+		BackupDir:        req.BackupDir,
+		MaintenanceStart: req.MaintenanceStart,
+		MaintenanceEnd:   req.MaintenanceEnd,
+		ExpiryDate:       req.ExpiryDate,
+		Archived:         req.Archived,
+		UseSudo:          req.UseSudo,
+	})
+	if err != nil {
+		handleNodeServiceError(c, err, req.BackupDir)
 		return
 	}
 
-	if req.Port == 0 {
-		req.Port = 22
-	}
-	if req.AuthType == "" {
-		req.AuthType = node.AuthType
-	}
-	if req.Status == "" {
-		req.Status = node.Status
-	}
-	if req.BasePath == "" {
-		req.BasePath = node.BasePath
-	}
-	oldBackupDir := node.BackupDir
-	if strings.TrimSpace(req.BackupDir) == "" {
-		req.BackupDir = node.BackupDir
-	}
-	if err := validateBackupDir(req.BackupDir); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := validateNodeName(req.Name); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if req.SSHKeyID == nil {
-		req.SSHKeyID = node.SSHKeyID
-	}
-	if req.Password == "" {
-		req.Password = node.Password
-	}
-	if req.PrivateKey == "" {
-		req.PrivateKey = node.PrivateKey
-	}
-
-	if err := validateNodeHostPort(req.Host, req.Port); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := h.validateSSHRef(req); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-
-	node.Name = req.Name
-	node.Host = req.Host
-	node.Port = req.Port
-	node.Username = req.Username
-	node.AuthType = req.AuthType
-	node.Tags = req.Tags
-	node.Status = req.Status
-	node.BasePath = req.BasePath
-	node.BackupDir = req.BackupDir
-
-	switch req.AuthType {
-	case "password":
-		node.Password = req.Password
-		node.SSHKeyID = nil
-		node.PrivateKey = ""
-	case "key":
-		node.Password = ""
-		node.SSHKeyID = req.SSHKeyID
-		if req.SSHKeyID == nil {
-			node.PrivateKey = req.PrivateKey
-		} else {
-			node.PrivateKey = ""
-		}
-	}
-	if req.MaintenanceStart != nil {
-		if *req.MaintenanceStart == "" {
-			node.MaintenanceStart = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceStart); err == nil {
-			node.MaintenanceStart = &t
-		}
-	}
-	if req.MaintenanceEnd != nil {
-		if *req.MaintenanceEnd == "" {
-			node.MaintenanceEnd = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.MaintenanceEnd); err == nil {
-			node.MaintenanceEnd = &t
-		}
-	}
-	if req.ExpiryDate != nil {
-		if *req.ExpiryDate == "" {
-			node.ExpiryDate = nil
-		} else if t, err := time.Parse(time.RFC3339, *req.ExpiryDate); err == nil {
-			node.ExpiryDate = &t
-		}
-	}
-	if req.Archived != nil {
-		node.Archived = *req.Archived
-	}
-	if req.UseSudo != nil {
-		node.UseSudo = *req.UseSudo
-	}
-	if err := h.db.Save(&node).Error; err != nil {
-		err = apperr.WrapDBError(err)
-		if errors.Is(err, apperr.ErrDuplicate) {
-			respondConflict(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", req.BackupDir))
-			return
-		}
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := h.db.Preload("SSHKey").First(&node, node.ID).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	resp := gin.H{"data": node.Sanitized()}
+	resp := gin.H{"data": nodeObj.Sanitized()}
 	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
 		resp["warning"] = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
 	}
 	respondOK(c, resp)
 }
 
-func uniqueNodeIDs(ids []uint) []uint {
-	seen := make(map[uint]struct{}, len(ids))
-	result := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
+// handleNodeServiceError maps errors from NodeService to appropriate HTTP responses.
+func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
+	if errors.Is(err, apperr.ErrValidation) {
+		msg := err.Error()
+		prefix := apperr.ErrValidation.Error() + ": "
+		if after, ok := strings.CutPrefix(msg, prefix); ok {
+			msg = after
 		}
-		if _, ok := seen[id]; ok {
-			continue
+		respondBadRequest(c, msg)
+		return
+	}
+	if errors.Is(err, apperr.ErrDuplicate) {
+		if backupDir != "" {
+			respondConflict(c, fmt.Sprintf("备份目录标识 '%s' 已被其他节点使用，请更换", backupDir))
+		} else {
+			respondConflict(c, "资源已存在")
 		}
-		seen[id] = struct{}{}
-		result = append(result, id)
+		return
 	}
-	return result
-}
-
-func diffNodeIDs(source []uint, existing []uint) []uint {
-	exists := make(map[uint]struct{}, len(existing))
-	for _, id := range existing {
-		exists[id] = struct{}{}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		respondNotFound(c, "节点不存在")
+		return
 	}
-	diff := make([]uint, 0, len(source))
-	for _, id := range source {
-		if _, ok := exists[id]; !ok {
-			diff = append(diff, id)
-		}
-	}
-	return diff
+	respondInternalError(c, err)
 }
 
 // BatchDelete godoc
@@ -490,7 +292,19 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
-	nodeIDs := uniqueNodeIDs(req.IDs)
+	nodeIDs := make([]uint, 0, len(req.IDs))
+	seen := make(map[uint]struct{}, len(req.IDs))
+	for _, id := range req.IDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		nodeIDs = append(nodeIDs, id)
+	}
+
 	if len(nodeIDs) == 0 {
 		respondBadRequest(c, "ids 不能为空")
 		return
@@ -524,27 +338,13 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		}
 	}
 
-	tx := h.db.Begin()
-	if tx.Error != nil {
-		respondInternalError(c, tx.Error)
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	var existingIDs []uint
-	if err := tx.Model(&model.Node{}).Where("id IN ?", nodeIDs).Pluck("id", &existingIDs).Error; err != nil {
-		tx.Rollback()
+	deleted, notFoundIDs, err := h.svc.BatchDelete(nodeIDs)
+	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	notFoundIDs := diffNodeIDs(nodeIDs, existingIDs)
-	if len(existingIDs) == 0 {
-		tx.Rollback()
+	if deleted == 0 {
 		respondOK(c, gin.H{
 			"deleted":       0,
 			"not_found_ids": notFoundIDs,
@@ -553,38 +353,8 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.PolicyNode{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Task{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.Alert{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	deleteResult := tx.Where("id IN ?", existingIDs).Delete(&model.Node{})
-	if deleteResult.Error != nil {
-		tx.Rollback()
-		respondInternalError(c, deleteResult.Error)
-		return
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-
 	respondOK(c, gin.H{
-		"deleted":       deleteResult.RowsAffected,
+		"deleted":       deleted,
 		"not_found_ids": notFoundIDs,
 		"message":       "deleted",
 	})
@@ -607,49 +377,11 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	tx := h.db.Begin()
-	if tx.Error != nil {
-		respondInternalError(c, tx.Error)
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	if err := h.svc.Delete(id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "节点不存在")
+			return
 		}
-	}()
-
-	var node model.Node
-	if err := tx.First(&node, id).Error; err != nil {
-		tx.Rollback()
-		respondNotFound(c, "节点不存在")
-		return
-	}
-
-	if err := tx.Where("node_id = ?", id).Delete(&model.PolicyNode{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Where("node_id = ?", id).Delete(&model.Task{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Where("node_id = ?", id).Delete(&model.Alert{}).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Delete(&model.Node{}, id).Error; err != nil {
-		tx.Rollback()
-		respondInternalError(c, err)
-		return
-	}
-
-	if err := tx.Commit().Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -914,89 +646,6 @@ func (h *NodeHandler) Metrics(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"items": samples})
-}
-
-// validateNodeName 校验节点名称，防止路径遍历攻击。
-func validateNodeName(name string) error {
-	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
-		return fmt.Errorf("节点名称不能包含 /、\\、.. 或空字符")
-	}
-	return nil
-}
-
-func validateNodeHostPort(host string, port int) error {
-	trimmedHost := strings.TrimSpace(host)
-	if trimmedHost == "" {
-		return fmt.Errorf("主机地址不能为空")
-	}
-	// 拒绝 localhost / 回环地址，防止 SSRF 或误操作管理服务器自身
-	lower := strings.ToLower(trimmedHost)
-	if lower == "localhost" || lower == "localhost.localdomain" {
-		return fmt.Errorf("不允许将管理服务器自身（localhost）添加为节点")
-	}
-	if ip := net.ParseIP(trimmedHost); ip != nil {
-		if ip.IsLoopback() {
-			return fmt.Errorf("不允许将回环地址添加为节点")
-		}
-		if ip.IsUnspecified() {
-			return fmt.Errorf("不允许使用未指定地址（0.0.0.0/::）作为节点主机")
-		}
-		if ip.IsLinkLocalUnicast() {
-			return fmt.Errorf("不允许使用链路本地地址作为节点主机")
-		}
-		if ip.IsMulticast() {
-			return fmt.Errorf("不允许使用组播地址作为节点主机")
-		}
-		if ip.IsInterfaceLocalMulticast() {
-			return fmt.Errorf("不允许使用组播地址作为节点主机")
-		}
-	} else {
-		// 不是 IP，检查是否是合法的 hostname
-		if len(trimmedHost) > 253 {
-			return fmt.Errorf("主机名过长")
-		}
-		if !nodeHostnameRegexp.MatchString(trimmedHost) {
-			return fmt.Errorf("主机地址格式不合法")
-		}
-	}
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("端口号必须在 1-65535 之间")
-	}
-	return nil
-}
-
-// sanitizeBackupDir generates a filesystem-safe backup directory identifier from a name.
-func sanitizeBackupDir(name string) string {
-	s := strings.ToLower(name)
-	var buf strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			buf.WriteRune(r)
-		} else {
-			buf.WriteByte('-')
-		}
-	}
-	// collapse consecutive dashes
-	result := consecutiveDashRegexp.ReplaceAllString(buf.String(), "-")
-	result = strings.Trim(result, "-")
-	if len(result) < 2 {
-		return ""
-	}
-	return result
-}
-
-// validateBackupDir checks that a backup directory identifier is safe for filesystem use.
-func validateBackupDir(dir string) error {
-	if dir == "" {
-		return fmt.Errorf("备份目录标识不能为空")
-	}
-	if len(dir) > 128 {
-		return fmt.Errorf("备份目录标识长度不能超过 128 个字符")
-	}
-	if strings.ContainsAny(dir, "/\\") || strings.Contains(dir, "..") || strings.ContainsRune(dir, 0) {
-		return fmt.Errorf("备份目录标识不能包含 /、\\、.. 或空字符")
-	}
-	return nil
 }
 
 // ListOwners godoc

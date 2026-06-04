@@ -10,6 +10,8 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
+	"xirang/backend/internal/node"
+	"xirang/backend/internal/policy"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
@@ -93,8 +95,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupHealthHandler := handlers.NewBackupHealthHandler(dep.DB)
 	backupConfidenceHandler := handlers.NewBackupConfidenceHandler(dep.DB)
 	storageUsageHandler := handlers.NewStorageUsageHandler(dep.DB)
-	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager).WithSettingsService(dep.SettingsService).WithAlertDispatcher(dep.AlertDispatcher)
-	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager)
+	nodeSvc := node.NewNodeService(dep.DB)
+	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager, nodeSvc).WithSettingsService(dep.SettingsService).WithAlertDispatcher(dep.AlertDispatcher)
+	policySvc := policy.NewPolicyService(dep.DB, dep.TaskManager)
+	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager).WithPolicyService(policySvc)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)

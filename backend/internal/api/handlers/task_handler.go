@@ -1,19 +1,15 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"xirang/backend/internal/auth"
-	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
-	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
-	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -33,19 +29,12 @@ type TaskRunner interface {
 type TaskHandler struct {
 	db         *gorm.DB
 	runner     TaskRunner
+	svc        *task.TaskApiService
 	jwtManager *auth.JWTManager
 }
 
-type taskRefValidationError struct {
-	message string
-}
-
-func (e *taskRefValidationError) Error() string {
-	return e.message
-}
-
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
-	return &TaskHandler{db: db, runner: runner}
+	return &TaskHandler{db: db, runner: runner, svc: task.NewTaskApiService(db, runner)}
 }
 
 func (h *TaskHandler) WithJWTManager(jwtManager *auth.JWTManager) *TaskHandler {
@@ -244,30 +233,6 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	hydrateTaskDefaultsFromPolicy(h.db, &req)
-	inferTaskExecutor(&req, "")
-	trimTaskRequest(&req)
-	ensureNodeTargetPrefix(h.db, &req)
-	// Auto-generate target for rsync/restic if still empty
-	if (req.ExecutorType == "rsync" || req.ExecutorType == "restic") && strings.TrimSpace(req.RsyncTarget) == "" {
-		var node model.Node
-		if err := h.db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
-
-	if err := validateTaskRequest(req); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := h.validateTaskRefs(req); err != nil {
-		if isTaskRefValidationError(err) {
-			respondBadRequest(c, err.Error())
-		} else {
-			respondInternalError(c, err)
-		}
-		return
-	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
@@ -276,7 +241,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	taskEntity := model.Task{
+	taskEntity, err := h.svc.CreateTask(task.CreateTaskInput{
 		Name:            req.Name,
 		NodeID:          req.NodeID,
 		PolicyID:        req.PolicyID,
@@ -287,22 +252,14 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		ExecutorType:    req.ExecutorType,
 		ExecutorConfig:  req.ExecutorConfig,
 		CronSpec:        req.CronSpec,
-		Status:          string(task.StatusPending),
-	}
-	if err := h.db.Create(&taskEntity).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	if h.runner != nil {
-		if err := h.runner.SyncSchedule(taskEntity); err != nil {
-			h.runner.RemoveSchedule(taskEntity.ID)
-			if rollbackErr := h.db.Delete(&model.Task{}, taskEntity.ID).Error; rollbackErr != nil {
-				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿删除失败: %v", rollbackErr))
-				return
-			}
-			respondBadRequest(c, "任务调度失败，请检查 Cron 表达式是否正确")
-			return
+	})
+	if err != nil {
+		if task.IsTaskValidationError(err) {
+			respondBadRequest(c, err.Error())
+		} else {
+			respondInternalError(c, err)
 		}
+		return
 	}
 	respondCreated(c, taskEntity)
 }
@@ -332,64 +289,6 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var taskEntity model.Task
-	if err := h.db.First(&taskEntity, id).Error; err != nil {
-		respondNotFound(c, "任务不存在")
-		return
-	}
-	// 值拷贝用于补偿回滚；安全前提：后续仅替换指针字段（如 PolicyID），
-	// 不可通过 *previous.PolicyID = xxx 修改指向值，否则回滚数据会被污染。
-	previous := taskEntity
-
-	hydrateTaskDefaultsFromPolicy(h.db, &req)
-	inferTaskExecutor(&req, taskEntity.ExecutorType)
-	trimTaskRequest(&req)
-
-	if req.Name == "" {
-		req.Name = taskEntity.Name
-	}
-	if req.NodeID == 0 {
-		req.NodeID = taskEntity.NodeID
-	}
-	if req.PolicyID == nil {
-		req.PolicyID = taskEntity.PolicyID
-	}
-	if req.RsyncSource == "" {
-		req.RsyncSource = taskEntity.RsyncSource
-	}
-	if req.RsyncTarget == "" {
-		req.RsyncTarget = taskEntity.RsyncTarget
-	}
-	if req.CronSpec == "" {
-		req.CronSpec = taskEntity.CronSpec
-	}
-	if req.ExecutorType == "" {
-		req.ExecutorType = taskEntity.ExecutorType
-	}
-	req.ExecutorConfig = mergeTaskExecutorConfigForUpdate(taskEntity.ExecutorType, req.ExecutorType, taskEntity.ExecutorConfig, req.ExecutorConfig)
-
-	ensureNodeTargetPrefix(h.db, &req)
-	// When node changes for rsync/restic tasks, regenerate target from new node
-	if (req.ExecutorType == "rsync" || req.ExecutorType == "restic") &&
-		req.NodeID != 0 && req.NodeID != taskEntity.NodeID {
-		var node model.Node
-		if err := h.db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
-
-	if err := validateTaskRequest(req); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := h.validateTaskRefsWithID(req, id); err != nil {
-		if isTaskRefValidationError(err) {
-			respondBadRequest(c, err.Error())
-		} else {
-			respondInternalError(c, err)
-		}
-		return
-	}
 	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
 		respondInternalError(c, err)
 		return
@@ -398,36 +297,25 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	taskEntity.Name = req.Name
-	taskEntity.NodeID = req.NodeID
-	taskEntity.PolicyID = req.PolicyID
-	taskEntity.DependsOnTaskID = req.DependsOnTaskID
-	taskEntity.Command = req.Command
-	taskEntity.RsyncSource = req.RsyncSource
-	taskEntity.RsyncTarget = req.RsyncTarget
-	taskEntity.ExecutorType = req.ExecutorType
-	taskEntity.ExecutorConfig = req.ExecutorConfig
-	taskEntity.CronSpec = req.CronSpec
-
-	if err := h.db.Save(&taskEntity).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	if h.runner != nil {
-		if err := h.runner.SyncSchedule(taskEntity); err != nil {
-			h.runner.RemoveSchedule(taskEntity.ID)
-			if restoreErr := h.db.Save(&previous).Error; restoreErr != nil {
-				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿回滚失败: %v", restoreErr))
-				return
-			}
-			if restoreScheduleErr := h.runner.SyncSchedule(previous); restoreScheduleErr != nil {
-				h.runner.RemoveSchedule(taskEntity.ID)
-				respondInternalError(c, fmt.Errorf("任务调度同步失败且补偿调度失败: %v", restoreScheduleErr))
-				return
-			}
-			respondBadRequest(c, "任务调度失败，请检查 Cron 表达式是否正确")
-			return
+	taskEntity, err := h.svc.UpdateTask(id, task.CreateTaskInput{
+		Name:            req.Name,
+		NodeID:          req.NodeID,
+		PolicyID:        req.PolicyID,
+		DependsOnTaskID: req.DependsOnTaskID,
+		Command:         req.Command,
+		RsyncSource:     req.RsyncSource,
+		RsyncTarget:     req.RsyncTarget,
+		ExecutorType:    req.ExecutorType,
+		ExecutorConfig:  req.ExecutorConfig,
+		CronSpec:        req.CronSpec,
+	})
+	if err != nil {
+		if task.IsTaskValidationError(err) {
+			respondBadRequest(c, err.Error())
+		} else {
+			respondInternalError(c, err)
 		}
+		return
 	}
 	respondOK(c, taskEntity)
 }
@@ -491,7 +379,7 @@ func (h *TaskHandler) Trigger(c *gin.Context) {
 	auditMetadata := taskCredentialAuditMetadata("manual", auditTask, hasAuditTask)
 	nodeID := taskCredentialAuditNodeID(auditTask, hasAuditTask)
 
-	runID, err := h.runner.TriggerManual(id)
+	runID, err := h.svc.TriggerTask(id)
 	if err != nil {
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:       "task.manual_trigger",
@@ -694,12 +582,6 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		return
 	}
 
-	type triggerResult struct {
-		TaskID uint   `json:"task_id"`
-		RunID  uint   `json:"run_id,omitempty"`
-		Error  string `json:"error,omitempty"`
-	}
-
 	// ownership 校验：operator 仅允许触发自己拥有的节点上的任务
 	nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db)
 	if err != nil {
@@ -714,7 +596,7 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		}
 	}
 
-	results := make([]triggerResult, 0, len(req.TaskIDs))
+	results := make([]task.BulkTriggerResult, 0, len(req.TaskIDs))
 	tasksToTrigger := make([]uint, 0, len(req.TaskIDs))
 	successCount := 0
 	failureCount := 0
@@ -734,13 +616,13 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		t, found := taskMap[tid]
 		if !found {
 			failureCount++
-			results = append(results, triggerResult{TaskID: tid, Error: "任务不存在"})
+			results = append(results, task.BulkTriggerResult{TaskID: tid, Error: "任务不存在"})
 			continue
 		}
 		if needFilter {
 			if _, ok := allowedNodeIDSet[t.NodeID]; !ok {
 				blockedCount++
-				results = append(results, triggerResult{TaskID: tid, Error: "无权操作该任务"})
+				results = append(results, task.BulkTriggerResult{TaskID: tid, Error: "无权操作该任务"})
 				continue
 			}
 		}
@@ -754,15 +636,16 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		return
 	}
 
-	for _, tid := range tasksToTrigger {
-		runID, err := h.runner.TriggerManual(tid)
-		if err != nil {
-			failureCount++
-			results = append(results, triggerResult{TaskID: tid, Error: err.Error()})
-			continue
+	if len(tasksToTrigger) > 0 {
+		svcResults := h.svc.BulkTriggerTasks(tasksToTrigger)
+		for _, r := range svcResults {
+			if r.Error != "" {
+				failureCount++
+			} else {
+				successCount++
+			}
+			results = append(results, r)
 		}
-		results = append(results, triggerResult{TaskID: tid, RunID: runID})
-		successCount++
 	}
 
 	if len(tasksToTrigger) == 0 {
@@ -905,280 +788,6 @@ func taskCredentialAuditMetadata(triggerType string, task model.Task, ok bool) m
 	return metadata
 }
 
-func trimTaskRequest(req *taskRequest) {
-	req.Name = strings.TrimSpace(req.Name)
-	req.Command = strings.TrimSpace(req.Command)
-	req.RsyncSource = strings.TrimSpace(req.RsyncSource)
-	req.RsyncTarget = strings.TrimSpace(req.RsyncTarget)
-	req.ExecutorType = strings.TrimSpace(strings.ToLower(req.ExecutorType))
-	req.CronSpec = strings.TrimSpace(req.CronSpec)
-}
-
-func hydrateTaskDefaultsFromPolicy(db *gorm.DB, req *taskRequest) {
-	if req.PolicyID == nil {
-		return
-	}
-	var p model.Policy
-	if err := db.First(&p, *req.PolicyID).Error; err != nil {
-		return
-	}
-	if strings.TrimSpace(req.RsyncSource) == "" {
-		req.RsyncSource = p.SourcePath
-	}
-	if strings.TrimSpace(req.RsyncTarget) == "" && req.NodeID != 0 {
-		var node model.Node
-		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
-	if strings.TrimSpace(req.CronSpec) == "" {
-		req.CronSpec = p.CronSpec
-	}
-}
-
-// ensureNodeTargetPrefix 确保关联策略的任务 RsyncTarget 包含节点子目录。
-// 当 RsyncTarget 与备份根目录完全相同（即缺少节点前缀）时自动补全。
-func ensureNodeTargetPrefix(db *gorm.DB, req *taskRequest) {
-	if req.NodeID == 0 {
-		return
-	}
-	if strings.TrimSpace(req.RsyncTarget) == "" {
-		return
-	}
-	if util.IsRemotePathSpec(req.RsyncTarget) {
-		return
-	}
-	// If target is just the backup root without node subdirectory, append it
-	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(config.BackupRoot, "/") {
-		var node model.Node
-		if err := db.First(&node, req.NodeID).Error; err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
-}
-
-func inferTaskExecutor(req *taskRequest, _ string) {
-	if strings.TrimSpace(req.ExecutorType) != "" {
-		req.ExecutorType = strings.TrimSpace(strings.ToLower(req.ExecutorType))
-		return
-	}
-	req.ExecutorType = "rsync"
-}
-
-func mergeTaskExecutorConfigForUpdate(previousExecutorType, nextExecutorType, previousConfig, nextConfig string) string {
-	previousExecutorType = strings.TrimSpace(strings.ToLower(previousExecutorType))
-	nextExecutorType = strings.TrimSpace(strings.ToLower(nextExecutorType))
-	if previousExecutorType != nextExecutorType {
-		return nextConfig
-	}
-
-	trimmedNext := strings.TrimSpace(nextConfig)
-	if trimmedNext == "" {
-		return previousConfig
-	}
-
-	merged, ok := preserveBlankSecretConfigValues(previousConfig, trimmedNext)
-	if ok {
-		return merged
-	}
-	return nextConfig
-}
-
-func preserveBlankSecretConfigValues(previousConfig, nextConfig string) (string, bool) {
-	var previous map[string]interface{}
-	var next map[string]interface{}
-	if err := json.Unmarshal([]byte(previousConfig), &previous); err != nil {
-		return "", false
-	}
-	if err := json.Unmarshal([]byte(nextConfig), &next); err != nil {
-		return "", false
-	}
-
-	changed := false
-	for key, value := range next {
-		if !isSecretConfigKey(key) {
-			continue
-		}
-		if str, ok := value.(string); ok && strings.TrimSpace(str) == "" {
-			if previousValue, exists := previous[key]; exists {
-				next[key] = previousValue
-				changed = true
-			}
-		}
-	}
-	if !changed {
-		return nextConfig, true
-	}
-	encoded, err := json.Marshal(next)
-	if err != nil {
-		return "", false
-	}
-	return string(encoded), true
-}
-
-func isSecretConfigKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	return strings.Contains(normalized, "password") ||
-		strings.Contains(normalized, "secret") ||
-		strings.Contains(normalized, "token") ||
-		strings.Contains(normalized, "api_key") ||
-		strings.Contains(normalized, "access_key")
-}
-
-func newTaskRefValidationError(message string) error {
-	return &taskRefValidationError{message: message}
-}
-
-func isTaskRefValidationError(err error) bool {
-	_, ok := err.(*taskRefValidationError)
-	return ok
-}
-
-func (h *TaskHandler) validateTaskRefs(req taskRequest) error {
-	return validateTaskRefsWithDB(h.db, req, 0)
-}
-
-func (h *TaskHandler) validateTaskRefsWithID(req taskRequest, selfID uint) error {
-	return validateTaskRefsWithDB(h.db, req, selfID)
-}
-
-func validateTaskRefsWithDB(db *gorm.DB, req taskRequest, selfID uint) error {
-	if req.NodeID != 0 {
-		var count int64
-		if err := db.Model(&model.Node{}).Where("id = ?", req.NodeID).Count(&count).Error; err != nil {
-			return fmt.Errorf("校验节点失败: %w", err)
-		}
-		if count == 0 {
-			return newTaskRefValidationError("所选节点不存在，请重新选择")
-		}
-	}
-	if req.PolicyID != nil {
-		var count int64
-		if err := db.Model(&model.Policy{}).Where("id = ?", *req.PolicyID).Count(&count).Error; err != nil {
-			return fmt.Errorf("校验策略失败: %w", err)
-		}
-		if count == 0 {
-			return newTaskRefValidationError("所选策略不存在，请重新选择")
-		}
-	}
-	if req.DependsOnTaskID != nil {
-		// cron 与依赖链互斥：有前置任务的任务不能设置 cron
-		if strings.TrimSpace(req.CronSpec) != "" {
-			return newTaskRefValidationError("设置了前置任务的任务不能同时设置定时调度")
-		}
-		// 前置任务不能是自身
-		if selfID != 0 && *req.DependsOnTaskID == selfID {
-			return newTaskRefValidationError("任务不能依赖自身")
-		}
-		// 检查前置任务是否存在
-		var count int64
-		if err := db.Model(&model.Task{}).Where("id = ?", *req.DependsOnTaskID).Count(&count).Error; err != nil {
-			return fmt.Errorf("校验前置任务失败: %w", err)
-		}
-		if count == 0 {
-			return newTaskRefValidationError("所选前置任务不存在，请重新选择")
-		}
-		// 环路检测：从前置任务向上追溯，深度不超过 10
-		if selfID != 0 {
-			if err := detectDependencyCycle(db, selfID, *req.DependsOnTaskID, 10); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// detectDependencyCycle 从 startID 开始沿 depends_on_task_id 链向上追溯，
-// 若遍历到 selfID 则说明形成环路，maxDepth 为最大追溯深度。
-func detectDependencyCycle(db *gorm.DB, selfID, startID uint, maxDepth int) error {
-	current := startID
-	for i := 0; i < maxDepth; i++ {
-		var t model.Task
-		if err := db.Select("id", "depends_on_task_id").First(&t, current).Error; err != nil {
-			return nil // 任务不存在，无法继续追溯
-		}
-		if t.DependsOnTaskID == nil {
-			return nil
-		}
-		if *t.DependsOnTaskID == selfID {
-			return newTaskRefValidationError("检测到循环依赖，请检查前置任务配置")
-		}
-		current = *t.DependsOnTaskID
-	}
-	return nil
-}
-
-func validateTaskRequest(req taskRequest) error {
-	if req.Name == "" {
-		return fmt.Errorf("任务名称不能为空")
-	}
-	if req.NodeID == 0 {
-		return fmt.Errorf("请选择目标节点")
-	}
-	switch req.ExecutorType {
-	case "rsync", "command", "restic", "rclone":
-	default:
-		return fmt.Errorf("不支持的执行器类型，仅允许 rsync / command / restic / rclone")
-	}
-	if req.CronSpec != "" {
-		if err := validateCronSpec(req.CronSpec); err != nil {
-			return err
-		}
-	}
-
-	if req.ExecutorType == "command" {
-		command := strings.TrimSpace(req.Command)
-		if command == "" {
-			return fmt.Errorf("命令类型任务必须填写命令内容")
-		}
-		if len(command) > maxCommandLength {
-			return fmt.Errorf("命令长度不能超过 %d 字符", maxCommandLength)
-		}
-		if isDangerousCommand(command) {
-			return fmt.Errorf("该命令被安全策略拦截，禁止执行")
-		}
-	} else {
-		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
-			return fmt.Errorf("同步任务必须填写源路径和目标路径")
-		}
-		// 拒绝路径中已知的 shell 注入字符（NUL/CR/LF/反引号/$(…)），
-		// defense-in-depth：executor 已对所有用户输入做 ShellEscape，但额外
-		// 在 API 层拦住明显恶意的输入并给出友好错误。
-		// 远程路径形如 user@host:/path 由 IsRemotePathSpec 识别后跳过本地校验。
-		if !util.IsRemotePathSpec(req.RsyncSource) {
-			if err := validatePathChars(req.RsyncSource, "rsync_source"); err != nil {
-				return err
-			}
-		}
-		if !util.IsRemotePathSpec(req.RsyncTarget) {
-			if err := validatePathChars(req.RsyncTarget, "rsync_target"); err != nil {
-				return err
-			}
-		}
-	}
-
-	if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
-		if !json.Valid([]byte(cfg)) {
-			return fmt.Errorf("executor_config 必须是合法的 JSON 格式")
-		}
-	}
-
-	sourceAllowList := parseCSVEnvList("RSYNC_ALLOWED_SOURCE_PREFIXES")
-	targetAllowList := parseCSVEnvList("RSYNC_ALLOWED_TARGET_PREFIXES")
-
-	if !util.IsRemotePathSpec(req.RsyncSource) {
-		if err := validatePathByPrefix(req.RsyncSource, sourceAllowList, "rsync_source"); err != nil {
-			return err
-		}
-	}
-	if !util.IsRemotePathSpec(req.RsyncTarget) {
-		if err := validatePathByPrefix(req.RsyncTarget, targetAllowList, "rsync_target"); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
 
 func parseTaskSort(raw string) string {
 	const defaultOrder = "created_at desc, id desc"

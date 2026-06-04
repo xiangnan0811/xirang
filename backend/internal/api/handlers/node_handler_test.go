@@ -11,6 +11,7 @@ import (
 
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	nodePkg "xirang/backend/internal/node"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -49,7 +50,7 @@ func TestNodeExecDisabled(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/exec", handler.Exec)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/exec", node.ID), strings.NewReader(`{"command":"hostname"}`))
@@ -80,7 +81,7 @@ func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/batch-delete", handler.BatchDelete)
 
 	req := httptest.NewRequest(http.MethodPost, "/nodes/batch-delete", strings.NewReader(`{"ids":[]}`))
@@ -131,7 +132,7 @@ func TestNodeBatchDeleteSuccess(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/batch-delete", func(c *gin.Context) {
 		c.Set("role", "admin")
 		c.Next()
@@ -194,7 +195,7 @@ func TestNodeMigrateReturnsInternalErrorWhenPolicyLookupFails(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/migrate", func(c *gin.Context) {
 		c.Set("role", "admin")
 		c.Next()
@@ -233,7 +234,7 @@ func TestNodeMigratePreflightReturnsInternalErrorWhenPolicyLookupFails(t *testin
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
 		c.Set("role", "admin")
 		c.Next()
@@ -281,7 +282,7 @@ func TestMigrationPreflightAuditDoesNotCopyDiagnosticHostOrPath(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
 		c.Set("userID", uint(101))
 		c.Set("username", "alice")
@@ -343,7 +344,7 @@ func TestMigrationPreflightResponseSanitizesDiagnosticFields(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewNodeHandler(db, nil)
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(db))
 	r.POST("/nodes/:id/migrate-preflight", func(c *gin.Context) {
 		c.Set("userID", uint(101))
 		c.Set("username", "alice")

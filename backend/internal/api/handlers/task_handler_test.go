@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	taskPkg "xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -678,7 +679,7 @@ func openTaskHandlerTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestValidateTaskRequestRejectsInvalidCron(t *testing.T) {
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-a",
 		NodeID:       1,
 		ExecutorType: "rsync",
@@ -686,20 +687,20 @@ func TestValidateTaskRequestRejectsInvalidCron(t *testing.T) {
 		RsyncTarget:  "/backup/dst",
 		CronSpec:     "invalid cron",
 	}
-	if err := validateTaskRequest(req); err == nil {
+	if err := taskPkg.ValidateTaskInput(req); err == nil {
 		t.Fatalf("期望非法 cron 返回错误")
 	}
 }
 
 func TestValidateTaskRequestRejectsRsyncWithoutPath(t *testing.T) {
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-rsync",
 		NodeID:       1,
 		ExecutorType: "rsync",
 		RsyncSource:  "/data/src",
 		RsyncTarget:  "",
 	}
-	if err := validateTaskRequest(req); err == nil {
+	if err := taskPkg.ValidateTaskInput(req); err == nil {
 		t.Fatalf("期望 rsync 缺少目标路径时返回错误")
 	}
 }
@@ -708,75 +709,75 @@ func TestValidateTaskRequestChecksWhitelist(t *testing.T) {
 	t.Setenv("RSYNC_ALLOWED_SOURCE_PREFIXES", "/data")
 	t.Setenv("RSYNC_ALLOWED_TARGET_PREFIXES", "/backup")
 
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-rsync",
 		NodeID:       1,
 		ExecutorType: "rsync",
 		RsyncSource:  "/etc/passwd",
 		RsyncTarget:  "/backup/node-a",
 	}
-	if err := validateTaskRequest(req); err == nil {
+	if err := taskPkg.ValidateTaskInput(req); err == nil {
 		t.Fatalf("期望 source 路径不在白名单时返回错误")
 	}
 
 	req.RsyncSource = "/data/node-a"
-	if err := validateTaskRequest(req); err != nil {
+	if err := taskPkg.ValidateTaskInput(req); err != nil {
 		t.Fatalf("期望白名单内路径通过校验，实际错误: %v", err)
 	}
 }
 
 func TestValidateTaskRequestRejectsNonRsyncExecutor(t *testing.T) {
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-local",
 		NodeID:       1,
 		ExecutorType: "local",
 	}
-	if err := validateTaskRequest(req); err == nil {
+	if err := taskPkg.ValidateTaskInput(req); err == nil {
 		t.Fatalf("期望 local 执行器被拒绝")
 	}
 }
 
 func TestValidateTaskRequestRejectsCommandWithEmptyContent(t *testing.T) {
 	// command 类型任务必须填写命令内容
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-cmd",
 		NodeID:       1,
 		ExecutorType: "command",
 		Command:      "   ", // 全空白，应被拒绝
 	}
-	if err := validateTaskRequest(req); err == nil {
+	if err := taskPkg.ValidateTaskInput(req); err == nil {
 		t.Fatalf("期望 command 内容为空时被拒绝")
 	}
 }
 
 func TestValidateTaskRequestRejectsCommandSafetyViolations(t *testing.T) {
-	req := taskRequest{
+	req := taskPkg.CreateTaskInput{
 		Name:         "task-cmd",
 		NodeID:       1,
 		ExecutorType: "command",
 		Command:      strings.Repeat("a", maxCommandLength+1),
 	}
-	if err := validateTaskRequest(req); err == nil || !strings.Contains(err.Error(), "命令长度不能超过") {
+	if err := taskPkg.ValidateTaskInput(req); err == nil || !strings.Contains(err.Error(), "命令长度不能超过") {
 		t.Fatalf("期望 command 长度超限被拒绝，实际: %v", err)
 	}
 
 	req.Command = "rm -rf /etc"
-	if err := validateTaskRequest(req); err == nil || !strings.Contains(err.Error(), "安全策略拦截") {
+	if err := taskPkg.ValidateTaskInput(req); err == nil || !strings.Contains(err.Error(), "安全策略拦截") {
 		t.Fatalf("期望危险 command 被拒绝，实际: %v", err)
 	}
 }
 
 func TestInferTaskExecutorDefaultsToRsync(t *testing.T) {
-	req := &taskRequest{}
-	inferTaskExecutor(req, "local")
+	req := &taskPkg.CreateTaskInput{}
+	taskPkg.InferTaskExecutor(req, "")
 	if req.ExecutorType != "rsync" {
 		t.Fatalf("期望默认推断 rsync，实际: %s", req.ExecutorType)
 	}
 }
 
 func TestInferTaskExecutorKeepsExplicitValue(t *testing.T) {
-	req := &taskRequest{ExecutorType: "local"}
-	inferTaskExecutor(req, "rsync")
+	req := &taskPkg.CreateTaskInput{ExecutorType: "local"}
+	taskPkg.InferTaskExecutor(req, "rsync")
 	if req.ExecutorType != "local" {
 		t.Fatalf("期望保留显式 executor_type 供校验拒绝，实际: %s", req.ExecutorType)
 	}
