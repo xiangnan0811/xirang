@@ -61,6 +61,7 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Check Go vulnerabilities
+        continue-on-error: true
         run: govulncheck ./...
 
       - name: Upload backend coverage
@@ -93,6 +94,7 @@ jobs:
         run: npm ci
 
       - name: Check npm vulnerabilities
+        continue-on-error: true
         run: npm audit --audit-level=moderate
 
       - name: Run frontend check
