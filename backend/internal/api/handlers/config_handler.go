@@ -374,10 +374,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			}
 			errDetail = append(errDetail, fmt.Sprintf("%s.%s: %s", label, ve.Field, ve.Message))
 		}
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":  fmt.Sprintf("导入数据校验失败（共 %d 项），请修复后重试", len(importErrList)),
-			"detail": errDetail,
-			"items":  importErrList,
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: fmt.Sprintf("导入数据校验失败（共 %d 项），请修复后重试", len(importErrList)),
+			Data:    gin.H{"detail": errDetail, "items": importErrList},
 		})
 		return
 	}
