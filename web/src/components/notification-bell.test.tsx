@@ -30,7 +30,7 @@ vi.mock("@/lib/api/client", () => ({
 
 function renderBell(token: string | null = "test-token") {
   return render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <NotificationBell token={token} />
     </MemoryRouter>
   );

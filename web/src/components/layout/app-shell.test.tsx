@@ -66,8 +66,8 @@ function renderShell() {
   return render(
     <MemoryRouter
       initialEntries={["/app/overview"]}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
+
+>
       <Routes>
         <Route path="/app" element={<AppShell />}>
           <Route path="overview" element={<div>概览内容</div>} />

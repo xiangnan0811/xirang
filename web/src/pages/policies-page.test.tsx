@@ -140,7 +140,7 @@ describe("PoliciesPage", () => {
 
   it("渲染策略工作台标题、摘要和数据面", () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <PoliciesPage />
       </MemoryRouter>
     );
@@ -168,7 +168,7 @@ describe("PoliciesPage", () => {
     });
 
     const view = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <PoliciesPage />
       </MemoryRouter>
     );
@@ -180,7 +180,7 @@ describe("PoliciesPage", () => {
     expect(setGlobalSearchMock).toHaveBeenCalledWith("");
 
     view.rerender(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <PoliciesPage />
       </MemoryRouter>
     );

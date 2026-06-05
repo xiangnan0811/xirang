@@ -64,7 +64,7 @@ describe("CredentialAccessGrantsPage a11y smoke", () => {
 
   it("初始渲染无 axe violations", async () => {
     const { container } = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <CredentialAccessGrantsPage />
       </MemoryRouter>,
     );

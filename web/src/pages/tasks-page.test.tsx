@@ -89,7 +89,7 @@ vi.mock("@/components/task-create-dialog", () => ({
           <button
             data-testid="edit-save-btn"
             onClick={() => void onSave({ name: "新名称", nodeId: editingTask.id })}
-          >
+>
             保存
           </button>
         </div>
@@ -101,7 +101,7 @@ vi.mock("@/components/task-create-dialog", () => ({
         <button
           data-testid="create-save-btn"
           onClick={() => void onSave({ name: "新任务", nodeId: 1 })}
-        >
+>
           创建
         </button>
       </div>
@@ -124,7 +124,7 @@ vi.mock("@/components/restore-confirm-dialog", () => ({
         <button
           data-testid="restore-confirm-btn"
           onClick={() => onSuccess?.(999)}
-        >
+>
           确认恢复
         </button>
       </div>
@@ -273,7 +273,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -299,7 +299,7 @@ describe("TasksPage", () => {
 
   it("日志入口使用链接语义跳转到对应任务日志页", () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -323,7 +323,7 @@ describe("TasksPage", () => {
     });
 
     const view = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -336,7 +336,7 @@ describe("TasksPage", () => {
     expect(setGlobalSearchMock).toHaveBeenCalledWith("");
 
     view.rerender(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -349,7 +349,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -394,7 +394,7 @@ describe("TasksPage", () => {
     });
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -411,7 +411,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -435,7 +435,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -460,7 +460,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -478,7 +478,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -522,7 +522,7 @@ describe("TasksPage", () => {
     });
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -559,7 +559,7 @@ describe("TasksPage", () => {
     });
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -597,7 +597,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );
@@ -627,7 +627,7 @@ describe("TasksPage", () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TasksPage />
       </MemoryRouter>
     );

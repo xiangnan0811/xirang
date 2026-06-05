@@ -25,8 +25,8 @@ describe("ProtectedRoute", () => {
     render(
       <MemoryRouter
         initialEntries={["/app/settings?tab=users#security"]}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
+
+>
         <Routes>
           <Route
             path="/app/settings"
@@ -50,8 +50,8 @@ describe("ProtectedRoute", () => {
     render(
       <MemoryRouter
         initialEntries={["/app/overview"]}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
+
+>
         <Routes>
           <Route
             path="/app/overview"
