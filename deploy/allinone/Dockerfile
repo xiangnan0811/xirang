@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26.3-alpine AS backend-builder
+FROM golang:1.26.4-alpine AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
@@ -26,7 +26,7 @@ RUN set -eux; \
 # 自行编译 supercronic，避免官方预编译二进制（v0.2.44 用 Go 1.26.1）带入过期 stdlib 的 HIGH CVE
 # （CVE-2026-32280/32282/33810，fix in 1.26.2）。用当前 builder 的 Go 1.26.3 重编一份，
 # 支持 linux/amd64 与 linux/arm64 交叉编译。
-FROM golang:1.26.3-alpine AS supercronic-builder
+FROM golang:1.26.4-alpine AS supercronic-builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG SUPERCRONIC_VERSION=v0.2.44
