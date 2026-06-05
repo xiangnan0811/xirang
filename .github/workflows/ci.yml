@@ -54,6 +54,15 @@ jobs:
       - name: Run backend tests
         run: go test -coverprofile=coverage.out ./...
 
+      - name: Check backend coverage
+        continue-on-error: true
+        run: |
+          COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Backend coverage: ${COV}%"
+          if (( $(echo "$COV < 60" | bc -l) )); then
+            echo "::warning ::Backend coverage ${COV}% is below 60% threshold"
+          fi
+
       - name: Build backend
         run: go build ./...
 
@@ -103,6 +112,19 @@ jobs:
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
         run: node scripts/check-bundle-budget.mjs
+
+      - name: Check frontend coverage
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -f coverage/lcov.info ]; then
+            LINES=$(grep -c "^SF:" coverage/lcov.info || echo 0)
+            COVERED=$(grep -c "^DA:" coverage/lcov.info || echo 0)
+            echo "Frontend source files: ${LINES}"
+            echo "Frontend covered lines entries: ${COVERED}"
+          else
+            echo "::warning ::Frontend coverage report not found"
+          fi
 
       - name: Upload frontend coverage
         if: always()

@@ -1,28 +1,27 @@
 package handlers
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 
-	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/apperr"
+	"xirang/backend/internal/integration"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type IntegrationHandler struct {
-	db *gorm.DB
+	db  *gorm.DB
+	svc *integration.IntegrationService
 }
 
-func NewIntegrationHandler(db *gorm.DB) *IntegrationHandler {
-	return &IntegrationHandler{db: db}
+func NewIntegrationHandler(db *gorm.DB, svc *integration.IntegrationService) *IntegrationHandler {
+	return &IntegrationHandler{db: db, svc: svc}
 }
 
 type integrationRequest struct {
@@ -58,39 +57,6 @@ type integrationPatchRequest struct {
 	ProxyURL         *string `json:"proxy_url"`
 }
 
-var knownIntegrationTypes = map[string]bool{
-	"webhook": true, "slack": true, "telegram": true, "email": true,
-	"feishu": true, "dingtalk": true, "wecom": true,
-}
-
-// channelDomainHints 各通道的预期域名提示
-var channelDomainHints = map[string]string{
-	"feishu":   "open.feishu.cn",
-	"dingtalk": "oapi.dingtalk.com",
-	"wecom":    "qyapi.weixin.qq.com",
-	"slack":    "hooks.slack.com",
-}
-
-// checkChannelDomainHint 返回域名建议提示（非强制），仅对 URL 类型渠道有效
-func checkChannelDomainHint(channelType, endpoint string) string {
-	expected, ok := channelDomainHints[channelType]
-	if !ok {
-		return ""
-	}
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || parsed == nil {
-		return ""
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if host == "" {
-		return ""
-	}
-	if host != expected && !strings.HasSuffix(host, "."+expected) {
-		return fmt.Sprintf("%s 通道通常使用 %s，当前地址 %s 不在此域名下，请确认地址是否正确", channelType, expected, host)
-	}
-	return ""
-}
-
 type integrationResponse struct {
 	ID              uint      `json:"id"`
 	Type            string    `json:"type"`
@@ -109,106 +75,6 @@ type integrationTestResponse struct {
 	OK        bool   `json:"ok"`
 	Message   string `json:"message"`
 	LatencyMS int64  `json:"latency_ms"`
-}
-
-func validateIntegrationEndpoint(channelType, endpoint string) error {
-	normalizedType := strings.ToLower(strings.TrimSpace(channelType))
-	if normalizedType == "email" {
-		return nil
-	}
-
-	parsedURL, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || parsedURL == nil {
-		return fmt.Errorf("%s 通道 endpoint 必须是合法 URL", normalizedType)
-	}
-
-	scheme := strings.ToLower(strings.TrimSpace(parsedURL.Scheme))
-	if (scheme != "http" && scheme != "https") || parsedURL.Host == "" {
-		return fmt.Errorf("%s 通道仅允许 http/https URL", normalizedType)
-	}
-	if normalizedType == "telegram" {
-		if err := validateTelegramEndpoint(parsedURL); err != nil {
-			return err
-		}
-	}
-
-	blockPrivate, err := util.ReadBoolEnv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", true)
-	if err != nil {
-		return err
-	}
-	if !blockPrivate {
-		return nil
-	}
-
-	hostName := strings.TrimSpace(parsedURL.Hostname())
-	if hostName == "" {
-		return fmt.Errorf("%s 通道 endpoint 缺少主机地址", normalizedType)
-	}
-	if err := validatePublicEndpointHost(hostName); err != nil {
-		return fmt.Errorf("%s 通道 endpoint 不安全: %w", normalizedType, err)
-	}
-	return nil
-}
-
-func validateTelegramEndpoint(parsedURL *url.URL) error {
-	_, err := util.ValidateTelegramEndpoint(parsedURL)
-	return err
-}
-
-func validatePublicEndpointHost(host string) error {
-	normalizedHost := strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
-	if normalizedHost == "" {
-		return fmt.Errorf("主机地址不能为空")
-	}
-	if normalizedHost == "localhost" || strings.HasSuffix(normalizedHost, ".localhost") {
-		return fmt.Errorf("禁止使用本地回环地址")
-	}
-
-	if ip, err := netip.ParseAddr(normalizedHost); err == nil {
-		if isPrivateOrLoopback(ip.Unmap()) {
-			return fmt.Errorf("禁止使用内网或回环地址")
-		}
-		return nil
-	}
-
-	resolved, err := resolveHostAddrs(normalizedHost)
-	if err != nil {
-		return fmt.Errorf("无法解析主机地址，请检查域名是否正确")
-	}
-	if len(resolved) == 0 {
-		return fmt.Errorf("主机地址无法解析，请检查域名是否正确")
-	}
-	for _, ip := range resolved {
-		addr, ok := netip.AddrFromSlice(ip)
-		if !ok {
-			continue
-		}
-		if isPrivateOrLoopback(addr.Unmap()) {
-			return fmt.Errorf("该地址指向内网或回环地址，不允许使用")
-		}
-	}
-	return nil
-}
-
-func resolveHostAddrs(host string) ([]net.IP, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	addresses := make([]net.IP, 0, len(ipAddrs))
-	for _, item := range ipAddrs {
-		if item.IP != nil {
-			addresses = append(addresses, item.IP)
-		}
-	}
-	return addresses, nil
-}
-
-func isPrivateOrLoopback(addr netip.Addr) bool {
-	return addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified()
 }
 
 // List godoc
@@ -280,80 +146,43 @@ func (h *IntegrationHandler) Create(c *gin.Context) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
 	req.Secret = strings.TrimSpace(req.Secret)
-	if req.Type == "" || req.Name == "" {
-		respondBadRequest(c, "请求参数不合法")
-		return
-	}
-	if !knownIntegrationTypes[req.Type] {
-		respondBadRequest(c, "不支持的通知通道类型")
-		return
-	}
-
-	// 优先从结构化字段构建 endpoint
-	if built, err := buildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	} else if built != "" {
-		req.Endpoint = built
-	}
-
-	if req.Endpoint == "" {
-		respondBadRequest(c, "endpoint 或通道特定字段必填")
-		return
-	}
-
-	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-
-	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
-	if !req.SkipEndpointHint {
-		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
-			respondOK(c, gin.H{"hint": hint, "created": false})
-			return
-		}
-	}
-
-	// 验证代理 URL
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
-	if req.ProxyURL != "" {
-		if err := validateProxyURL(req.ProxyURL); err != nil {
-			respondBadRequest(c, err.Error())
-			return
+
+	// Domain hint check (handler concern — affects response code path)
+	if !req.SkipEndpointHint {
+		endpointForHint := req.Endpoint
+		if built, err := integration.BuildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err == nil && built != "" {
+			endpointForHint = built
+		}
+		if endpointForHint != "" {
+			if hint := integration.CheckChannelDomainHint(req.Type, endpointForHint); hint != "" {
+				respondOK(c, gin.H{"hint": hint, "created": false})
+				return
+			}
 		}
 	}
 
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	if req.FailThreshold <= 0 {
-		req.FailThreshold = 1
-	}
-	if req.CooldownMinutes <= 0 {
-		req.CooldownMinutes = 5
-	}
-
-	item := model.Integration{
+	item, err := h.svc.CreateIntegration(c.Request.Context(), integration.CreateIntegrationInput{
 		Type:            req.Type,
 		Name:            req.Name,
 		Endpoint:        req.Endpoint,
 		Secret:          req.Secret,
-		Enabled:         enabled,
+		Enabled:         req.Enabled,
 		FailThreshold:   req.FailThreshold,
 		CooldownMinutes: req.CooldownMinutes,
 		ProxyURL:        req.ProxyURL,
-	}
-	if err := h.db.Create(&item).Error; err != nil {
-		respondInternalError(c, err)
+		BotToken:        req.BotToken,
+		ChatID:          req.ChatID,
+		AccessToken:     req.AccessToken,
+		HookID:          req.HookID,
+		WebhookKey:      req.WebhookKey,
+	})
+	if err != nil {
+		handleIntegrationServiceError(c, err)
 		return
 	}
-	if err := h.db.First(&item, item.ID).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondCreated(c, sanitizeIntegration(&item))
+
+	respondCreated(c, sanitizeIntegration(item))
 }
 
 // Update godoc
@@ -375,6 +204,7 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
+
 	var req integrationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, "请求参数不合法")
@@ -385,107 +215,47 @@ func (h *IntegrationHandler) Update(c *gin.Context) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
 	req.Secret = strings.TrimSpace(req.Secret)
-	if req.Type == "" || req.Name == "" {
-		respondBadRequest(c, "请求参数不合法")
-		return
-	}
-	if !knownIntegrationTypes[req.Type] {
-		respondBadRequest(c, "不支持的通知通道类型")
-		return
-	}
-
-	var item model.Integration
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "通知通道不存在")
-		return
-	}
-
-	// 记录更新前是否有 secret（AfterFind 已解密）
-	hadSecret := item.Secret != ""
-
-	// 优先从结构化字段构建 endpoint；若客户端回传 API 响应中的脱敏占位符，保持原 endpoint。
-	if built, err := buildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	} else if built != "" {
-		req.Endpoint = built
-	} else if isMaskedIntegrationURL(req.Endpoint) {
-		if !strings.EqualFold(req.Type, item.Type) || !maskedIntegrationURLMatches(req.Endpoint, item.Endpoint) {
-			respondBadRequest(c, "endpoint 不能使用脱敏占位符")
-			return
-		}
-		req.Endpoint = item.Endpoint
-	}
-
-	if req.Endpoint == "" {
-		respondBadRequest(c, "endpoint 或通道特定字段必填")
-		return
-	}
-
-	if err := validateIntegrationEndpoint(req.Type, req.Endpoint); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-
-	if req.FailThreshold <= 0 {
-		req.FailThreshold = item.FailThreshold
-	}
-	if req.CooldownMinutes <= 0 {
-		req.CooldownMinutes = item.CooldownMinutes
-	}
-
-	// 域名建议提示（非强制），用户可设置 skip_endpoint_hint=true 跳过
-	if !req.SkipEndpointHint {
-		if hint := checkChannelDomainHint(req.Type, req.Endpoint); hint != "" {
-			respondOK(c, gin.H{"hint": hint, "updated": false})
-			return
-		}
-	}
-
-	// 验证代理 URL；若客户端回传脱敏占位符，保持原 proxy_url。
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
-	proxyURLChanged := false
-	if req.ProxyURL != "" {
-		if isMaskedIntegrationURL(req.ProxyURL) {
-			if !maskedIntegrationURLMatches(req.ProxyURL, item.ProxyURL) {
-				respondBadRequest(c, "代理地址不能使用脱敏占位符")
+
+	// Domain hint check (handler concern — affects response code path)
+	if !req.SkipEndpointHint {
+		endpointForHint := req.Endpoint
+		if built, err := integration.BuildEndpointFromFields(req.Type, req.BotToken, req.ChatID, req.AccessToken, req.HookID, req.WebhookKey); err == nil && built != "" {
+			endpointForHint = built
+		}
+		if endpointForHint != "" && !isMaskedIntegrationURL(endpointForHint) {
+			if hint := integration.CheckChannelDomainHint(req.Type, endpointForHint); hint != "" {
+				respondOK(c, gin.H{"hint": hint, "updated": false})
 				return
 			}
-		} else {
-			if err := validateProxyURL(req.ProxyURL); err != nil {
-				respondBadRequest(c, err.Error())
-				return
-			}
-			proxyURLChanged = true
 		}
 	}
 
-	item.Type = req.Type
-	item.Name = req.Name
-	item.Endpoint = req.Endpoint
-	if req.Enabled != nil {
-		item.Enabled = *req.Enabled
-	}
-	item.FailThreshold = req.FailThreshold
-	item.CooldownMinutes = req.CooldownMinutes
-	if req.Secret != "" {
-		item.Secret = req.Secret
-	}
-	// ProxyURL: 空字符串表示保持不变（PUT 兼容旧前端）；显式清除使用 PATCH + proxy_url=""。
-	if proxyURLChanged {
-		item.ProxyURL = req.ProxyURL
+	updated, hadSecret, err := h.svc.UpdateIntegration(c.Request.Context(), id, integration.CreateIntegrationInput{
+		Type:            req.Type,
+		Name:            req.Name,
+		Endpoint:        req.Endpoint,
+		Secret:          req.Secret,
+		Enabled:         req.Enabled,
+		FailThreshold:   req.FailThreshold,
+		CooldownMinutes: req.CooldownMinutes,
+		ProxyURL:        req.ProxyURL,
+		BotToken:        req.BotToken,
+		ChatID:          req.ChatID,
+		AccessToken:     req.AccessToken,
+		HookID:          req.HookID,
+		WebhookKey:      req.WebhookKey,
+	})
+	if err != nil {
+		handleIntegrationServiceError(c, err)
+		return
 	}
 
-	if err := h.db.Save(&item).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	// Restore HasSecret for response (service sets it internally; we align with original logic)
+	if !updated.HasSecret {
+		updated.HasSecret = hadSecret || req.Secret != ""
 	}
-	if err := h.db.First(&item, item.ID).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	item.HasSecret = hadSecret || req.Secret != ""
-	respondOK(c, sanitizeIntegration(&item))
+	respondOK(c, sanitizeIntegration(updated))
 }
 
 // Patch godoc
@@ -558,7 +328,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 				return
 			}
 		} else {
-			if err := validateIntegrationEndpoint(item.Type, endpoint); err != nil {
+			if err := integration.ValidateIntegrationEndpoint(item.Type, endpoint); err != nil {
 				respondBadRequest(c, err.Error())
 				return
 			}
@@ -569,7 +339,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 
 	// 域名建议提示（仅当 endpoint 变化且未跳过时）
 	if endpointChanged && !req.SkipEndpointHint {
-		if hint := checkChannelDomainHint(item.Type, item.Endpoint); hint != "" {
+		if hint := integration.CheckChannelDomainHint(item.Type, item.Endpoint); hint != "" {
 			respondOK(c, gin.H{"hint": hint, "updated": false})
 			return
 		}
@@ -604,7 +374,7 @@ func (h *IntegrationHandler) Patch(c *gin.Context) {
 					return
 				}
 			} else {
-				if err := validateProxyURL(proxyURL); err != nil {
+				if err := integration.ValidateProxyURL(proxyURL); err != nil {
 					respondBadRequest(c, err.Error())
 					return
 				}
@@ -667,48 +437,84 @@ func (h *IntegrationHandler) Test(c *gin.Context) {
 		return
 	}
 
-	var item model.Integration
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "通知通道不存在")
-		return
-	}
-
-	startedAt := time.Now()
-	err := alerting.SendProbe(item)
-	latency := time.Since(startedAt).Milliseconds()
+	result, err := h.svc.TestIntegration(c.Request.Context(), id)
 	if err != nil {
-		respondOK(c, integrationTestResponse{
-			OK:        false,
-			Message:   "测试发送失败: " + util.SanitizeError(err),
-			LatencyMS: latency,
-		})
+		if errors.Is(err, apperr.ErrNotFound) {
+			respondNotFound(c, "通知通道不存在")
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 
 	respondOK(c, integrationTestResponse{
-		OK:        true,
-		Message:   "测试发送成功",
-		LatencyMS: latency,
+		OK:        result.OK,
+		Message:   result.Message,
+		LatencyMS: result.LatencyMS,
 	})
 }
 
-// validateProxyURL 验证代理 URL 格式
-// 注意：代理地址允许 localhost/内网地址（代理通常部署在本机或 VPC 内），
-// 不复用通知 endpoint 的 SSRF 校验。该字段受 RBAC("integrations:write") 保护。
-func validateProxyURL(proxyURL string) error {
-	parsed, err := url.Parse(proxyURL)
-	if err != nil {
-		return fmt.Errorf("代理地址格式不合法")
+// handleIntegrationServiceError maps service-layer sentinel errors to HTTP responses.
+func handleIntegrationServiceError(c *gin.Context, err error) {
+	if errors.Is(err, apperr.ErrValidation) {
+		msg := err.Error()
+		prefix := apperr.ErrValidation.Error() + ": "
+		if after, ok := strings.CutPrefix(msg, prefix); ok {
+			msg = after
+		}
+		respondBadRequest(c, msg)
+		return
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" && scheme != "socks5" && scheme != "socks5h" {
-		return fmt.Errorf("代理地址仅支持 http/https/socks5 协议")
+	if errors.Is(err, apperr.ErrNotFound) {
+		respondNotFound(c, "通知通道不存在")
+		return
 	}
-	if parsed.Host == "" {
-		return fmt.Errorf("代理地址缺少主机信息")
+	if errors.Is(err, apperr.ErrDuplicate) {
+		respondConflict(c, "资源已存在")
+		return
 	}
-	return nil
+	respondInternalError(c, err)
 }
+
+// --- response / sanitization helpers ---
+
+func sanitizeIntegration(item *model.Integration) integrationResponse {
+	return integrationResponse{
+		ID:              item.ID,
+		Type:            item.Type,
+		Name:            item.Name,
+		Endpoint:        maskIntegrationURL(item.Endpoint),
+		HasSecret:       item.HasSecret,
+		Enabled:         item.Enabled,
+		FailThreshold:   item.FailThreshold,
+		CooldownMinutes: item.CooldownMinutes,
+		ProxyURL:        maskIntegrationURL(item.ProxyURL),
+		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
+	}
+}
+
+func maskIntegrationURL(raw string) string {
+	return integration.MaskIntegrationURL(raw)
+}
+
+func isMaskedIntegrationURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == integration.MaskedURLPlaceholder {
+		return true
+	}
+	parsed, err := url.Parse(trimmed)
+	return err == nil && parsed != nil && strings.EqualFold(parsed.Host, integration.MaskedURLHost) && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func maskedIntegrationURLMatches(masked, original string) bool {
+	if !isMaskedIntegrationURL(masked) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(masked), maskIntegrationURL(original))
+}
+
+// --- endpoint parsing helpers (Patch-specific) ---
 
 // buildEndpointFromPatch 根据 PATCH 请求中的结构化字段和现有 endpoint 重建完整 endpoint
 func buildEndpointFromPatch(channelType, existingEndpoint string, req integrationPatchRequest) (string, error) {
@@ -728,7 +534,7 @@ func buildEndpointFromPatch(channelType, existingEndpoint string, req integratio
 		if botToken == "" || chatID == "" {
 			return "", fmt.Errorf("telegram 通道需要 bot_token 和 chat_id")
 		}
-		return buildEndpointFromFields(normalizedType, botToken, chatID, "", "", "")
+		return integration.BuildEndpointFromFields(normalizedType, botToken, chatID, "", "", "")
 
 	case "dingtalk":
 		existingToken := parseDingtalkAccessToken(existingEndpoint)
@@ -739,7 +545,7 @@ func buildEndpointFromPatch(channelType, existingEndpoint string, req integratio
 		if accessToken == "" {
 			return "", fmt.Errorf("dingtalk 通道需要 access_token")
 		}
-		return buildEndpointFromFields(normalizedType, "", "", accessToken, "", "")
+		return integration.BuildEndpointFromFields(normalizedType, "", "", accessToken, "", "")
 
 	case "feishu":
 		existingHookID := parseFeishuHookID(existingEndpoint)
@@ -750,7 +556,7 @@ func buildEndpointFromPatch(channelType, existingEndpoint string, req integratio
 		if hookID == "" {
 			return "", fmt.Errorf("feishu 通道需要 hook_id")
 		}
-		return buildEndpointFromFields(normalizedType, "", "", "", hookID, "")
+		return integration.BuildEndpointFromFields(normalizedType, "", "", "", hookID, "")
 
 	case "wecom":
 		existingKey := parseWecomWebhookKey(existingEndpoint)
@@ -761,53 +567,7 @@ func buildEndpointFromPatch(channelType, existingEndpoint string, req integratio
 		if webhookKey == "" {
 			return "", fmt.Errorf("wecom 通道需要 webhook_key")
 		}
-		return buildEndpointFromFields(normalizedType, "", "", "", "", webhookKey)
-
-	default:
-		return "", nil
-	}
-}
-
-// buildEndpointFromFields 根据通道类型和结构化字段构建完整 endpoint URL
-func buildEndpointFromFields(channelType, botToken, chatID, accessToken, hookID, webhookKey string) (string, error) {
-	switch channelType {
-	case "telegram":
-		botToken = strings.TrimSpace(botToken)
-		chatID = strings.TrimSpace(chatID)
-		if botToken == "" || chatID == "" {
-			return "", fmt.Errorf("telegram 通道需要 bot_token 和 chat_id")
-		}
-		if !util.BotTokenPattern().MatchString("bot" + botToken) {
-			return "", fmt.Errorf("bot_token 格式不正确，应为 数字:字母数字串（如 123456:ABC-DEF）")
-		}
-		return fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage?chat_id=%s", botToken, url.QueryEscape(chatID)), nil
-
-	case "dingtalk":
-		accessToken = strings.TrimSpace(accessToken)
-		if accessToken == "" {
-			return "", fmt.Errorf("dingtalk 通道需要 access_token")
-		}
-		return fmt.Sprintf("https://oapi.dingtalk.com/robot/send?access_token=%s", url.QueryEscape(accessToken)), nil
-
-	case "feishu":
-		hookID = strings.TrimSpace(hookID)
-		if hookID == "" {
-			return "", fmt.Errorf("feishu 通道需要 hook_id")
-		}
-		// 校验 hookID 仅含字母数字和连字符（UUID 格式）
-		for _, c := range hookID {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-				return "", fmt.Errorf("feishu hook_id 格式不正确，仅允许字母、数字、连字符")
-			}
-		}
-		return fmt.Sprintf("https://open.feishu.cn/open-apis/bot/v2/hook/%s", url.PathEscape(hookID)), nil
-
-	case "wecom":
-		webhookKey = strings.TrimSpace(webhookKey)
-		if webhookKey == "" {
-			return "", fmt.Errorf("wecom 通道需要 webhook_key")
-		}
-		return fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=%s", url.QueryEscape(webhookKey)), nil
+		return integration.BuildEndpointFromFields(normalizedType, "", "", "", "", webhookKey)
 
 	default:
 		return "", nil
@@ -862,53 +622,4 @@ func parseWecomWebhookKey(endpoint string) string {
 		return ""
 	}
 	return parsed.Query().Get("key")
-}
-
-func sanitizeIntegration(item *model.Integration) integrationResponse {
-	return integrationResponse{
-		ID:              item.ID,
-		Type:            item.Type,
-		Name:            item.Name,
-		Endpoint:        maskIntegrationURL(item.Endpoint),
-		HasSecret:       item.HasSecret,
-		Enabled:         item.Enabled,
-		FailThreshold:   item.FailThreshold,
-		CooldownMinutes: item.CooldownMinutes,
-		ProxyURL:        maskIntegrationURL(item.ProxyURL),
-		CreatedAt:       item.CreatedAt,
-		UpdatedAt:       item.UpdatedAt,
-	}
-}
-
-func maskIntegrationURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
-		return integrationMaskedPlaceholder
-	}
-	return strings.ToLower(parsed.Scheme) + "://" + integrationMaskedHost
-}
-
-const (
-	integrationMaskedPlaceholder = "[redacted]"
-	integrationMaskedHost        = "redacted.invalid"
-)
-
-func isMaskedIntegrationURL(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == integrationMaskedPlaceholder {
-		return true
-	}
-	parsed, err := url.Parse(trimmed)
-	return err == nil && parsed != nil && strings.EqualFold(parsed.Host, integrationMaskedHost) && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
-}
-
-func maskedIntegrationURLMatches(masked, original string) bool {
-	if !isMaskedIntegrationURL(masked) {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(masked), maskIntegrationURL(original))
 }
