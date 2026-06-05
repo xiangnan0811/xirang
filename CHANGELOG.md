@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.1](https://github.com/xiangnan0811/xirang/compare/v0.44.0...v0.44.1) (2026-06-05)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** make govulncheck/npm-audit non-fatal in local parity script ([#309](https://github.com/xiangnan0811/xirang/issues/309)) ([740bf74](https://github.com/xiangnan0811/xirang/commit/740bf74e2a9a5d6241d294b316bb1949ed438518))
+
 ## [0.44.0](https://github.com/xiangnan0811/xirang/compare/v0.43.37...v0.44.0) (2026-06-05)
 
 
