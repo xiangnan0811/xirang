@@ -9,6 +9,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/integration"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/policy"
@@ -108,7 +109,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithTaskApiService(taskSvc).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
-	integrationHandler := handlers.NewIntegrationHandler(dep.DB)
+	integrationSvc := integration.NewIntegrationService(dep.DB)
+	integrationHandler := handlers.NewIntegrationHandler(dep.DB, integrationSvc)
 	alertHandler := handlers.NewAlertHandler(dep.DB)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
 	credentialAuditHandler := handlers.NewCredentialAuditHandler(dep.DB)

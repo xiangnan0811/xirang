@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"xirang/backend/internal/integration"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -19,28 +20,28 @@ import (
 
 func TestValidateIntegrationEndpointRejectsInvalidScheme(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
-	if err := validateIntegrationEndpoint("webhook", "ftp://example.com/hook"); err == nil {
+	if err := integration.ValidateIntegrationEndpoint("webhook", "ftp://example.com/hook"); err == nil {
 		t.Fatalf("期望非 http/https endpoint 返回错误")
 	}
 }
 
 func TestValidateIntegrationEndpointBlocksPrivateHostWhenEnabled(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "true")
-	if err := validateIntegrationEndpoint("webhook", "http://127.0.0.1/hook"); err == nil {
+	if err := integration.ValidateIntegrationEndpoint("webhook", "http://127.0.0.1/hook"); err == nil {
 		t.Fatalf("期望开启私网阻断时拒绝回环地址")
 	}
 }
 
 func TestValidateIntegrationEndpointAllowsPrivateHostWhenDisabled(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
-	if err := validateIntegrationEndpoint("webhook", "http://127.0.0.1/hook"); err != nil {
+	if err := integration.ValidateIntegrationEndpoint("webhook", "http://127.0.0.1/hook"); err != nil {
 		t.Fatalf("期望关闭私网阻断时允许回环地址，实际错误: %v", err)
 	}
 }
 
 func TestValidateIntegrationEndpointTelegramRequiresBotTokenPath(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
-	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/sendMessage?chat_id=1")
+	err := integration.ValidateIntegrationEndpoint("telegram", "https://api.telegram.org/sendMessage?chat_id=1")
 	if err == nil {
 		t.Fatalf("期望缺少 /bot<token> 路径时返回错误")
 	}
@@ -51,7 +52,7 @@ func TestValidateIntegrationEndpointTelegramRequiresBotTokenPath(t *testing.T) {
 
 func TestValidateIntegrationEndpointTelegramRequiresChatID(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
-	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage")
+	err := integration.ValidateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage")
 	if err == nil {
 		t.Fatalf("期望缺少 chat_id 时返回错误")
 	}
@@ -62,7 +63,7 @@ func TestValidateIntegrationEndpointTelegramRequiresChatID(t *testing.T) {
 
 func TestValidateIntegrationEndpointTelegramAcceptsValidEndpoint(t *testing.T) {
 	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
-	err := validateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage?chat_id=-1001")
+	err := integration.ValidateIntegrationEndpoint("telegram", "https://api.telegram.org/bot123456:abc/sendMessage?chat_id=-1001")
 	if err != nil {
 		t.Fatalf("期望合法 Telegram endpoint 校验通过，实际错误: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestIntegrationHandlerTestSuccess(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.POST("/integrations/:id/test", handler.Test)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/integrations/%d/test", item.ID), nil)
@@ -134,7 +135,7 @@ func TestIntegrationHandlerTestNotFound(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.POST("/integrations/:id/test", handler.Test)
 
 	req := httptest.NewRequest(http.MethodPost, "/integrations/999/test", nil)
@@ -166,7 +167,7 @@ func TestIntegrationHandlerListSanitizesEndpointAndProxyURL(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.GET("/integrations", handler.List)
 
 	req := httptest.NewRequest(http.MethodGet, "/integrations", nil)
@@ -211,7 +212,7 @@ func TestIntegrationHandlerListSanitizesNonURLValues(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.GET("/integrations", handler.List)
 
 	req := httptest.NewRequest(http.MethodGet, "/integrations", nil)
@@ -248,7 +249,7 @@ func TestIntegrationHandlerGetSanitizesEndpointAndProxyURL(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.GET("/integrations/:id", handler.Get)
 
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/integrations/%d", item.ID), nil)
@@ -276,7 +277,7 @@ func TestIntegrationHandlerCreateSanitizesResponse(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.POST("/integrations", handler.Create)
 
 	body := `{"type":"webhook","name":"created-webhook","endpoint":"https://hooks.example.test/services/FAKE_CREATED_TOKEN?token=FAKE_CREATED_QUERY","secret":"FAKE_CREATED_SECRET_FOR_TEST_ONLY","proxy_url":"socks5://proxy-user:FAKE_PROXY_SECRET@proxy.example.test:1080/path?token=FAKE_PROXY_QUERY","skip_endpoint_hint":true}`
@@ -309,7 +310,7 @@ func TestIntegrationHandlerUpdatePreservesStoredValuesWhenResponseMasksRoundTrip
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.PUT("/integrations/:id", handler.Update)
 
 	body := `{"type":"webhook","name":"updated-webhook","endpoint":"https://redacted.invalid","enabled":true,"fail_threshold":3,"cooldown_minutes":9,"proxy_url":"http://redacted.invalid","skip_endpoint_hint":true}`
@@ -354,7 +355,7 @@ func TestIntegrationHandlerPatchSanitizesResponseAndPreservesMaskedProxyURL(t *t
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.PATCH("/integrations/:id", handler.Patch)
 
 	body := `{"name":"patched-webhook","endpoint":"https://redacted.invalid","fail_threshold":4,"cooldown_minutes":11,"proxy_url":"socks5://redacted.invalid","skip_endpoint_hint":true}`
@@ -401,7 +402,7 @@ func TestIntegrationHandlerTestFailureSanitizesSenderError(t *testing.T) {
 	}
 
 	r := gin.New()
-	handler := NewIntegrationHandler(db)
+	handler := NewIntegrationHandler(db, integration.NewIntegrationService(db))
 	r.POST("/integrations/:id/test", handler.Test)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/integrations/%d/test", item.ID), nil)
