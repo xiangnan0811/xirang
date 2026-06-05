@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.44.0](https://github.com/xiangnan0811/xirang/compare/v0.43.37...v0.44.0) (2026-06-05)
+
+
+### ✨ Features
+
+* **login:** 添加登录锁定倒计时显示 ([#289](https://github.com/xiangnan0811/xirang/issues/289)) ([44b4e54](https://github.com/xiangnan0811/xirang/commit/44b4e5489315f916fa00b411607f587e0c73b3b6))
+* **service:** 扩展 integration service + A11y 微调 ([#305](https://github.com/xiangnan0811/xirang/issues/305)) ([7790d09](https://github.com/xiangnan0811/xirang/commit/7790d09f3714cf93335acef548d5eaa7898041fa))
+* **test:** 搭建 MSW (Mock Service Worker) 基础设施 ([#306](https://github.com/xiangnan0811/xirang/issues/306)) ([d2d432d](https://github.com/xiangnan0811/xirang/commit/d2d432d1617e31127bcce996b55db6954a8919a7))
+
+
+### 🐛 Bug Fixes
+
+* **config:** 使用标准 Response 信封替换 gin.H 非标准格式 ([#287](https://github.com/xiangnan0811/xirang/issues/287)) ([139f44c](https://github.com/xiangnan0811/xirang/commit/139f44c474536eaf66bcb5bc666f1dd345601758))
+
 ## [0.43.37](https://github.com/xiangnan0811/xirang/compare/v0.43.36...v0.43.37) (2026-06-04)
 
 
