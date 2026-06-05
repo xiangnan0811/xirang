@@ -68,8 +68,8 @@ describe("LoginPage a11y smoke", () => {
     const { container } = render(
       <MemoryRouter
         initialEntries={["/login"]}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
+
+>
         <LoginPage />
       </MemoryRouter>
     );
