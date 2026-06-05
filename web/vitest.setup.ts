@@ -88,6 +88,13 @@ if (typeof globalThis !== "undefined" && !("ResizeObserver" in globalThis)) {
   });
 }
 
+// MSW (Mock Service Worker) server is available for opt-in use in tests via:
+//   import { server } from "@/test/mocks/server";
+//   beforeAll(() => server.listen());
+//   afterEach(() => server.resetHandlers());
+//   afterAll(() => server.close());
+// Not enabled globally to avoid conflicts with existing fetch-mock tests.
+
 if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,

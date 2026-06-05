@@ -22,6 +22,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
   const [drawerOpen, setDrawerOpen] = useState(false);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  const focusableNodesRef = useRef<HTMLElement[]>([]);
   const navItems = useMemo(() => getVisibleNavItems(role), [role]);
   const drawerId = "mobile-quick-menu";
   const drawerTitleId = "mobile-quick-menu-title";
@@ -32,26 +33,28 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
   // Items shown in the "More" drawer (everything not in primary tabs)
   const drawerItems = useMemo(() => navItems.filter((item) => item.mobileTab !== true), [navItems]);
 
+  const collectFocusableNodes = () => {
+    if (!drawerRef.current) {
+      return [] as HTMLElement[];
+    }
+    const candidates = drawerRef.current.querySelectorAll<HTMLElement>(
+      "a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])"
+    );
+    return Array.from(candidates).filter((node) => !node.hasAttribute("disabled"));
+  };
+
   useEffect(() => {
     if (!drawerOpen) {
+      focusableNodesRef.current = [];
       return;
     }
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
-    const collectFocusableNodes = () => {
-      if (!drawerRef.current) {
-        return [] as HTMLElement[];
-      }
-      const candidates = drawerRef.current.querySelectorAll<HTMLElement>(
-        "a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])"
-      );
-      return Array.from(candidates).filter((node) => !node.hasAttribute("disabled"));
-    };
-
-    const initialFocusableNodes = collectFocusableNodes();
-    initialFocusableNodes[0]?.focus();
+    // Cache focusable nodes when drawer opens
+    focusableNodesRef.current = collectFocusableNodes();
+    focusableNodesRef.current[0]?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -64,7 +67,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
         return;
       }
 
-      const focusableNodes = collectFocusableNodes();
+      const focusableNodes = focusableNodesRef.current;
       if (focusableNodes.length === 0) {
         return;
       }
@@ -93,6 +96,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      focusableNodesRef.current = [];
       if (buttonElement?.isConnected) buttonElement.focus();
     };
   }, [drawerOpen]);
