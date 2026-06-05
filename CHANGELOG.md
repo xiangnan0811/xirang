@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.2](https://github.com/xiangnan0811/xirang/compare/v0.44.1...v0.44.2) (2026-06-05)
+
+
+### 🐛 Bug Fixes
+
+* **build:** upgrade Go 1.26.3→1.26.4 to fix CVE-2026-42504 ([#313](https://github.com/xiangnan0811/xirang/issues/313)) ([0d3c488](https://github.com/xiangnan0811/xirang/commit/0d3c488156d8ffa99960fa6f5239f13d491b2395))
+
+
+### 📚 Documentation
+
+* sync documentation with actual codebase state ([#311](https://github.com/xiangnan0811/xirang/issues/311)) ([64453a6](https://github.com/xiangnan0811/xirang/commit/64453a6ea83fd0014e5c69a0bbeb545723ce9515))
+
 ## [0.44.1](https://github.com/xiangnan0811/xirang/compare/v0.44.0...v0.44.1) (2026-06-05)
 
 
