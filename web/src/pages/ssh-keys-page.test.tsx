@@ -172,7 +172,7 @@ describe("SSHKeysPage", () => {
 
   it("mount 时同时刷新 SSH Keys 和 Nodes 数据", () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <SSHKeysPage />
       </MemoryRouter>
     );
@@ -183,7 +183,7 @@ describe("SSHKeysPage", () => {
 
   it("渲染密钥列表并正确显示节点使用数", () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <SSHKeysPage />
       </MemoryRouter>
     );
@@ -197,7 +197,7 @@ describe("SSHKeysPage", () => {
     createContext({ sshKeys: [] as unknown as Record<string, unknown>[] });
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <SSHKeysPage />
       </MemoryRouter>
     );
