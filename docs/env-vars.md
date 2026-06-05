@@ -33,7 +33,7 @@
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `JWT_SECRET` | string | 开发环境 `xirang-dev-secret` | 生产必填 | JWT 签名密钥，生产环境必须为强随机字符串（≥16 字符） |
+| `JWT_SECRET` | string | 开发环境 `xirang-dev-secret` | 生产必填 | JWT 签名密钥，生产环境必须为强随机字符串（≥32 字符） |
 | `JWT_TTL` | duration | `24h` | 否 | JWT 有效期 |
 | `LOGIN_RATE_LIMIT` | int | `10` | 否 | 登录接口速率限制（次/窗口） |
 | `LOGIN_RATE_WINDOW` | duration | `1m` | 否 | 速率限制时间窗口 |
@@ -42,7 +42,7 @@
 | `LOGIN_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用登录验证码（settings 键 `login.captcha_enabled`，可通过设置 API 实时调整） |
 | `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
 | `ADMIN_INITIAL_PASSWORD` | string | — | 首次启动 | 初始 admin 账号密码，仅 bootstrap 阶段使用 |
-| `DATA_ENCRYPTION_KEY` | string | 内置开发密钥 | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 SHA-256 派生） |
+| `DATA_ENCRYPTION_KEY` | string | 开发环境自动生成随机密钥（重启后失效） | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 argon2id 派生） |
 | `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 数据；确认轮替完成后清理 |
 
 **读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go` 和 `backend/internal/config/config.go`；`DATA_ENCRYPTION_LEGACY_KEY` → `backend/internal/secure/crypto.go`。
@@ -129,7 +129,7 @@
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `ALERT_DEDUP_WINDOW` | duration | `10m` | 否 | 告警去重窗口（同节点+同任务+同错误码），`0` 关闭去重 |
-| `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | bool | `true` | 否 | 阻断 webhook/slack/telegram 指向私网地址（`.env.example` 开发值 `false`，生产建议 `true`） |
+| `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | bool | `true` | 否 | 阻断 webhook/slack/telegram 指向私网地址（`.env.example` 开发值 `true`，生产建议 `true`） |
 | `BACKUP_STALE_THRESHOLD_HOURS` | int | `48` | 否 | 备份健康面板判定节点备份过期的小时阈值 |
 
 **读取位置**：`ALERT_DEDUP_WINDOW` → settings 服务 / `backend/internal/alerting/dispatcher.go`；`INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` → `backend/internal/api/handlers/integration_handler.go`；`BACKUP_STALE_THRESHOLD_HOURS` → `backend/internal/api/handlers/overview_backup_health_handler.go`。
@@ -182,7 +182,7 @@ All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761
 
 | 变量 | 代码默认值 | `.env.example` | `.env.production.example` |
 |------|-----------|----------------|--------------------------|
-| `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | `true` | `false` | `true` |
+| `INTEGRATION_BLOCK_PRIVATE_ENDPOINTS` | `true` | `true` | `true` |
 
 > 注意：`SSH_STRICT_HOST_KEY_CHECKING` 和 `SSH_AUTO_ACCEPT_NEW_HOSTS` 已在 v0.44+ 统一为安全默认值（code、`.env.example`、`.env.production.example` 均为 `true` / `false`），不再纳入不一致清单。生产环境启动时若 `SSH_STRICT_HOST_KEY_CHECKING=false` 会记录 warn 日志。
 

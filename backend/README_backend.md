@@ -347,33 +347,16 @@ go run ./cmd/server
 
 关键必填项（生产环境）：
 - `ADMIN_INITIAL_PASSWORD`：初始 admin 密码
-- `JWT_SECRET`：JWT 签名密钥（≥16 字符）
+- `JWT_SECRET`：JWT 签名密钥（≥32 字符）
 - `DATA_ENCRYPTION_KEY`：敏感字段加密密钥
 
 ## 数据库
 
 支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000060_credential_access_grants`。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, NodeMetricSample, NodeOwner, AuditLog, CredentialAuditEvent, CredentialAccessGrant, ReportConfig, Report, LoginFailure, SystemSetting, Silence, SLODefinition
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（43 个模型）
 
 敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 不参与 JSON 序列化以避免泄露执行器密钥。
-
-新增接口（P5b 智能告警）：
-- `GET    /api/v1/silences` — 列出静默规则（?active=true 仅返回生效中，alerts:read）
-- `GET    /api/v1/silences/:id` — 获取单条静默规则（alerts:read）
-- `POST   /api/v1/silences` — 创建静默规则（admin-only）
-- `PATCH  /api/v1/silences/:id` — 更新静默规则（admin-only）
-- `DELETE /api/v1/silences/:id` — 软删除静默规则，将 ends_at 设为当前时间（admin-only）
-- `POST   /api/v1/alert-deliveries/:id/retry` — 手动重试指定投递记录（admin-only，绕过 next_retry_at 调度；不存在返回 404）
-
-新增接口（P5d-1 SLO 引擎）：
-- `GET    /api/v1/slos` — 列出 SLO 定义（alerts:read）
-- `GET    /api/v1/slos/compliance-summary` — 所有已启用 SLO 合规汇总（alerts:read）
-- `GET    /api/v1/slos/:id` — 获取单条 SLO 定义（alerts:read）
-- `GET    /api/v1/slos/:id/compliance` — 单条 SLO 合规状态（alerts:read）
-- `POST   /api/v1/slos` — 创建 SLO 定义（admin）
-- `PATCH  /api/v1/slos/:id` — 更新 SLO 定义（admin）
-- `DELETE /api/v1/slos/:id` — 硬删除 SLO 定义（admin）
 
 ### 升级策略
 
