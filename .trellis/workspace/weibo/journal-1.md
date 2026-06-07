@@ -38,3 +38,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 提交 Trellis 配置更新并发布测试镜像
+
+**Date**: 2026-06-08
+**Task**: 提交 Trellis 配置更新并发布测试镜像
+**Branch**: `chore/cleanup-omc-superpowers`
+
+### Summary
+
+提交 Trellis 0.6.0-beta.22 配置更新，创建 PR #315，确认 CI 通过，并通过 Publish Docker Images 发布可供真实测试环境拉取的 docker.io/linnea7171/xirang:0.44.315 与 v0.44.315 测试镜像。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `30e679a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
