@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/prd.md","reason":"Acceptance criteria and verification summary for final cleanup validation."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/design.md","reason":"Cleanup scope and preservation boundaries to verify against."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/implement.md","reason":"Validation commands and risky-file checklist used during quality verification."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/research/superpowers-injection-followup.md","reason":"Evidence for Superpowers hook injection cleanup verification."}
