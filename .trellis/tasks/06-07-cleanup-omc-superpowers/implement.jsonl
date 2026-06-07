@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/research/omc-superpowers-inventory.md","reason":"Inventory of OMC/Superpowers user-level and project-level cleanup targets used to implement the removal plan."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/research/superpowers-injection-followup.md","reason":"Follow-up evidence identifying the cached Superpowers SessionStart hook as an injection source."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/design.md","reason":"Approved cleanup boundaries, preservation rules, compatibility notes, and rollback shape."}
+{"file":".trellis/tasks/06-07-cleanup-omc-superpowers/implement.md","reason":"Approved ordered execution plan and validation checklist."}
