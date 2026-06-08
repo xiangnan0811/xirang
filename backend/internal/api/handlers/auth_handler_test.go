@@ -22,13 +22,13 @@ import (
 // ---------- fixture ----------
 
 type authHandlerTestFixture struct {
-	db          *gorm.DB
-	service     *auth.Service
-	jwtManager  *auth.JWTManager
-	router      *gin.Engine
-	adminUser   model.User
-	adminToken  string
-	adminPass   string
+	db         *gorm.DB
+	service    *auth.Service
+	jwtManager *auth.JWTManager
+	router     *gin.Engine
+	adminUser  model.User
+	adminToken string
+	adminPass  string
 }
 
 func openAuthHandlerTestDB(t *testing.T) *gorm.DB {
@@ -119,8 +119,6 @@ func jsonRequest(t *testing.T, router *gin.Engine, method, path, token, body str
 	return resp
 }
 
-
-
 // ---------- Login ----------
 
 func TestLoginSuccess(t *testing.T) {
@@ -137,10 +135,10 @@ func TestLoginSuccess(t *testing.T) {
 		Data struct {
 			Token string `json:"token"`
 			User  struct {
-				ID           uint   `json:"id"`
-				Username     string `json:"username"`
-				Role         string `json:"role"`
-				TOTPEnabled  bool   `json:"totp_enabled"`
+				ID          uint   `json:"id"`
+				Username    string `json:"username"`
+				Role        string `json:"role"`
+				TOTPEnabled bool   `json:"totp_enabled"`
 			} `json:"user"`
 		} `json:"data"`
 	}
@@ -269,6 +267,39 @@ func TestSetupTOTPSuccess(t *testing.T) {
 	}
 	if user.TOTPEnabled {
 		t.Fatalf("setup 后 TOTPEnabled 仍应为 false")
+	}
+}
+
+func TestSetupTOTPRejectsAlreadyEnabledUser(t *testing.T) {
+	fx := setupAuthHandlerFixture(t)
+	_ = jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+
+	var user model.User
+	if err := fx.db.First(&user, fx.adminUser.ID).Error; err != nil {
+		t.Fatalf("重新加载用户失败: %v", err)
+	}
+	code, err := totp.GenerateCode(user.TOTPSecret, time.Now())
+	if err != nil {
+		t.Fatalf("生成 TOTP 验证码失败: %v", err)
+	}
+	verifyResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/verify", fx.adminToken, fmt.Sprintf(`{"code":%q}`, code))
+	if verifyResp.Code != http.StatusOK {
+		t.Fatalf("启用 TOTP 失败: %d %s", verifyResp.Code, verifyResp.Body.String())
+	}
+	if err := fx.db.First(&user, fx.adminUser.ID).Error; err != nil {
+		t.Fatalf("重新加载启用后用户失败: %v", err)
+	}
+	activeSecret := user.TOTPSecret
+
+	resp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("已启用用户再次 setup 应返回 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if err := fx.db.First(&user, fx.adminUser.ID).Error; err != nil {
+		t.Fatalf("重新加载拒绝后用户失败: %v", err)
+	}
+	if user.TOTPSecret != activeSecret {
+		t.Fatalf("拒绝重复 setup 后不应轮换 active secret")
 	}
 }
 

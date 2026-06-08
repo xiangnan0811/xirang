@@ -1,11 +1,15 @@
 package bootstrap
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -97,4 +101,74 @@ func TestAutoMigrateIncludesTaskTrafficSample(t *testing.T) {
 	if !db.Migrator().HasTable(&model.TaskTrafficSample{}) {
 		t.Fatalf("期望 AutoMigrate 创建 task_traffic_samples 表")
 	}
+}
+
+func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", key)
+	secure.ResetForTesting()
+
+	db := openBootstrapTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Node{},
+		&model.SSHKey{},
+		&model.Integration{},
+		&model.Task{},
+		&model.Policy{},
+		&model.AppCredential{},
+		&model.User{},
+		&model.SystemSetting{},
+	); err != nil {
+		t.Fatalf("初始化加密迁移测试表失败: %v", err)
+	}
+	legacyValue := encryptV1ForTest(t, key, "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY")
+	if err := db.Create(&model.SystemSetting{Key: "smtp.password", Value: legacyValue}).Error; err != nil {
+		t.Fatalf("写入 v1 设置失败: %v", err)
+	}
+
+	if got := CountV1EncryptedData(db); got != 1 {
+		t.Fatalf("迁移前应统计到 1 条 v1 设置，实际 %d", got)
+	}
+	if err := MigrateEncryptionV1ToV2(db); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	var row model.SystemSetting
+	if err := db.First(&row, "key = ?", "smtp.password").Error; err != nil {
+		t.Fatalf("读取迁移后设置失败: %v", err)
+	}
+	if !strings.HasPrefix(row.Value, "enc:v2:") {
+		t.Fatalf("期望迁移为 enc:v2，实际 %q", row.Value)
+	}
+	plain, err := secure.DecryptString(row.Value)
+	if err != nil {
+		t.Fatalf("解密迁移后设置失败: %v", err)
+	}
+	if plain != "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY" {
+		t.Fatalf("迁移后明文不匹配: %q", plain)
+	}
+	if got := CountV1EncryptedData(db); got != 0 {
+		t.Fatalf("迁移后不应残留 v1 设置，实际 %d", got)
+	}
+}
+
+func encryptV1ForTest(t *testing.T, rawKey string, value string) string {
+	t.Helper()
+	key, err := base64.StdEncoding.DecodeString(rawKey)
+	if err != nil {
+		t.Fatalf("解析测试加密密钥失败: %v", err)
+	}
+	block, err := aes.NewCipher(key[:32])
+	if err != nil {
+		t.Fatalf("创建测试 cipher 失败: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("创建测试 gcm 失败: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	ciphertext := gcm.Seal(nil, nonce, []byte(value), nil)
+	packed := append(nonce, ciphertext...)
+	return "enc:v1:" + base64.StdEncoding.EncodeToString(packed)
 }

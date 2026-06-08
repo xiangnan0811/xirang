@@ -113,8 +113,19 @@ func (sm *StateMachine) NextAfterFailureConfigurable(
 	if currentStatus != StatusRunning && currentStatus != StatusRetrying {
 		return StatusFailed, retryCount, time.Time{}, false
 	}
+	if maxRetries <= 0 {
+		return StatusFailed, retryCount, time.Time{}, false
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
 	if retryCount >= maxRetries {
 		return StatusFailed, retryCount, time.Time{}, false
+	}
+	if baseSeconds <= 0 {
+		baseSeconds = 1
+	} else if baseSeconds > 3600 {
+		baseSeconds = 3600
 	}
 	base := time.Duration(baseSeconds) * time.Second
 	delay := base * time.Duration(1<<uint(retryCount))

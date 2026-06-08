@@ -75,10 +75,11 @@ func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 	}
 	total += n
 
-	// Integration: Endpoint, Secret
+	// Integration: Endpoint, Secret, ProxyURL
 	n, err = reEncryptColumns(noHooks, "integrations", map[string]string{
-		"endpoint": "endpoint",
-		"secret":   "secret",
+		"endpoint":  "endpoint",
+		"secret":    "secret",
+		"proxy_url": "proxy_url",
 	})
 	if err != nil {
 		return fmt.Errorf("integrations 迁移失败: %w", err)
@@ -91,6 +92,32 @@ func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 	})
 	if err != nil {
 		return fmt.Errorf("tasks 迁移失败: %w", err)
+	}
+	total += n
+
+	// Policy: PreHook, PostHook
+	n, err = reEncryptColumns(noHooks, "policies", map[string]string{
+		"pre_hook":  "pre_hook",
+		"post_hook": "post_hook",
+	})
+	if err != nil {
+		return fmt.Errorf("policies 迁移失败: %w", err)
+	}
+	total += n
+
+	// AppCredential: Config
+	n, err = reEncryptColumns(noHooks, "app_credentials", map[string]string{
+		"config": "config",
+	})
+	if err != nil {
+		return fmt.Errorf("app_credentials 迁移失败: %w", err)
+	}
+	total += n
+
+	// SystemSetting: sensitive runtime settings persisted through settings.Service.
+	n, err = reEncryptSystemSettings(noHooks)
+	if err != nil {
+		return fmt.Errorf("system_settings 迁移失败: %w", err)
 	}
 	total += n
 
@@ -108,6 +135,11 @@ func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 		log.Printf("info: 加密迁移完成，共更新 %d 个字段（v1 → v2）", total)
 	}
 	return nil
+}
+
+var encryptedSystemSettingKeys = []string{
+	"metrics.remote_bearer_token",
+	"smtp.password",
 }
 
 // reEncryptColumns 对指定表的指定列进行 v1→v2 重加密，返回更新字段数。
@@ -167,6 +199,36 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 	return updated, nil
 }
 
+func reEncryptSystemSettings(db *gorm.DB) (int, error) {
+	type settingRow struct {
+		Key   string
+		Value string
+	}
+	var rows []settingRow
+	if err := db.Table("system_settings").Select("key", "value").Where("key IN ?", encryptedSystemSettingKeys).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, row := range rows {
+		if !secure.IsV1Encrypted(row.Value) {
+			continue
+		}
+		newVal, changed, err := secure.ReEncryptV1Value(row.Value)
+		if err != nil {
+			return updated, fmt.Errorf("system_settings key=%s 重加密失败: %w", row.Key, err)
+		}
+		if !changed {
+			continue
+		}
+		if err := db.Table("system_settings").Where("key = ?", row.Key).Update("value", newVal).Error; err != nil {
+			return updated, fmt.Errorf("system_settings key=%s 更新失败: %w", row.Key, err)
+		}
+		updated++
+	}
+	return updated, nil
+}
+
 // HasV1EncryptedData 快速检查是否存在 v1 加密数据。
 func HasV1EncryptedData(db *gorm.DB) bool {
 	return CountV1EncryptedData(db) > 0
@@ -183,8 +245,10 @@ func CountV1EncryptedData(db *gorm.DB) int64 {
 	}{
 		{"nodes", []string{"password", "private_key"}},
 		{"ssh_keys", []string{"private_key"}},
-		{"integrations", []string{"endpoint", "secret"}},
+		{"integrations", []string{"endpoint", "secret", "proxy_url"}},
 		{"tasks", []string{"executor_config"}},
+		{"policies", []string{"pre_hook", "post_hook"}},
+		{"app_credentials", []string{"config"}},
 		{"users", []string{"totp_secret", "recovery_codes"}},
 	}
 
@@ -197,6 +261,10 @@ func CountV1EncryptedData(db *gorm.DB) int64 {
 			}
 		}
 	}
+
+	var sensitiveSettingsCount int64
+	if err := db.Table("system_settings").Where("key IN ? AND value LIKE ?", encryptedSystemSettingKeys, "enc:v1:%").Count(&sensitiveSettingsCount).Error; err == nil {
+		total += sensitiveSettingsCount
+	}
 	return total
 }
-

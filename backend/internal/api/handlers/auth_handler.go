@@ -285,6 +285,17 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 		respondInternalError(c, fmt.Errorf("db 未注入"))
 		return
 	}
+	userID := c.GetUint(middleware.CtxUserID)
+	var user model.User
+	if err := h.db.Select("id", "totp_enabled").First(&user, userID).Error; err != nil {
+		respondNotFound(c, "用户不存在")
+		return
+	}
+	if user.TOTPEnabled {
+		respondBadRequest(c, "两步验证已启用，如需轮换请先完成二次验证并禁用后重新启用")
+		return
+	}
+
 	username := c.GetString(middleware.CtxUsername)
 	key, err := auth.GenerateTOTPSecret("息壤 XiRang", username)
 	if err != nil {
@@ -293,7 +304,6 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 	}
 
 	// 将 pending secret 存入 DB（TOTPEnabled 保持 false，直到 verify 成功）
-	userID := c.GetUint(middleware.CtxUserID)
 	if err := h.db.Model(&model.User{}).Where("id = ?", userID).
 		Update("totp_secret", key.Secret()).Error; err != nil {
 		respondInternalError(c, fmt.Errorf("保存密钥失败: %w", err))

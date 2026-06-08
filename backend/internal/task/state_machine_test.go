@@ -191,6 +191,29 @@ func TestNextAfterFailureConfigurable(t *testing.T) {
 			wantShouldRetry: false,
 		},
 
+		{
+			name:            "negative maxRetries → 直接失败",
+			currentStatus:   StatusRunning,
+			retryCount:      0,
+			maxRetries:      -1,
+			baseSeconds:     30,
+			wantStatus:      StatusFailed,
+			wantRetryCount:  0,
+			wantShouldRetry: false,
+		},
+		{
+			name:            "negative retryCount is normalized before retry",
+			currentStatus:   StatusRunning,
+			retryCount:      -3,
+			maxRetries:      3,
+			baseSeconds:     0,
+			wantStatus:      StatusRetrying,
+			wantRetryCount:  1,
+			wantShouldRetry: true,
+			minDelay:        time.Second,
+			maxDelay:        time.Second + time.Second/4,
+		},
+
 		// 6. 大 baseSeconds: base=600s, retryCount=0 → delay in [600s, 750s)
 		{
 			name:            "large base=600s retryCount=0 → delay in [600s, 750s)",

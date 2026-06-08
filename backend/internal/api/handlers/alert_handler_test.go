@@ -199,6 +199,38 @@ func TestAlertBulkResolveRejectsUnauthorizedNode(t *testing.T) {
 	}
 }
 
+func TestAlertEscalationEventsRejectsUnauthorizedAlert(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertEscalationEvent{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	alert := model.Alert{NodeID: 9, NodeName: "node-denied", Severity: "critical", Status: "open", ErrorCode: "XR-DENY", Message: "denied", TriggeredAt: time.Now()}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+	if err := db.Create(&model.AlertEscalationEvent{AlertID: alert.ID, LevelIndex: 0, SeverityBefore: "critical", SeverityAfter: "critical", FiredAt: time.Now()}).Error; err != nil {
+		t.Fatalf("创建升级事件失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler := NewAlertHandler(db)
+	r.GET("/alerts/:id/escalation-events", handler.EscalationEvents)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/alerts/%d/escalation-events", alert.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("期望状态码 403，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestAlertDeliveries(t *testing.T) {
 	db := openAlertHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}); err != nil {

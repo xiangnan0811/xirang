@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -60,6 +61,7 @@ type SettingDef struct {
 	Max             string      `json:"max,omitempty"`
 	MinDuration     string      `json:"min_duration,omitempty"` // 安全下限（duration 类型）
 	RequiresRestart bool        `json:"requires_restart"`
+	Sensitive       bool        `json:"sensitive"`
 }
 
 // ResolvedSetting 已解析的设置值（含来源信息）
@@ -155,11 +157,11 @@ var registry = []SettingDef{
 	{Key: "anomaly.events_retention_days", EnvVar: "ANOMALY_EVENTS_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "anomaly", Description: "异常事件保留天数", Min: "7", Max: "365"},
 	{Key: "alerts.silence_retention_days", EnvVar: "SILENCE_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "retention", Description: "已过期静默规则的审计保留天数（超出后删除）", Min: "1", Max: "365"},
 	{Key: "metrics.remote_url", EnvVar: "METRICS_REMOTE_URL", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 端点 URL（如 https://mimir.example.com/api/v1/push）；留空禁用远程推送", RequiresRestart: true},
-	{Key: "metrics.remote_bearer_token", EnvVar: "METRICS_REMOTE_BEARER_TOKEN", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 鉴权 Bearer token；生产环境建议使用环境变量配置以避免明文存库", RequiresRestart: true},
+	{Key: "metrics.remote_bearer_token", EnvVar: "METRICS_REMOTE_BEARER_TOKEN", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 鉴权 Bearer token；生产环境建议使用环境变量配置以避免明文存库", RequiresRestart: true, Sensitive: true},
 	{Key: "smtp.host", EnvVar: "SMTP_HOST", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 服务器地址（启用邮件告警时必填）"},
 	{Key: "smtp.port", EnvVar: "SMTP_PORT", CodeDefault: "587", Type: TypeString, Category: "alerting", Description: "SMTP 端口（默认 587 STARTTLS；465 走隐式 TLS）"},
 	{Key: "smtp.user", EnvVar: "SMTP_USER", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 用户名"},
-	{Key: "smtp.password", EnvVar: "SMTP_PASS", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 密码（生产环境建议通过环境变量注入而非入库）"},
+	{Key: "smtp.password", EnvVar: "SMTP_PASS", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 密码（生产环境建议通过环境变量注入而非入库）", Sensitive: true},
 	{Key: "smtp.from", EnvVar: "SMTP_FROM", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "发件人地址；为空时回退到 smtp.user"},
 	{Key: "smtp.require_tls", EnvVar: "SMTP_REQUIRE_TLS", CodeDefault: "true", Type: TypeBool, Category: "alerting", Description: "强制 TLS 连接（465 隐式 / 587 STARTTLS）；false 回退明文"},
 }
@@ -213,7 +215,7 @@ func (s *Service) GetAll() (map[string]ResolvedSetting, error) {
 	for _, def := range registry {
 		if dbVal, ok := dbMap[def.Key]; ok {
 			t := dbVal.UpdatedAt
-			result[def.Key] = ResolvedSetting{Value: dbVal.Value, Source: "db", UpdatedAt: &t}
+			result[def.Key] = ResolvedSetting{Value: decryptSettingValue(def.Key, dbVal.Value), Source: "db", UpdatedAt: &t}
 			continue
 		}
 		if envVal := strings.TrimSpace(os.Getenv(def.EnvVar)); envVal != "" {
@@ -236,7 +238,23 @@ func (s *Service) GetEffective(key string) string {
 	s.mu.RUnlock()
 
 	// 缓存未命中，查 DB
-	value := s.resolveValue(key)
+	value, err := s.resolveValue(key)
+	if err != nil {
+		// DB 短暂不可用时保留旧缓存（即使已过期），避免错误回退到 env/default 后污染缓存。
+		s.mu.RLock()
+		if cv, ok := s.cache[key]; ok {
+			s.mu.RUnlock()
+			return cv.value
+		}
+		s.mu.RUnlock()
+		if def, ok := registryMap[key]; ok {
+			if envVal := strings.TrimSpace(os.Getenv(def.EnvVar)); envVal != "" {
+				return envVal
+			}
+			return def.CodeDefault
+		}
+		return ""
+	}
 
 	// 写入缓存
 	s.mu.Lock()
@@ -247,21 +265,23 @@ func (s *Service) GetEffective(key string) string {
 }
 
 // resolveValue 按 DB → env → default 优先级解析值（无缓存）
-func (s *Service) resolveValue(key string) string {
+func (s *Service) resolveValue(key string) (string, error) {
 	// 使用 Limit(1).Find 代替 First，避免 GORM 对空结果打 "record not found" 错误日志
 	var dbSettings []model.SystemSetting
-	s.db.Where("key = ?", key).Limit(1).Find(&dbSettings)
+	if err := s.db.Where("key = ?", key).Limit(1).Find(&dbSettings).Error; err != nil {
+		return "", err
+	}
 	if len(dbSettings) > 0 {
-		return dbSettings[0].Value
+		return decryptSettingValue(key, dbSettings[0].Value), nil
 	}
 
 	if def, ok := registryMap[key]; ok {
 		if envVal := strings.TrimSpace(os.Getenv(def.EnvVar)); envVal != "" {
-			return envVal
+			return envVal, nil
 		}
-		return def.CodeDefault
+		return def.CodeDefault, nil
 	}
-	return ""
+	return "", nil
 }
 
 // Validate 校验设置值（不写入），用于批量更新前的预检
@@ -301,15 +321,39 @@ func (s *Service) UpdateWithTx(tx *gorm.DB, key, value string) error {
 }
 
 func (s *Service) upsert(db *gorm.DB, key, value string) error {
+	storedValue := value
+	if isSensitiveSetting(key) {
+		encrypted, err := secure.EncryptIfNeeded(value)
+		if err != nil {
+			return err
+		}
+		storedValue = encrypted
+	}
 	setting := model.SystemSetting{
 		Key:       key,
-		Value:     value,
+		Value:     storedValue,
 		UpdatedAt: time.Now(),
 	}
 	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
 	}).Create(&setting).Error
+}
+
+func isSensitiveSetting(key string) bool {
+	def := findDef(key)
+	return def != nil && def.Sensitive
+}
+
+func decryptSettingValue(key, value string) string {
+	if !isSensitiveSetting(key) || strings.TrimSpace(value) == "" {
+		return value
+	}
+	decrypted, err := secure.DecryptIfNeeded(value)
+	if err != nil {
+		return ""
+	}
+	return decrypted
 }
 
 // Delete 删除 DB 覆盖值（恢复为环境变量或默认值），写入后自动失效缓存

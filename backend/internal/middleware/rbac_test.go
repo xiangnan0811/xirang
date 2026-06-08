@@ -64,6 +64,19 @@ func TestRBAC_OperatorCanTriggerTask(t *testing.T) {
 	}
 }
 
+func TestRBAC_NodeFilesAreAdminOrOperatorOnly(t *testing.T) {
+	r := setupRBACHandler("nodes:files")
+	if w := rbacPerformRequest(r, "admin"); w.Code != http.StatusOK {
+		t.Fatalf("admin 应能访问 nodes:files，期望 200 实际 %d", w.Code)
+	}
+	if w := rbacPerformRequest(r, "operator"); w.Code != http.StatusOK {
+		t.Fatalf("operator 应能访问 nodes:files，期望 200 实际 %d", w.Code)
+	}
+	if w := rbacPerformRequest(r, "viewer"); w.Code != http.StatusForbidden {
+		t.Fatalf("viewer 不应访问 nodes:files，期望 403 实际 %d", w.Code)
+	}
+}
+
 func TestRBAC_OperatorCannotManageUsers(t *testing.T) {
 	r := setupRBACHandler("users:manage")
 	w := rbacPerformRequest(r, "operator")
@@ -168,7 +181,7 @@ func TestRequireRole_NoRoleCannotAccessAdminOnly(t *testing.T) {
 
 func TestHasPermission_AdminHasAllPermissions(t *testing.T) {
 	allPerms := []string{
-		"nodes:read", "nodes:write", "nodes:test", "nodes:owners",
+		"nodes:read", "nodes:write", "nodes:test", "nodes:files", "nodes:owners",
 		"policies:read", "policies:write",
 		"tasks:read", "tasks:write", "tasks:trigger",
 		"ssh_keys:read", "ssh_keys:write",

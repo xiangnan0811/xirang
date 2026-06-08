@@ -137,6 +137,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
+	v1.GET("/version", versionHandler.Info)
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
 	secured.Use(middleware.AuditLogger(dep.DB))
@@ -174,8 +175,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/nodes/:id/status", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.Status)
 	secured.GET("/nodes/:id/metric-series", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.Metrics)
 	secured.GET("/nodes/:id/disk-forecast", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.DiskForecast)
-	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.ListNodeFiles)
-	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.GetNodeFileContent)
+	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:files"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.ListNodeFiles)
+	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:files"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.GetNodeFileContent)
 	secured.GET("/nodes/:id/docker-volumes", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), dockerHandler.ListVolumes)
 	secured.GET("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.ListOwners)
 	secured.POST("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.AddOwner)
@@ -370,7 +371,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	}
 
 	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)
-	secured.GET("/version", versionHandler.Info)
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)

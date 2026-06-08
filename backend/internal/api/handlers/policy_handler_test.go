@@ -119,6 +119,113 @@ func TestPolicyUpdateWarningUsesEnvelope(t *testing.T) {
 	}
 }
 
+func TestPolicyHooksHiddenFromNonAdminResponses(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	policyWithHook := model.Policy{
+		Name:       "hooked-policy",
+		SourcePath: "/srv/data",
+		TargetPath: config.BackupRoot,
+		CronSpec:   "0 2 * * *",
+		PreHook:    "echo FAKE_HOOK_SECRET_FOR_TEST_ONLY",
+		PostHook:   "echo cleanup",
+	}
+	if err := db.Create(&policyWithHook).Error; err != nil {
+		t.Fatalf("创建带 hook 的策略失败: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	makeRouter := func(role string) *gin.Engine {
+		r := gin.New()
+		r.Use(func(c *gin.Context) { c.Set("role", role); c.Next() })
+		r.GET("/policies/:id", handler.Get)
+		return r
+	}
+
+	viewerReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyWithHook.ID), nil)
+	viewerResp := httptest.NewRecorder()
+	makeRouter("viewer").ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusOK {
+		t.Fatalf("viewer 读取策略应成功，实际: %d %s", viewerResp.Code, viewerResp.Body.String())
+	}
+	var viewerEnvelope struct {
+		Data struct {
+			PreHook  string `json:"pre_hook"`
+			PostHook string `json:"post_hook"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(viewerResp.Body.Bytes(), &viewerEnvelope); err != nil {
+		t.Fatalf("解析 viewer 响应失败: %v", err)
+	}
+	if viewerEnvelope.Data.PreHook != "" || viewerEnvelope.Data.PostHook != "" {
+		t.Fatalf("非 admin 响应不应暴露 hook，data=%+v", viewerEnvelope.Data)
+	}
+
+	adminReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyWithHook.ID), nil)
+	adminResp := httptest.NewRecorder()
+	makeRouter("admin").ServeHTTP(adminResp, adminReq)
+	if adminResp.Code != http.StatusOK {
+		t.Fatalf("admin 读取策略应成功，实际: %d %s", adminResp.Code, adminResp.Body.String())
+	}
+	var adminEnvelope struct {
+		Data struct {
+			PreHook string `json:"pre_hook"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(adminResp.Body.Bytes(), &adminEnvelope); err != nil {
+		t.Fatalf("解析 admin 响应失败: %v", err)
+	}
+	if adminEnvelope.Data.PreHook != "echo FAKE_HOOK_SECRET_FOR_TEST_ONLY" {
+		t.Fatalf("admin 响应应保留 hook，data=%+v", adminEnvelope.Data)
+	}
+}
+
+func TestPolicyUpdateByNonAdminDoesNotClearHiddenHooks(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	preHook := "echo FAKE_OPERATOR_HIDDEN_PRE_HOOK_FOR_TEST_ONLY"
+	postHook := "echo FAKE_OPERATOR_HIDDEN_POST_HOOK_FOR_TEST_ONLY"
+	policyWithHook := model.Policy{
+		Name:       "operator-edit-policy",
+		SourcePath: "/srv/data",
+		TargetPath: config.BackupRoot,
+		CronSpec:   "0 2 * * *",
+		Enabled:    true,
+		PreHook:    preHook,
+		PostHook:   postHook,
+	}
+	if err := db.Create(&policyWithHook).Error; err != nil {
+		t.Fatalf("创建带 hook 的策略失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "operator"); c.Next() })
+	r.PUT("/policies/:id", NewPolicyHandler(db, nil).Update)
+
+	body := map[string]any{
+		"name":        "operator-edited-policy",
+		"source_path": policyWithHook.SourcePath,
+		"cron_spec":   policyWithHook.CronSpec,
+		"enabled":     false,
+		"pre_hook":    "",
+		"post_hook":   "",
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", policyWithHook.ID), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("operator 更新策略应成功，实际: %d %s", resp.Code, resp.Body.String())
+	}
+
+	var updated model.Policy
+	if err := db.First(&updated, policyWithHook.ID).Error; err != nil {
+		t.Fatalf("重新读取策略失败: %v", err)
+	}
+	if updated.PreHook != preHook || updated.PostHook != postHook {
+		t.Fatalf("非 admin 更新不应清空隐藏 hook，pre=%q post=%q", updated.PreHook, updated.PostHook)
+	}
+}
+
 // DrillConfig 测试辅助函数：创建 Gin 路由并设置 admin 角色
 func setupDrillTestRouter(handler *PolicyHandler) *gin.Engine {
 	r := gin.New()
@@ -170,6 +277,37 @@ func TestPolicyCreatePersistsEscalationPolicy(t *testing.T) {
 	}
 	if policyEntity.EscalationPolicyID == nil || *policyEntity.EscalationPolicyID != escalationPolicyID {
 		t.Fatalf("期望持久化 escalation_policy_id=%d，实际: %#v", escalationPolicyID, policyEntity.EscalationPolicyID)
+	}
+}
+
+func TestPolicyRejectsInvalidRetryConfig(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	r := setupDrillTestRouter(NewPolicyHandler(db, nil))
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "negative max retries",
+			body: map[string]any{"name": "bad-retry-count", "source_path": "/data", "cron_spec": "0 2 * * *", "max_retries": -1},
+		},
+		{
+			name: "zero retry base",
+			body: map[string]any{"name": "bad-retry-base", "source_path": "/data", "cron_spec": "0 2 * * *", "retry_base_seconds": 0},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(tc.body)
+			req := httptest.NewRequest(http.MethodPost, "/policies", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+			}
+		})
 	}
 }
 

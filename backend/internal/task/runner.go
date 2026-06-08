@@ -16,6 +16,8 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/profile"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/verifier"
 
@@ -209,6 +211,13 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
+	var currentRun struct{ Status string }
+	if err := m.db.Model(&model.TaskRun{}).Select("status").Where("id = ?", runID).Take(&currentRun).Error; err == nil && currentRun.Status == "canceled" {
+		runCompleted = true
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务已在启动前取消，跳过执行", taskEntity.Status)
+		return
+	}
+
 	// 检查关联节点是否存在（Preload 时 Node 可能为 nil，如节点已被删除）
 	if taskEntity.Node.ID == 0 {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", "关联节点不存在，跳过执行", taskEntity.Status)
@@ -321,6 +330,35 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	m.chainRunner.Store(taskID, cancel)
 	defer m.chainRunner.Delete(taskID)
 	defer cancel()
+
+	if taskEntity.Policy != nil {
+		if preHook, err := secure.DecryptIfNeeded(taskEntity.Policy.PreHook); err == nil {
+			taskEntity.Policy.PreHook = preHook
+		}
+		if postHook, err := secure.DecryptIfNeeded(taskEntity.Policy.PostHook); err == nil {
+			taskEntity.Policy.PostHook = postHook
+		}
+	}
+
+	if err := m.renderPolicyProfileHooks(&taskEntity); err != nil {
+		errorMsg := sanitizeTaskLastError(fmt.Sprintf("渲染应用感知 hook 失败: %v", err))
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
+		failedAt := time.Now()
+		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": &failedAt,
+			"last_error":  errorMsg,
+		})
+		runCompleted = true
+		if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
+			"last_error":  errorMsg,
+		}); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in app-profile hook render error path")
+		}
+		m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
+		return
+	}
 
 	// Pre-hook 执行
 	if taskEntity.Policy != nil && taskEntity.Policy.PreHook != "" {
@@ -895,6 +933,30 @@ func (m *Manager) withTaskCredentialAuditContext(ctx context.Context, taskEntity
 		PolicyID:  taskEntity.PolicyID,
 		Metadata:  baseMetadata,
 	})
+}
+
+func (m *Manager) renderPolicyProfileHooks(taskEntity *model.Task) error {
+	if taskEntity.Policy == nil || strings.TrimSpace(taskEntity.Policy.AppProfile) == "" {
+		return nil
+	}
+	if taskEntity.Policy.AppCredentialID == nil || *taskEntity.Policy.AppCredentialID == 0 {
+		return fmt.Errorf("应用感知备份缺少凭据")
+	}
+	access, err := profile.ResolveAppProfileAccess(m.db, *taskEntity.Policy.AppCredentialID)
+	if err != nil {
+		return err
+	}
+	renderedPreHook, renderedPostHook, err := profile.RenderHooks(taskEntity.Policy.AppProfile, access.Config())
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(taskEntity.Policy.PreHook) == "" {
+		taskEntity.Policy.PreHook = renderedPreHook
+	}
+	if strings.TrimSpace(taskEntity.Policy.PostHook) == "" {
+		taskEntity.Policy.PostHook = renderedPostHook
+	}
+	return nil
 }
 
 func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates map[string]interface{}) error {

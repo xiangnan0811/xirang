@@ -417,6 +417,43 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 	}
 }
 
+func TestCancelBeforeRunStartsDoesNotExecute(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	for i := 0; i < cap(m.semaphore); i++ {
+		m.semaphore <- struct{}{}
+	}
+	runID, err := m.TriggerManual(taskEntity.ID)
+	if err != nil {
+		t.Fatalf("触发任务失败: %v", err)
+	}
+	if err := m.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("启动前取消任务失败: %v", err)
+	}
+	for i := 0; i < cap(m.semaphore); i++ {
+		<-m.semaphore
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := m.Shutdown(ctx); err != nil {
+		t.Fatalf("关闭 manager 失败: %v", err)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("启动前取消后执行器不应被调用，实际: %d", exec.Calls())
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Fatalf("TaskRun 状态期望 canceled，实际 %s", run.Status)
+	}
+}
+
 func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
