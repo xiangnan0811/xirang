@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.3](https://github.com/xiangnan0811/xirang/compare/v0.44.2...v0.44.3) (2026-06-08)
+
+
+### 🐛 Bug Fixes
+
+* harden audited workflows ([#317](https://github.com/xiangnan0811/xirang/issues/317)) ([925b290](https://github.com/xiangnan0811/xirang/commit/925b2907252a0e3c45a66f3bdc3484e091c026d1))
+
 ## [0.44.2](https://github.com/xiangnan0811/xirang/compare/v0.44.1...v0.44.2) (2026-06-05)
 
 
