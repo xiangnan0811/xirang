@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 	taskexec "xirang/backend/internal/task/executor"
 
@@ -106,6 +107,9 @@ func (e *blockingExecutor) Calls() int {
 
 func openManagerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	// 关键：不用 cache=shared + 命名 file，原实现导致两个 flake：
 	//   1) Manager 的后台 goroutine 与测试主线程并发写同一内存库 →
 	//      SQLite 单写者锁默认立即返回 "database table is locked"，
