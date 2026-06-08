@@ -130,9 +130,10 @@ func (h *PolicyHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	includeHooks := policyResponseIncludesHooks(c)
 	result := make([]gin.H, len(policies))
 	for i, p := range policies {
-		result[i] = buildPolicyResponse(p, latestDrillByPolicy[p.ID])
+		result[i] = buildPolicyResponse(p, latestDrillByPolicy[p.ID], includeHooks)
 	}
 	respondOK(c, result)
 }
@@ -171,7 +172,7 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, buildPolicyResponse(p, latestDrill))
+	respondOK(c, buildPolicyResponse(p, latestDrill, policyResponseIncludesHooks(c)))
 }
 
 // Create godoc
@@ -213,10 +214,11 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	canManageHooks := policyResponseIncludesHooks(c)
+
 	// 非 admin 不允许设置 hook 命令
 	if req.PreHook != "" || req.PostHook != "" {
-		role, _ := c.Get("role")
-		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
+		if !canManageHooks {
 			respondForbidden(c, "仅管理员可配置 hook 命令")
 			return
 		}
@@ -268,37 +270,20 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 			respondBadRequest(c, "不支持的应用类型: "+appProfile)
 			return
 		}
-		// 用户手动提供了 hook → 保留用户值（用户 override 优先级最高）
-		userProvidedPre := preHook != ""
-		userProvidedPost := postHook != ""
-
-		if !userProvidedPre || !userProvidedPost {
-			// 需要从 profile 渲染 hook
-			if req.AppCredentialID == nil || *req.AppCredentialID == 0 {
-				respondBadRequest(c, "选择应用类型后必须指定凭据")
-				return
-			}
-			access, err := profile.ResolveAppProfileAccess(h.db, *req.AppCredentialID)
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					respondBadRequest(c, "指定的凭据不存在")
-					return
-				}
-				respondInternalError(c, err)
-				return
-			}
-			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, access.Config())
-			if err != nil {
-				respondInternalError(c, err)
-				return
-			}
-			if !userProvidedPre {
-				preHook = renderedPre
-			}
-			if !userProvidedPost {
-				postHook = renderedPost
-			}
+		if req.AppCredentialID == nil || *req.AppCredentialID == 0 {
+			respondBadRequest(c, "选择应用类型后必须指定凭据")
+			return
 		}
+		if _, err := profile.ResolveAppProfileAccess(h.db, *req.AppCredentialID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondBadRequest(c, "指定的凭据不存在")
+				return
+			}
+			respondInternalError(c, err)
+			return
+		}
+		// 内置 profile 自动生成的凭据 hook 在任务运行时从加密凭据即时渲染，
+		// 避免将数据库密码固化到 policies.pre_hook/post_hook；管理员手动提供的 hook 保留并加密入库。
 	}
 
 	// drill 演练配置校验
@@ -444,9 +429,17 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		p.MaxExecutionSeconds = *req.MaxExecutionSeconds
 	}
 	if req.MaxRetries != nil {
+		if *req.MaxRetries < 0 || *req.MaxRetries > 10 {
+			respondBadRequest(c, "最大重试次数必须在 0-10 之间")
+			return
+		}
 		p.MaxRetries = *req.MaxRetries
 	}
 	if req.RetryBaseSeconds != nil {
+		if *req.RetryBaseSeconds < 1 || *req.RetryBaseSeconds > 3600 {
+			respondBadRequest(c, "重试基础间隔必须在 1-3600 秒之间")
+			return
+		}
 		p.RetryBaseSeconds = *req.RetryBaseSeconds
 	}
 
@@ -486,7 +479,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 
 	// 重新加载以获取关联节点
 	h.db.Preload("Nodes").First(&p, p.ID)
-	respondCreated(c, buildPolicyResponse(p, nil))
+	respondCreated(c, buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)))
 }
 
 // Update godoc
@@ -549,10 +542,11 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		return
 	}
 
+	canManageHooks := policyResponseIncludesHooks(c)
+
 	// 非 admin 不允许设置 hook 命令
 	if req.PreHook != "" || req.PostHook != "" {
-		role, _ := c.Get("role")
-		if roleStr, ok := role.(string); !ok || roleStr != "admin" {
+		if !canManageHooks {
 			respondForbidden(c, "仅管理员可配置 hook 命令")
 			return
 		}
@@ -587,41 +581,35 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	appProfile := strings.TrimSpace(req.AppProfile)
 	updatePreHook := strings.TrimSpace(req.PreHook)
 	updatePostHook := strings.TrimSpace(req.PostHook)
+	if !canManageHooks {
+		updatePreHook = p.PreHook
+		updatePostHook = p.PostHook
+	}
 
 	if appProfile != "" {
 		if _, ok := profile.GetProfile(appProfile); !ok {
 			respondBadRequest(c, "不支持的应用类型: "+appProfile)
 			return
 		}
-		userProvidedPre := updatePreHook != ""
-		userProvidedPost := updatePostHook != ""
-
-		if !userProvidedPre || !userProvidedPost {
-			if req.AppCredentialID == nil || *req.AppCredentialID == 0 {
-				respondBadRequest(c, "选择应用类型后必须指定凭据")
-				return
-			}
-			access, err := profile.ResolveAppProfileAccess(h.db, *req.AppCredentialID)
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					respondBadRequest(c, "指定的凭据不存在")
-					return
-				}
-				respondInternalError(c, err)
-				return
-			}
-			renderedPre, renderedPost, err := profile.RenderHooks(appProfile, access.Config())
-			if err != nil {
-				respondInternalError(c, err)
-				return
-			}
-			if !userProvidedPre {
-				updatePreHook = renderedPre
-			}
-			if !userProvidedPost {
-				updatePostHook = renderedPost
-			}
+		appCredentialID := req.AppCredentialID
+		if appCredentialID == nil {
+			appCredentialID = p.AppCredentialID
 		}
+		if appCredentialID == nil || *appCredentialID == 0 {
+			respondBadRequest(c, "选择应用类型后必须指定凭据")
+			return
+		}
+		if _, err := profile.ResolveAppProfileAccess(h.db, *appCredentialID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondBadRequest(c, "指定的凭据不存在")
+				return
+			}
+			respondInternalError(c, err)
+			return
+		}
+		req.AppCredentialID = appCredentialID
+		// 内置 profile 自动生成的凭据 hook 在任务运行时从加密凭据即时渲染，
+		// 避免将数据库密码固化到 policies.pre_hook/post_hook；管理员手动提供的 hook 保留并加密入库。
 	}
 
 	// drill 演练配置校验
@@ -798,9 +786,17 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		p.MaxExecutionSeconds = *req.MaxExecutionSeconds
 	}
 	if req.MaxRetries != nil {
+		if *req.MaxRetries < 0 || *req.MaxRetries > 10 {
+			respondBadRequest(c, "最大重试次数必须在 0-10 之间")
+			return
+		}
 		p.MaxRetries = *req.MaxRetries
 	}
 	if req.RetryBaseSeconds != nil {
+		if *req.RetryBaseSeconds < 1 || *req.RetryBaseSeconds > 3600 {
+			respondBadRequest(c, "重试基础间隔必须在 1-3600 秒之间")
+			return
+		}
 		p.RetryBaseSeconds = *req.RetryBaseSeconds
 	}
 
@@ -863,11 +859,11 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{
 			Code:    http.StatusOK,
 			Message: fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
-			Data:    buildPolicyResponse(p, nil),
+			Data:    buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)),
 		})
 		return
 	}
-	respondOK(c, buildPolicyResponse(p, nil))
+	respondOK(c, buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)))
 }
 
 // Delete godoc
@@ -984,7 +980,6 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 	respondOK(c, gin.H{"task_run_id": taskRunID, "message": "恢复演练已触发"})
 }
 
-
 type latestDrillSummary struct {
 	TaskRunID          uint       `json:"task_run_id"`
 	Status             string     `json:"status"`
@@ -1042,11 +1037,22 @@ func (h *PolicyHandler) latestDrillSummaries(c *gin.Context, policies []model.Po
 	return result, nil
 }
 
+func policyResponseIncludesHooks(c *gin.Context) bool {
+	role, _ := c.Get("role")
+	return role == "admin"
+}
+
 // buildPolicyResponse 构建策略响应，避免序列化 Node 中的敏感字段（Password/PrivateKey）。
-func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary) gin.H {
+func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary, includeHooks bool) gin.H {
 	nodeIDs := make([]uint, len(p.Nodes))
 	for i, n := range p.Nodes {
 		nodeIDs[i] = n.ID
+	}
+	preHook := ""
+	postHook := ""
+	if includeHooks {
+		preHook = p.PreHook
+		postHook = p.PostHook
 	}
 	return gin.H{
 		"id":                    p.ID,
@@ -1063,8 +1069,8 @@ func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary) gin.H 
 		"verify_enabled":        p.VerifyEnabled,
 		"verify_sample_rate":    p.VerifySampleRate,
 		"is_template":           p.IsTemplate,
-		"pre_hook":              p.PreHook,
-		"post_hook":             p.PostHook,
+		"pre_hook":              preHook,
+		"post_hook":             postHook,
 		"hook_timeout_seconds":  p.HookTimeoutSeconds,
 		"max_execution_seconds": p.MaxExecutionSeconds,
 		"max_retries":           p.MaxRetries,
@@ -1182,5 +1188,5 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		return
 	}
 
-	respondCreated(c, buildPolicyResponse(*newPolicy, nil))
+	respondCreated(c, buildPolicyResponse(*newPolicy, nil, policyResponseIncludesHooks(c)))
 }

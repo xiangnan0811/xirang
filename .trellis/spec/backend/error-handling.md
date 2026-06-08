@@ -73,6 +73,83 @@ SFTP/file content, Docker output, diagnostic evidence, exported config payloads,
 or stack-like error details to clients. For current user-facing messages, the
 codebase mostly uses Simplified Chinese strings.
 
+## Scenario: Rate Limit Response Envelope
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing login, API, metrics, or other per-client rate
+  limiting middleware that returns HTTP 429.
+- Applies to `backend/internal/middleware/rate_limit.go`,
+  `backend/internal/middleware/metrics_auth.go`, auth login routes, generic API
+  rate limiting, and frontend API error handling for retry timing.
+
+### 2. Signatures
+
+- HTTP status: `429 Too Many Requests`.
+- Header: `Retry-After: <seconds>` where `<seconds>` is a positive integer.
+- Backend response body:
+
+```json
+{"code":429,"message":"请求过于频繁，请稍后再试","data":{"retry_after":12}}
+```
+
+- Frontend error surface: `ApiError.retryAfter`.
+
+### 3. Contracts
+
+- Rate-limit middleware must return the standard response envelope, not a raw
+  `{ "error": ... }` object.
+- `Retry-After` and `data.retry_after` must represent the same positive retry
+  delay in seconds when the limiter has a reset time.
+- `data.retry_after` is snake_case because it is an API wire field; frontend
+  code reads it only through `request()` / `ApiError`.
+- The client-visible message may be localized but must stay generic. Do not
+  include IP addresses, usernames, tokens, request paths containing secrets, or
+  internal limiter state.
+- A limiter implementation should clamp zero/negative retry values to at least
+  one second before responding.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Request is within limit | Call `c.Next()` and do not set retry headers. |
+| Request exceeds limit and reset time is in the future | Return 429 envelope plus `Retry-After` and `data.retry_after`. |
+| Reset time calculation is zero or negative | Return 429 with retry delay clamped to 1 second. |
+| Metrics scraping is rate-limited | Use the same envelope/header contract as API/login paths. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: login rate limit returns HTTP 429 with `code=429`,
+  `message="登录尝试过于频繁，请稍后再试"`, `Retry-After: 60`, and
+  `data.retry_after=60`.
+- Base: metrics rate limit returns the same envelope shape with a metrics-specific
+  message.
+- Bad: `c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many"})`; the
+  frontend cannot extract retry timing consistently.
+
+### 6. Tests Required
+
+- Middleware tests must assert status code, envelope `code/message/data`, and
+  `Retry-After` header.
+- Limiter unit tests must assert blocked calls return a positive retry value.
+- Frontend `core.ts` tests must assert `ApiError.retryAfter` is populated from
+  either header or envelope data.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁"})
+```
+
+Correct:
+
+```go
+respondRateLimited(c, "请求过于频繁，请稍后再试", retryAfterSeconds)
+```
+
 ---
 
 ## Scenario: SSH Fleet Doctor Diagnostics

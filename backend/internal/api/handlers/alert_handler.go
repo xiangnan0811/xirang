@@ -800,6 +800,18 @@ func (h *AlertHandler) EscalationEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var a model.Alert
+	if err := h.db.WithContext(c.Request.Context()).First(&a, id).Error; err != nil {
+		respondNotFound(c, "告警不存在")
+		return
+	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, a.NodeID); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if !allowed {
+		respondForbidden(c, "无权访问该告警")
+		return
+	}
 	var evs []model.AlertEscalationEvent
 	if err := h.db.WithContext(c.Request.Context()).
 		Where("alert_id = ?", id).

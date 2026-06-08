@@ -1,9 +1,12 @@
 package settings
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -47,6 +50,72 @@ func TestAnomalyDefaults_AreConservativeAndAlertsOff(t *testing.T) {
 		if got := svc.GetEffective(key); got != want {
 			t.Errorf("%s default = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestSensitiveSettingPersistsEncryptedAndReadsPlaintext(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	db := setupTestDB(t)
+	svc := NewService(db)
+
+	if err := svc.Update("smtp.password", "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY"); err != nil {
+		t.Fatalf("update sensitive setting: %v", err)
+	}
+	var row model.SystemSetting
+	if err := db.First(&row, "key = ?", "smtp.password").Error; err != nil {
+		t.Fatalf("load stored setting: %v", err)
+	}
+	if !strings.HasPrefix(row.Value, "enc:v2:") || strings.Contains(row.Value, "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY") {
+		t.Fatalf("expected encrypted stored value, got %q", row.Value)
+	}
+	if got := svc.GetEffective("smtp.password"); got != "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY" {
+		t.Fatalf("expected decrypted effective value, got %q", got)
+	}
+	all, err := svc.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if got := all["smtp.password"].Value; got != "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY" {
+		t.Fatalf("expected decrypted GetAll value, got %q", got)
+	}
+}
+
+func TestSensitiveSettingEmptyValuePersistsWithoutEncryption(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	db := setupTestDB(t)
+	svc := NewService(db)
+
+	if err := svc.Update("smtp.password", ""); err != nil {
+		t.Fatalf("update empty sensitive setting: %v", err)
+	}
+	var row model.SystemSetting
+	if err := db.First(&row, "key = ?", "smtp.password").Error; err != nil {
+		t.Fatalf("load stored setting: %v", err)
+	}
+	if row.Value != "" {
+		t.Fatalf("empty sensitive setting should stay empty, got %q", row.Value)
+	}
+}
+
+func TestGetEffectiveDBErrorKeepsExpiredCache(t *testing.T) {
+	db := setupTestDB(t)
+	svc := NewService(db)
+	svc.cache["login.rate_limit"] = cachedValue{value: "77", expiresAt: time.Now().Add(-time.Minute)}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if got := svc.GetEffective("login.rate_limit"); got != "77" {
+		t.Fatalf("DB error should return stale cached value, got %q", got)
 	}
 }
 

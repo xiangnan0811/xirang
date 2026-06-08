@@ -5,6 +5,7 @@ function createMockResponse(status = 200, body = "") {
   return {
     status,
     ok: status >= 200 && status < 300,
+    headers: { get: vi.fn().mockReturnValue(null) },
     text: vi.fn().mockResolvedValue(body)
   } as unknown as Response;
 }

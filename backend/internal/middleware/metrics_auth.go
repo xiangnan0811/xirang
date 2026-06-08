@@ -100,11 +100,12 @@ func validBearer(header, expected string) bool {
 func MetricsRateLimit(limit int, window time.Duration) gin.HandlerFunc {
 	limiter := newAPIRateLimiter(limit, window)
 	return func(c *gin.Context) {
-		if limiter.allow(c.ClientIP(), time.Now()) {
+		if allowed, retryAfter := limiter.allow(c.ClientIP(), time.Now()); allowed {
 			c.Next()
 			return
+		} else {
+			respondRateLimited(c, "metrics 抓取过于频繁", retryAfter)
 		}
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "metrics 抓取过于频繁"})
 		c.Abort()
 	}
 }

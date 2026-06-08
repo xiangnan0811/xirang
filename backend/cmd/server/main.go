@@ -140,8 +140,8 @@ func main() {
 			var node model.Node
 			if alert.NodeID > 0 {
 				if err := db.First(&node, alert.NodeID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				logger.Module("alerting").Warn().Err(err).Uint("node_id", alert.NodeID).Msg("静默检查时查询节点失败")
-			}
+					logger.Module("alerting").Warn().Err(err).Uint("node_id", alert.NodeID).Msg("静默检查时查询节点失败")
+				}
 			}
 			return alerting.MatchSilence(alert, node, sils, time.Now())
 		},
@@ -168,6 +168,7 @@ func main() {
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetAnomalySink(anomalySink)
 	taskManager.SetAutomationDispatcher(autoDispatcher)
+	autoDispatcher.SetTaskTriggerer(taskManager)
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}

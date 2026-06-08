@@ -14,14 +14,23 @@ import (
 	"gorm.io/gorm"
 )
 
+type TaskTriggerer interface {
+	TriggerAutomation(taskID uint) (uint, error)
+}
+
 // Dispatcher matches events to enabled rules and executes their actions.
 type Dispatcher struct {
-	db *gorm.DB
+	db        *gorm.DB
+	triggerer TaskTriggerer
 }
 
 // NewDispatcher creates a Dispatcher with the given DB.
 func NewDispatcher(db *gorm.DB) *Dispatcher {
 	return &Dispatcher{db: db}
+}
+
+func (d *Dispatcher) SetTaskTriggerer(triggerer TaskTriggerer) {
+	d.triggerer = triggerer
 }
 
 // Dispatch finds matching enabled rules for the event and executes their actions.
@@ -220,7 +229,9 @@ func (d *Dispatcher) execDisablePolicy(ctx context.Context, actionConfig string,
 	return nil
 }
 
-// execTriggerTask creates a pending TaskRun for the task_id in config.
+// execTriggerTask triggers a task through the runtime manager so the run enters
+// the same execution path as manual/cron triggers instead of leaving a pending
+// TaskRun row behind.
 func (d *Dispatcher) execTriggerTask(ctx context.Context, actionConfig string, evtCtx map[string]interface{}) (detailsJSON string, err error) {
 	log := logger.Module("automation")
 	cfg := renderConfig(actionConfig, evtCtx)
@@ -228,27 +239,26 @@ func (d *Dispatcher) execTriggerTask(ctx context.Context, actionConfig string, e
 	if taskID == 0 {
 		return "", fmt.Errorf("trigger_task: task_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
-
-	// Verify the task exists
-	var task model.Task
-	if err := d.db.WithContext(ctx).First(&task, taskID).Error; err != nil {
-		return "", fmt.Errorf("trigger_task: 未找到 Task id=%d: %w", taskID, err)
+	if d.triggerer == nil {
+		return "", fmt.Errorf("trigger_task: 任务执行器未初始化")
 	}
 
-	run := model.TaskRun{
-		TaskID:      taskID,
-		TriggerType: "auto",
-		Status:      "pending",
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
 	}
-	if err := d.db.WithContext(ctx).Create(&run).Error; err != nil {
-		return "", fmt.Errorf("trigger_task: 创建 TaskRun 失败: %w", err)
+
+	runID, err := d.triggerer.TriggerAutomation(taskID)
+	if err != nil {
+		return "", fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
 	}
 
 	detailsBytes, _ := json.Marshal(map[string]interface{}{
-		"task_run_id": run.ID,
+		"task_run_id": runID,
 		"task_id":     taskID,
 	})
-	log.Info().Uint("task_id", taskID).Uint("task_run_id", run.ID).Msg("automation: task triggered")
+	log.Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("automation: task triggered")
 	return string(detailsBytes), nil
 }
 

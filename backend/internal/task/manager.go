@@ -115,7 +115,7 @@ type Manager struct {
 
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
 
-	rootCtx   context.Context    // worker goroutines 的父级 context
+	rootCtx    context.Context    // worker goroutines 的父级 context
 	rootCancel context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
 
 	shuttingDown atomic.Bool
@@ -207,6 +207,10 @@ func (m *Manager) RemoveSchedule(taskID uint) {
 
 func (m *Manager) TriggerManual(taskID uint) (uint, error) {
 	return m.triggerCore(taskID, "manual", generateChainRunID(), nil)
+}
+
+func (m *Manager) TriggerAutomation(taskID uint) (uint, error) {
+	return m.triggerCore(taskID, "auto", generateChainRunID(), nil)
 }
 
 func (m *Manager) TriggerFromScheduler(taskID uint) error {
@@ -347,6 +351,16 @@ func (m *Manager) Cancel(taskID uint) error {
 	case StatusPending, StatusRetrying:
 		m.stopRetryTimer(taskID)
 		m.retryChainContexts.Delete(taskID) // 清理重试链路上下文，防止泄漏
+		canceledAt := time.Now()
+		if err := m.db.Model(&model.TaskRun{}).
+			Where("task_id = ? AND status = ?", taskID, "pending").
+			Updates(map[string]interface{}{
+				"status":      "canceled",
+				"finished_at": &canceledAt,
+				"last_error":  "任务已取消",
+			}).Error; err != nil {
+			return err
+		}
 		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
 			"last_error":  "任务已取消",

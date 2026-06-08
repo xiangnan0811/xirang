@@ -93,6 +93,116 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Config export/import must preserve SSH key scope columns (`disabled`,
   `expires_at`, `allowed_purposes`, `allowed_node_ids`, `allowed_node_tags`) even
   when `include_secrets=false`; `private_key` remains secret-only export data.
+- `policies.pre_hook` and `policies.post_hook` are secret-bearing command
+  fields. They are encrypted/decrypted by `model.Policy` hooks, hidden from
+  non-admin policy responses, and must not be overwritten by non-admin update
+  requests whose forms received hidden/empty hook fields.
+- Built-in application-profile hooks for policies are rendered at task runtime
+  from encrypted app credentials. Do not persist generated credential-bearing
+  hook commands in `policies.pre_hook` or `policies.post_hook`; only admin-supplied
+  manual hook overrides belong in those columns.
+- Sensitive runtime settings such as `smtp.password` and
+  `metrics.remote_bearer_token` are encrypted by `settings.Service` before
+  persistence and decrypted at the service boundary for `GetEffective` /
+  `GetAll`. New secret-like settings must be added to the service registry with
+  `Sensitive: true` and to the v1-to-v2 encryption migration allowlist.
+
+## Scenario: Policy Hooks And Sensitive Settings At Rest
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing policy hook persistence, app-aware policy creation
+  or execution, settings registry entries that can contain secrets, or encryption
+  migration coverage.
+- Applies to `model.Policy`, `PolicyHandler`, task execution hook rendering,
+  `settings.Service`, `system_settings`, app credentials, and
+  `bootstrap.MigrateEncryptionV1ToV2`.
+
+### 2. Signatures
+
+- Policy DB columns: `policies.pre_hook`, `policies.post_hook`.
+- Policy API fields: `pre_hook`, `post_hook`, visible only to admin responses.
+- Settings registry field: `SettingDef.Sensitive`.
+- Sensitive settings currently include `smtp.password` and
+  `metrics.remote_bearer_token`.
+- Encryption prefixes: `enc:v1:` for legacy values and `enc:v2:` for current
+  writes.
+
+### 3. Contracts
+
+- Policy model hooks encrypt non-empty `PreHook` and `PostHook` before save and
+  decrypt them after find. Handlers and task execution should work with plaintext
+  model values after GORM loads.
+- Non-admin policy list/detail/create/update responses must return empty
+  `pre_hook` and `post_hook` fields, even when stored hooks exist.
+- Non-admin policy updates must preserve existing stored hooks. Hidden or empty
+  hook fields from a non-admin client are not authorization to clear hooks.
+- Non-admin requests with non-empty `pre_hook` or `post_hook` must fail with
+  `respondForbidden`.
+- Admin requests may create, update, or clear manual hook fields, subject to the
+  existing hook command validation.
+- App-profile-generated hooks must be rendered only at task runtime from
+  encrypted app credential config. Persisting those rendered commands would copy
+  database passwords or tokens into policy hook columns.
+- Sensitive settings persisted through `settings.Service.Update` or
+  `UpdateWithTx` must be encrypted before `system_settings` upsert, while empty
+  sensitive values may remain empty.
+- `GetEffective` must not replace an expired cache entry with env/default values
+  when the DB lookup fails; return the stale cache if available.
+- V1-to-V2 encryption migration must count and re-encrypt all sensitive setting
+  keys plus policy/app-credential secret columns.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Operator reads a policy with stored hooks | Response contains empty `pre_hook` and `post_hook`. |
+| Operator updates normal policy fields and sends empty hooks | Existing hooks remain unchanged in the DB. |
+| Operator sends a non-empty hook | 403 through `respondForbidden`; no mutation. |
+| Admin sends a valid hook | Persist encrypted at rest and return plaintext in admin response. |
+| Built-in app profile is selected with a credential | Validate credential existence; leave generated hooks out of stored policy fields. |
+| Sensitive setting is updated with a non-empty value | Store `enc:v2:` value and return plaintext through settings service reads. |
+| DB lookup fails during `GetEffective` and stale cache exists | Return stale cached value, not env/default fallback. |
+| Legacy `enc:v1:` value exists in a covered column/key | Migration re-encrypts to `enc:v2:` and count goes to zero. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an admin stores `pre_hook="echo prepare"`; DB contains encrypted text,
+  admin reads plaintext, operator reads an empty hook, and operator updates
+  `enabled=false` without clearing the stored hook.
+- Base: a MySQL app-aware policy stores `app_profile` and `app_credential_id`;
+  runtime renders the dump/cleanup hooks just before execution.
+- Bad: rendering `mysqldump -p<password>` during policy create/update and saving
+  it into `policies.pre_hook`.
+
+### 6. Tests Required
+
+- Handler tests for admin visibility, non-admin hidden responses, non-admin
+  update preservation, and non-admin non-empty hook rejection.
+- Integration tests for app-aware policies proving generated hooks are not
+  persisted while runtime rendering still executes.
+- Model/service tests proving policy hooks and sensitive settings are encrypted
+  at rest and plaintext only at the model/service boundary.
+- Bootstrap tests proving V1 values in policy, app credential, integration proxy,
+  and sensitive settings are counted and migrated.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+p.PreHook, p.PostHook, _ = profile.RenderHooks(appProfile, access.Config())
+tx.Save(&p)
+```
+
+Correct:
+
+```go
+if _, err := profile.ResolveAppProfileAccess(db, credentialID); err != nil {
+    return err
+}
+// Store only app_profile/app_credential_id. Render generated hooks at runtime.
+```
 
 ---
 

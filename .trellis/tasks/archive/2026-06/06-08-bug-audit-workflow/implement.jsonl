@@ -1,0 +1,3 @@
+{"file":".trellis/spec/guides/index.md","reason":"全仓库审计需要遵守跨层、复用、文档真实性等思考指南。"}
+{"file":".trellis/spec/backend/index.md","reason":"后端模块审计入口，指向数据库、错误处理、质量、部署运行时等规范。"}
+{"file":".trellis/spec/frontend/index.md","reason":"前端模块审计入口，指向组件、hooks、状态管理、类型安全、可访问性等规范。"}

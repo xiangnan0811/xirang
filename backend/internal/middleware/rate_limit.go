@@ -17,6 +17,26 @@ type rateWindow struct {
 	reset time.Time
 }
 
+type apiResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
+}
+
+func respondRateLimited(c *gin.Context, message string, retryAfterSeconds int) {
+	if retryAfterSeconds <= 0 {
+		retryAfterSeconds = 1
+	}
+	c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
+	c.JSON(http.StatusTooManyRequests, apiResponse{
+		Code:    http.StatusTooManyRequests,
+		Message: message,
+		Data: gin.H{
+			"retry_after": retryAfterSeconds,
+		},
+	})
+}
+
 type loginRateLimiter struct {
 	mu          sync.Mutex
 	store       map[string]rateWindow
@@ -60,7 +80,7 @@ func (l *loginRateLimiter) cleanup(ctx context.Context) {
 	}
 }
 
-func (l *loginRateLimiter) allow(ip string, now time.Time) bool {
+func (l *loginRateLimiter) allow(ip string, now time.Time) (bool, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -79,16 +99,20 @@ func (l *loginRateLimiter) allow(ip string, now time.Time) bool {
 	entry, ok := l.store[ip]
 	if !ok || now.After(entry.reset) {
 		l.store[ip] = rateWindow{count: 1, reset: now.Add(window)}
-		return true
+		return true, 0
 	}
 
 	if entry.count >= limit {
-		return false
+		retryAfter := int(entry.reset.Sub(now).Seconds())
+		if retryAfter <= 0 {
+			retryAfter = 1
+		}
+		return false, retryAfter
 	}
 
 	entry.count++
 	l.store[ip] = entry
-	return true
+	return true, 0
 }
 
 func LoginRateLimit(limit int, window time.Duration) gin.HandlerFunc {
@@ -98,11 +122,12 @@ func LoginRateLimit(limit int, window time.Duration) gin.HandlerFunc {
 func LoginRateLimitWithContext(ctx context.Context, settingsSvc *settings.Service, limit int, window time.Duration) gin.HandlerFunc {
 	limiter := newLoginRateLimiterWithContext(ctx, settingsSvc, limit, window)
 	return func(c *gin.Context) {
-		if limiter.allow(c.ClientIP(), time.Now()) {
+		if allowed, retryAfter := limiter.allow(c.ClientIP(), time.Now()); allowed {
 			c.Next()
 			return
+		} else {
+			respondRateLimited(c, "登录尝试过于频繁，请稍后再试", retryAfter)
 		}
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "登录尝试过于频繁，请稍后再试"})
 		c.Abort()
 	}
 }
@@ -140,32 +165,37 @@ func (l *apiRateLimiter) cleanup() {
 	}
 }
 
-func (l *apiRateLimiter) allow(ip string, now time.Time) bool {
+func (l *apiRateLimiter) allow(ip string, now time.Time) (bool, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	entry, ok := l.store[ip]
 	if !ok || now.After(entry.reset) {
 		l.store[ip] = rateWindow{count: 1, reset: now.Add(l.window)}
-		return true
+		return true, 0
 	}
 	if entry.count >= l.limit {
-		return false
+		retryAfter := int(entry.reset.Sub(now).Seconds())
+		if retryAfter <= 0 {
+			retryAfter = 1
+		}
+		return false, retryAfter
 	}
 	entry.count++
 	l.store[ip] = entry
-	return true
+	return true, 0
 }
 
 // APIRateLimit 返回通用 API 限流中间件（per IP）
 func APIRateLimit(limit int, window time.Duration) gin.HandlerFunc {
 	limiter := newAPIRateLimiter(limit, window)
 	return func(c *gin.Context) {
-		if limiter.allow(c.ClientIP(), time.Now()) {
+		if allowed, retryAfter := limiter.allow(c.ClientIP(), time.Now()); allowed {
 			c.Next()
 			return
+		} else {
+			respondRateLimited(c, "请求过于频繁，请稍后再试", retryAfter)
 		}
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁，请稍后再试"})
 		c.Abort()
 	}
 }

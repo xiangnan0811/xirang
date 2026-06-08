@@ -98,6 +98,29 @@ export function normalizeRedirectTarget(raw: string | null | undefined): string 
   return value;
 }
 
+function parseRetryAfter(response: Response, payload: unknown): number | undefined {
+  const headerValue = Number(response.headers.get("Retry-After"));
+  if (Number.isFinite(headerValue) && headerValue > 0) {
+    return headerValue;
+  }
+
+  if (payload && typeof payload === "object") {
+    const data = (payload as { data?: unknown }).data;
+    if (data && typeof data === "object") {
+      const retryAfter = Number((data as { retry_after?: unknown }).retry_after);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        return retryAfter;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function isSuccessEnvelopeCode(code: number, responseStatus: number): boolean {
+  return code === 0 || code === responseStatus;
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const isWriteOperation = method !== "GET";
@@ -148,18 +171,19 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   if (!response.ok) {
+    const retryAfter = parseRetryAfter(response, payload);
     // Try to extract message from the new envelope format
     if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
       const envelope = payload as { code: number; message: string };
-      throw new ApiError(response.status, envelope.message || i18n.t("common.requestFailed", { status: response.status }), payload);
+      throw new ApiError(response.status, envelope.message || i18n.t("common.requestFailed", { status: response.status }), payload, retryAfter);
     }
-    throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload);
+    throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload, retryAfter);
   }
 
   // Auto-unwrap unified {code, message, data} envelope
   if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
     const envelope = payload as { code: number; message: string; data: unknown };
-    if (envelope.code !== 0) {
+    if (!isSuccessEnvelopeCode(envelope.code, response.status)) {
       throw new ApiError(envelope.code, envelope.message, payload);
     }
     // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)

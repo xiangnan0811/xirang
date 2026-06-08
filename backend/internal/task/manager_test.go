@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 	taskexec "xirang/backend/internal/task/executor"
 
@@ -106,6 +107,9 @@ func (e *blockingExecutor) Calls() int {
 
 func openManagerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	// 关键：不用 cache=shared + 命名 file，原实现导致两个 flake：
 	//   1) Manager 的后台 goroutine 与测试主线程并发写同一内存库 →
 	//      SQLite 单写者锁默认立即返回 "database table is locked"，
@@ -414,6 +418,43 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 	}
 	if run.FinishedAt == nil {
 		t.Fatalf("TaskRun.FinishedAt 不应为空")
+	}
+}
+
+func TestCancelBeforeRunStartsDoesNotExecute(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	for i := 0; i < cap(m.semaphore); i++ {
+		m.semaphore <- struct{}{}
+	}
+	runID, err := m.TriggerManual(taskEntity.ID)
+	if err != nil {
+		t.Fatalf("触发任务失败: %v", err)
+	}
+	if err := m.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("启动前取消任务失败: %v", err)
+	}
+	for i := 0; i < cap(m.semaphore); i++ {
+		<-m.semaphore
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := m.Shutdown(ctx); err != nil {
+		t.Fatalf("关闭 manager 失败: %v", err)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("启动前取消后执行器不应被调用，实际: %d", exec.Calls())
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("查询 TaskRun 失败: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Fatalf("TaskRun 状态期望 canceled，实际 %s", run.Status)
 	}
 }
 

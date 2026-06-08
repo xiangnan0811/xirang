@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
+- **Total Sessions**: 3
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~73 | Active |
+| `journal-1.md` | ~109 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-06-08 | Bug audit workflow fixes | `621f6a3`, `b2e42cf`, `cc4b83e`, `77322d0` | `bug-audit-workflow` |
 | 2 | 2026-06-08 | 重建 Trellis 配置更新 PR | `7ed2050` | `chore/update-trellis-config-clean` |
 | 1 | 2026-06-08 | 清理 OMC 和 Superpowers 配置 | `2dbcc63` | `chore/cleanup-omc-superpowers` |
 <!-- @@@/auto:session-history -->

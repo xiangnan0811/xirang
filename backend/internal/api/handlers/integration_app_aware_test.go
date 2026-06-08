@@ -116,36 +116,15 @@ func TestIntegrationFullPipelineHostMySQL(t *testing.T) {
 		t.Error("app_credential_id should be set")
 	}
 
-	// pre_hook 应包含渲染后的 mysqldump 命令
-	if !strings.Contains(preHook, "mysqldump") {
-		t.Error("pre-hook should contain mysqldump")
+	// 自动生成的凭据 hook 不再持久化到 policy，避免数据库密码固化到 policies.pre_hook/post_hook。
+	if preHook != "" {
+		t.Errorf("auto-rendered pre_hook should stay empty at rest, got: %s", preHook)
 	}
-	if !strings.Contains(preHook, "-u root") {
-		t.Error("pre-hook should contain -u root")
-	}
-	if !strings.Contains(preHook, "-h 10.0.0.1") {
-		t.Error("pre-hook should contain -h 10.0.0.1")
-	}
-	if !strings.Contains(preHook, "-P 3306") {
-		t.Error("pre-hook should contain -P 3306")
-	}
-	if !strings.Contains(preHook, "--single-transaction") {
-		t.Error("pre-hook should contain --single-transaction")
-	}
-	if !strings.Contains(preHook, "--all-databases") {
-		t.Error("pre-hook should contain --all-databases")
-	}
-	// 密码必须出现在渲染后的 hook 中（设计如此：hook 在目标节点以明文执行）
-	if !strings.Contains(preHook, "FAKE_INTEGRATION_MYSQL_PW_FOR_TEST_ONLY") {
-		t.Errorf("pre-hook should contain password in rendered command, got: %s", preHook)
+	if postHook != "" {
+		t.Errorf("auto-rendered post_hook should stay empty at rest, got: %s", postHook)
 	}
 
-	// post_hook 应包含清理命令
-	if !strings.Contains(postHook, "rm -f /tmp/xirang-mysql-backup.sql") {
-		t.Errorf("post-hook should contain cleanup, got: %s", postHook)
-	}
-
-	// Step 4: GET /policies/:id 验证返回同样内容
+	// Step 4: GET /policies/:id 验证仍不返回自动渲染 hook
 	getReq := httptest.NewRequest("GET", "/policies/1", nil)
 	getW := httptest.NewRecorder()
 	r.ServeHTTP(getW, getReq)
@@ -156,8 +135,8 @@ func TestIntegrationFullPipelineHostMySQL(t *testing.T) {
 	_ = json.Unmarshal(getW.Body.Bytes(), &getResp)
 	getData := getResp.Data.(map[string]interface{})
 	getPreHook := getData["pre_hook"].(string)
-	if !strings.Contains(getPreHook, "mysqldump") {
-		t.Error("GET /policies/:id should return rendered pre_hook")
+	if getPreHook != "" {
+		t.Errorf("GET /policies/:id should not return auto-rendered pre_hook, got: %s", getPreHook)
 	}
 }
 
@@ -196,7 +175,7 @@ func TestIntegrationFullPipelineDockerMySQL(t *testing.T) {
 		t.Fatalf("policy create: expected 201, got %d: %s", policyW.Code, policyW.Body.String())
 	}
 
-	// Step 3: 验证容器存在性预校验注入 + docker exec
+	// Step 3: 自动生成的 Docker hook 运行时渲染，不落库也不在策略响应中暴露。
 	var policyResp Response
 	if err := json.Unmarshal(policyW.Body.Bytes(), &policyResp); err != nil {
 		t.Fatalf("unmarshal policy: %v", err)
@@ -204,32 +183,8 @@ func TestIntegrationFullPipelineDockerMySQL(t *testing.T) {
 	policyData := policyResp.Data.(map[string]interface{})
 	preHook, _ := policyData["pre_hook"].(string)
 	postHook, _ := policyData["post_hook"].(string)
-
-	// 容器存在性预校验（#9）—— pre-hook 第一行必须是 docker inspect
-	trimmedPre := strings.TrimSpace(preHook)
-	if !strings.HasPrefix(trimmedPre, "docker inspect my-mysql") {
-		t.Errorf("docker pre-hook should start with 'docker inspect' for existence check, got: %s", trimmedPre[:min(50, len(trimmedPre))])
-	}
-	if !strings.Contains(trimmedPre, "容器 my-mysql 不存在或未运行") {
-		t.Error("docker pre-hook should contain Chinese error message for missing container")
-	}
-
-	// docker exec 命令
-	if !strings.Contains(preHook, "docker exec my-mysql mysqldump") {
-		t.Errorf("pre-hook should contain 'docker exec my-mysql mysqldump', got: %s", preHook)
-	}
-
-	// 用户名和密码
-	if !strings.Contains(preHook, "-u root") {
-		t.Error("pre-hook should contain -u root")
-	}
-	if !strings.Contains(preHook, "FAKE_INTEGRATION_DOCKER_MYSQL_PW_FOR_TEST_ONLY") {
-		t.Error("pre-hook should contain password")
-	}
-
-	// 清理命令
-	if !strings.Contains(postHook, "rm -f /tmp/xirang-docker-mysql-backup.sql") {
-		t.Errorf("post-hook should contain cleanup, got: %s", postHook)
+	if preHook != "" || postHook != "" {
+		t.Fatalf("auto-rendered docker hooks should stay empty at rest, pre=%q post=%q", preHook, postHook)
 	}
 }
 
@@ -336,7 +291,7 @@ func TestIntegrationPartialUserOverride(t *testing.T) {
 	}
 
 	// Step 2: 仅提供 pre_hook（不提供 post_hook）
-	// pre_hook 应保留用户值，post_hook 应自动渲染
+	// pre_hook 应保留用户值，post_hook 运行时自动渲染但不落库。
 	policyBody := `{"name":"partial-override","source_path":"/data/partial","cron_spec":"0 5 * * *","app_profile":"mysql","app_credential_id":1,"pre_hook":"echo manual pre","retention_days":7,"max_concurrent":1}`
 	policyReq := httptest.NewRequest("POST", "/policies", strings.NewReader(policyBody))
 	policyReq.Header.Set("Content-Type", "application/json")
@@ -358,8 +313,8 @@ func TestIntegrationPartialUserOverride(t *testing.T) {
 	if preHook != "echo manual pre" {
 		t.Errorf("pre_hook should preserve user value, got: %s", preHook)
 	}
-	if !strings.Contains(postHook, "rm -f /tmp/xirang-mysql-backup.sql") {
-		t.Errorf("post_hook should be auto-rendered (user didn't override), got: %s", postHook)
+	if postHook != "" {
+		t.Errorf("missing auto post_hook should stay empty at rest, got: %s", postHook)
 	}
 }
 
@@ -552,10 +507,10 @@ func TestIntegrationPolicyUnknownAppProfile(t *testing.T) {
 }
 
 // ================================================================================
-// Test 9: Verify password appears in rendered hook (design: shell execution needs it)
+// Test 9: Verify password does not appear in persisted policy hook
 // ================================================================================
 
-func TestIntegrationPasswordInRenderedHook(t *testing.T) {
+func TestIntegrationPasswordNotPersistedInPolicyHook(t *testing.T) {
 	db := setupIntegrationAppAwareTestDB(t)
 	credHandler := NewAppCredentialHandler(db)
 	policyHandler := NewPolicyHandler(db, nil)
@@ -583,7 +538,7 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 		t.Error("credential API response should not contain password in config")
 	}
 
-	// 但渲染到 hook 中必须包含密码（设计如此）
+	// 自动 hook 运行时渲染；策略响应与持久化字段不应包含密码。
 	policyBody := `{"name":"pw-check-policy","source_path":"/data/pwcheck","cron_spec":"0 9 * * *","app_profile":"mysql","app_credential_id":1,"retention_days":7,"max_concurrent":1}`
 	policyReq := httptest.NewRequest("POST", "/policies", strings.NewReader(policyBody))
 	policyReq.Header.Set("Content-Type", "application/json")
@@ -599,8 +554,16 @@ func TestIntegrationPasswordInRenderedHook(t *testing.T) {
 	policyData := policyResp.Data.(map[string]interface{})
 	preHook := policyData["pre_hook"].(string)
 
-	if !strings.Contains(preHook, "FAKE_PASSWORD_FOR_TEST_ONLY") {
-		t.Errorf("password should appear in rendered pre-hook, got: %s", preHook)
+	if preHook != "" || strings.Contains(preHook, "FAKE_PASSWORD_FOR_TEST_ONLY") {
+		t.Errorf("password should not appear in persisted policy hook, got: %s", preHook)
+	}
+
+	var stored model.Policy
+	if err := db.First(&stored, "name = ?", "pw-check-policy").Error; err != nil {
+		t.Fatalf("load stored policy: %v", err)
+	}
+	if strings.Contains(stored.PreHook, "FAKE_PASSWORD_FOR_TEST_ONLY") || strings.Contains(stored.PostHook, "FAKE_PASSWORD_FOR_TEST_ONLY") {
+		t.Fatalf("stored policy hooks must not contain app credential password")
 	}
 }
 

@@ -104,8 +104,9 @@ func (h *Hub) Run(ctx context.Context) {
 			h.mu.Lock()
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
-				c.markClosed()
-				close(c.send)
+				if c.markClosed() {
+					close(c.send)
+				}
 			}
 			h.mu.Unlock()
 		case event := <-h.broadcast:
@@ -125,8 +126,9 @@ func (h *Hub) Run(ctx context.Context) {
 					select {
 					case h.unregister <- c:
 					default:
-						c.markClosed()
-						close(c.send)
+						if c.markClosed() {
+							close(c.send)
+						}
 					}
 				}
 			}
@@ -440,10 +442,14 @@ func (c *client) isClosed() bool {
 }
 
 // markClosed 标记客户端为关闭状态。必须在此之后才能安全地 close(c.send)。
-func (c *client) markClosed() {
+func (c *client) markClosed() bool {
 	c.closedMu.Lock()
+	defer c.closedMu.Unlock()
+	if c.closed {
+		return false
+	}
 	c.closed = true
-	c.closedMu.Unlock()
+	return true
 }
 
 func (c *client) writePump(onClose func()) {

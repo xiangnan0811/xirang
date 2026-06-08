@@ -11,6 +11,7 @@ var rolePermissions = map[string]map[string]bool{
 		"nodes:read":             true,
 		"nodes:write":            true,
 		"nodes:test":             true,
+		"nodes:files":            true,
 		"nodes:owners":           true,
 		"policies:read":          true,
 		"policies:write":         true,
@@ -44,6 +45,7 @@ var rolePermissions = map[string]map[string]bool{
 	"operator": {
 		"nodes:read":             true,
 		"nodes:test":             true,
+		"nodes:files":            true,
 		"policies:read":          true,
 		"tasks:read":             true,
 		"tasks:write":            true,

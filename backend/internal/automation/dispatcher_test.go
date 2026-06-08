@@ -315,9 +315,22 @@ func TestDispatch_DisablePolicy(t *testing.T) {
 	}
 }
 
+type fakeTaskTriggerer struct {
+	runID   uint
+	taskIDs []uint
+	err     error
+}
+
+func (f *fakeTaskTriggerer) TriggerAutomation(taskID uint) (uint, error) {
+	f.taskIDs = append(f.taskIDs, taskID)
+	return f.runID, f.err
+}
+
 func TestDispatch_TriggerTask(t *testing.T) {
 	db := setupDispatcherTestDB(t)
 	d := NewDispatcher(db)
+	triggerer := &fakeTaskTriggerer{runID: 42}
+	d.SetTaskTriggerer(triggerer)
 
 	seedRule(t, db, model.AutomationRule{
 		Name:         "FAKE_TEST_RULE_TRIGGER_TASK_FOR_TEST_ONLY",
@@ -332,17 +345,52 @@ func TestDispatch_TriggerTask(t *testing.T) {
 	if err := d.Dispatch(context.Background(), evt); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
+	if len(triggerer.taskIDs) != 1 || triggerer.taskIDs[0] != 1 {
+		t.Fatalf("expected runtime trigger for task 1, got %#v", triggerer.taskIDs)
+	}
 
-	var runs []model.TaskRun
-	db.Find(&runs)
-	if len(runs) != 1 {
-		t.Fatalf("expected 1 TaskRun, got %d", len(runs))
+	var logs []model.AutomationRuleLog
+	db.Find(&logs)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 execution log, got %d", len(logs))
 	}
-	if runs[0].Status != "pending" {
-		t.Errorf("expected pending status, got %s", runs[0].Status)
+	if logs[0].Result != ResultSuccess {
+		t.Fatalf("expected success log, got %s: %s", logs[0].Result, logs[0].Error)
 	}
-	if runs[0].TriggerType != "auto" {
-		t.Errorf("expected auto trigger_type, got %s", runs[0].TriggerType)
+	var details map[string]uint
+	if err := json.Unmarshal([]byte(logs[0].Details), &details); err != nil {
+		t.Fatalf("parse trigger details: %v", err)
+	}
+	if details["task_run_id"] != 42 || details["task_id"] != 1 {
+		t.Fatalf("unexpected trigger details: %#v", details)
+	}
+}
+
+func TestDispatch_TriggerTaskWithoutRuntimeTriggererLogsError(t *testing.T) {
+	db := setupDispatcherTestDB(t)
+	d := NewDispatcher(db)
+
+	seedRule(t, db, model.AutomationRule{
+		Name:         "FAKE_TEST_RULE_TRIGGER_TASK_WITHOUT_RUNTIME_FOR_TEST_ONLY",
+		EventType:    EventNodeOffline,
+		EventFilter:  `{}`,
+		ActionType:   ActionTriggerTask,
+		ActionConfig: `{"task_id":"1"}`,
+		Enabled:      true,
+	})
+
+	evt := Event{Type: EventNodeOffline, Context: map[string]interface{}{"node_id": uint(3)}}
+	if err := d.Dispatch(context.Background(), evt); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	var logs []model.AutomationRuleLog
+	db.Find(&logs)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 execution log, got %d", len(logs))
+	}
+	if logs[0].Result != ResultError || !strings.Contains(logs[0].Error, "任务执行器未初始化") {
+		t.Fatalf("expected missing triggerer error log, got result=%s error=%s", logs[0].Result, logs[0].Error)
 	}
 }
 

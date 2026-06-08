@@ -2,6 +2,10 @@ package model
 
 import (
 	"time"
+
+	"xirang/backend/internal/secure"
+
+	"gorm.io/gorm"
 )
 
 type Policy struct {
@@ -53,6 +57,42 @@ type Policy struct {
 	Nodes             []Node    `gorm:"many2many:policy_nodes" json:"-"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+func (p *Policy) BeforeSave(_ *gorm.DB) error {
+	if p.PreHook != "" {
+		encrypted, err := secure.EncryptIfNeeded(p.PreHook)
+		if err != nil {
+			return err
+		}
+		p.PreHook = encrypted
+	}
+	if p.PostHook != "" {
+		encrypted, err := secure.EncryptIfNeeded(p.PostHook)
+		if err != nil {
+			return err
+		}
+		p.PostHook = encrypted
+	}
+	return nil
+}
+
+func (p *Policy) AfterFind(_ *gorm.DB) error {
+	if p.PreHook != "" {
+		decrypted, err := secure.DecryptIfNeeded(p.PreHook)
+		if err != nil {
+			return err
+		}
+		p.PreHook = decrypted
+	}
+	if p.PostHook != "" {
+		decrypted, err := secure.DecryptIfNeeded(p.PostHook)
+		if err != nil {
+			return err
+		}
+		p.PostHook = decrypted
+	}
+	return nil
 }
 
 // PolicyNode 策略-节点关联表
