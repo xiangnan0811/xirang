@@ -49,6 +49,7 @@ export type NodesPageDialogsProps = Pick<
   | "fileBrowserNode"
   | "setFileBrowserNode"
   | "fileBrowserTab"
+  | "canBrowseNodeFiles"
   | "setFileBrowserTab"
   | "batchCmdOpen"
   | "setBatchCmdOpen"
@@ -84,6 +85,7 @@ export function NodesPageDialogs({
   fileBrowserNode,
   setFileBrowserNode,
   fileBrowserTab,
+  canBrowseNodeFiles,
   setFileBrowserTab,
   batchCmdOpen,
   setBatchCmdOpen,
@@ -159,7 +161,7 @@ export function NodesPageDialogs({
         onRun={runDoctorForNode}
       />
 
-      {token && fileBrowserNode && (
+      {token && canBrowseNodeFiles && fileBrowserNode && (
         <Dialog
           open={fileBrowserNode !== null}
           onOpenChange={(open) => { if (!open) { setFileBrowserNode(null); setFileBrowserTab("files"); } }}

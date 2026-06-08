@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
-import { ApiError, buildLoginRedirectPath, isStepUpRequiredError, normalizeRedirectTarget } from "./core";
+import { ApiError, buildLoginRedirectPath, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
 
 function createMockResponse(status = 200, body = "") {
   return {
     status,
     ok: status >= 200 && status < 300,
+    headers: { get: vi.fn().mockReturnValue(null) },
     text: vi.fn().mockResolvedValue(body)
   } as unknown as Response;
 }
@@ -49,6 +50,49 @@ describe("apiClient ID 解析", () => {
       "无效的 int ID"
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("request envelope handling", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("unwraps successful HTTP status envelope codes from backend helpers", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(
+        201,
+        JSON.stringify({ code: 201, message: "ok", data: { id: 7 } })
+      )
+    );
+
+    await expect(request<{ id: number }>("/created", { method: "POST" })).resolves.toEqual({ id: 7 });
+  });
+
+  it("exposes retryAfter from error envelope data", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(
+        429,
+        JSON.stringify({ code: 429, message: "请求过于频繁", data: { retry_after: 12 } })
+      )
+    );
+
+    let captured: unknown;
+    try {
+      await request<void>("/limited");
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(ApiError);
+    expect((captured as ApiError).retryAfter).toBe(12);
   });
 });
 

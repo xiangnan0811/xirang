@@ -49,6 +49,7 @@ export function NodesPage() {
     triggeringNodeId,
     emergencyNodeId,
     isAdmin,
+    canBrowseNodeFiles,
     openCreateDialog,
     openEditDialog,
     onTestNode,
@@ -117,8 +118,9 @@ export function NodesPage() {
     emergencyNodeId,
     onOpenTerminal,
     onMigrate: setMigrateSourceNode,
-    onOpenFileBrowser: setFileBrowserNode,
+    onOpenFileBrowser: canBrowseNodeFiles ? setFileBrowserNode : undefined,
     isAdmin,
+    canBrowseNodeFiles,
   };
 
   return (
@@ -301,6 +303,7 @@ export function NodesPage() {
         fileBrowserNode={state.fileBrowserNode}
         setFileBrowserNode={state.setFileBrowserNode}
         fileBrowserTab={state.fileBrowserTab}
+        canBrowseNodeFiles={state.canBrowseNodeFiles}
         setFileBrowserTab={state.setFileBrowserTab}
         batchCmdOpen={state.batchCmdOpen}
         setBatchCmdOpen={state.setBatchCmdOpen}

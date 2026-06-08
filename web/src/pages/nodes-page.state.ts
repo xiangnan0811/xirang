@@ -34,6 +34,7 @@ export function useNodesPageState() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
+  const canBrowseNodeFiles = role === "admin" || role === "operator";
   const { loading, globalSearch, setGlobalSearch } = useSharedContext();
   const {
     nodes,
@@ -541,6 +542,7 @@ export function useNodesPageState() {
     // auth
     token,
     isAdmin,
+    canBrowseNodeFiles,
     // data
     nodes,
     sshKeys,

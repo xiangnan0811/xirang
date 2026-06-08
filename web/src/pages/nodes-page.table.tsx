@@ -32,6 +32,7 @@ export const NodesTable = React.memo(function NodesTable({
   onMigrate,
   onOpenFileBrowser,
   isAdmin,
+  canBrowseNodeFiles,
 }: NodesViewProps) {
   const { t } = useTranslation();
 
@@ -212,15 +213,17 @@ export const NodesTable = React.memo(function NodesTable({
                           <MonitorPlay className="size-4" aria-hidden />
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                        onClick={() => onOpenFileBrowser?.(node)}
-                      >
-                        <FolderOpen className="size-4" aria-hidden />
-                      </Button>
+                      {canBrowseNodeFiles && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
+                          onClick={() => onOpenFileBrowser?.(node)}
+                        >
+                          <FolderOpen className="size-4" aria-hidden />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"

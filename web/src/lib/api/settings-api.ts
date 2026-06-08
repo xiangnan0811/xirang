@@ -10,6 +10,7 @@ export type SettingDef = {
   min?: string;
   max?: string;
   requires_restart?: boolean;
+  sensitive?: boolean;
 };
 
 export type ResolvedSetting = {
