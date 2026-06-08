@@ -48,6 +48,11 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 
 - `request<T>()` in `core.ts` unwraps the backend `{code, message, data}`
   envelope and throws `ApiError` for HTTP/envelope errors.
+- Success envelopes are valid when `code` is either `0` or the HTTP status code
+  returned by the response, such as `201` from `respondCreated`. Do not treat
+  `code=201` on an HTTP 201 response as an application error.
+- Rate-limit errors expose retry timing through `ApiError.retryAfter`, parsed
+  from the `Retry-After` header first and then from envelope `data.retry_after`.
 - `PaginatedEnvelope<T>` plus `unwrapPaginated` is the preferred pattern for
   paginated endpoint clients.
 - API modules export `create*Api()` factories returning typed methods rather
@@ -68,6 +73,81 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 - Do not add implicit `unknown as T` casts where a mapper can validate and
   normalize the shape.
 - Do not bypass the central request wrapper for normal JSON API calls.
+
+## Scenario: Core API Envelope Handling
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing `web/src/lib/api/core.ts`, backend response helper
+  handling, rate-limit handling, or tests that mock `Response`.
+- Applies to every typed API wrapper that calls `request<T>()`.
+
+### 2. Signatures
+
+- Success envelope: `{ code: 0 | <http_status>, message: string, data: T }`.
+- Error envelope: `{ code: number, message: string, data?: unknown }`.
+- Rate-limit retry field: `data.retry_after` from backend JSON and
+  `Retry-After` from response headers.
+- Error type: `ApiError` with `status`, `message`, `payload`, and optional
+  `retryAfter`.
+
+### 3. Contracts
+
+- `request<T>()` is the only normal JSON request boundary for API wrappers.
+- HTTP success plus envelope `code=0` unwraps `data`.
+- HTTP success plus envelope `code` equal to the response HTTP status also
+  unwraps `data`. This covers `respondCreated` and similar helpers.
+- HTTP success plus any other non-zero envelope code throws `ApiError`.
+- HTTP error responses throw `ApiError` with the backend envelope message when
+  available.
+- `ApiError.retryAfter` must prefer the `Retry-After` header and fall back to
+  `data.retry_after` when the header is missing or invalid.
+- Mocked `Response` objects in tests must include `headers.get()` when exercising
+  `request()`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| HTTP 200 with `code=0` | Resolve with `data`. |
+| HTTP 201 with `code=201` | Resolve with `data`. |
+| HTTP 200 with `code=400` | Throw `ApiError(400, message, payload)`. |
+| HTTP 429 with `Retry-After: 12` | Throw `ApiError` with `retryAfter=12`. |
+| HTTP 429 without header but `data.retry_after=12` | Throw `ApiError` with `retryAfter=12`. |
+| HTTP error body is not an envelope | Throw generic localized request-failed `ApiError`. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `createPolicy()` receives HTTP 201 / `code=201` and maps the returned
+  policy DTO instead of showing an error toast.
+- Base: a rate-limited login request throws `ApiError` with message and
+  retryAfter so UI can render a retry countdown if needed.
+- Bad: frontend code checks `envelope.code !== 0` only and treats successful
+  created responses as failures.
+
+### 6. Tests Required
+
+- `core.ts` or client tests must cover HTTP 201 / `code=201` success envelopes.
+- Tests must cover retryAfter extraction from both `Retry-After` and
+  `data.retry_after`.
+- API wrapper tests that mock `Response` for `request()` must include
+  `headers.get()`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+if (envelope.code !== 0) throw new ApiError(envelope.code, envelope.message, payload);
+```
+
+Correct:
+
+```ts
+if (envelope.code !== 0 && envelope.code !== response.status) {
+  throw new ApiError(envelope.code, envelope.message, payload);
+}
+```
 
 ---
 
