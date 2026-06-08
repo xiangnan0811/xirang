@@ -284,7 +284,7 @@ func (h *AppCredentialHandler) Update(c *gin.Context) {
 		if err := tx.Save(&item).Error; err != nil {
 			return err
 		}
-		// #5 级联更新：重新渲染所有引用此 credential 的 Policy 的 hook
+		// 清理旧版已持久化的自动生成 hook；当前版本在任务运行时即时渲染。
 		return cascadePolicyHooks(tx, id, oldConfigMap, newConfigMap)
 	})
 	if err != nil {
@@ -298,8 +298,9 @@ func (h *AppCredentialHandler) Update(c *gin.Context) {
 
 // cascadePolicyHooks 查询所有引用 credentialID 的 Policy，对其中 app_profile 非空的，
 // 用旧 config 重新渲染 hook 并与当前存储的 hook 比对。若当前 hook 与旧渲染值一致（说明
-// 未被用户手动修改），则更新为新渲染值；否则保留用户手动编辑的内容。
-func cascadePolicyHooks(db *gorm.DB, credentialID uint, oldConfig, newConfig map[string]interface{}) error {
+// 是历史版本自动持久化的 hook），则清空该字段，后续由任务运行时按最新凭据即时渲染；
+// 否则保留管理员手动编辑的内容。
+func cascadePolicyHooks(db *gorm.DB, credentialID uint, oldConfig, _ map[string]interface{}) error {
 	var policies []model.Policy
 	if err := db.Where("app_credential_id = ? AND app_profile != ''", credentialID).Find(&policies).Error; err != nil {
 		return err
@@ -310,17 +311,13 @@ func cascadePolicyHooks(db *gorm.DB, credentialID uint, oldConfig, newConfig map
 		if err != nil {
 			continue // 渲染失败跳过，不阻塞 credential 更新
 		}
-		newPre, newPost, err := profile.RenderHooks(p.AppProfile, newConfig)
-		if err != nil {
-			continue
-		}
 		needsSave := false
-		if p.PreHook == oldPre && newPre != oldPre {
-			p.PreHook = newPre
+		if p.PreHook == oldPre {
+			p.PreHook = ""
 			needsSave = true
 		}
-		if p.PostHook == oldPost && newPost != oldPost {
-			p.PostHook = newPost
+		if p.PostHook == oldPost {
+			p.PostHook = ""
 			needsSave = true
 		}
 		if needsSave {

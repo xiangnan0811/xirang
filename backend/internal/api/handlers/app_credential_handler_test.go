@@ -244,7 +244,7 @@ func TestAppCredentialUpdatePreservePassword(t *testing.T) {
 	}
 }
 
-func TestAppCredentialUpdateCascadeWithoutPassword(t *testing.T) {
+func TestAppCredentialUpdateClearsLegacyGeneratedHooksWithoutPassword(t *testing.T) {
 	db := setupCredentialTestDB(t)
 	h := NewAppCredentialHandler(db)
 
@@ -288,14 +288,11 @@ func TestAppCredentialUpdateCascadeWithoutPassword(t *testing.T) {
 	if err := db.First(&p, 1).Error; err != nil {
 		t.Fatalf("load policy: %v", err)
 	}
-	if !strings.Contains(p.PreHook, "-h 10.0.0.2") {
-		t.Errorf("policy pre-hook should contain updated host, got: %s", p.PreHook)
+	if p.PreHook != "" || p.PostHook != "" {
+		t.Fatalf("legacy auto-rendered hooks should be cleared and re-rendered at runtime, pre=%q post=%q", p.PreHook, p.PostHook)
 	}
-	if strings.Contains(p.PreHook, "10.0.0.1") {
-		t.Errorf("policy pre-hook should not contain old host, got: %s", p.PreHook)
-	}
-	if strings.Contains(p.PreHook, "FAKE_") || strings.Contains(w.Body.String(), `"password"`) {
-		t.Fatalf("no-password cascade leaked password-shaped data: hook=%s response=%s", p.PreHook, w.Body.String())
+	if strings.Contains(w.Body.String(), `"password"`) {
+		t.Fatalf("credential update response leaked password field: %s", w.Body.String())
 	}
 }
 
@@ -427,7 +424,7 @@ func TestAppCredentialListProfiles(t *testing.T) {
 	}
 }
 
-func TestAppCredentialUpdateCascade(t *testing.T) {
+func TestAppCredentialUpdateClearsLegacyGeneratedHooks(t *testing.T) {
 	db := setupCredentialTestDB(t)
 	h := NewAppCredentialHandler(db)
 
@@ -472,17 +469,11 @@ func TestAppCredentialUpdateCascade(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Step 4: 验证 policy 的 hook 已更新为新密码
+	// Step 4: 验证旧版自动生成的 policy hook 已清空，后续任务执行时按最新凭据运行时渲染
 	var p model.Policy
 	db.First(&p, 1)
-	if !strings.Contains(p.PreHook, "FAKE_NEW_CASCADE_PW_FOR_TEST_ONLY") {
-		t.Errorf("policy pre-hook should contain new password, got: %s", p.PreHook)
-	}
-	if strings.Contains(p.PreHook, "FAKE_OLD_CASCADE_PW_FOR_TEST_ONLY") {
-		t.Error("policy pre-hook should NOT contain old password")
-	}
-	if !strings.Contains(p.PostHook, "rm -f /tmp/xirang-mysql-backup.sql") {
-		t.Error("policy post-hook should contain cleanup command")
+	if p.PreHook != "" || p.PostHook != "" {
+		t.Fatalf("legacy auto-rendered hooks should be cleared instead of rewritten, pre=%q post=%q", p.PreHook, p.PostHook)
 	}
 }
 
