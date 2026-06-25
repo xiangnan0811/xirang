@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.4](https://github.com/xiangnan0811/xirang/compare/v0.44.3...v0.44.4) (2026-06-25)
+
+
+### 📚 Documentation
+
+* add agent guidance for project memory ([21d4866](https://github.com/xiangnan0811/xirang/commit/21d48666ac028770c2db3c10f9a019975688299c))
+
 ## [0.44.3](https://github.com/xiangnan0811/xirang/compare/v0.44.2...v0.44.3) (2026-06-08)
 
 
