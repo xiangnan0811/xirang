@@ -102,6 +102,16 @@ describe("AuditPage", () => {
     });
   });
 
+  it("renders a page-level Audit heading", async () => {
+    render(<AuditPage />);
+
+    await waitFor(() => {
+      expect(getAuditLogsMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.getByRole("heading", { level: 1, name: "审计" })).toBeInTheDocument();
+  });
+
   it("筛选参数变更后会带入查询请求", async () => {
     const user = userEvent.setup();
     render(<AuditPage />);
