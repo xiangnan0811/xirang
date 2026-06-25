@@ -100,6 +100,7 @@ const zh = {
     automationRules: "自动化规则",
     serviceMonitors: "服务监控",
     settings: "设置",
+    more: "更多",
     group: {
       core: "核心",
       backup: "备份",
@@ -2762,6 +2763,8 @@ const zh = {
       creating: "创建中...",
       save: "保存",
       saving: "保存中...",
+      createDesc: "创建新的 SLO 目标，配置指标类型、阈值与匹配标签。",
+      editDesc: "修改 SLO 目标的指标类型、阈值与匹配标签。",
     },
     summary: {
       total: "总计",

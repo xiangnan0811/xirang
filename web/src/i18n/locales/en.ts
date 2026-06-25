@@ -100,6 +100,7 @@ const en = {
     automationRules: "Automation Rules",
     serviceMonitors: "Service Monitors",
     settings: "Settings",
+    more: "More",
     group: {
       core: "Core",
       backup: "Backup",
@@ -2762,6 +2763,8 @@ const en = {
       creating: "Creating...",
       save: "Save",
       saving: "Saving...",
+      createDesc: "Create a new SLO target with metric type, threshold, and match tags.",
+      editDesc: "Modify the SLO target's metric type, threshold, and match tags.",
     },
     summary: {
       total: "Total",
