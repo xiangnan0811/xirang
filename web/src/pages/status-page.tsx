@@ -13,14 +13,14 @@ function isAbortError(error: unknown): boolean {
 
 function StatusDot({ status }: { status: string }) {
   const base = "size-2.5 rounded-full shrink-0";
-  if (status === "up") return <span className={`${base} bg-emerald-500`} aria-label="Up" />;
-  if (status === "down") return <span className={`${base} bg-red-500`} aria-label="Down" />;
+  if (status === "up") return <span className={`${base} bg-success`} aria-label="Up" />;
+  if (status === "down") return <span className={`${base} bg-destructive`} aria-label="Down" />;
   return <span className={`${base} bg-muted-foreground/50`} aria-label="Unknown" />;
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "up") return <CheckCircle2 className="size-5 text-emerald-500" aria-hidden="true" />;
-  if (status === "down") return <AlertTriangle className="size-5 text-red-500" aria-hidden="true" />;
+  if (status === "up") return <CheckCircle2 className="size-5 text-success" aria-hidden="true" />;
+  if (status === "down") return <AlertTriangle className="size-5 text-destructive" aria-hidden="true" />;
   return <HelpCircle className="size-5 text-muted-foreground/50" aria-hidden="true" />;
 }
 
@@ -90,9 +90,9 @@ export function StatusPage() {
         <div
           className={`mb-6 rounded-lg border px-6 py-4 ${
             overallStatus === "up"
-              ? "border-emerald-500/30 bg-emerald-500/5"
+              ? "border-success/30 bg-success/5"
               : overallStatus === "down"
-                ? "border-red-500/30 bg-red-500/5"
+                ? "border-destructive/30 bg-destructive/5"
                 : "border-muted-foreground/20 bg-muted/30"
           }`}
         >
