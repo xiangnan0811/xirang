@@ -24,6 +24,9 @@ web/.env
 # ai（Trellis 平台文件由 .claude/ .codex/ 下提交，不整体忽略）
 .claude/settings.local.json
 .codex/*.local.toml
+.omo/
+.opencode/
+.codegraph/
 .gemini/
 .agent/
 CLAUDE.md
