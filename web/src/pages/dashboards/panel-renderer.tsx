@@ -111,7 +111,13 @@ export function PanelRenderer({ panel, data }: RendererProps) {
   switch (panel.chart_type) {
     case "line": {
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={1}
+          minHeight={1}
+          initialDimension={{ width: 1, height: 1 }}
+        >
           <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
@@ -137,7 +143,13 @@ export function PanelRenderer({ panel, data }: RendererProps) {
 
     case "area": {
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={1}
+          minHeight={1}
+          initialDimension={{ width: 1, height: 1 }}
+        >
           <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
@@ -165,7 +177,13 @@ export function PanelRenderer({ panel, data }: RendererProps) {
 
     case "bar": {
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={1}
+          minHeight={1}
+          initialDimension={{ width: 1, height: 1 }}
+        >
           <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="4 3" stroke="hsl(var(--border))" strokeOpacity={0.25} vertical={false} />
             <XAxis dataKey="ts" tick={axisStyle} stroke="transparent" tickLine={false} interval="preserveStartEnd" />
