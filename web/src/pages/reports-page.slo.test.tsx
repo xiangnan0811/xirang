@@ -91,4 +91,19 @@ describe("SLOPanel", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
   });
+
+  it("create dialog includes an accessible description", async () => {
+    render(<SLOPanel />);
+    await waitFor(() => expect(screen.getByText("prod availability")).toBeInTheDocument());
+
+    const allButtons = screen.getAllByRole("button");
+    await userEvent.click(allButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/创建新的 SLO 目标/);
+  });
 });
