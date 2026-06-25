@@ -10,7 +10,7 @@
         { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
         { "type": "perf", "section": "⚡ Performance", "hidden": false },
         { "type": "revert", "section": "⏪ Reverts", "hidden": false },
-        { "type": "docs", "section": "📚 Documentation", "hidden": false },
+        { "type": "docs", "section": "📚 Documentation", "hidden": true },
         { "type": "refactor", "section": "♻️ Refactor", "hidden": true },
         { "type": "test", "section": "✅ Tests", "hidden": true },
         { "type": "build", "section": "🛠 Build System", "hidden": true },
