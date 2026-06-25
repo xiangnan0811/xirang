@@ -180,6 +180,7 @@ export function LoginPage() {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8 animate-fade-in">
       <div aria-hidden className="bg-login-ambient" />
+      <h1 className="sr-only">{t("login.platformName")}</h1>
 
       <div className="relative z-10 grid w-full max-w-5xl gap-4 md:max-w-3xl lg:max-w-5xl lg:grid-cols-[1.1fr_0.9fr]">
         <section className="hidden rounded-lg border border-border bg-card shadow-md p-8 md:flex md:flex-col md:justify-center lg:p-12">
@@ -187,9 +188,9 @@ export function LoginPage() {
             <img src="/xirang-mark.svg" alt="XiRang" className="size-4.5 rounded-xs border border-border bg-background" />
             <span>XiRang / X-Soil</span>
           </div>
-          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
+          <p className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
             <span>{t("login.platformName")}</span>
-          </h1>
+          </p>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
             {t("login.platformSlogan")}
           </p>
@@ -224,7 +225,7 @@ export function LoginPage() {
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary md:hidden">
               <ShieldCheck className="size-6" aria-hidden />
             </div>
-            <h1 className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</h1>
+            <p className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</p>
             {requires2FA ? (
               <>
                 <CardTitle as="h2" className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
