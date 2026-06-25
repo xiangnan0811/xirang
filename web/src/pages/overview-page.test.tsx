@@ -219,6 +219,9 @@ describe("OverviewPage", () => {
 
     render(<OverviewPage />);
 
+    await screen.findByText("近期未发现健康事件");
+    await screen.findByRole("img", { name: /近 1 小时流量与活动趋势图/ });
+
     const preview = screen.getByRole("group", { name: /主机状态矩阵预览/ });
     const previewDots = within(preview)
       .getAllByRole("link")
@@ -238,6 +241,35 @@ describe("OverviewPage", () => {
     expect(fullscreenDots).toHaveLength(210);
     expect(within(fullscreen).getByRole("link", { name: /Node-001，状态在线/ }))
       .toHaveAttribute("href", "/app/nodes/1");
+  });
+
+  it("矩阵链接通过 aria-describedby 关联 tooltip 且 tooltip 支持键盘焦点", async () => {
+    fetchHealthIncidentTimelineMock.mockReturnValue(new Promise(() => undefined));
+    fetchOverviewTrafficMock.mockReturnValue(new Promise(() => undefined));
+    setContext(3, true);
+
+    render(<OverviewPage />);
+
+    const preview = screen.getByRole("group", { name: /主机状态矩阵预览/ });
+    const firstLink = within(preview)
+      .getAllByRole("link")
+      .find((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
+
+    if (!firstLink) {
+      throw new Error("Expected the matrix preview to include a node status link.");
+    }
+
+    const describedBy = firstLink.getAttribute("aria-describedby");
+    if (!describedBy) {
+      throw new Error("Expected the node status link to reference a tooltip description.");
+    }
+
+    const tooltip = document.getElementById(describedBy);
+    if (!tooltip) {
+      throw new Error("Expected the described tooltip element to exist.");
+    }
+    expect(tooltip).toHaveAttribute("role", "tooltip");
+    expect(tooltip.className).toContain("group-focus-within:opacity-100");
   });
 
   it("无数据时显示空提示并输出图表可访问名称", async () => {
