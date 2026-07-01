@@ -547,6 +547,7 @@ const zh = {
     fileBrowserAriaLabel: "浏览节点 {{name}} 文件",
     editNodeAriaLabel: "编辑节点 {{name}}",
     deleteNodeAriaLabel: "删除节点 {{name}}",
+    moreActionsAriaLabel: "节点 {{name}} 更多操作",
     nodeCardAriaLabel: "节点卡片 {{name}}",
     selectNodeAriaLabel: "选择节点 {{name}}",
     selectLabel: "选择",

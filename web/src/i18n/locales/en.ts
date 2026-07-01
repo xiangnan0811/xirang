@@ -547,6 +547,7 @@ const en = {
     fileBrowserAriaLabel: "Browse files on node {{name}}",
     editNodeAriaLabel: "Edit node {{name}}",
     deleteNodeAriaLabel: "Delete node {{name}}",
+    moreActionsAriaLabel: "More actions for node {{name}}",
     nodeCardAriaLabel: "Node card {{name}}",
     selectNodeAriaLabel: "Select node {{name}}",
     selectLabel: "Select",
