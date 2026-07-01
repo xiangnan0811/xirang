@@ -56,10 +56,7 @@ function renderLoginPage() {
 
 function renderLoginPageWithEntries(initialEntries: string[]) {
   return render(
-    <MemoryRouter
-      initialEntries={initialEntries}
-
->
+    <MemoryRouter initialEntries={initialEntries}>
       <LoginPage />
     </MemoryRouter>
   );
@@ -77,6 +74,14 @@ describe("LoginPage", () => {
 
     expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
     expect(apiLoginMock).not.toHaveBeenCalled();
+  });
+
+  it("renders exactly one level-1 heading", () => {
+    renderLoginPage();
+
+    const h1s = screen.getAllByRole("heading", { level: 1 });
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0]).toHaveTextContent("息壤集中备份管理平台");
   });
 
   beforeEach(() => {

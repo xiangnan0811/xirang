@@ -3,34 +3,46 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { I18nextProvider } from "react-i18next";
+import i18n, { setLanguage } from "@/i18n";
 import { ThemeProvider } from "@/context/theme-context";
 import { MobileNavigation } from "./mobile-navigation";
 
 function renderWithProviders() {
   return render(
     <ThemeProvider>
-      <MemoryRouter
-        initialEntries={["/app/overview"]}
-
->
-        {/* `role` 是组件自定义 prop（用户角色），并非 ARIA role；
-             jsx-a11y 误判为 role 属性。 */}
-        {/* eslint-disable-next-line jsx-a11y/aria-role */}
-        <MobileNavigation username="alice" role="admin" onLogout={vi.fn()} onRefresh={vi.fn()} />
-      </MemoryRouter>
+      <I18nextProvider i18n={i18n}>
+        <MemoryRouter initialEntries={["/app/overview"]}>
+          {/* `role` 是组件自定义 prop（用户角色），并非 ARIA role；
+               jsx-a11y 误判为 role 属性。 */}
+          {/* eslint-disable-next-line jsx-a11y/aria-role */}
+          <MobileNavigation username="alice" role="admin" onLogout={vi.fn()} onRefresh={vi.fn()} />
+        </MemoryRouter>
+      </I18nextProvider>
     </ThemeProvider>
   );
 }
 
 describe("MobileNavigation", () => {
-  it("底部导航使用链接语义并标记当前页", () => {
+  it("底部导航使用链接语义并标记当前页", async () => {
+    await setLanguage("zh");
     renderWithProviders();
 
     expect(screen.getByRole("link", { name: "切换到概览" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "切换到节点" })).toBeInTheDocument();
   });
 
+  it("More tab renders translated nav.more label, not the raw key", async () => {
+    await setLanguage("zh");
+    renderWithProviders();
+
+    const moreButton = screen.getByRole("button", { name: "打开快捷菜单" });
+    expect(moreButton).toHaveTextContent("更多");
+    expect(moreButton).not.toHaveTextContent("nav.more");
+  });
+
   it("抽屉具备对话框语义并支持 Esc 关闭且焦点回到触发按钮", async () => {
+    await setLanguage("zh");
     const user = userEvent.setup();
 
     renderWithProviders();

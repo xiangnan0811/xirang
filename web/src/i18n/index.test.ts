@@ -24,4 +24,12 @@ describe("i18n bootstrap", () => {
     expect(window.localStorage.getItem("xirang.language")).toBe("en");
     expect(document.documentElement.lang).toBe("en");
   });
+
+  it("resolves nav.more in both zh and en", async () => {
+    await setLanguage("zh");
+    expect(i18n.t("nav.more")).toBe("更多");
+
+    await setLanguage("en");
+    expect(i18n.t("nav.more")).toBe("More");
+  });
 });

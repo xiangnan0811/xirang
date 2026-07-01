@@ -118,6 +118,24 @@ describe("ServiceMonitorsPage", () => {
     expect(screen.getByText("监控清单")).toBeInTheDocument();
   });
 
+  it("does not render raw status palette classes for status dots or labels", async () => {
+    apiMock.list.mockResolvedValueOnce([
+      monitor,
+      { ...monitor, id: 2, name: "Down API", last_status: "down", uptime_pct: 0 },
+    ]);
+    const { container } = render(<ServiceMonitorsPage />);
+
+    await waitFor(() => expect(screen.getByText("Down API")).toBeInTheDocument());
+
+    const html = container.innerHTML;
+    expect(html).toContain("bg-success");
+    expect(html).toContain("bg-destructive");
+    expect(html).toContain("text-destructive");
+    expect(html).not.toContain("emerald-500");
+    expect(html).not.toContain("red-500");
+    expect(html).not.toContain("text-red-600");
+  });
+
   it("renders row actions with monitor-specific accessible names", async () => {
     render(<ServiceMonitorsPage />);
 

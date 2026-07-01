@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { PageHero } from "@/components/ui/page-hero";
 import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast-sonner";
 
@@ -180,6 +181,7 @@ export function AuditPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
+      <PageHero title={t("nav.audit")} />
       <Card className="rounded-lg border border-border bg-card">
         <CardContent className="space-y-4 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-4">

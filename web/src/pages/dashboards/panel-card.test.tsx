@@ -13,12 +13,30 @@ vi.mock("./hooks/use-panel-data", () => ({
   usePanelData: vi.fn(),
 }));
 
-// recharts 在 jsdom 中需要 mock ResizeObserver
-global.ResizeObserver = class {
-  observe() {}
+class NonZeroSizeResizeObserver {
+  private readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(target: Element) {
+    const size: ResizeObserverSize = { inlineSize: 300, blockSize: 200 };
+    const entry: ResizeObserverEntry = {
+      target,
+      contentRect: new DOMRect(0, 0, 300, 200),
+      borderBoxSize: [size],
+      contentBoxSize: [size],
+      devicePixelContentBoxSize: [size],
+    };
+    this.callback([entry], this);
+  }
+
   unobserve() {}
   disconnect() {}
-};
+}
+
+global.ResizeObserver = NonZeroSizeResizeObserver;
 
 import { usePanelData } from "./hooks/use-panel-data";
 const mockUsePanelData = vi.mocked(usePanelData);
@@ -82,6 +100,33 @@ function renderCard(props: CardProps = {}) {
 describe("PanelCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("does not emit Recharts dimension warnings when rendering a chart", async () => {
+    const warnSpy = vi.spyOn(console, "warn");
+
+    mockUsePanelData.mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      retry: vi.fn(),
+    });
+
+    try {
+      renderCard();
+
+      await waitFor(() => {
+        expect(screen.getByText("CPU 使用率")).toBeInTheDocument();
+      });
+
+      const rechartsDimensionWarnings = warnSpy.mock.calls
+        .map((args) => String(args[0] ?? ""))
+        .filter((msg) => /width\(/i.test(msg) && /height\(/i.test(msg));
+
+      expect(rechartsDimensionWarnings).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("loading 状态下显示骨架屏", () => {

@@ -444,6 +444,7 @@ export function OverviewPage() {
                       let dotColor = "bg-muted-foreground/30";
                       if (node.status === "online") dotColor = "bg-success";
                       if (node.status === "warning") dotColor = "bg-warning";
+                      const tooltipId = `overview-node-tooltip-${node.id}`;
                       return (
                         <Link
                           key={node.id}
@@ -451,9 +452,14 @@ export function OverviewPage() {
                           data-testid={`overview-node-link-${node.id}`}
                           className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                           aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
+                          aria-describedby={tooltipId}
                         >
-                          {/* Tooltip on hover */}
-                          <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
+                          {/* Tooltip on hover and keyboard focus */}
+                          <span
+                            id={tooltipId}
+                            role="tooltip"
+                            className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
+                          >
                             <span className="font-medium">{node.name}</span>
                             <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
                           </span>
@@ -526,6 +532,7 @@ export function OverviewPage() {
                 let dotColor = "bg-muted-foreground/30";
                 if (node.status === "online") dotColor = "bg-success";
                 if (node.status === "warning") dotColor = "bg-warning";
+                const tooltipId = `overview-node-tooltip-full-${node.id}`;
                 return (
                   <Link
                     key={node.id}
@@ -534,8 +541,13 @@ export function OverviewPage() {
                     className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
                     onClick={() => setMatrixFullscreen(false)}
                     aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
+                    aria-describedby={tooltipId}
                   >
-                    <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
+                    <span
+                      id={tooltipId}
+                      role="tooltip"
+                      className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
+                    >
                       <span className="font-medium">{node.name}</span>
                       <span className="ml-2 text-muted-foreground">{node.ip}</span>
                       <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>

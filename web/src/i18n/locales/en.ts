@@ -100,6 +100,7 @@ const en = {
     automationRules: "Automation Rules",
     serviceMonitors: "Service Monitors",
     settings: "Settings",
+    more: "More",
     group: {
       core: "Core",
       backup: "Backup",
@@ -546,6 +547,7 @@ const en = {
     fileBrowserAriaLabel: "Browse files on node {{name}}",
     editNodeAriaLabel: "Edit node {{name}}",
     deleteNodeAriaLabel: "Delete node {{name}}",
+    moreActionsAriaLabel: "More actions for node {{name}}",
     nodeCardAriaLabel: "Node card {{name}}",
     selectNodeAriaLabel: "Select node {{name}}",
     selectLabel: "Select",
@@ -2762,6 +2764,8 @@ const en = {
       creating: "Creating...",
       save: "Save",
       saving: "Saving...",
+      createDesc: "Create a new SLO target with metric type, threshold, and match tags.",
+      editDesc: "Modify the SLO target's metric type, threshold, and match tags.",
     },
     summary: {
       total: "Total",

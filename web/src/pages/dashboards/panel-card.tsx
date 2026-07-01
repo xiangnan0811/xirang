@@ -175,7 +175,7 @@ function PanelEmpty({ label }: PanelEmptyProps) {
 type PanelBodyProps = { panel: Panel; data: PanelQueryResult };
 function PanelBody({ panel, data }: PanelBodyProps) {
   return (
-    <div className="h-full w-full">
+    <div className="h-full min-h-[1px] w-full">
       <PanelRenderer panel={panel} data={data} />
     </div>
   );

@@ -1,10 +1,17 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
+import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, MoreHorizontal, ServerCog, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { getNodeStatusMeta } from "@/lib/status";
 import { getDiskBarToneClass } from "@/pages/nodes-page.utils";
 import { cn } from "@/lib/utils";
@@ -185,16 +192,6 @@ export const NodesTable = React.memo(function NodesTable({
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
-                        onClick={() => onOpenDoctor?.(node)}
-                        disabled={doctorNodeId === node.id}
-                      >
-                        {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
                         asChild
                       >
@@ -202,66 +199,68 @@ export const NodesTable = React.memo(function NodesTable({
                           <Terminal className="size-4" aria-hidden />
                         </Link>
                       </Button>
-                      {isAdmin && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
-                          onClick={() => onOpenTerminal?.(node)}
-                        >
-                          <MonitorPlay className="size-4" aria-hidden />
-                        </Button>
-                      )}
-                      {canBrowseNodeFiles && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                          onClick={() => onOpenFileBrowser?.(node)}
-                        >
-                          <FolderOpen className="size-4" aria-hidden />
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                        onClick={() => openEditDialog(node)}
-                      >
-                        <Wrench className="size-4" aria-hidden />
-                      </Button>
-                      {onMigrate && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={t("nodes.migrateShort")} title={t("nodes.migrateShort")}
-                          onClick={() => onMigrate(node)}
-                        >
-                          <ArrowRightLeft className="size-4" aria-hidden />
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                        aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
-                        onClick={() => onDeleteNode(node)}
-                      >
-                        <Trash2 className="size-4" aria-hidden />
-                      </Button>
                       <Button
                         size="sm"
-                        className="ml-2"
                         disabled={triggeringNodeId === node.id}
                         onClick={() => void handleTriggerBackup(node.id, node.name)}
                       >
                         {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
                         {t("nodes.manualBackup")}
                       </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                            aria-label={t("nodes.moreActionsAriaLabel", { name: node.name })}
+                            title={t("common.more")}
+                          >
+                            <MoreHorizontal className="size-4" aria-hidden />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem
+                            disabled={doctorNodeId === node.id}
+                            onClick={() => onOpenDoctor?.(node)}
+                          >
+                            {doctorNodeId === node.id
+                              ? <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                              : <Stethoscope className="mr-2 size-4" aria-hidden />}
+                            {t("nodes.doctor")}
+                          </DropdownMenuItem>
+                          {isAdmin && (
+                            <DropdownMenuItem onClick={() => onOpenTerminal?.(node)}>
+                              <MonitorPlay className="mr-2 size-4" aria-hidden />
+                              {t("nodes.webTerminal")}
+                            </DropdownMenuItem>
+                          )}
+                          {canBrowseNodeFiles && (
+                            <DropdownMenuItem onClick={() => onOpenFileBrowser?.(node)}>
+                              <FolderOpen className="mr-2 size-4" aria-hidden />
+                              {t("nodes.fileBrowser")}
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem onClick={() => openEditDialog(node)}>
+                            <Wrench className="mr-2 size-4" aria-hidden />
+                            {t("nodes.editNode")}
+                          </DropdownMenuItem>
+                          {onMigrate && (
+                            <DropdownMenuItem onClick={() => onMigrate(node)}>
+                              <ArrowRightLeft className="mr-2 size-4" aria-hidden />
+                              {t("nodes.migrateShort")}
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => onDeleteNode(node)}
+                          >
+                            <Trash2 className="mr-2 size-4" aria-hidden />
+                            {t("nodes.deleteNode")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </td>
                 </tr>

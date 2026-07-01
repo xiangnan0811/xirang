@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
@@ -63,7 +63,16 @@ vi.mock("@/hooks/use-confirm", () => ({
 }));
 
 vi.mock("@/components/node-editor-dialog", () => ({
-  NodeEditorDialog: () => null,
+  NodeEditorDialog: ({ open, editingNode }: { open: boolean; editingNode: { name: string } | null }) =>
+    open ? (
+      <div role="dialog" aria-label={editingNode ? `编辑节点 - ${editingNode.name}` : "编辑节点"}>
+        editor
+      </div>
+    ) : null,
+}));
+
+vi.mock("@/components/web-terminal", () => ({
+  default: () => <div data-testid="web-terminal-mock" />,
 }));
 
 vi.mock("@/components/ui/toast-sonner", () => ({
@@ -411,5 +420,156 @@ describe("NodesPage", () => {
 
     expect(screen.getByText("当前筛选 2 / 2 个节点")).toBeInTheDocument();
     expect(screen.getAllByText("node-prod-1")).toHaveLength(2);
+  });
+
+  it("桌面行保留主操作内联并将次级操作聚合到更多菜单", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(
+      "xirang.nodes.view",
+      JSON.stringify("list")
+    );
+    createContext();
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const table = screen.getByRole("table");
+    const prodLink = within(table).getByRole("link", { name: "node-prod-1" });
+    const prodRow = prodLink.closest("tr") as HTMLElement;
+    expect(prodRow).not.toBeNull();
+    const row = within(prodRow);
+
+    expect(
+      row.getByRole("button", { name: /测试节点 node-prod-1 连接/ })
+    ).toBeInTheDocument();
+    expect(
+      row.getByRole("link", { name: /查看节点 node-prod-1 日志/ })
+    ).toBeInTheDocument();
+    expect(
+      row.getByRole("button", { name: /手动备份/ })
+    ).toBeInTheDocument();
+
+    const overflowTrigger = row.getByRole("button", {
+      name: /节点 node-prod-1 更多操作/,
+    });
+    expect(overflowTrigger).toBeInTheDocument();
+
+    expect(
+      row.queryByRole("button", { name: /运行节点 node-prod-1 Fleet Doctor/ })
+    ).not.toBeInTheDocument();
+    expect(
+      row.queryByRole("button", { name: /删除节点 node-prod-1/ })
+    ).not.toBeInTheDocument();
+
+    await user.click(overflowTrigger);
+
+    expect(
+      screen.getByRole("menuitem", { name: /Fleet Doctor/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /Web 终端/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /文件浏览/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /编辑节点/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /迁移/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /删除节点/ })
+    ).toBeInTheDocument();
+  });
+
+  it("桌面行更多菜单的 Fleet Doctor 菜单项触发诊断并打开结果对话框", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    createContext();
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const table = screen.getByRole("table");
+    const prodLink = within(table).getByRole("link", { name: "node-prod-1" });
+    const prodRow = prodLink.closest("tr") as HTMLElement;
+    const overflowTrigger = within(prodRow).getByRole("button", {
+      name: /节点 node-prod-1 更多操作/,
+    });
+
+    await user.click(overflowTrigger);
+    await user.click(screen.getByRole("menuitem", { name: /Fleet Doctor/ }));
+
+    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1);
+    expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+  });
+
+  it("桌面行更多菜单的删除菜单项触发确认流程并删除节点", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    createContext();
+    const deleteNodeMock = nodesRef.current.deleteNode as ReturnType<typeof vi.fn>;
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const table = screen.getByRole("table");
+    const prodLink = within(table).getByRole("link", { name: "node-prod-1" });
+    const prodRow = prodLink.closest("tr") as HTMLElement;
+    const overflowTrigger = within(prodRow).getByRole("button", {
+      name: /节点 node-prod-1 更多操作/,
+    });
+
+    await user.click(overflowTrigger);
+    await user.click(screen.getByRole("menuitem", { name: /删除节点/ }));
+
+    expect(confirmMock).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(deleteNodeMock).toHaveBeenCalledWith(1);
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith(
+      expect.stringContaining("节点 node-prod-1 已删除")
+    );
+  });
+
+  it("桌面行更多菜单的 Web 终端、文件浏览、编辑菜单项分别打开对应对话框", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    createContext();
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const table = screen.getByRole("table");
+    const prodLink = within(table).getByRole("link", { name: "node-prod-1" });
+    const prodRow = prodLink.closest("tr") as HTMLElement;
+    const row = within(prodRow);
+
+    await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Web 终端/ }));
+    expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
+    await user.click(screen.getByRole("menuitem", { name: /文件浏览/ }));
+    expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
+    await user.click(screen.getByRole("menuitem", { name: /编辑节点/ }));
+    expect(await screen.findByRole("dialog", { name: /编辑节点 - node-prod-1/ })).toBeInTheDocument();
   });
 });

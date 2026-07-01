@@ -291,6 +291,7 @@ function SLODialog({
       open={open}
       onOpenChange={onOpenChange}
       title={existing ? t("slo.edit") : t("slo.new")}
+      description={existing ? t("slo.dialog.editDesc") : t("slo.dialog.createDesc")}
       size="md"
       saving={saving}
       onSubmit={handleSubmit}

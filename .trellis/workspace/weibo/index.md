@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
-- **Last Active**: 2026-06-08
+- **Total Sessions**: 5
+- **Last Active**: 2026-07-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~109 | Active |
+| `journal-1.md` | ~186 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-07-01 | Frontend audit remediation phase 2 | `1889b33`, `b6a2612`, `6b6059c` | `fix/frontend-audit-remediation` |
+| 4 | 2026-06-25 | 前端审查整改收尾 | `32aa2a5`, `2c0e7f4`, `e715bd9`, `d64421f`, `a677798`, `af08b0d`, `a710784`, `d532909`, `e3f14c9`, `0e9bb79` | `fix/frontend-audit-remediation` |
 | 3 | 2026-06-08 | Bug audit workflow fixes | `621f6a3`, `b2e42cf`, `cc4b83e`, `77322d0` | `bug-audit-workflow` |
 | 2 | 2026-06-08 | 重建 Trellis 配置更新 PR | `7ed2050` | `chore/update-trellis-config-clean` |
 | 1 | 2026-06-08 | 清理 OMC 和 Superpowers 配置 | `2dbcc63` | `chore/cleanup-omc-superpowers` |

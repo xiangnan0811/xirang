@@ -49,8 +49,8 @@ function headersToJSON(kvs: HeaderKV[]): string {
 }
 
 function statusDot(status: string) {
-  if (status === "up") return <span className="mr-1.5 inline-block size-2 rounded-full bg-emerald-500" aria-hidden="true" />;
-  if (status === "down") return <span className="mr-1.5 inline-block size-2 rounded-full bg-red-500" aria-hidden="true" />;
+  if (status === "up") return <span className="mr-1.5 inline-block size-2 rounded-full bg-success" aria-hidden="true" />;
+  if (status === "down") return <span className="mr-1.5 inline-block size-2 rounded-full bg-destructive" aria-hidden="true" />;
   return <span className="mr-1.5 inline-block size-2 rounded-full bg-muted-foreground/40" aria-hidden="true" />;
 }
 
@@ -372,7 +372,7 @@ export function ServiceMonitorsPage() {
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center">
                           {statusDot(monitor.last_status)}
-                          <span className={monitor.last_status === "down" ? "text-red-600" : ""}>
+                          <span className={monitor.last_status === "down" ? "text-destructive" : ""}>
                             {lastStatusLabel(monitor.last_status)}
                           </span>
                         </span>
