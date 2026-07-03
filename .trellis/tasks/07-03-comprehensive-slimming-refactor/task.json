@@ -1,0 +1,28 @@
+{
+  "id": "comprehensive-slimming-refactor",
+  "name": "comprehensive-slimming-refactor",
+  "title": "全面瘦身重构",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-03",
+  "completedAt": null,
+  "branch": "chore/slimming-refactor-planning",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-03-policy-node-id-query-slimming"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

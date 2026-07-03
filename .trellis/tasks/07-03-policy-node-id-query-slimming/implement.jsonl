@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Handler/service boundary and package organization for a backend-only policy response optimization."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend response helper, test, and conservative behavior-change requirements."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"GORM query and association-loading conventions for replacing full preloads with targeted join-table reads."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Avoid introducing duplicate response mapping or ad hoc helper patterns while slimming repeated logic."}
