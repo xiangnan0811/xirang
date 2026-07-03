@@ -184,3 +184,37 @@ Grouped /app/nodes desktop secondary row actions into an overflow menu, preserve
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Policy node_ids query slimming
+
+**Date**: 2026-07-03
+**Task**: Policy node_ids query slimming
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Planned the comprehensive slimming refactor parent task, implemented the first backend child by loading policy node_ids from policy_nodes for list/detail responses, added regression tests, and verified handler/backend tests plus build.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e878df2` | (see git log) |
+| `56e2492` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
