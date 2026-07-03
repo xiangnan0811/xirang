@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func openPolicyHandlerTestDB(t *testing.T) *gorm.DB {
@@ -30,6 +32,200 @@ func openPolicyHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("迁移测试表失败: %v", err)
 	}
 	return db
+}
+
+type policySQLRecorder struct {
+	statements []string
+}
+
+func (r *policySQLRecorder) LogMode(gormlogger.LogLevel) gormlogger.Interface {
+	return r
+}
+
+func (r *policySQLRecorder) Info(context.Context, string, ...any)  {}
+func (r *policySQLRecorder) Warn(context.Context, string, ...any)  {}
+func (r *policySQLRecorder) Error(context.Context, string, ...any) {}
+
+func (r *policySQLRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	sql, _ := fc()
+	if sql != "" {
+		r.statements = append(r.statements, sql)
+	}
+}
+
+func (r *policySQLRecorder) containsFullNodeSelect() bool {
+	for _, statement := range r.statements {
+		normalized := strings.ToLower(statement)
+		if strings.Contains(normalized, "from `nodes`") ||
+			strings.Contains(normalized, `from "nodes"`) ||
+			strings.Contains(normalized, "from nodes ") {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *policySQLRecorder) containsPolicyNodeSelect() bool {
+	for _, statement := range r.statements {
+		normalized := strings.ToLower(statement)
+		if strings.Contains(normalized, "from `policy_nodes`") ||
+			strings.Contains(normalized, `from "policy_nodes"`) ||
+			strings.Contains(normalized, "from policy_nodes ") {
+			return true
+		}
+	}
+	return false
+}
+
+func newPolicyHandlerWithSQLRecorder(db *gorm.DB) (*PolicyHandler, *policySQLRecorder) {
+	recorder := &policySQLRecorder{}
+	return NewPolicyHandler(db.Session(&gorm.Session{Logger: recorder}), nil), recorder
+}
+
+func equalUintSlices(a, b []uint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPolicyListNodeIDsUseJoinTableWithoutLoadingNodes(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	nodeA := model.Node{Name: "node-a", Host: "10.10.0.1", BackupDir: "/backup/node-a"}
+	nodeB := model.Node{Name: "node-b", Host: "10.10.0.2", BackupDir: "/backup/node-b"}
+	nodeC := model.Node{Name: "node-c", Host: "10.10.0.3", BackupDir: "/backup/node-c"}
+	for _, node := range []*model.Node{&nodeA, &nodeB, &nodeC} {
+		if err := db.Create(node).Error; err != nil {
+			t.Fatalf("创建测试节点失败: %v", err)
+		}
+	}
+
+	noNodes := model.Policy{Name: "policy-no-nodes", SourcePath: "/data/none", TargetPath: config.BackupRoot, CronSpec: "0 1 * * *"}
+	oneNode := model.Policy{Name: "policy-one-node", SourcePath: "/data/one", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *"}
+	multipleNodes := model.Policy{Name: "policy-multiple-nodes", SourcePath: "/data/multiple", TargetPath: config.BackupRoot, CronSpec: "0 3 * * *"}
+	for _, policyEntity := range []*model.Policy{&noNodes, &oneNode, &multipleNodes} {
+		if err := db.Create(policyEntity).Error; err != nil {
+			t.Fatalf("创建测试策略失败: %v", err)
+		}
+	}
+	for _, link := range []model.PolicyNode{
+		{PolicyID: oneNode.ID, NodeID: nodeA.ID},
+		{PolicyID: multipleNodes.ID, NodeID: nodeB.ID},
+		{PolicyID: multipleNodes.ID, NodeID: nodeC.ID},
+	} {
+		if err := db.Create(&link).Error; err != nil {
+			t.Fatalf("创建策略节点关联失败: %v", err)
+		}
+	}
+
+	handler, recorder := newPolicyHandlerWithSQLRecorder(db)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	r.GET("/policies", handler.List)
+
+	req := httptest.NewRequest(http.MethodGet, "/policies", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Data []struct {
+			ID      uint   `json:"id"`
+			NodeIDs []uint `json:"node_ids"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v, body=%s", err, resp.Body.String())
+	}
+	if len(envelope.Data) != 3 {
+		t.Fatalf("期望 3 条策略，实际: %d", len(envelope.Data))
+	}
+
+	wantNodeIDs := map[uint][]uint{
+		noNodes.ID:       {},
+		oneNode.ID:       {nodeA.ID},
+		multipleNodes.ID: {nodeB.ID, nodeC.ID},
+	}
+	for _, item := range envelope.Data {
+		if !equalUintSlices(item.NodeIDs, wantNodeIDs[item.ID]) {
+			t.Fatalf("policy %d node_ids 期望 %v，实际 %v", item.ID, wantNodeIDs[item.ID], item.NodeIDs)
+		}
+	}
+	if !recorder.containsPolicyNodeSelect() {
+		t.Fatalf("期望通过 policy_nodes 查询 node_ids，实际 SQL: %#v", recorder.statements)
+	}
+	if recorder.containsFullNodeSelect() {
+		t.Fatalf("列表响应不应加载完整 nodes 记录，实际 SQL: %#v", recorder.statements)
+	}
+}
+
+func TestPolicyGetNodeIDsUseJoinTableWithoutLoadingNodes(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	nodeA := model.Node{Name: "detail-node-a", Host: "10.20.0.1", BackupDir: "/backup/detail-a"}
+	nodeB := model.Node{Name: "detail-node-b", Host: "10.20.0.2", BackupDir: "/backup/detail-b"}
+	for _, node := range []*model.Node{&nodeA, &nodeB} {
+		if err := db.Create(node).Error; err != nil {
+			t.Fatalf("创建测试节点失败: %v", err)
+		}
+	}
+	policyEntity := model.Policy{Name: "policy-detail-node-ids", SourcePath: "/data/detail", TargetPath: config.BackupRoot, CronSpec: "0 4 * * *"}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建测试策略失败: %v", err)
+	}
+	for _, link := range []model.PolicyNode{
+		{PolicyID: policyEntity.ID, NodeID: nodeA.ID},
+		{PolicyID: policyEntity.ID, NodeID: nodeB.ID},
+	} {
+		if err := db.Create(&link).Error; err != nil {
+			t.Fatalf("创建策略节点关联失败: %v", err)
+		}
+	}
+
+	handler, recorder := newPolicyHandlerWithSQLRecorder(db)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	r.GET("/policies/:id", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyEntity.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var envelope struct {
+		Data struct {
+			ID      uint   `json:"id"`
+			NodeIDs []uint `json:"node_ids"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v, body=%s", err, resp.Body.String())
+	}
+	if envelope.Data.ID != policyEntity.ID {
+		t.Fatalf("期望 policy id=%d，实际=%d", policyEntity.ID, envelope.Data.ID)
+	}
+	wantNodeIDs := []uint{nodeA.ID, nodeB.ID}
+	if !equalUintSlices(envelope.Data.NodeIDs, wantNodeIDs) {
+		t.Fatalf("详情 node_ids 期望 %v，实际 %v", wantNodeIDs, envelope.Data.NodeIDs)
+	}
+	if !recorder.containsPolicyNodeSelect() {
+		t.Fatalf("期望通过 policy_nodes 查询 node_ids，实际 SQL: %#v", recorder.statements)
+	}
+	if recorder.containsFullNodeSelect() {
+		t.Fatalf("详情响应不应加载完整 nodes 记录，实际 SQL: %#v", recorder.statements)
+	}
 }
 
 // TestPolicyUpdateWarningUsesEnvelope reproduces the regression where toggling a

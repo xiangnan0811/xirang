@@ -107,10 +107,7 @@ type policyRequest struct {
 // @Failure      401  {object}  handlers.Response
 // @Router       /policies [get]
 func (h *PolicyHandler) List(c *gin.Context) {
-	// TODO: Preloading full Nodes is wasteful — buildPolicyResponse only uses node IDs.
-	// Replace Preload("Nodes") with a lighter query on policy_nodes to collect policy_id → []nodeID
-	// maps, then pass those maps into buildPolicyResponse instead of p.Nodes.
-	query := h.db.Preload("Nodes").Order("id asc")
+	query := h.db.WithContext(c.Request.Context()).Order("id asc")
 
 	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
 		respondInternalError(c, err)
@@ -125,6 +122,11 @@ func (h *PolicyHandler) List(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	nodeIDsByPolicy, err := h.policyNodeIDsByPolicyID(c, policies)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	latestDrillByPolicy, err := h.latestDrillSummaries(c, policies)
 	if err != nil {
 		respondInternalError(c, err)
@@ -133,7 +135,7 @@ func (h *PolicyHandler) List(c *gin.Context) {
 	includeHooks := policyResponseIncludesHooks(c)
 	result := make([]gin.H, len(policies))
 	for i, p := range policies {
-		result[i] = buildPolicyResponse(p, latestDrillByPolicy[p.ID], includeHooks)
+		result[i] = buildPolicyResponse(p, nodeIDsByPolicy[p.ID], latestDrillByPolicy[p.ID], includeHooks)
 	}
 	respondOK(c, result)
 }
@@ -156,11 +158,17 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		return
 	}
 	var p model.Policy
-	if err := h.db.Preload("Nodes").First(&p, id).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).First(&p, id).Error; err != nil {
 		respondNotFound(c, "策略不存在")
 		return
 	}
-	if allowed, err := authorizePolicyOwnership(c, h.db, p); err != nil {
+	nodeIDsByPolicy, err := h.policyNodeIDsByPolicyID(c, []model.Policy{p})
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	nodeIDs := nodeIDsByPolicy[p.ID]
+	if allowed, err := authorizePolicyOwnership(c, h.db, policyWithNodeIDs(p, nodeIDs)); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
@@ -172,7 +180,7 @@ func (h *PolicyHandler) Get(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, buildPolicyResponse(p, latestDrill, policyResponseIncludesHooks(c)))
+	respondOK(c, buildPolicyResponse(p, nodeIDs, latestDrill, policyResponseIncludesHooks(c)))
 }
 
 // Create godoc
@@ -479,7 +487,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 
 	// 重新加载以获取关联节点
 	h.db.Preload("Nodes").First(&p, p.ID)
-	respondCreated(c, buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)))
+	respondCreated(c, buildPolicyResponse(p, policyNodeIDsFromLoadedNodes(p), nil, policyResponseIncludesHooks(c)))
 }
 
 // Update godoc
@@ -859,11 +867,11 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{
 			Code:    http.StatusOK,
 			Message: fmt.Sprintf("策略备份目标路径已从 %s 统一为 /backup，旧路径下的备份数据不会自动迁移", oldTargetPath),
-			Data:    buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)),
+			Data:    buildPolicyResponse(p, policyNodeIDsFromLoadedNodes(p), nil, policyResponseIncludesHooks(c)),
 		})
 		return
 	}
-	respondOK(c, buildPolicyResponse(p, nil, policyResponseIncludesHooks(c)))
+	respondOK(c, buildPolicyResponse(p, policyNodeIDsFromLoadedNodes(p), nil, policyResponseIncludesHooks(c)))
 }
 
 // Delete godoc
@@ -1037,16 +1045,52 @@ func (h *PolicyHandler) latestDrillSummaries(c *gin.Context, policies []model.Po
 	return result, nil
 }
 
+func (h *PolicyHandler) policyNodeIDsByPolicyID(c *gin.Context, policies []model.Policy) (map[uint][]uint, error) {
+	result := make(map[uint][]uint, len(policies))
+	if len(policies) == 0 {
+		return result, nil
+	}
+	policyIDs := make([]uint, 0, len(policies))
+	for _, p := range policies {
+		policyIDs = append(policyIDs, p.ID)
+	}
+
+	var links []model.PolicyNode
+	if err := h.db.WithContext(c.Request.Context()).Where("policy_id IN ?", policyIDs).Order("policy_id asc, node_id asc").Find(&links).Error; err != nil {
+		return nil, err
+	}
+	for _, link := range links {
+		result[link.PolicyID] = append(result[link.PolicyID], link.NodeID)
+	}
+	return result, nil
+}
+
 func policyResponseIncludesHooks(c *gin.Context) bool {
 	role, _ := c.Get("role")
 	return role == "admin"
 }
 
-// buildPolicyResponse 构建策略响应，避免序列化 Node 中的敏感字段（Password/PrivateKey）。
-func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary, includeHooks bool) gin.H {
+func policyNodeIDsFromLoadedNodes(p model.Policy) []uint {
 	nodeIDs := make([]uint, len(p.Nodes))
 	for i, n := range p.Nodes {
 		nodeIDs[i] = n.ID
+	}
+	return nodeIDs
+}
+
+func policyWithNodeIDs(p model.Policy, nodeIDs []uint) model.Policy {
+	p.Nodes = make([]model.Node, len(nodeIDs))
+	for i, id := range nodeIDs {
+		p.Nodes[i] = model.Node{ID: id}
+	}
+	return p
+}
+
+// buildPolicyResponse 构建策略响应，避免序列化 Node 中的敏感字段（Password/PrivateKey）。
+func buildPolicyResponse(p model.Policy, nodeIDs []uint, latestDrill *latestDrillSummary, includeHooks bool) gin.H {
+	responseNodeIDs := append([]uint(nil), nodeIDs...)
+	if responseNodeIDs == nil {
+		responseNodeIDs = []uint{}
 	}
 	preHook := ""
 	postHook := ""
@@ -1094,7 +1138,7 @@ func buildPolicyResponse(p model.Policy, latestDrill *latestDrillSummary, includ
 		"keep_weekly":           p.KeepWeekly,
 		"keep_monthly":          p.KeepMonthly,
 		"keep_yearly":           p.KeepYearly,
-		"node_ids":              nodeIDs,
+		"node_ids":              responseNodeIDs,
 		"latest_drill":          latestDrill,
 		"created_at":            p.CreatedAt,
 		"updated_at":            p.UpdatedAt,
@@ -1188,5 +1232,5 @@ func (h *PolicyHandler) CloneFromTemplate(c *gin.Context) {
 		return
 	}
 
-	respondCreated(c, buildPolicyResponse(*newPolicy, nil, policyResponseIncludesHooks(c)))
+	respondCreated(c, buildPolicyResponse(*newPolicy, policyNodeIDsFromLoadedNodes(*newPolicy), nil, policyResponseIncludesHooks(c)))
 }
