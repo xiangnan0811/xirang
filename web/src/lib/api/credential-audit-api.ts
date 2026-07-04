@@ -6,6 +6,7 @@ import type {
 } from "@/types/domain";
 import i18n from "@/i18n";
 import { ApiError, fetchWithFallback, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
 
 type CredentialAuditEventResponse = {
   id?: number | string;
@@ -135,16 +136,6 @@ const sensitiveErrorPatterns = [
 
 const endpointPattern = /\b(?:https?|wss?):\/\/[^\s"'<>]+/gi;
 
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function optionalPositiveNumber(value: unknown): number | undefined {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 function cleanString(value: unknown, maxLength = 500): string {
   const raw = String(value ?? "").trim();
   const clean = sanitizeLegacySensitiveText(raw);
@@ -264,11 +255,11 @@ export function mapCredentialAuditEvent(row: CredentialAuditEventResponse | null
     purpose: cleanString(row?.purpose, 64),
     credentialKind: cleanString(row?.credential_kind, 32),
     credentialSource: cleanString(row?.credential_source, 64),
-    sshKeyId: optionalPositiveNumber(row?.ssh_key_id),
-    nodeId: optionalPositiveNumber(row?.node_id),
-    taskId: optionalPositiveNumber(row?.task_id),
-    taskRunId: optionalPositiveNumber(row?.task_run_id),
-    policyId: optionalPositiveNumber(row?.policy_id),
+    sshKeyId: positiveNumberOrUndefined(row?.ssh_key_id),
+    nodeId: positiveNumberOrUndefined(row?.node_id),
+    taskId: positiveNumberOrUndefined(row?.task_id),
+    taskRunId: positiveNumberOrUndefined(row?.task_run_id),
+    policyId: positiveNumberOrUndefined(row?.policy_id),
     outcome: normalizeOutcome(row?.outcome),
     errorMessage: sanitizeErrorMessage(row?.error_message),
     metadata: sanitizeMetadata(row?.metadata),

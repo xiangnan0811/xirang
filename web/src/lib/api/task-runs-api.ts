@@ -1,5 +1,6 @@
 import type { LogEvent, RestoreDrillEvidence, RestoreDrillStatus, TaskRunRecord, TaskStatus } from "@/types/domain";
 import { extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+import { finiteNumber, nullableFiniteNumber } from "./number-utils";
 
 type RestoreDrillEvidenceResponse = {
   id: number;
@@ -120,19 +121,6 @@ function mapDrillStatus(raw?: string): RestoreDrillStatus {
     default:
       return "pending";
   }
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value ?? fallback);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function nullableFiniteNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function mapDrillEvidence(row?: RestoreDrillEvidenceResponse | null): RestoreDrillEvidence | null {

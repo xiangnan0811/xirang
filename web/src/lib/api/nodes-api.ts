@@ -1,5 +1,6 @@
 import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeRecord, NodeStatus } from "@/types/domain";
 import { parseNumericId, request, formatTime } from "./core";
+import { finiteNumber } from "./number-utils";
 
 type NodeResponse = {
   id: number;
@@ -101,11 +102,6 @@ function mapNode(row: NodeResponse): NodeRecord {
   };
 }
 
-function safeNumber(value: unknown, fallback = 0): number {
-  const numeric = Number(value ?? fallback);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
 function mapDoctorStatus(raw?: string): NodeDoctorCheckStatus {
   switch (raw) {
     case "pass":
@@ -120,7 +116,7 @@ function mapDoctorStatus(raw?: string): NodeDoctorCheckStatus {
 
 function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
   return {
-    nodeId: safeNumber(row.node_id),
+    nodeId: finiteNumber(row.node_id),
     nodeName: String(row.node_name ?? ""),
     generatedAt: String(row.generated_at ?? ""),
     checks: Array.isArray(row.checks)

@@ -1,6 +1,7 @@
 import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentAction, HealthIncidentGroup, HealthIncidentResource, HealthIncidentResourceType, HealthIncidentSeverity, HealthIncidentSignal, HealthIncidentSourceType, HealthIncidentTimelineData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
 import { request } from "./core";
+import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
 
 type OverviewSummaryResponse = {
   totalNodes: number;
@@ -156,20 +157,6 @@ type BackupConfidenceItemRaw = {
   targets?: { node_id?: number | string; node_name?: string; last_backup_at?: string | null }[];
 };
 
-function positiveNumber(value: unknown): number | undefined {
-  return finitePositiveNumber(value);
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value ?? fallback);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function finitePositiveNumber(value: unknown): number | undefined {
-  const parsed = finiteNumber(value, 0);
-  return parsed > 0 ? parsed : undefined;
-}
-
 function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
   switch (raw) {
     case "critical":
@@ -211,14 +198,14 @@ function mapHealthIncidentSourceType(raw?: string): HealthIncidentSourceType {
 
 function mapHealthIncidentResource(raw?: HealthIncidentResourceRaw | null): HealthIncidentResource {
   const type = mapHealthIncidentResourceType(raw?.type);
-  const id = positiveNumber(raw?.id);
+  const id = positiveNumberOrUndefined(raw?.id);
   return {
     type,
     id,
     name: String(raw?.name || (type === "platform" ? "platform" : "")),
-    nodeId: positiveNumber(raw?.node_id),
+    nodeId: positiveNumberOrUndefined(raw?.node_id),
     nodeName: raw?.node_name ? String(raw.node_name) : undefined,
-    policyId: positiveNumber(raw?.policy_id),
+    policyId: positiveNumberOrUndefined(raw?.policy_id),
     policyName: raw?.policy_name ? String(raw.policy_name) : undefined,
   };
 }
@@ -237,12 +224,12 @@ function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSi
     severity: mapHealthIncidentSeverity(raw.severity),
     occurredAt: String(raw.occurred_at || ""),
     message: String(raw.message || ""),
-    alertId: positiveNumber(raw.alert_id),
-    deliveryId: positiveNumber(raw.delivery_id),
-    taskId: positiveNumber(raw.task_id),
-    taskRunId: positiveNumber(raw.task_run_id),
-    nodeId: positiveNumber(raw.node_id),
-    policyId: positiveNumber(raw.policy_id),
+    alertId: positiveNumberOrUndefined(raw.alert_id),
+    deliveryId: positiveNumberOrUndefined(raw.delivery_id),
+    taskId: positiveNumberOrUndefined(raw.task_id),
+    taskRunId: positiveNumberOrUndefined(raw.task_run_id),
+    nodeId: positiveNumberOrUndefined(raw.node_id),
+    policyId: positiveNumberOrUndefined(raw.policy_id),
   };
 }
 
@@ -353,9 +340,9 @@ function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidence
   return {
     id: String(raw.id || `policy-${raw.policy_id ?? raw.node_id ?? "unknown"}`),
     scope: raw.scope === "node" ? "node" : "policy",
-    policyId: finitePositiveNumber(raw.policy_id),
+    policyId: positiveNumberOrUndefined(raw.policy_id),
     policyName: raw.policy_name || undefined,
-    nodeId: finitePositiveNumber(raw.node_id),
+    nodeId: positiveNumberOrUndefined(raw.node_id),
     nodeName: raw.node_name || undefined,
     status: mapConfidenceStatus(raw.status),
     score: finiteNumber(raw.score),
@@ -372,9 +359,9 @@ function mapBackupConfidenceItem(raw: BackupConfidenceItemRaw): BackupConfidence
           status: String(evidence.status || "unknown"),
           message: String(evidence.message || ""),
           observedAt: evidence.observed_at || undefined,
-          taskId: finitePositiveNumber(evidence.task_id),
-          taskRunId: finitePositiveNumber(evidence.task_run_id),
-          alertId: finitePositiveNumber(evidence.alert_id),
+          taskId: positiveNumberOrUndefined(evidence.task_id),
+          taskRunId: positiveNumberOrUndefined(evidence.task_run_id),
+          alertId: positiveNumberOrUndefined(evidence.alert_id),
         }))
       : [],
     nextSteps: Array.isArray(raw.next_steps)

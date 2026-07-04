@@ -1,6 +1,7 @@
 import type { CredentialAccessGrant, CredentialAccessGrantAction, CredentialAccessGrantPurpose, CredentialAccessGrantStatus } from "@/types/domain";
 import { formatTime } from "@/lib/date-utils";
 import { request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
 
 export type CredentialAccessGrantListOptions = {
   requesterUserId?: number;
@@ -42,16 +43,6 @@ interface CredentialAccessGrantResponse {
   revoked_by_user_id?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function positiveNumberOrUndefined(value: unknown): number | undefined {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function stringValue(value: unknown): string {

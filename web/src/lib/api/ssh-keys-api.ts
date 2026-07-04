@@ -1,5 +1,6 @@
 import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
 import { ApiError, formatTime, parseNumericId, request } from "./core";
+import { finiteNumber } from "./number-utils";
 
 type SSHKeyResponse = {
   id: number;
@@ -30,11 +31,6 @@ function toRfc3339(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
