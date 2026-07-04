@@ -391,3 +391,38 @@ Planned and completed a focused backend runtime logging cleanup. Converted selec
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Alert delivery dispatcher injection cleanup
+
+**Date**: 2026-07-04
+**Task**: Alert delivery dispatcher injection cleanup
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Planned and completed a focused alert delivery dependency cleanup. IntegrationService and AlertHandler now accept an injected alerting Dispatcher, router wiring passes dep.AlertDispatcher, scoped SendProbe/SendAlert calls use dispatcher methods, and a static regression test rejects direct package-level delivery shim usage in those files. Verified focused tests, go test ./..., go build ./..., source search, diff check, and Trellis validation. golangci-lint was not installed locally.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d698f4c` | (see git log) |
+| `e3dc92e` | (see git log) |
+| `fee92f8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

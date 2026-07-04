@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-07-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~393 | Active |
+| `journal-1.md` | ~428 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-07-04 | Alert delivery dispatcher injection cleanup | `d698f4c`, `e3dc92e`, `fee92f8` | `chore/slimming-refactor-planning` |
 | 11 | 2026-07-04 | Backend legacy log.Printf cleanup | `10f5712`, `16f396a` | `chore/slimming-refactor-planning` |
 | 10 | 2026-07-04 | Node detail auth token boundary cleanup | `a4d1341`, `6e794b9`, `16ad719` | `chore/slimming-refactor-planning` |
 | 9 | 2026-07-04 | Backend response helper cleanup | `4628120`, `7a488d6` | `chore/slimming-refactor-planning` |
