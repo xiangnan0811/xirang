@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Verify backend spec compliance."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review structured logging contract and sensitive logging rules."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review backend checks and gofmt/test expectations."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Review behavior-preserving error handling."}
+{"file": "backend/internal/api/handlers/AGENTS.md", "reason": "Review handler-layer rules for node handler changes."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check branch workflow compliance."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check repeated logging patterns."}

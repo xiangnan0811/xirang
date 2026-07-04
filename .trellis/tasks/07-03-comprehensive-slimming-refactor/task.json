@@ -23,7 +23,8 @@
     "07-03-frontend-numeric-helper-consolidation",
     "07-04-hook-templates-deprecation-cleanup",
     "07-04-backend-handler-response-helper-cleanup",
-    "07-04-node-detail-auth-token-boundary-cleanup"
+    "07-04-node-detail-auth-token-boundary-cleanup",
+    "07-04-backend-log-printf-cleanup"
   ],
   "parent": null,
   "relatedFiles": [],
