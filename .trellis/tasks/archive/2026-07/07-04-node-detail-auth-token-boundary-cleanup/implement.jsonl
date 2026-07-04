@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend pre-development checklist and guide routing for this task."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Node-detail tabs are React components with explicit prop contracts."}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Node-detail data loading hooks are being refactored."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Auth token ownership and prop flow are state-boundary concerns."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Token props and hook params must remain explicit and type-safe."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gate and forbidden direct-fetch/storage patterns."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guide index required before coding."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Repository requires feature work on a dedicated branch."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "This cleanup removes repeated token lookup logic."}

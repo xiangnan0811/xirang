@@ -2154,38 +2154,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/hook-templates": {
-            "get": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "返回所有内置备份前/后脚本 hook 模板（MySQL/PostgreSQL/MongoDB/Redis/Docker 等）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "templates"
-                ],
-                "summary": "列出 Hook 模板",
-                "deprecated": true,
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/integrations": {
             "get": {
                 "security": [

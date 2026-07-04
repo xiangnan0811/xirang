@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import AlertsTab from "./alerts-tab";
@@ -29,24 +29,23 @@ const makeAlert = (overrides: { id?: string; nodeId?: number; status?: string; m
 
 describe("AlertsTab", () => {
   beforeEach(() => {
-    sessionStorage.setItem("xirang-auth-token", "test-token");
+    mockGetAlerts.mockReset();
     mockGetAlerts.mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    sessionStorage.removeItem("xirang-auth-token");
   });
 
   test("renders filter chips and empty state", async () => {
     render(
       <MemoryRouter>
-        <AlertsTab nodeId={1} />
+        <AlertsTab nodeId={1} token="test-token" />
       </MemoryRouter>,
     );
     expect(screen.getByTestId("alerts-filter-open")).toBeInTheDocument();
     expect(screen.getByTestId("alerts-filter-acked")).toBeInTheDocument();
     expect(screen.getByTestId("alerts-filter-resolved")).toBeInTheDocument();
     expect(await screen.findByText(/暂无未处理告警/)).toBeInTheDocument();
+    expect(mockGetAlerts).toHaveBeenCalledWith("test-token", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   test("renders matching alerts and filters out other nodes", async () => {
@@ -57,12 +56,22 @@ describe("AlertsTab", () => {
 
     render(
       <MemoryRouter>
-        <AlertsTab nodeId={1} />
+        <AlertsTab nodeId={1} token="test-token" />
       </MemoryRouter>,
     );
 
     expect(await screen.findByText("连接超时")).toBeInTheDocument();
     expect(screen.queryByText("磁盘满")).not.toBeInTheDocument();
     expect(screen.getByTestId("alert-jump-alert-1")).toBeInTheDocument();
+  });
+
+  test("skips fetching when token is missing", () => {
+    render(
+      <MemoryRouter>
+        <AlertsTab nodeId={1} token={null} />
+      </MemoryRouter>,
+    );
+
+    expect(mockGetAlerts).not.toHaveBeenCalled();
   });
 });

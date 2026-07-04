@@ -25,30 +25,40 @@ const mockData = {
   ],
 };
 
+const { mockUseNodeMetrics } = vi.hoisted(() => ({
+  mockUseNodeMetrics: vi.fn(),
+}));
+
 vi.mock("./use-node-metrics", () => ({
-  useNodeMetrics: () => ({ data: mockData, isLoading: false, error: null }),
+  useNodeMetrics: mockUseNodeMetrics,
 }));
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  mockUseNodeMetrics.mockReset();
+  mockUseNodeMetrics.mockReturnValue({ data: mockData, isLoading: false, error: null });
 });
 
 describe("MetricsTab", () => {
   test("renders range and granularity selectors", () => {
-    render(<MetricsTab nodeId={1} />);
+    render(<MetricsTab nodeId={1} token="test-token" />);
     expect(screen.getByTestId("range-select")).toBeInTheDocument();
     expect(screen.getByTestId("granularity-select")).toBeInTheDocument();
+    expect(mockUseNodeMetrics).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: 1,
+      token: "test-token",
+    }));
   });
 
   test("renders one section per metric", () => {
-    render(<MetricsTab nodeId={1} />);
+    render(<MetricsTab nodeId={1} token="test-token" />);
     expect(screen.getByTestId("metric-section-cpu_pct")).toBeInTheDocument();
     expect(screen.getByTestId("metric-section-mem_pct")).toBeInTheDocument();
     expect(screen.getByTestId("metric-section-load1")).toBeInTheDocument();
   });
 
   test("changing range updates the select value", () => {
-    render(<MetricsTab nodeId={1} />);
+    render(<MetricsTab nodeId={1} token="test-token" />);
     fireEvent.change(screen.getByTestId("range-select"), {
       target: { value: "7d" },
     });
@@ -56,7 +66,7 @@ describe("MetricsTab", () => {
   });
 
   test("export button triggers a download", () => {
-    render(<MetricsTab nodeId={1} />);
+    render(<MetricsTab nodeId={1} token="test-token" />);
     const createObjectURL = vi.fn(() => "blob:test");
     const revokeObjectURL = vi.fn();
     URL.createObjectURL = createObjectURL;

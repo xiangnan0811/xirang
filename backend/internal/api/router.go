@@ -109,9 +109,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithTaskApiService(taskSvc).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
 	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
-	integrationSvc := integration.NewIntegrationService(dep.DB)
+	integrationSvc := integration.NewIntegrationService(dep.DB).WithAlertDispatcher(dep.AlertDispatcher)
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB, integrationSvc)
-	alertHandler := handlers.NewAlertHandler(dep.DB)
+	alertHandler := handlers.NewAlertHandler(dep.DB).WithAlertDispatcher(dep.AlertDispatcher)
 	auditHandler := handlers.NewAuditHandler(dep.DB)
 	credentialAuditHandler := handlers.NewCredentialAuditHandler(dep.DB)
 	credentialAccessGrantHandler := handlers.NewCredentialAccessGrantHandler(dep.DB, dep.JWTManager)
@@ -120,7 +120,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	fileHandler := handlers.NewFileHandler(dep.DB)
 	dockerHandler := handlers.NewDockerHandler(dep.DB)
 	reportHandler := handlers.NewReportHandler(dep.DB)
-	hookTemplatesHandler := handlers.NewHookTemplatesHandler()
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
 	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB)
@@ -325,8 +324,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/report-configs/:id/generate", middleware.RBAC("reports:write"), reportHandler.GenerateNow)
 	secured.GET("/report-configs/:id/reports", middleware.RBAC("reports:read"), reportHandler.ListReports)
 	secured.GET("/reports/:id", middleware.RBAC("reports:read"), reportHandler.GetReport)
-
-	secured.GET("/hook-templates", middleware.RBAC("policies:read"), hookTemplatesHandler.List)
 
 	secured.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListSnapshots)
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)

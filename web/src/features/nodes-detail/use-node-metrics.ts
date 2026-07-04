@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import type { MetricSeriesResponse } from "@/lib/api/node-metrics-api";
+import type { NodeDetailAuthToken } from "./types";
 
 type Params = {
   nodeId: number;
+  token: NodeDetailAuthToken;
   from: string;
   to: string;
   fields?: string[];
@@ -11,19 +13,11 @@ type Params = {
   refetchMs?: number;
 };
 
-export function useNodeMetrics({ nodeId, from, to, fields, granularity = "auto", refetchMs }: Params) {
+export function useNodeMetrics({ nodeId, token, from, to, fields, granularity = "auto", refetchMs }: Params) {
   const [data, setData] = useState<MetricSeriesResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  const token = (() => {
-    try {
-      return sessionStorage.getItem("xirang-auth-token");
-    } catch {
-      return null;
-    }
-  })();
 
   const fieldsKey = fields?.join(",");
 

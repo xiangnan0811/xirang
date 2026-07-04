@@ -1,4 +1,5 @@
 import { request } from "./core";
+import { finiteNumber } from "./number-utils";
 
 export type SettingDef = {
   key: string;
@@ -77,11 +78,6 @@ type SecurityRiskItemRaw = {
   count?: number | string;
   examples?: unknown;
 };
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
 
 function normalizeRiskSeverity(value?: string): SecurityRiskSeverity {
   if (value === "info" || value === "critical") {

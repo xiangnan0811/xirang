@@ -742,7 +742,6 @@ const zh = {
     backupVerify: "备份校验",
     sampleRate: "抽样率（%）",
     advancedSettings: "高级设置",
-    insertTemplate: "插入模板",
     preHook: "备份前钩子",
     preHookPlaceholder: "例如: mysqldump -u root --all-databases > /tmp/db_backup.sql",
     postHook: "备份后钩子",

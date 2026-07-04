@@ -2,10 +2,10 @@ package policy
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -83,7 +83,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			task.CronSpec = cronSpec
 			if policy.Enabled {
 				if err := runner.SyncSchedule(*task); err != nil {
-					log.Printf("warn: 同步任务调度失败(task_id=%d): %v", task.ID, err)
+					logger.Module("policy").Warn().Uint("task_id", task.ID).Err(err).Msg("同步任务调度失败")
 				}
 			} else {
 				runner.RemoveSchedule(task.ID)
@@ -108,7 +108,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			}
 			if policy.Enabled {
 				if err := runner.SyncSchedule(newTask); err != nil {
-					log.Printf("warn: 注册任务调度失败(task_id=%d): %v", newTask.ID, err)
+					logger.Module("policy").Warn().Uint("task_id", newTask.ID).Err(err).Msg("注册任务调度失败")
 				}
 			}
 		}
@@ -167,7 +167,7 @@ func ResumeTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint, cronSpe
 	for i := range tasks {
 		tasks[i].CronSpec = cronSpec
 		if err := runner.SyncSchedule(tasks[i]); err != nil {
-			log.Printf("warn: 恢复任务调度失败(task_id=%d): %v", tasks[i].ID, err)
+			logger.Module("policy").Warn().Uint("task_id", tasks[i].ID).Err(err).Msg("恢复任务调度失败")
 		}
 	}
 	return nil

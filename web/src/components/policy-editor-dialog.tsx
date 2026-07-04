@@ -22,7 +22,7 @@ import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor"
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context.hooks";
 import { toast } from "@/components/ui/toast-sonner";
-import type { AppCredential, EscalationPolicy, HookTemplate, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
+import type { AppCredential, EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -137,14 +137,12 @@ export function PolicyEditorDialog({
   const [drillOpen, setDrillOpen] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [drillConfirmOpen, setDrillConfirmOpen] = useState(false);
-  const [hookTemplates, setHookTemplates] = useState<HookTemplate[]>([]);
   const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
   const [profiles, setProfiles] = useState<ProfileSchema[]>([]);
   const [credentials, setCredentials] = useState<AppCredential[]>([]);
 
   useEffect(() => {
     if (!open || !token) return;
-    apiClient.getHookTemplates(token).then(setHookTemplates).catch(() => {});
     apiClient.listEscalationPolicies(token)
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
@@ -676,32 +674,6 @@ export function PolicyEditorDialog({
 
         {advancedOpen && (
           <div className="space-y-3 border-t border-border/40 px-3 py-3 animate-in slide-in-from-top-1 fade-in duration-150">
-            {/* Hook template selector */}
-            {hookTemplates.length > 0 && (
-              <div>
-                <label className="mb-1 block text-sm font-medium">{t('policyEditor.insertTemplate')}</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {hookTemplates.map((tpl) => (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-                      onClick={() =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          preHook: tpl.preHook,
-                          postHook: tpl.postHook,
-                        }))
-                      }
-                      title={tpl.description}
-                    >
-                      {tpl.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
             <div>
               <label htmlFor="policy-edit-pre-hook" className="mb-1 block text-sm font-medium">
                 {t('policyEditor.preHook')}

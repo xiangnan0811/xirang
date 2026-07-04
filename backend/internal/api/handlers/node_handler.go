@@ -3,8 +3,6 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +10,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
@@ -390,11 +389,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
-	c.JSON(http.StatusForbidden, Response{
-		Code:    http.StatusForbidden,
-		Message: "节点远程执行能力已禁用",
-		Data:    gin.H{"error_code": nodeExecDisabledCode},
-	})
+	respondForbiddenData(c, "节点远程执行能力已禁用", gin.H{"error_code": nodeExecDisabledCode})
 }
 
 // TestConnection godoc
@@ -419,6 +414,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
+	nodeLog := logger.Module("api").With().Uint("node_id", node.ID).Logger()
 
 	authMethods, _, credential, err := sshutil.BuildSSHAuthWithKeyForPurpose(node, h.db, sshutil.PurposeNodeTest)
 	if err != nil {
@@ -427,12 +423,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
 		}
 		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
 		}
-		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:           "node.credential.test_connection",
 			Purpose:          sshutil.PurposeNodeTest,
@@ -461,12 +457,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
 		}
 		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
 		}
-		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:           "node.credential.test_connection",
 			Purpose:          sshutil.PurposeNodeTest,
@@ -500,12 +496,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		node.ConnectionLatency = 0
 		node.LastSeenAt = &probeAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			log.Printf("更新节点探测状态失败(node_id=%d): %v", node.ID, saveErr)
+			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
 		}
 		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			log.Printf("创建节点探测告警失败(node_id=%d): %v", node.ID, alertErr)
+			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
 		}
-		log.Printf("SSH 连接测试失败(node_id=%d): %v", node.ID, err)
+		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:           "node.credential.test_connection",
 			Purpose:          sshutil.PurposeNodeTest,
@@ -563,14 +559,14 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		return
 	}
 	if resolveErr := h.getAlertDispatcher().ResolveNodeAlerts(node.ID, "节点探测恢复正常"); resolveErr != nil {
-		log.Printf("恢复节点探测告警失败(node_id=%d): %v", node.ID, resolveErr)
+		nodeLog.Warn().Err(resolveErr).Msg("恢复节点探测告警失败")
 	}
 
 	lastUsedUpdated := false
 	if node.SSHKeyID != nil {
 		now := time.Now()
 		if err := h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error; err != nil {
-			log.Printf("更新 SSH Key 最近使用时间失败(ssh_key_id=%d): %v", *node.SSHKeyID, err)
+			nodeLog.Warn().Uint("ssh_key_id", *node.SSHKeyID).Err(err).Msg("更新 SSH Key 最近使用时间失败")
 		} else {
 			lastUsedUpdated = true
 		}

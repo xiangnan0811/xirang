@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend handler and response helper conventions for the cleanup slice."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Response helper requirements and backend verification expectations."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Branch workflow and cross-layer thinking guidance for focused refactors."}

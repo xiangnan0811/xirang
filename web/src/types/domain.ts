@@ -762,14 +762,6 @@ export interface StorageUsageData {
   perNode: NodeStorageInfo[];
 }
 
-export interface HookTemplate {
-  id: string;
-  name: string;
-  preHook: string;
-  postHook: string;
-  description: string;
-}
-
 export interface AppCredential {
   id: number;
   name: string;

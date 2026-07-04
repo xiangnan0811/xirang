@@ -742,7 +742,6 @@ const en = {
     backupVerify: "Backup Verification",
     sampleRate: "Sample rate (%)",
     advancedSettings: "Advanced Settings",
-    insertTemplate: "Insert Template",
     preHook: "Pre-backup Hook",
     preHookPlaceholder: "e.g. mysqldump -u root --all-databases > /tmp/db_backup.sql",
     postHook: "Post-backup Hook",

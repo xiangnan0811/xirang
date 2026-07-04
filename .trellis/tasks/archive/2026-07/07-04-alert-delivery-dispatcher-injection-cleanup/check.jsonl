@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify retry/probe error behavior and response contracts."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify backend test/build/gofmt expectations."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify sensitive delivery errors remain sanitized."}
+{"file": "backend/internal/api/handlers/AGENTS.md", "reason": "Verify handler-layer orchestration and response rules."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check branch workflow compliance."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check reuse of existing DI patterns."}

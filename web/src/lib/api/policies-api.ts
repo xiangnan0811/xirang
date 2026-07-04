@@ -1,6 +1,7 @@
 import type { NewPolicyInput, PolicyLatestDrillSummary, PolicyRecord, RestoreDrillStatus } from "@/types/domain";
 import i18n from "@/i18n";
 import { request } from "./core";
+import { finiteNumber } from "./number-utils";
 
 type LatestDrillSummaryResponse = {
   task_run_id: number;
@@ -64,11 +65,6 @@ function mapDrillStatus(raw?: string): RestoreDrillStatus {
     default:
       return "pending";
   }
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  const parsed = Number(value ?? fallback);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function mapLatestDrillSummary(row?: LatestDrillSummaryResponse | null): PolicyLatestDrillSummary | null {

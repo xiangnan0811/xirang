@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index and guide routing for this task."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Defines logger.Module, log levels, structured fields, and sensitive logging rules."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend gate, gofmt, tests, and forbidden patterns."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Ensure logging conversion does not change error wrapping or return behavior."}
+{"file": "backend/internal/api/handlers/AGENTS.md", "reason": "Handler-layer response and orchestration rules for node handler changes."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guide index required before coding."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Repository requires work on a dedicated branch."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Repeated logging conversion should follow established module patterns."}

@@ -44,7 +44,7 @@ Xirang 支持三类备份执行器：
 - API 响应不会返回明文密码。
 - 渲染后的 hook 脚本对有权限的用户可见，请按 RBAC 控制管理权限。
 
-旧版 `GET /api/v1/hook-templates` 端点仍可用但已废弃，新集成应使用 `GET /api/v1/app-credentials/profiles`。
+旧版 hook 模板端点已移除；应用感知备份的受支持路径是 `GET /api/v1/app-credentials/profiles`。
 
 ## 保留策略与 RPO/RTO
 

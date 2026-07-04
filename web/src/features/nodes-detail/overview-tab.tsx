@@ -4,12 +4,13 @@ import TrendChart, { type Range } from "./trend-chart";
 import DiskForecastCard from "./disk-forecast-card";
 import { useNodeStatus } from "./use-node-status";
 import { useNodeMetrics } from "./use-node-metrics";
+import type { NodeDetailTabProps } from "./types";
 
 const HOURS_BY_RANGE: Record<Range, number> = { "1h": 1, "6h": 6, "24h": 24, "7d": 168, "30d": 720 };
 
-export default function OverviewTab({ nodeId }: { nodeId: number }) {
+export default function OverviewTab({ nodeId, token }: NodeDetailTabProps) {
   const [range, setRange] = useState<Range>("24h");
-  const { data: status } = useNodeStatus(nodeId);
+  const { data: status } = useNodeStatus(nodeId, token);
 
   const { from, to } = useMemo(() => {
     const now = new Date();
@@ -19,6 +20,7 @@ export default function OverviewTab({ nodeId }: { nodeId: number }) {
 
   const { data: metrics } = useNodeMetrics({
     nodeId,
+    token,
     from,
     to,
     fields: ["cpu_pct", "mem_pct", "disk_pct", "load1"],
@@ -72,7 +74,7 @@ export default function OverviewTab({ nodeId }: { nodeId: number }) {
         </aside>
       </div>
 
-      <DiskForecastCard nodeId={nodeId} />
+      <DiskForecastCard nodeId={nodeId} token={token} />
     </div>
   );
 }
