@@ -520,6 +520,101 @@ auth, _, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeTerminal
 
 ---
 
+### Scenario: Deprecated API route removal
+
+#### 1. Scope / Trigger
+
+- Trigger: removing a deprecated `/api/v1` route or deciding that a deprecated
+  route should no longer be advertised as available.
+- Applies to `backend/internal/api/router.go`, the owning handler file,
+  generated Swagger docs under `backend/internal/api/docs/`, frontend API
+  wrappers and domain types under `web/src/`, and current public/admin docs.
+
+#### 2. Signatures
+
+- Route registration signature:
+  `secured.GET("/old-path", middleware.RBAC("<permission>"), handler.Method)`.
+- Handler constructor signature:
+  `handlers.New<DeprecatedThing>Handler(...)`.
+- Frontend wrapper signature:
+  `apiClient.<deprecatedMethod>(token, ...)`.
+- Documentation signatures: route tables, admin docs, and generated Swagger
+  path blocks such as `"/old-path": { ... }`.
+
+#### 3. Contracts
+
+- Remove the backend route registration and the handler constructor together.
+- Delete the handler file only when no other live route or package imports it.
+- Remove frontend API wrapper methods, domain types, state, effects, and UI
+  controls that exist only to consume the deprecated route.
+- Keep replacement routes and unrelated internal helpers intact. If an internal
+  helper contains similar names but backs the replacement flow, do not delete it
+  just because a broad text search matched it.
+- Public docs must describe the current supported path. Do not leave wording
+  that says a removed endpoint is still available.
+- Regenerate Swagger with `make swag-init` when `swag` is installed. If the
+  local tool is unavailable, remove only the generated path block that came from
+  the deleted handler annotation and record the tooling gap in the task.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Router still lists the deprecated path | Router registration test fails. |
+| Frontend still calls the deprecated wrapper | Component/API test or typecheck fails. |
+| Generated docs still include the old path | Source search fails before commit. |
+| Replacement route accidentally removed | Router/API tests for the replacement route fail. |
+| `swag` command unavailable locally | Manual generated-doc edit is allowed, with the failed command recorded. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: remove `/hook-templates`, preserve `/app-credentials/profiles`, delete
+  the frontend insert-template UI, update docs, and add tests for old-path
+  absence plus replacement route presence.
+- Base: a deprecated route has no frontend consumer; still remove generated
+  docs and public route tables.
+- Bad: deleting internal app-aware profile template fields because they contain
+  `HookTemplate` in the name even though they render the supported replacement
+  flow.
+
+#### 6. Tests Required
+
+- Router registration tests must assert the deprecated route is absent and the
+  replacement route remains registered when there is one.
+- Frontend tests must cover the user-facing consumer that previously requested
+  the deprecated method, or a focused API/client test when there is no component
+  consumer.
+- Run a source search for the literal route path, frontend wrapper name, handler
+  constructor/type, and stale i18n keys. Exclude archive/build/coverage output
+  and avoid matching intentionally retained replacement internals.
+- Run backend tests, frontend `npm run check` when frontend code changes, doc
+  freshness checks when docs change, and `git diff --check`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Route removed, but docs and frontend still advertise/call it.
+// backend/internal/api/router.go
+// secured.GET("/old-path", ...)
+```
+
+Correct:
+
+```go
+replacementPath := "/api/v1/app-credentials/profiles"
+deprecatedPath := "/api/v1/" + "hook" + "-templates"
+if !hasRoute(routes, http.MethodGet, replacementPath) {
+	t.Fatalf("replacement route missing")
+}
+if hasRoute(routes, http.MethodGet, deprecatedPath) {
+	t.Fatalf("deprecated route still registered")
+}
+```
+
+---
+
 ### Test fixture credential naming
 
 Test fixtures that simulate secrets/credentials (passwords, tokens, keys,
