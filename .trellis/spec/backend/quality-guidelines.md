@@ -54,6 +54,38 @@ Go files. The standard backend gate is `cd backend && go test ./... && go build
   release/deploy behavior. `CONTRIBUTING.md` lists the current doc-sync rules.
 - Prefer existing domain services and helpers before adding new abstractions.
 
+### Convention: Alerting dispatcher dependency boundary
+
+**What**: Runtime components that send alerts, probes, or delivery retries
+should accept an injected `*alerting.Dispatcher` when one is available and call
+dispatcher methods such as `SendAlert`, `SendProbe`, `RaiseTaskFailure`, or
+`ResolveTaskAlerts`. Package-level alerting shim functions are compatibility
+fallbacks and should not be copied into new runtime call sites.
+
+**Why**: Dispatcher injection keeps delivery behavior tied to the server's
+configured settings and escalation resolver, reduces package-global state, and
+makes retry/probe paths easier to test without mutating alerting globals.
+
+**Example**:
+
+```go
+func (h *AlertHandler) WithAlertDispatcher(d *alerting.Dispatcher) *AlertHandler {
+    h.alertDispatcher = d
+    return h
+}
+
+func (h *AlertHandler) getAlertDispatcher() *alerting.Dispatcher {
+    if h.alertDispatcher != nil {
+        return h.alertDispatcher
+    }
+    return alerting.NewDispatcher(h.db, nil, nil)
+}
+```
+
+**Tests**: For cleanup slices that remove package-level shim calls, add a
+source-boundary regression test scoped to the converted files. Keep constructor
+fallbacks when existing tests or call sites do not yet inject a dispatcher.
+
 ---
 
 ## Testing Requirements
