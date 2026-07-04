@@ -218,3 +218,38 @@ Planned the comprehensive slimming refactor parent task, implemented the first b
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Frontend API numeric helper consolidation
+
+**Date**: 2026-07-04
+**Task**: Frontend API numeric helper consolidation
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Planned and completed the frontend numeric helper consolidation child task, added shared API numeric utilities with tests, replaced duplicate mapper helpers, documented the new API-boundary convention, and verified npm run check.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `61f705d` | (see git log) |
+| `448fc17` | (see git log) |
+| `5d8c738` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
