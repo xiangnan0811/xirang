@@ -1,9 +1,9 @@
 {
-  "id": "comprehensive-slimming-refactor",
-  "name": "comprehensive-slimming-refactor",
-  "title": "全面瘦身重构",
+  "id": "frontend-numeric-helper-consolidation",
+  "name": "frontend-numeric-helper-consolidation",
+  "title": "前端数值 helper 合并",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -18,11 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "07-03-policy-node-id-query-slimming",
-    "07-03-frontend-numeric-helper-consolidation"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "07-03-comprehensive-slimming-refactor",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

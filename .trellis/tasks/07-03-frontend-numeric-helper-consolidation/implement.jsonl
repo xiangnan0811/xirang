@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Places shared API wrapper utilities under web/src/lib/api/ and defines frontend module boundaries."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Defines API-boundary normalization, safe numeric fallback, and raw payload mapper expectations."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Defines frontend test/typecheck gates and reuse requirements for API mapper changes."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Guides consolidation of repeated helper logic without over-abstracting unrelated form semantics."}
+
