@@ -1,20 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import type { DiskForecast } from "@/lib/api/node-metrics-api";
+import type { NodeDetailAuthToken } from "./types";
 
-export function useDiskForecast(nodeId: number) {
+export function useDiskForecast(nodeId: number, token: NodeDetailAuthToken) {
   const [data, setData] = useState<DiskForecast | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  const token = (() => {
-    try {
-      return sessionStorage.getItem("xirang-auth-token");
-    } catch {
-      return null;
-    }
-  })();
 
   const fetchOnce = useCallback(async () => {
     if (!token || nodeId <= 0) return;

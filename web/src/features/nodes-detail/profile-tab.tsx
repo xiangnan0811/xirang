@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
+import type { NodeDetailTabProps } from "./types";
 
-export default function ProfileTab({ nodeId }: { nodeId: number }) {
+export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
   const [node, setNode] = useState<NodeRecord | null>(null);
   const [loading, setLoading] = useState(false);
 
   const fetchNode = useCallback(async (signal: AbortSignal) => {
-    const token = sessionStorage.getItem("xirang-auth-token");
     if (!token || nodeId <= 0) return;
     setLoading(true);
     try {
@@ -20,7 +20,7 @@ export default function ProfileTab({ nodeId }: { nodeId: number }) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [nodeId]);
+  }, [nodeId, token]);
 
   useEffect(() => {
     const controller = new AbortController();

@@ -37,27 +37,28 @@ const BASE_CONFIG = {
 
 describe("LogConfigTab", () => {
   beforeEach(() => {
-    sessionStorage.setItem("xirang-auth-token", "test-token");
     mockGetNodeLogConfig.mockResolvedValue(BASE_CONFIG);
     mockUpdateNodeLogConfig.mockResolvedValue(BASE_CONFIG);
   });
 
   afterEach(() => {
-    sessionStorage.removeItem("xirang-auth-token");
     vi.clearAllMocks();
   });
 
   test("renders with loaded config values", async () => {
-    render(<LogConfigTab nodeId={1} />);
+    render(<LogConfigTab nodeId={1} token="test-token" />);
 
     expect(await screen.findByDisplayValue("/var/log/nginx/access.log")).toBeInTheDocument();
     expect(screen.getByDisplayValue("14")).toBeInTheDocument();
     const switchEl = screen.getByRole("switch");
     expect(switchEl).toHaveAttribute("data-state", "checked");
+    expect(mockGetNodeLogConfig).toHaveBeenCalledWith("test-token", 1, expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   test("save succeeds and calls updateNodeLogConfig with correct shape", async () => {
-    render(<LogConfigTab nodeId={1} />);
+    render(<LogConfigTab nodeId={1} token="test-token" />);
     await screen.findByDisplayValue("/var/log/nginx/access.log");
 
     fireEvent.click(screen.getByRole("button", { name: /保存/ }));
@@ -73,7 +74,7 @@ describe("LogConfigTab", () => {
   });
 
   test("invalid relative path shows validation error without calling updateNodeLogConfig", async () => {
-    render(<LogConfigTab nodeId={1} />);
+    render(<LogConfigTab nodeId={1} token="test-token" />);
     const textarea = await screen.findByDisplayValue("/var/log/nginx/access.log");
     fireEvent.change(textarea, { target: { value: "relative/path/here" } });
 
@@ -88,7 +89,7 @@ describe("LogConfigTab", () => {
   });
 
   test("toggle journalctl off and save calls mock with log_journalctl_enabled false", async () => {
-    render(<LogConfigTab nodeId={1} />);
+    render(<LogConfigTab nodeId={1} token="test-token" />);
     await screen.findByDisplayValue("/var/log/nginx/access.log");
 
     const switchEl = screen.getByRole("switch");
@@ -103,5 +104,13 @@ describe("LogConfigTab", () => {
         log_journalctl_enabled: false,
       }));
     });
+  });
+
+  test("skips loading and saving when token is missing", () => {
+    render(<LogConfigTab nodeId={1} token={null} />);
+    expect(mockGetNodeLogConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+    expect(mockUpdateNodeLogConfig).not.toHaveBeenCalled();
   });
 });

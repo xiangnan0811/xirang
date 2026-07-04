@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
+import type { NodeDetailTabProps } from "./types";
 
 const DENIED_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/", "/boot/", "/root/"];
 
@@ -24,7 +25,7 @@ function validatePaths(paths: string[], t: (k: string) => string): string | null
   return null;
 }
 
-export default function LogConfigTab({ nodeId }: { nodeId: number }) {
+export default function LogConfigTab({ nodeId, token }: NodeDetailTabProps) {
   const { t } = useTranslation();
   const [logPaths, setLogPaths] = useState("");
   const [journalctlEnabled, setJournalctlEnabled] = useState(false);
@@ -35,7 +36,6 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
   const [pathsError, setPathsError] = useState<string | null>(null);
 
   const fetchConfig = useCallback(async (signal: AbortSignal) => {
-    const token = sessionStorage.getItem("xirang-auth-token");
     if (!token || nodeId <= 0) return;
     setLoading(true);
     try {
@@ -50,7 +50,7 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [nodeId]);
+  }, [nodeId, token]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -59,7 +59,6 @@ export default function LogConfigTab({ nodeId }: { nodeId: number }) {
   }, [fetchConfig]);
 
   const handleSave = async () => {
-    const token = sessionStorage.getItem("xirang-auth-token");
     if (!token) return;
 
     setRetentionError(null);

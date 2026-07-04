@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import TasksTab from "./tasks-tab";
@@ -40,24 +40,23 @@ const makeTask = (overrides: { id?: number; name?: string; nodeId?: number; stat
 
 describe("TasksTab", () => {
   beforeEach(() => {
-    sessionStorage.setItem("xirang-auth-token", "test-token");
+    mockGetTasks.mockReset();
     mockGetTasks.mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    sessionStorage.removeItem("xirang-auth-token");
   });
 
   test("renders filter chips and empty state", async () => {
     render(
       <MemoryRouter>
-        <TasksTab nodeId={1} />
+        <TasksTab nodeId={1} token="test-token" />
       </MemoryRouter>,
     );
     expect(screen.getByTestId("filter-all")).toBeInTheDocument();
     expect(screen.getByTestId("filter-running")).toBeInTheDocument();
     expect(screen.getByTestId("filter-failed")).toBeInTheDocument();
     expect(await screen.findByText(/暂无关联任务记录/)).toBeInTheDocument();
+    expect(mockGetTasks).toHaveBeenCalledWith("test-token", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   test("renders task rows for the given nodeId and filters out other nodes", async () => {
@@ -68,11 +67,21 @@ describe("TasksTab", () => {
 
     render(
       <MemoryRouter>
-        <TasksTab nodeId={1} />
+        <TasksTab nodeId={1} token="test-token" />
       </MemoryRouter>,
     );
 
     expect(await screen.findByText("daily-backup")).toBeInTheDocument();
     expect(screen.queryByText("other-node-task")).not.toBeInTheDocument();
+  });
+
+  test("skips fetching when token is missing", () => {
+    render(
+      <MemoryRouter>
+        <TasksTab nodeId={1} token={null} />
+      </MemoryRouter>,
+    );
+
+    expect(mockGetTasks).not.toHaveBeenCalled();
   });
 });

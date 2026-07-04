@@ -1,4 +1,5 @@
 import { useDiskForecast } from "./use-disk-forecast";
+import type { NodeDetailTabProps } from "./types";
 
 const confidenceCopy: Record<string, string> = {
   high: "预测置信度：高",
@@ -7,10 +8,8 @@ const confidenceCopy: Record<string, string> = {
   insufficient: "样本不足（< 7 天）",
 };
 
-type Props = { nodeId: number };
-
-export default function DiskForecastCard({ nodeId }: Props) {
-  const { data } = useDiskForecast(nodeId);
+export default function DiskForecastCard({ nodeId, token }: NodeDetailTabProps) {
+  const { data } = useDiskForecast(nodeId, token);
 
   if (!data) {
     return (

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { TaskRecord, TaskStatus } from "@/types/domain";
+import type { NodeDetailTabProps } from "./types";
 
 type Filter = "all" | "running" | "failed";
 
@@ -11,13 +12,12 @@ const FILTER_STATUSES: Record<Filter, TaskStatus[]> = {
   failed: ["failed"],
 };
 
-export default function TasksTab({ nodeId }: { nodeId: number }) {
+export default function TasksTab({ nodeId, token }: NodeDetailTabProps) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
 
   const fetchTasks = useCallback(async (signal: AbortSignal) => {
-    const token = sessionStorage.getItem("xirang-auth-token");
     if (!token || nodeId <= 0) return;
     setLoading(true);
     try {
@@ -30,7 +30,7 @@ export default function TasksTab({ nodeId }: { nodeId: number }) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [nodeId]);
+  }, [nodeId, token]);
 
   useEffect(() => {
     const controller = new AbortController();

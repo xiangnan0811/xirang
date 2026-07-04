@@ -8,6 +8,7 @@ import ProfileTab from "@/features/nodes-detail/profile-tab";
 import LogConfigTab from "@/features/nodes-detail/log-config-tab";
 import AnomalyTab from "@/features/nodes-detail/anomaly-tab";
 import { useNodeStatus } from "@/features/nodes-detail/use-node-status";
+import { useAuth } from "@/context/auth-context.hooks";
 
 const TAB_IDS = ["overview", "metrics", "tasks", "alerts", "profile", "log-config", "anomaly"] as const;
 type TabId = typeof TAB_IDS[number];
@@ -20,11 +21,12 @@ export function NodesDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
   const { t } = useTranslation();
+  const { token } = useAuth();
   const nodeId = Number(id ?? 0);
 
   const tabParam = params.get("tab");
   const activeTab: TabId = isTabId(tabParam) ? tabParam : "overview";
-  const { data: status, isLoading } = useNodeStatus(nodeId);
+  const { data: status, isLoading } = useNodeStatus(nodeId, token);
 
   const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params);
@@ -84,13 +86,13 @@ export function NodesDetailPage() {
       </div>
 
       <div role="tabpanel">
-        {activeTab === "overview" && <OverviewTab nodeId={nodeId} />}
-        {activeTab === "metrics" && <MetricsTab nodeId={nodeId} />}
-        {activeTab === "tasks" && <TasksTab nodeId={nodeId} />}
-        {activeTab === "alerts" && <AlertsTab nodeId={nodeId} />}
-        {activeTab === "profile" && <ProfileTab nodeId={nodeId} />}
-        {activeTab === "log-config" && <LogConfigTab nodeId={nodeId} />}
-        {activeTab === "anomaly" && <AnomalyTab nodeId={nodeId} />}
+        {activeTab === "overview" && <OverviewTab nodeId={nodeId} token={token} />}
+        {activeTab === "metrics" && <MetricsTab nodeId={nodeId} token={token} />}
+        {activeTab === "tasks" && <TasksTab nodeId={nodeId} token={token} />}
+        {activeTab === "alerts" && <AlertsTab nodeId={nodeId} token={token} />}
+        {activeTab === "profile" && <ProfileTab nodeId={nodeId} token={token} />}
+        {activeTab === "log-config" && <LogConfigTab nodeId={nodeId} token={token} />}
+        {activeTab === "anomaly" && <AnomalyTab nodeId={nodeId} token={token} />}
       </div>
     </div>
   );

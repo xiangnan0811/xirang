@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { AlertRecord, AlertStatus } from "@/types/domain";
 import { buildAlertJumpHref } from "./alert-jump";
+import type { NodeDetailTabProps } from "./types";
 
 // AlertStatus uses "acked" (not "acknowledged") per domain.ts
 type Filter = AlertStatus; // "open" | "acked" | "resolved"
@@ -13,13 +14,12 @@ const FILTER_LABELS: Record<Filter, string> = {
   resolved: "已解决",
 };
 
-export default function AlertsTab({ nodeId }: { nodeId: number }) {
+export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
 
   const fetchAlerts = useCallback(async (signal: AbortSignal) => {
-    const token = sessionStorage.getItem("xirang-auth-token");
     if (!token || nodeId <= 0) return;
     setLoading(true);
     try {
@@ -32,7 +32,7 @@ export default function AlertsTab({ nodeId }: { nodeId: number }) {
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [nodeId]);
+  }, [nodeId, token]);
 
   useEffect(() => {
     const controller = new AbortController();

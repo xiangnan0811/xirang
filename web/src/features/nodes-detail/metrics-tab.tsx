@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import TrendChart from "./trend-chart";
 import type { Range as TrendChartRange } from "./trend-chart";
 import { useNodeMetrics } from "./use-node-metrics";
+import type { NodeDetailTabProps } from "./types";
 
 type Range = "24h" | "7d" | "30d" | "90d";
 const HOURS_BY_RANGE: Record<Range, number> = { "24h": 24, "7d": 168, "30d": 720, "90d": 2160 };
@@ -78,7 +79,7 @@ function toChartRange(r: Range): TrendChartRange {
   return r as TrendChartRange;
 }
 
-export default function MetricsTab({ nodeId }: { nodeId: number }) {
+export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
   const [range, setRange] = useState<Range>("24h");
   const [granularity, setGranularity] = useState<Granularity>("auto");
 
@@ -90,6 +91,7 @@ export default function MetricsTab({ nodeId }: { nodeId: number }) {
 
   const { data } = useNodeMetrics({
     nodeId,
+    token,
     from,
     to,
     fields: ALL_FIELDS,

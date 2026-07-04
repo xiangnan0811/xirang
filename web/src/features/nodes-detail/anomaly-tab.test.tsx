@@ -19,10 +19,6 @@ vi.mock("@/lib/api/client", async () => {
   };
 });
 
-vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" }),
-}));
-
 vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
@@ -69,7 +65,7 @@ const makeEvent = (overrides: Partial<AnomalyEvent> = {}): AnomalyEvent => ({
 function renderTab() {
   return render(
     <MemoryRouter>
-      <AnomalyTab nodeId={10} />
+      <AnomalyTab nodeId={10} token="test-token" />
     </MemoryRouter>,
   );
 }
@@ -93,6 +89,7 @@ describe("AnomalyTab", () => {
       expect(screen.getByTestId("anomaly-tab-empty")).toBeInTheDocument();
     });
     expect(screen.getByText("该节点尚无异常记录")).toBeInTheDocument();
+    expect(mockListNodeAnomalyEvents).toHaveBeenCalledWith("test-token", 10, { limit: 50 });
   });
 
   it("renders 2 event rows when API returns 2 events", async () => {
@@ -119,5 +116,15 @@ describe("AnomalyTab", () => {
     });
     expect(screen.getByText("基线异常")).toBeInTheDocument();
     expect(screen.getByText("磁盘预测")).toBeInTheDocument();
+  });
+
+  it("skips loading when token is missing", () => {
+    render(
+      <MemoryRouter>
+        <AnomalyTab nodeId={10} token={null} />
+      </MemoryRouter>,
+    );
+
+    expect(mockListNodeAnomalyEvents).not.toHaveBeenCalled();
   });
 });

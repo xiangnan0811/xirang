@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import AnomalyEventRow from "@/components/anomaly-event-row";
 import type { AnomalyEvent } from "@/types/domain";
+import type { NodeDetailTabProps } from "./types";
 
-export default function AnomalyTab({ nodeId }: { nodeId: number }) {
+export default function AnomalyTab({ nodeId, token }: NodeDetailTabProps) {
   const { t } = useTranslation();
-  const { token } = useAuth();
   const [events, setEvents] = useState<AnomalyEvent[]>([]);
   const [loading, setLoading] = useState(true);
 

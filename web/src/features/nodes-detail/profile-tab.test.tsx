@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import ProfileTab from "./profile-tab";
 
@@ -36,25 +36,24 @@ vi.mock("@/lib/api/client", () => ({
 
 describe("ProfileTab", () => {
   beforeEach(() => {
-    sessionStorage.setItem("xirang-auth-token", "test-token");
+    mockGetNodes.mockReset();
     mockGetNodes.mockResolvedValue([BASE_NODE]);
   });
 
-  afterEach(() => {
-    sessionStorage.removeItem("xirang-auth-token");
-  });
-
   test("renders node basics when found", async () => {
-    render(<ProfileTab nodeId={1} />);
+    render(<ProfileTab nodeId={1} token="test-token" />);
     expect(await screen.findByText("demo-node")).toBeInTheDocument();
     expect(screen.getByText(/127\.0\.0\.1/)).toBeInTheDocument();
     expect(screen.getByText("prod")).toBeInTheDocument();
     expect(screen.getByText("/backups")).toBeInTheDocument();
     expect(screen.getByText("online")).toBeInTheDocument();
+    expect(mockGetNodes).toHaveBeenCalledWith("test-token", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   test("renders not-found when node id missing", async () => {
-    render(<ProfileTab nodeId={999} />);
+    render(<ProfileTab nodeId={999} token="test-token" />);
     expect(await screen.findByText(/未找到该节点/)).toBeInTheDocument();
   });
 
@@ -62,8 +61,13 @@ describe("ProfileTab", () => {
     mockGetNodes.mockResolvedValueOnce([
       { ...BASE_NODE, id: 2, maintenanceStart: "02:00", maintenanceEnd: "04:00" },
     ]);
-    render(<ProfileTab nodeId={2} />);
+    render(<ProfileTab nodeId={2} token="test-token" />);
     expect(await screen.findByText(/02:00/)).toBeInTheDocument();
     expect(screen.getByText(/04:00/)).toBeInTheDocument();
+  });
+
+  test("skips fetching when token is missing", () => {
+    render(<ProfileTab nodeId={1} token={null} />);
+    expect(mockGetNodes).not.toHaveBeenCalled();
   });
 });

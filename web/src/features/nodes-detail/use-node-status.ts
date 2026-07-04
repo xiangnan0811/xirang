@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import type { NodeStatus } from "@/lib/api/node-metrics-api";
+import type { NodeDetailAuthToken } from "./types";
 
 export type { NodeStatus };
 
@@ -11,19 +12,11 @@ interface UseNodeStatusResult {
   refetch: () => void;
 }
 
-export function useNodeStatus(nodeId: number): UseNodeStatusResult {
+export function useNodeStatus(nodeId: number, token: NodeDetailAuthToken): UseNodeStatusResult {
   const [data, setData] = useState<NodeStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  const token = (() => {
-    try {
-      return sessionStorage.getItem("xirang-auth-token");
-    } catch {
-      return null;
-    }
-  })();
 
   const fetchStatus = useCallback(async () => {
     if (!token || nodeId <= 0) return;
