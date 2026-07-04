@@ -37,6 +37,11 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 - Use `Array.isArray` before mapping unknown arrays from responses.
 - Convert numeric fields with `Number(...)` and provide safe defaults for
   missing values.
+- For repeated API mapper numeric fallbacks, use the shared helpers in
+  `web/src/lib/api/number-utils.ts` (`finiteNumber`,
+  `positiveNumberOrUndefined`, and `nullableFiniteNumber`) instead of copying
+  local `Number(...)`/`Number.isFinite(...)` helpers. Keep bounded form-input
+  parsers local when they have min/max or rounding behavior.
 - Validate redirect and route-sensitive strings explicitly. Existing example:
   `normalizeRedirectTarget` in `core.ts`.
 - Browser storage reads/writes should be guarded with try/catch and null checks,
