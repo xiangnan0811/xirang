@@ -303,8 +303,6 @@ go run ./cmd/server
 | PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
 | GET | /config/export | 🔒 导出配置（include_secrets=true 时需二次验证和 config.export/config_export 临时授权） |
 | POST | /config/import | 🔒 导入配置 |
-| GET | /hook-templates | 🔒 钩子模板列表 |
-
 ### 系统管理
 
 | 方法 | 路径 | 说明 |

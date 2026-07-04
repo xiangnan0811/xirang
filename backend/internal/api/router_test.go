@@ -139,6 +139,13 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodGet, "/api/v1/settings/security-risk-summary") {
 		t.Fatalf("未注册安全风险摘要接口")
 	}
+	if !hasRoute(routes, http.MethodGet, "/api/v1/app-credentials/profiles") {
+		t.Fatalf("未注册应用感知备份 profile 接口")
+	}
+	deprecatedHookTemplatesPath := "/api/v1/" + "hook" + "-templates"
+	if hasRoute(routes, http.MethodGet, deprecatedHookTemplatesPath) {
+		t.Fatalf("不应继续注册已废弃的 hook templates 接口")
+	}
 }
 
 func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {

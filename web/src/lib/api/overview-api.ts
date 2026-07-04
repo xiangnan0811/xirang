@@ -1,4 +1,4 @@
-import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentAction, HealthIncidentGroup, HealthIncidentResource, HealthIncidentResourceType, HealthIncidentSeverity, HealthIncidentSignal, HealthIncidentSourceType, HealthIncidentTimelineData, HealthTrendPoint, HookTemplate, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
+import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentAction, HealthIncidentGroup, HealthIncidentResource, HealthIncidentResourceType, HealthIncidentSeverity, HealthIncidentSignal, HealthIncidentSourceType, HealthIncidentTimelineData, HealthTrendPoint, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
 import { request } from "./core";
 import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
@@ -457,8 +457,5 @@ export function createOverviewApi() {
       return mapStorageUsage(payload);
     },
 
-    async getHookTemplates(token: string): Promise<HookTemplate[]> {
-      return (await request<HookTemplate[]>("/hook-templates", { token })) ?? [];
-    },
   };
 }
