@@ -31,24 +31,24 @@ current production behavior of the single-user deployment.
 
 ## Acceptance Criteria
 
-- [ ] Every child task has its own PRD, design if complex, implementation plan,
+- [x] Every child task has its own PRD, design if complex, implementation plan,
       validation commands, and rollback notes before implementation starts.
-- [ ] The first child optimizes policy `node_ids` response loading without
+- [x] The first child optimizes policy `node_ids` response loading without
       changing policy list/detail response shape.
-- [ ] A later child removes deprecated hook templates only after replacing the
+- [x] A later child removes deprecated hook templates only after replacing the
       frontend policy editor dependency on `GET /hook-templates`.
-- [ ] V1 encryption compatibility is removed only after evidence proves all
+- [x] V1 encryption compatibility is removed only after evidence proves all
       protected fields no longer contain `enc:v1:` values.
-- [ ] Frontend duplicated numeric parsing helpers are consolidated behind a
+- [x] Frontend duplicated numeric parsing helpers are consolidated behind a
       shared utility with mapper/dialog tests updated as needed.
-- [ ] Backend ad hoc `c.JSON` responses and legacy `log.Printf` call sites are
+- [x] Backend ad hoc `c.JSON` responses and legacy `log.Printf` call sites are
       reduced or converted in focused slices, preserving documented startup
       exceptions.
-- [ ] Alerting package-global shims are removed or narrowed only after live
+- [x] Alerting package-global shims are removed or narrowed only after live
       callers are converted to dependency injection.
-- [ ] Node detail feature token access is moved away from direct browser storage
+- [x] Node detail feature token access is moved away from direct browser storage
       reads toward the auth context or explicit props.
-- [ ] Final review confirms no child task introduced broad behavior drift,
+- [x] Final review confirms no child task introduced broad behavior drift,
       missing tests, stale docs, or unreconciled compatibility assumptions.
 
 ## Notes
@@ -66,3 +66,44 @@ current production behavior of the single-user deployment.
     specs require response helpers for handler responses.
   - Alerting package-level shims still have live callers in integration tests,
     alert retry, and reporting.
+
+## Final Review (2026-07-04)
+
+- All seven implementation slices were completed as Trellis child tasks and
+  archived under `.trellis/tasks/archive/2026-07/`. Each archived child contains
+  `prd.md`, `design.md`, and `implement.md` with validation and rollback notes.
+- Implementation commits:
+  - `56e2492` slims policy list/detail `node_ids` loading while preserving the
+    response shape. Remaining `Preload("Nodes")` calls are create/update/drill
+    paths outside that child scope.
+  - `448fc17` consolidates frontend API numeric fallback helpers behind shared
+    numeric utilities and mapper tests.
+  - `5c5b25c` removes the deprecated hook templates endpoint and frontend
+    consumer after the policy editor moved to app-aware profiles.
+  - `7a488d6` routes selected auth/node/policy handler responses through shared
+    response helpers.
+  - `6e794b9` passes node-detail auth tokens from `useAuth()` through page
+    props/hooks instead of direct production browser-storage reads.
+  - `16f396a` converts selected runtime `log.Printf` call sites to structured
+    module loggers.
+  - `e3dc92e` injects alert dispatchers into the scoped alert delivery and
+    integration probe paths.
+- V1 encryption compatibility was not removed. No production-state evidence was
+  available to prove all protected fields lack `enc:v1:` values, so the parent
+  requirement was honored by leaving that compatibility path intact.
+- No additional parent-level code-spec update was needed. Durable backend and
+  frontend conventions discovered by implementation were already captured in
+  the relevant child task spec commits.
+- Parent-level verification run after all children:
+  - `python3 ./.trellis/scripts/task.py validate .trellis/tasks/07-03-comprehensive-slimming-refactor`
+  - `git diff --check`
+  - `cd backend && go test ./...`
+  - `cd backend && go build ./...`
+  - `cd web && npm run check` (typecheck, lint, 117 test files / 502 tests, build)
+  - Source-boundary scans for deprecated hook-template references, selected
+    direct `c.JSON` calls, selected legacy `log.Printf` calls, scoped direct
+    `alerting.SendAlert` / `alerting.SendProbe` calls, and production
+    node-detail auth-token storage reads.
+- `golangci-lint` and `swag` binaries were not available in this local
+  environment during final parent review; frontend lint and backend test/build
+  gates were run directly.
