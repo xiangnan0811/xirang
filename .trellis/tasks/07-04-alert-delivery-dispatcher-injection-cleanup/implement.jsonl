@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index and guide routing for this task."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Delivery retry responses and sanitized errors must preserve contracts."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend gofmt, test, and quality gates."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Alerting and delivery errors must not leak secrets through logs."}
+{"file": "backend/internal/api/handlers/AGENTS.md", "reason": "Handler-layer response and orchestration rules for alert handler changes."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guide index required before coding."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Repository requires work on a dedicated branch."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "DI pattern should follow existing handler patterns instead of inventing a new abstraction."}
