@@ -253,3 +253,38 @@ Planned and completed the frontend numeric helper consolidation child task, adde
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Hook templates deprecation cleanup
+
+**Date**: 2026-07-04
+**Task**: Hook templates deprecation cleanup
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Removed deprecated hook templates API/UI surface, refreshed docs and Swagger path metadata, added route/component regression tests, documented deprecated API removal contract. Verification: backend API/handlers tests, full backend tests, backend build, frontend npm run check, doc freshness, diff check, source search. Local tools unavailable: swag and golangci-lint.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e571962` | (see git log) |
+| `5c5b25c` | (see git log) |
+| `428d8e5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

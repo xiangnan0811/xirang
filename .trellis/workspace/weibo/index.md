@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~255 | Active |
+| `journal-1.md` | ~290 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-04 | Hook templates deprecation cleanup | `e571962`, `5c5b25c`, `428d8e5` | `chore/slimming-refactor-planning` |
 | 7 | 2026-07-04 | Frontend API numeric helper consolidation | `61f705d`, `448fc17`, `5d8c738` | `chore/slimming-refactor-planning` |
 | 6 | 2026-07-03 | Policy node_ids query slimming | `e878df2`, `56e2492` | `chore/slimming-refactor-planning` |
 | 5 | 2026-07-01 | Frontend audit remediation phase 2 | `1889b33`, `b6a2612`, `6b6059c` | `fix/frontend-audit-remediation` |
