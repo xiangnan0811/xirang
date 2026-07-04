@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~324 | Active |
+| `journal-1.md` | ~359 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-04 | Node detail auth token boundary cleanup | `a4d1341`, `6e794b9`, `16ad719` | `chore/slimming-refactor-planning` |
 | 9 | 2026-07-04 | Backend response helper cleanup | `4628120`, `7a488d6` | `chore/slimming-refactor-planning` |
 | 8 | 2026-07-04 | Hook templates deprecation cleanup | `e571962`, `5c5b25c`, `428d8e5` | `chore/slimming-refactor-planning` |
 | 7 | 2026-07-04 | Frontend API numeric helper consolidation | `61f705d`, `448fc17`, `5d8c738` | `chore/slimming-refactor-planning` |

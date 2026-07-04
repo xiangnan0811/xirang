@@ -322,3 +322,38 @@ Converted selected auth, node, and policy handlers away from direct c.JSON respo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Node detail auth token boundary cleanup
+
+**Date**: 2026-07-04
+**Task**: Node detail auth token boundary cleanup
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Planned and completed the node-detail token boundary cleanup. NodesDetailPage now owns useAuth token access and passes token through node-detail tabs/hooks; feature production files no longer read xirang-auth-token from browser storage. Added explicit token-prop tests plus a source-boundary regression test. Frontend npm run check passed; Trellis context validation and production source scan passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a4d1341` | (see git log) |
+| `6e794b9` | (see git log) |
+| `16ad719` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
