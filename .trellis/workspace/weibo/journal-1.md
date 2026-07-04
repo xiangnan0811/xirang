@@ -357,3 +357,37 @@ Planned and completed the node-detail token boundary cleanup. NodesDetailPage no
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Backend legacy log.Printf cleanup
+
+**Date**: 2026-07-04
+**Task**: Backend legacy log.Printf cleanup
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Planned and completed a focused backend runtime logging cleanup. Converted selected log.Printf calls in node handler connection-test paths and policy task sync scheduling paths to logger.Module structured warnings, added a static regression test for the scoped files, and preserved best-effort behavior. Verified go test ./internal, go test ./internal/api/handlers ./internal/policy, go test ./..., go build ./..., source search, diff check, and Trellis validation. golangci-lint was not installed locally.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `10f5712` | (see git log) |
+| `16f396a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
