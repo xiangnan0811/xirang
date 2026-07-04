@@ -18,7 +18,8 @@ import (
 )
 
 type AlertHandler struct {
-	db *gorm.DB
+	db              *gorm.DB
+	alertDispatcher *alerting.Dispatcher
 }
 
 type retryDeliveryRequest struct {
@@ -68,6 +69,18 @@ type deliveryStatsResponse struct {
 
 func NewAlertHandler(db *gorm.DB) *AlertHandler {
 	return &AlertHandler{db: db}
+}
+
+func (h *AlertHandler) WithAlertDispatcher(alertDispatcher *alerting.Dispatcher) *AlertHandler {
+	h.alertDispatcher = alertDispatcher
+	return h
+}
+
+func (h *AlertHandler) getAlertDispatcher() *alerting.Dispatcher {
+	if h.alertDispatcher != nil {
+		return h.alertDispatcher
+	}
+	return alerting.NewDispatcher(h.db, nil, nil)
 }
 
 // List godoc
@@ -553,7 +566,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 		AlertID:       alert.ID,
 		IntegrationID: integration.ID,
 	}
-	if err := alerting.SendAlert(integration, alert); err != nil {
+	if err := h.getAlertDispatcher().SendAlert(integration, alert); err != nil {
 		delivery.Status = "failed"
 		delivery.LastError = util.SanitizeDeliveryError(integration.Type, err)
 		if saveErr := h.db.Create(&delivery).Error; saveErr != nil {
@@ -655,7 +668,7 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 			newRecord.Status = "failed"
 			newRecord.LastError = fmt.Sprintf("通知通道不存在: %d", integrationID)
 			failedCount += 1
-		} else if err := alerting.SendAlert(integration, alert); err != nil {
+		} else if err := h.getAlertDispatcher().SendAlert(integration, alert); err != nil {
 			newRecord.Status = "failed"
 			newRecord.LastError = util.SanitizeDeliveryError(integration.Type, err)
 			failedCount += 1

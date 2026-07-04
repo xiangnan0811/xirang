@@ -33,12 +33,25 @@ var channelDomainHints = map[string]string{
 
 // IntegrationService encapsulates business logic for integration CRUD and testing.
 type IntegrationService struct {
-	db *gorm.DB
+	db              *gorm.DB
+	alertDispatcher *alerting.Dispatcher
 }
 
 // NewIntegrationService creates a new IntegrationService.
 func NewIntegrationService(db *gorm.DB) *IntegrationService {
 	return &IntegrationService{db: db}
+}
+
+func (s *IntegrationService) WithAlertDispatcher(alertDispatcher *alerting.Dispatcher) *IntegrationService {
+	s.alertDispatcher = alertDispatcher
+	return s
+}
+
+func (s *IntegrationService) getAlertDispatcher() *alerting.Dispatcher {
+	if s.alertDispatcher != nil {
+		return s.alertDispatcher
+	}
+	return alerting.NewDispatcher(s.db, nil, nil)
 }
 
 // DB returns the underlying database instance for simple read operations.
@@ -247,7 +260,7 @@ func (s *IntegrationService) TestIntegration(ctx context.Context, id uint) (*Tes
 	}
 
 	startedAt := time.Now()
-	err := alerting.SendProbe(item)
+	err := s.getAlertDispatcher().SendProbe(item)
 	latency := time.Since(startedAt).Milliseconds()
 
 	if err != nil {
