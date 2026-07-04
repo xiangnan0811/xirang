@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -390,11 +389,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 }
 
 func (h *NodeHandler) Exec(c *gin.Context) {
-	c.JSON(http.StatusForbidden, Response{
-		Code:    http.StatusForbidden,
-		Message: "节点远程执行能力已禁用",
-		Data:    gin.H{"error_code": nodeExecDisabledCode},
-	})
+	respondForbiddenData(c, "节点远程执行能力已禁用", gin.H{"error_code": nodeExecDisabledCode})
 }
 
 // TestConnection godoc

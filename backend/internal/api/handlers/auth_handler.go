@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -127,7 +126,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		if lockedErr, ok := auth.IsLoginLocked(err); ok {
 			retryAfter := lockedErr.RetryAfterSeconds(time.Now())
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			c.JSON(http.StatusLocked, Response{Code: http.StatusLocked, Message: err.Error(), Data: gin.H{"retry_after": retryAfter}})
+			respondLocked(c, err.Error(), gin.H{"retry_after": retryAfter})
 			return
 		}
 		respondUnauthorized(c, err.Error())
@@ -198,7 +197,7 @@ func (h *AuthHandler) CompleteOnboarding(c *gin.Context) {
 		return
 	}
 	if h.db == nil {
-		c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: "服务不可用", Data: nil})
+		respondServiceUnavailable(c, "服务不可用")
 		return
 	}
 	if err := h.db.Model(&model.User{}).Where("id = ?", userID).Update("onboarded", true).Error; err != nil {
@@ -253,7 +252,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 // @Router       /auth/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
 	if h.jwtManager == nil {
-		c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: "认证服务不可用", Data: nil})
+		respondServiceUnavailable(c, "认证服务不可用")
 		return
 	}
 

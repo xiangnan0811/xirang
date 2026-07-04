@@ -29,6 +29,10 @@ func respondOK(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "ok", Data: data})
 }
 
+func respondOKWithMessage(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: msg, Data: data})
+}
+
 func respondCreated(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusCreated, Response{Code: http.StatusCreated, Message: "ok", Data: data})
 }
@@ -62,6 +66,14 @@ func respondUnauthorized(c *gin.Context, msg string) {
 
 func respondForbidden(c *gin.Context, msg string) {
 	c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: msg, Data: nil})
+}
+
+func respondForbiddenData(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: msg, Data: data})
+}
+
+func respondLocked(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusLocked, Response{Code: http.StatusLocked, Message: msg, Data: data})
 }
 
 func respondNotFound(c *gin.Context, msg string) {
