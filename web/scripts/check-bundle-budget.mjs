@@ -9,8 +9,11 @@ import { fileURLToPath } from 'node:url';
 // 列表虚拟化，预算从 540 → 546 KiB，留 ~6 KiB 缓冲覆盖该依赖与未来微调。
 // 05-14 frontend-bundle-budget-governance: locale resources are lazy-loaded,
 // so the startup bundle now has real headroom instead of passing by bytes.
+// Tailwind 4 emits more raw CSS for registered custom properties and modern
+// utility output. The post-migration main CSS is ~99 KiB raw but ~16 KiB gzip,
+// so keep a small raw-size cushion without weakening the JS startup budget.
 const DEFAULT_MAIN_JS_BUDGET_KIB = 500;
-const DEFAULT_MAIN_CSS_BUDGET_KIB = 70;
+const DEFAULT_MAIN_CSS_BUDGET_KIB = 105;
 
 function formatKiB(bytes) {
   return `${(bytes / 1024).toFixed(2)} KiB`;

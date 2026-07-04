@@ -7,6 +7,7 @@ import { Toaster } from "./components/ui/toast";
 import { ThemeProvider } from "./context/theme-context";
 import { AuthProvider } from "./context/auth-context";
 import { i18nReady } from "./i18n";
+import "@fontsource-variable/inter";
 import "./index.css";
 
 i18nReady.then(() => {
