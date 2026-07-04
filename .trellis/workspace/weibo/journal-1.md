@@ -288,3 +288,37 @@ Removed deprecated hook templates API/UI surface, refreshed docs and Swagger pat
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Backend response helper cleanup
+
+**Date**: 2026-07-04
+**Task**: Backend response helper cleanup
+**Branch**: `chore/slimming-refactor-planning`
+
+### Summary
+
+Converted selected auth, node, and policy handlers away from direct c.JSON responses by adding focused response helper variants and preserving existing envelopes. Added a static contract test for selected handler files. Verification: focused RED/GREEN test, selected handler c.JSON source search, auth/node/policy behavior tests, backend handlers tests, full backend tests, backend build, git diff check. Local tool unavailable: golangci-lint.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4628120` | (see git log) |
+| `7a488d6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
