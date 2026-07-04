@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Verify frontend checklist compliance."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Review component prop and composition changes."}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Review data-fetching hook contract changes."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Review auth state boundary and prop flow."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Review token typing and test typings."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Review test and quality gate expectations."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Check branch workflow compliance."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check repeated token lookup cleanup."}
