@@ -66,6 +66,41 @@ Keep state local when:
 - Map timestamps, numbers, enum-like status values, and optional fields in API
   wrapper functions before storing them.
 
+### Convention: Auth token ownership boundary
+
+**What**: Route pages and top-level authenticated surfaces should obtain the
+current auth token with `useAuth()` and pass it explicitly to feature
+components, hooks, or page fragments that need to call API wrappers. Feature
+modules must not read `xirang-auth-token` directly from `sessionStorage` or
+`localStorage`.
+
+**Why**: The auth context owns token persistence, legacy localStorage migration,
+logout cleanup, and unavailable-storage handling. Feature-level storage reads
+duplicate that knowledge and make tests depend on browser storage setup instead
+of the component contract.
+
+**Example**:
+
+```tsx
+const { token } = useAuth();
+
+return <NodePanel nodeId={nodeId} token={token} />;
+```
+
+```ts
+export function useNodeData(nodeId: number, token: string | null) {
+  useEffect(() => {
+    if (!token || nodeId <= 0) return;
+    void apiClient.getNodeStatus(token, nodeId);
+  }, [nodeId, token]);
+}
+```
+
+**Tests**: Feature tests should pass `token="test-token"` or `token={null}`
+through props/hook params. For feature areas with repeated API calls, add a
+source-boundary regression test that rejects direct auth-token storage reads in
+production files.
+
 ---
 
 ## Scenario: Terminal credential grant prompt state
