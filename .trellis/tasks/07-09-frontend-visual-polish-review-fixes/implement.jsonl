@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Frontend component, page shell, motion, and manual tab conventions for the review fixes."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gate, test expectations, and forbidden patterns for changed UI behavior."}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Tab roles, icon accessibility, and keyboard/a11y review requirements."}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Dedicated branch and PR workflow constraints for the retroactive Trellis task."}
