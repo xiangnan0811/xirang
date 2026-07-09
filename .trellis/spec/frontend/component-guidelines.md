@@ -160,6 +160,10 @@ warning is gone rather than hidden.
   panels.
 - Keep responsive layouts explicit with grid/flex constraints. Do not rely on
   text overflow or dynamic content to size fixed controls.
+- Framer Motion usage must respect both OS reduced-motion and the in-app
+  power-saving mode. Keep the root `MotionConfig` inside `ThemeProvider` so it
+  can switch to `reducedMotion="always"` when `powerMode === "save"`; do not
+  mount new motion islands that bypass that boundary.
 
 ### Convention: SSH Key least-privilege scope UI
 
@@ -246,7 +250,10 @@ setSearchParams(next, { replace: true });
 metadata that affects scanability, `DataSurface` title where present, and URL
 state preservation for tabs or filters. Manual tab controls must also preserve
 `role="tablist"`, `role="tab"`, `aria-selected`, `aria-controls`, and keyboard
-navigation tests.
+navigation tests. Every `aria-controls` value must point to a mounted
+`tabpanel`; if only the active panel content should be mounted, render empty
+hidden panels for inactive tabs rather than leaving controls with missing
+targets.
 
 ---
 
