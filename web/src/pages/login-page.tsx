@@ -189,7 +189,7 @@ export function LoginPage() {
             <span>XiRang / X-Soil</span>
           </div>
           <p className="text-4xl font-extrabold tracking-tight lg:text-5xl animate-slide-up [animation-delay:150ms]">
-            <span>{t("login.platformName")}</span>
+            <span className="bg-gradient-to-br from-primary to-info bg-clip-text text-transparent">{t("login.platformName")}</span>
           </p>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted-foreground animate-slide-up [animation-delay:200ms]">
             {t("login.platformSlogan")}

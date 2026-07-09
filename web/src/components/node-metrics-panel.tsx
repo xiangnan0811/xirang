@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { LineChart } from "lucide-react";
 import { apiClient } from "@/lib/api/client";
 import {
   Dialog,
@@ -13,6 +13,8 @@ import {
 import type { NodeMetricSample } from "@/lib/api/node-metrics-api";
 import type { NodeRecord } from "@/types/domain";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/loading-state";
+import { EmptyState } from "@/components/ui/empty-state";
 import { MetricChart, type MetricKey, type ChartPoint } from "@/components/node-metrics-chart";
 import { NODE_PALETTE } from "@/components/node-metrics-theme";
 
@@ -151,19 +153,16 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
   if (onlineNodes.length === 0) return null;
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-10">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-sm text-muted-foreground">{t("nodes.metricsLoading")}</span>
-      </div>
-    );
+    return <LoadingState title={t("nodes.metricsLoading")} />;
   }
 
   if (!hasData) {
     return (
-      <p className="py-6 text-center text-sm text-muted-foreground">
-        {t("nodes.metricsEmpty")}
-      </p>
+      <EmptyState
+        icon={LineChart}
+        title={t("nodes.metricsEmpty")}
+        className="border border-dashed border-border/70 bg-transparent shadow-none"
+      />
     );
   }
 

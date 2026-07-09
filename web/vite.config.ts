@@ -45,6 +45,8 @@ export default defineConfig(({ mode }) => ({
         manualChunks: {
           recharts: ["recharts"],
           "framer-motion": ["framer-motion"],
+          xterm: ["@xterm/xterm", "@xterm/addon-fit"],
+          "grid-layout": ["react-grid-layout"],
         },
       },
     },

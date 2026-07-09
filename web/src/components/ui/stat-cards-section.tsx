@@ -1,5 +1,19 @@
 import type { ReactNode } from "react";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+
+const staggerContainer = {
+  animate: { transition: { staggerChildren: 0.06 } },
+};
+
+const staggerItem = {
+  initial: { opacity: 0, y: 12 },
+  animate: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] as const },
+  },
+};
 
 type StatCardTone = "info" | "success" | "warning" | "destructive" | "primary";
 
@@ -47,7 +61,10 @@ export function StatCardsSection({
   compact = false,
 }: StatCardsSectionProps) {
   return (
-    <section
+    <motion.section
+      initial="initial"
+      animate="animate"
+      variants={staggerContainer}
       className={cn(
         "grid gap-2 sm:grid-cols-2 xl:grid-cols-4",
         compact ? "grid-cols-2" : "grid-cols-1",
@@ -56,11 +73,13 @@ export function StatCardsSection({
       )}
     >
       {items.map((item) => (
-        <div
+        <motion.div
           key={item.id ?? item.title}
+          variants={staggerItem}
+          whileHover={{ y: -4 }}
           data-tone={item.tone ?? "info"}
           className={cn(
-            "rounded-lg border border-border bg-card shadow-sm",
+            "rounded-lg border border-border bg-card shadow-sm transition-[border-color,box-shadow] duration-200 ease-out hover:border-primary/30 hover:shadow-[var(--shadow-panel-hover)]",
             compact ? "p-3" : "p-4",
             cardClassName
           )}
@@ -93,9 +112,9 @@ export function StatCardsSection({
               {item.description}
             </div>
           ) : null}
-        </div>
+        </motion.div>
       ))}
-    </section>
+    </motion.section>
   );
 }
 

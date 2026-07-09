@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Stepper } from "@/components/ui/stepper";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { MountVerifyResult } from "@/lib/api/storage-guide-api";
@@ -86,7 +87,7 @@ function isStep2Valid(protocol: Protocol, nfs: NfsFields, smb: SmbFields, usb: U
   }
 }
 
-const inputClass = "w-full rounded-lg border border-input/90 bg-background/70 px-3 py-2 text-sm placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:border-primary/35";
+const inputClass = "w-full rounded-lg border border-input bg-background/70 px-3 py-2 text-sm placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/35";
 const labelClass = "block text-xs font-medium text-foreground mb-1";
 
 export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
@@ -171,23 +172,7 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
         </DialogHeader>
 
         {/* 步骤指示器 */}
-        <div className="flex items-center gap-1 px-6 pt-2 pb-1" role="navigation" aria-label={t("nasMountWizard.stepsAriaLabel")}>
-          {STEP_LABELS.map((label, i) => (
-            <div key={label} className="flex items-center gap-1 flex-1">
-              <div className={`flex items-center justify-center size-6 rounded-full text-xs font-medium shrink-0 ${
-                i <= step ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-              }`}>
-                {i + 1}
-              </div>
-              <span className={`text-xs truncate hidden sm:inline ${i <= step ? "text-foreground" : "text-muted-foreground"}`}>
-                {label}
-              </span>
-              {i < STEP_LABELS.length - 1 && (
-                <div className={`flex-1 h-px mx-1 ${i < step ? "bg-primary" : "bg-border"}`} />
-              )}
-            </div>
-          ))}
-        </div>
+        <Stepper steps={STEP_LABELS} current={step} className="px-6 pt-2 pb-1" aria-label={t("nasMountWizard.stepsAriaLabel")} />
 
         <DialogBody>
           {/* Step 0: 选择协议 */}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { MoreVertical, Trash2 } from "lucide-react";
+import { LayoutDashboard, MoreVertical, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
@@ -29,6 +29,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { formatTime } from "@/lib/date-utils";
+import { PageHero } from "@/components/ui/page-hero";
+import { Stagger, Reveal } from "@/components/ui/reveal";
+import { EmptyState } from "@/components/ui/empty-state";
 
 // ─── 删除确认对话框 ───────────────────────────────────────────────
 
@@ -336,87 +339,87 @@ export function DashboardsPage() {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      {/* 页头 */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("dashboards.pageTitle")}</h1>
-        <Button onClick={() => setCreateOpen(true)}>
-          {t("dashboards.newButton")}
-        </Button>
-      </div>
-
-      {/* 内容区 */}
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <DashboardCardSkeleton />
-          <DashboardCardSkeleton />
-          <DashboardCardSkeleton />
-        </div>
-      ) : dashboards.length === 0 ? (
-        /* 空态 */
-        <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-          <p className="text-lg font-medium">{t("dashboards.empty.title")}</p>
-          <p className="text-sm text-muted-foreground">
-            {t("dashboards.empty.hint")}
-          </p>
+      <PageHero
+        title={t("dashboards.pageTitle")}
+        actions={
           <Button onClick={() => setCreateOpen(true)}>
             {t("dashboards.newButton")}
           </Button>
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {dashboards.map((d) => (
-            <Card
-              key={d.id}
-              className="relative transition-shadow hover:shadow-md"
-            >
-              <div className="absolute right-3 top-3">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      aria-label={t("common.more")}
-                    >
-                      <MoreVertical className="size-4" aria-hidden="true" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={() => setDeleteTarget(d)}
-                    >
-                      <Trash2 className="mr-2 size-4" aria-hidden="true" />
-                      {t("common.delete")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+        }
+      />
 
-              <CardHeader className="pr-10">
-                <Link
-                  to={`/app/dashboards/${d.id}`}
-                  className="font-medium leading-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {d.name}
-                </Link>
-                <p className="text-xs text-muted-foreground">
-                  {t(`dashboards.timeRange.${d.time_range}`)}
-                </p>
-              </CardHeader>
-              <CardContent>
-                {d.description && (
-                  <p className="line-clamp-2 text-sm text-muted-foreground">
-                    {d.description}
+      {/* 内容区 */}
+      {loading ? (
+        <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Reveal><DashboardCardSkeleton /></Reveal>
+          <Reveal><DashboardCardSkeleton /></Reveal>
+          <Reveal><DashboardCardSkeleton /></Reveal>
+        </Stagger>
+      ) : dashboards.length === 0 ? (
+        <EmptyState
+          icon={LayoutDashboard}
+          title={t("dashboards.empty.title")}
+          description={t("dashboards.empty.hint")}
+          action={
+            <Button onClick={() => setCreateOpen(true)}>
+              {t("dashboards.newButton")}
+            </Button>
+          }
+        />
+      ) : (
+        <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {dashboards.map((d) => (
+            <Reveal key={d.id}>
+              <Card className="relative card-lift">
+                <div className="absolute right-3 top-3">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        aria-label={t("common.more")}
+                      >
+                        <MoreVertical className="size-4" aria-hidden="true" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setDeleteTarget(d)}
+                      >
+                        <Trash2 className="mr-2 size-4" aria-hidden="true" />
+                        {t("common.delete")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+
+                <CardHeader className="pr-10">
+                  <Link
+                    to={`/app/dashboards/${d.id}`}
+                    className="font-medium leading-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {d.name}
+                  </Link>
+                  <p className="text-xs text-muted-foreground">
+                    {t(`dashboards.timeRange.${d.time_range}`)}
                   </p>
-                )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {formatTime(d.updated_at)}
-                </p>
-              </CardContent>
-            </Card>
+                </CardHeader>
+                <CardContent>
+                  {d.description && (
+                    <p className="line-clamp-2 text-sm text-muted-foreground">
+                      {d.description}
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {formatTime(d.updated_at)}
+                  </p>
+                </CardContent>
+              </Card>
+            </Reveal>
           ))}
-        </div>
+        </Stagger>
       )}
 
       {/* 新建对话框 */}

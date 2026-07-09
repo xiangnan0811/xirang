@@ -138,4 +138,39 @@ describe("NodesDetailPage", () => {
       token: "test-token",
     });
   });
+
+  it("keeps the full tab row reachable in narrow viewports", () => {
+    renderAt("/app/nodes/42");
+    const tablist = screen.getByRole("tablist");
+
+    expect(tablist).toHaveClass("overflow-x-auto");
+    expect(tablist).toHaveAttribute("aria-label", "节点详情标签页");
+    expect(screen.getByRole("tab", { name: /日志配置/ })).toHaveAttribute(
+      "aria-controls",
+      "node-detail-panel-log-config"
+    );
+    for (const tab of screen.getAllByRole("tab")) {
+      const panelId = tab.getAttribute("aria-controls");
+      expect(panelId).toBeTruthy();
+      expect(document.getElementById(panelId!)).not.toBeNull();
+    }
+    expect(screen.getByRole("tabpanel")).toHaveAttribute(
+      "aria-labelledby",
+      "node-detail-tab-overview"
+    );
+  });
+
+  it("supports arrow key navigation between tabs", () => {
+    renderAt("/app/nodes/42");
+    const overviewTab = screen.getByRole("tab", { name: /概览/ });
+
+    fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: /指标/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /指标/ }), { key: "End" });
+    expect(screen.getByRole("tab", { name: /异常事件/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /异常事件/ }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: /概览/ })).toHaveAttribute("aria-selected", "true");
+  });
 });

@@ -13,10 +13,15 @@ describe("Stepper", () => {
   });
 
   it("shows checkmark for completed steps", () => {
-    render(<Stepper steps={steps} current={2} />);
-    // Steps 0 and 1 are complete, should show ✓
-    const checks = screen.getAllByText("✓");
-    expect(checks.length).toBe(2);
+    const { container } = render(<Stepper steps={steps} current={2} />);
+    // Steps 0 and 1 are complete; each completed indicator renders a check icon
+    const indicators = Array.from(
+      container.querySelectorAll<HTMLElement>("div.size-6")
+    );
+    const completed = indicators.filter(
+      (el) => el.className.includes("bg-primary") && el.querySelector("svg") !== null
+    );
+    expect(completed.length).toBe(2);
   });
 
   it("shows step number for future steps", () => {

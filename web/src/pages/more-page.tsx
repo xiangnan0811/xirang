@@ -24,9 +24,9 @@ export function MorePage() {
             <Link
               key={item.path}
               to={item.path}
-              className="flex items-center gap-3 rounded-lg bg-card p-4 shadow-sm dark:border dark:border-border"
+              className="card-lift flex items-center gap-3 rounded-lg bg-card p-4 shadow-sm hover:bg-muted/40 dark:border dark:border-border"
             >
-              <div className="flex size-10 items-center justify-center rounded-md bg-accent text-foreground">
+              <div className="flex size-10 items-center justify-center rounded-md bg-gradient-to-br from-primary/10 to-info/10 text-primary">
                 <Icon className="size-5" aria-hidden />
               </div>
               <div className="text-sm font-medium text-foreground">{t(item.titleKey)}</div>

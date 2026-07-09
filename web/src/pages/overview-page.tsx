@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { Stagger, Reveal } from "@/components/ui/reveal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -80,7 +81,7 @@ function HealthIncidentTimelinePanel({
   const visibleGroups = groups.slice(0, INCIDENT_PREVIEW_LIMIT);
 
   return (
-    <DataSurface className="animate-slide-up [animation-delay:180ms]">
+    <DataSurface>
       <DataSurfaceHeader
         title={
           <span className="inline-flex items-center gap-2">
@@ -345,8 +346,8 @@ export function OverviewPage() {
   }, [chartMetrics.chartData, visibleLayers]);
 
   return (
-    <div className="animate-fade-in space-y-5">
-      <OverviewHero />
+    <Stagger className="space-y-5">
+      <Reveal><OverviewHero /></Reveal>
       <StatCardsSection
         compact
         className="animate-slide-up [animation-delay:150ms]"
@@ -365,7 +366,7 @@ export function OverviewPage() {
             value: healthRate,
             unit: "%",
             icon: healthRate >= 90 ? (
-              <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" />
+              <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" aria-hidden />
             ) : undefined,
             description: t("overview.healthRateDesc", { healthy: overview.healthyNodes, total: overview.totalNodes }),
             tone: "success",
@@ -393,130 +394,136 @@ export function OverviewPage() {
         ]}
       />
 
-      <HealthIncidentTimelinePanel
-        groups={incidentGroups}
-        loading={incidentLoading}
-        error={incidentError}
-        onRetry={() => setIncidentReloadKey((current) => current + 1)}
-      />
-
-      <section className="grid gap-4 grid-cols-1 lg:grid-cols-2 animate-slide-up [animation-delay:200ms]">
-        <div className="flex flex-col gap-2 w-full min-w-0">
-          <Card className="rounded-lg border border-border bg-card flex-1 flex flex-col min-h-0">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-base">{t("overview.matrixTitle")}</CardTitle>
-                {nodes.length > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => setMatrixFullscreen(true)}
-                    aria-label={t("overview.fullscreenAriaLabel")}
-                    title={t("overview.fullscreenTitle")}
-                  >
-                    <Maximize2 className="size-3.5" />
-                  </Button>
-                ) : null}
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col min-h-0">
-              {loading ? (
-                <LoadingState
-                  className="mb-3"
-                  title={t("overview.matrixLoading")}
-                  description={t("overview.matrixLoadingDesc")}
-                  rows={2}
-                />
-              ) : null}
-              {!loading && nodes.length === 0 ? (
-                <p className="rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-                  {t("overview.matrixEmpty")}
-                </p>
-              ) : (
-                <div className="flex flex-col flex-1 min-h-0 h-full">
-                  <div
-                    role="group"
-                    aria-label={t("overview.matrixPreviewAriaLabel", { shown: previewNodes.length, total: nodes.length })}
-                    className="flex flex-wrap gap-1 overflow-y-auto pb-4"
-                  >
-                    {previewNodes.map((node) => {
-                      let dotColor = "bg-muted-foreground/30";
-                      if (node.status === "online") dotColor = "bg-success";
-                      if (node.status === "warning") dotColor = "bg-warning";
-                      const tooltipId = `overview-node-tooltip-${node.id}`;
-                      return (
-                        <Link
-                          key={node.id}
-                          to={`/app/nodes/${node.id}`}
-                          data-testid={`overview-node-link-${node.id}`}
-                          className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
-                          aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
-                          aria-describedby={tooltipId}
-                        >
-                          {/* Tooltip on hover and keyboard focus */}
-                          <span
-                            id={tooltipId}
-                            role="tooltip"
-                            className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
-                          >
-                            <span className="font-medium">{node.name}</span>
-                            <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
-                          </span>
-                        </Link>
-                      );
-                    })}
-                  </div>
-
-                  {hiddenNodeCount > 0 ? (
-                    <p className="pb-3 text-xs text-foreground/70">
-                      {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
-                    </p>
-                  ) : null}
-
-                  {nodes.length > 0 && (
-                    <div className="mt-auto shrink-0 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
-                      <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <OverviewTrafficChart
-          trafficWindow={trafficWindow}
-          setTrafficWindow={setTrafficWindow}
-          trafficLoading={trafficLoading}
-          trafficError={trafficError}
-          chartMetrics={chartMetrics}
-          visibleLayers={visibleLayers}
-          setVisibleLayers={setVisibleLayers}
-          yMaxLeft={yMaxLeft}
-          yMaxRight={yMaxRight}
+      <Reveal>
+        <HealthIncidentTimelinePanel
+          groups={incidentGroups}
+          loading={incidentLoading}
+          error={incidentError}
+          onRetry={() => setIncidentReloadKey((current) => current + 1)}
         />
-      </section>
+      </Reveal>
+
+      <Reveal>
+        <section className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+          <div className="flex flex-col gap-2 w-full min-w-0">
+            <Card className="rounded-lg border border-border bg-card flex-1 flex flex-col min-h-0">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-base">{t("overview.matrixTitle")}</CardTitle>
+                  {nodes.length > 0 ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-muted-foreground hover:text-foreground"
+                      onClick={() => setMatrixFullscreen(true)}
+                      aria-label={t("overview.fullscreenAriaLabel")}
+                      title={t("overview.fullscreenTitle")}
+                    >
+                      <Maximize2 className="size-3.5" aria-hidden />
+                    </Button>
+                  ) : null}
+                </div>
+              </CardHeader>
+              <CardContent className="flex-1 flex flex-col min-h-0">
+                {loading ? (
+                  <LoadingState
+                    className="mb-3"
+                    title={t("overview.matrixLoading")}
+                    description={t("overview.matrixLoadingDesc")}
+                    rows={2}
+                  />
+                ) : null}
+                {!loading && nodes.length === 0 ? (
+                  <p className="rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground">
+                    {t("overview.matrixEmpty")}
+                  </p>
+                ) : (
+                  <div className="flex flex-col flex-1 min-h-0 h-full">
+                    <div
+                      role="group"
+                      aria-label={t("overview.matrixPreviewAriaLabel", { shown: previewNodes.length, total: nodes.length })}
+                      className="flex flex-wrap gap-1 overflow-y-auto pb-4"
+                    >
+                      {previewNodes.map((node) => {
+                        let dotColor = "bg-muted-foreground/30";
+                        if (node.status === "online") dotColor = "bg-success";
+                        if (node.status === "warning") dotColor = "bg-warning";
+                        const tooltipId = `overview-node-tooltip-${node.id}`;
+                        return (
+                          <Link
+                            key={node.id}
+                            to={`/app/nodes/${node.id}`}
+                            data-testid={`overview-node-link-${node.id}`}
+                            className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
+                            aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
+                            aria-describedby={tooltipId}
+                          >
+                            {/* Tooltip on hover and keyboard focus */}
+                            <span
+                              id={tooltipId}
+                              role="tooltip"
+                              className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
+                            >
+                              <span className="font-medium">{node.name}</span>
+                              <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+
+                    {hiddenNodeCount > 0 ? (
+                      <p className="pb-3 text-xs text-foreground/70">
+                        {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
+                      </p>
+                    ) : null}
+
+                    {nodes.length > 0 && (
+                      <div className="mt-auto shrink-0 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
+                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
+                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
+                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <OverviewTrafficChart
+            trafficWindow={trafficWindow}
+            setTrafficWindow={setTrafficWindow}
+            trafficLoading={trafficLoading}
+            trafficError={trafficError}
+            chartMetrics={chartMetrics}
+            visibleLayers={visibleLayers}
+            setVisibleLayers={setVisibleLayers}
+            yMaxLeft={yMaxLeft}
+            yMaxRight={yMaxRight}
+          />
+        </section>
+      </Reveal>
 
       {/* 节点资源概览 */}
       {nodes.length > 0 && nodes.some(n => n.status === "online") && token && (
-        <section className="animate-slide-up [animation-delay:250ms]">
-          <Card className="rounded-lg border border-border bg-card">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{t("overview.nodeResources")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <NodeMetricsPanel nodes={nodes} token={token} />
-              {nodes.filter(n => n.status === "online").length > 8 && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  {t("overview.nodeResourcesHint")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </section>
+        <Reveal>
+          <section>
+            <Card className="rounded-lg border border-border bg-card">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">{t("overview.nodeResources")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <NodeMetricsPanel nodes={nodes} token={token} />
+                {nodes.filter(n => n.status === "online").length > 8 && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {t("overview.nodeResourcesHint")}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </section>
+        </Reveal>
       )}
 
       <Dialog open={matrixFullscreen} onOpenChange={setMatrixFullscreen}>
@@ -565,7 +572,9 @@ export function OverviewPage() {
         </DialogContent>
       </Dialog>
 
-      <OverviewRecentTasks tasks={tasks} recentTasks={recentTasks} loading={loading} />
-    </div>
+      <Reveal>
+        <OverviewRecentTasks tasks={tasks} recentTasks={recentTasks} loading={loading} />
+      </Reveal>
+    </Stagger>
   );
 }

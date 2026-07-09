@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Activity, AlertTriangle, CheckCircle2, Globe, HelpCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { DataSurface } from "@/components/ui/data-surface";
 import { createServiceMonitorsApi } from "@/lib/api/service-monitors";
 import { formatTime } from "@/lib/date-utils";
 import type { StatusPageItem } from "@/types/domain";
@@ -146,9 +147,9 @@ export function StatusPage() {
         {!loading && items.length > 0 && (
           <div className="grid gap-3 sm:grid-cols-2">
             {items.map((item) => (
-              <Card
+              <DataSurface
                 key={item.name}
-                className="border-border bg-card transition-colors hover:bg-muted/20"
+                className="transition-colors hover:bg-muted/20"
               >
                 <CardContent className="flex items-start gap-4 p-4">
                   <StatusDot status={item.status} />
@@ -171,7 +172,7 @@ export function StatusPage() {
                     </div>
                   </div>
                 </CardContent>
-              </Card>
+              </DataSurface>
             ))}
           </div>
         )}
