@@ -33,9 +33,9 @@ export function DesktopSidebar({
       isCollapsed ? "justify-center px-2" : "gap-3 px-3",
       isActive
         ? [
-            "bg-secondary text-foreground",
+            "bg-primary/10 text-primary",
             // left indicator rail — absolute pseudo-element via before:
-            "before:absolute before:inset-y-2 before:-left-[9px] before:w-[3px] before:rounded-r before:bg-primary",
+            "before:absolute before:inset-y-2 before:-left-[9px] before:w-[3px] before:rounded-r before:bg-gradient-to-b before:from-primary before:to-info",
           ]
         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
     );
@@ -45,7 +45,7 @@ export function DesktopSidebar({
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border bg-card pb-4 pt-14 transition-[width] duration-200 md:flex",
+        "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border bg-card/80 backdrop-blur-xl pb-4 pt-14 transition-[width] duration-200 md:flex",
         isCollapsed ? "w-16 px-2" : "w-60 px-3",
       )}
     >

@@ -45,10 +45,10 @@ function AnimatedOutlet() {
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
         key={location.pathname}
-        initial={reduced ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={reduced ? { opacity: 0 } : { opacity: 0 }}
-        transition={{ duration: reduced ? 0 : 0.2, ease: [0, 0, 0.2, 1] }}
+        initial={reduced ? false : { opacity: 0, y: 10, scale: 0.99 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.995 }}
+        transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
       >
         {outlet}
       </motion.div>
@@ -173,14 +173,14 @@ function AppShellInner() {
 
       {/* 顶部固定导航栏 */}
       <header
-        className="fixed left-0 right-0 top-0 z-50 h-14 border-b border-border bg-background"
+        className="fixed left-0 right-0 top-0 z-50 h-14 border-b border-border bg-background/80 backdrop-blur-md"
       >
         <div className="flex h-14 items-center">
           <div className="flex items-center md:hidden px-4">
             <img
               src="/xirang-mark.svg"
               alt="XiRang"
-              className="size-8 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-sm"
+              className="size-8 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-[0_2px_14px_-4px_hsl(var(--primary)/0.5)]"
             />
             <span className="ml-2 text-base font-semibold tracking-tight">{t('appShell.brandName')}</span>
           </div>
@@ -194,7 +194,7 @@ function AppShellInner() {
             <img
               src="/xirang-mark.svg"
               alt="XiRang"
-              className="size-8 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-sm"
+              className="size-8 rounded-md border border-primary/35 bg-primary/10 p-1 shadow-[0_2px_14px_-4px_hsl(var(--primary)/0.5)]"
             />
             {!sidebarCollapsed ? (
               <div className="ml-3 min-w-0 leading-none">

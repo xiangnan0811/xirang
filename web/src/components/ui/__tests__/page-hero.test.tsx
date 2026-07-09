@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { PageHero } from "../page-hero";
@@ -26,5 +27,13 @@ describe("PageHero", () => {
   it("omits subtitle element when not provided", () => {
     const { container } = render(<PageHero title="Overview" />);
     expect(container.querySelector("p")).toBeNull();
+  });
+
+  it("keeps the shared page hero free of decorative background layers", () => {
+    const { container } = render(<PageHero title="Overview" />);
+    const header = container.querySelector("header");
+
+    expect(header).not.toHaveClass("overflow-hidden");
+    expect(container.querySelector("[aria-hidden='true']")).toBeNull();
   });
 });

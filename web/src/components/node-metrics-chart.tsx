@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { useReducedMotion } from "framer-motion";
 import { Maximize2 } from "lucide-react";
 import type { NodeRecord } from "@/types/domain";
 import type { NodePaletteEntry } from "@/components/node-metrics-theme";
@@ -61,6 +62,7 @@ export function MetricChart({
   clipPercentile,
 }: MetricChartProps) {
   const { t } = useTranslation();
+  const reduce = useReducedMotion();
 
   const gradientIds = useMemo(
     () => nodes.map((n) => `${idPrefix}grad-${metricKey}-${n.id}`),
@@ -206,7 +208,9 @@ export function MetricChart({
                 dot={false}
                 connectNulls
                 hide={!visible}
-                isAnimationActive={false}
+                isAnimationActive={!reduce}
+                animationDuration={500}
+                animationEasing="ease-out"
               />
             );
           })}

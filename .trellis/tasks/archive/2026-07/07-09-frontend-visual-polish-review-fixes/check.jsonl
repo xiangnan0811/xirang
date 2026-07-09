@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Check changed UI primitives, page shells, tabs, and motion behavior against frontend conventions."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Check type/lint/test/build gate and regression-test coverage expectations."}
+{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Check manual tab semantics, keyboard behavior, labels, and decorative icon handling."}

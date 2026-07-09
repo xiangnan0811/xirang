@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, XCircle, AlertTriangle, SkipForward, Loader2, ArrowRightLeft } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogCloseButton } from "@/components/ui/dialog";
+import { Stepper } from "@/components/ui/stepper";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
@@ -140,7 +141,7 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ArrowRightLeft className="size-5" />
+            <ArrowRightLeft className="size-5" aria-hidden />
             {t("nodes.migrateWizardTitle", { name: sourceNode.name })}
           </DialogTitle>
           <DialogDescription>{t("nodes.migrateWizardDesc")}</DialogDescription>
@@ -148,22 +149,12 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
         </DialogHeader>
 
         {/* Step indicator */}
-        <div className="flex items-center justify-center gap-1 px-6 pb-2 text-xs text-muted-foreground">
-          {([1, 2, 3, 4] as Step[]).map((s) => (
-            <div key={s} className="flex items-center gap-1">
-              <span
-                role="presentation"
-                aria-label={`${t("nodes.migrateStep")} ${s}`}
-                className={`flex size-6 items-center justify-center rounded-full text-xs font-medium ${
-                  s === step ? "bg-primary text-primary-foreground" : s < step ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {s}
-              </span>
-              {s < 4 && <span className="mx-0.5 text-muted-foreground/40">—</span>}
-            </div>
-          ))}
-        </div>
+        <Stepper
+          steps={["", "", "", ""]}
+          current={step - 1}
+          className="px-6 pb-2"
+          aria-label={t("nodes.migrateStepsAriaLabel")}
+        />
 
         <div className="space-y-4 px-6 pb-6">
           {/* Step 1: Select target */}

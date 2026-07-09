@@ -186,7 +186,7 @@ export default function TrendChart({
             aria-label="放大图表"
             onClick={() => setZoomOpen(true)}
           >
-            <Maximize2 className="size-3.5" />
+            <Maximize2 className="size-3.5" aria-hidden />
           </Button>
         )}
       </div>

@@ -35,4 +35,16 @@ describe("Card", () => {
     expect(screen.getByText("Body text")).toBeDefined();
     expect(screen.getByText("Footer text")).toBeDefined();
   });
+
+  it("does not apply hover lift globally unless the caller opts in", () => {
+    const { rerender } = render(<Card data-testid="card">Body text</Card>);
+    expect(screen.getByTestId("card")).not.toHaveClass("card-lift");
+
+    rerender(
+      <Card data-testid="card" className="card-lift">
+        Body text
+      </Card>
+    );
+    expect(screen.getByTestId("card")).toHaveClass("card-lift");
+  });
 });
