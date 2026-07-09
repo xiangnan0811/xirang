@@ -459,3 +459,42 @@ Completed the parent Trellis review for the comprehensive slimming refactor: rec
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Frontend visual polish review fixes
+
+**Date**: 2026-07-09
+**Task**: Frontend visual polish review fixes
+**Branch**: `fix/frontend-review-polish`
+
+### Summary
+
+Reviewed and fixed frontend visual polish, motion, responsive tab, and accessibility issues; added regression coverage and recorded Trellis task artifacts.
+
+### Main Changes
+
+- Fixed node detail tabs on narrow screens with horizontal scrolling, full tab/tabpanel ARIA wiring, and keyboard navigation.
+- Kept shared UI primitives restrained: Card hover lift is opt-in, decorative motion layers were removed, and Framer Motion now respects in-app power-saving mode.
+- Added localized Stepper labels and regression tests for tabs, cards, Stepper labeling, PageHero, CSS motion behavior, and node migration wizard coverage.
+- Verification: `git diff --check HEAD`, `python3 ./.trellis/scripts/task.py validate .trellis/tasks/07-09-frontend-visual-polish-review-fixes`, and `cd web && npm run check` passed before commit; browser smoke for mobile node detail tabs also passed.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fd611ab` | (see git log) |
+| `9a49df6` | (see git log) |
+| `55bca86` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
