@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.6](https://github.com/xiangnan0811/xirang/compare/v0.44.5...v0.44.6) (2026-07-10)
+
+
+### 🐛 Bug Fixes
+
+* **frontend:** remediate audit findings A1/A2/A3/P1/P2 ([#365](https://github.com/xiangnan0811/xirang/issues/365)) ([a3630c8](https://github.com/xiangnan0811/xirang/commit/a3630c82c247ce0c7e3d46a8d565b66c80c9db45))
+
 ## [0.44.5](https://github.com/xiangnan0811/xirang/compare/v0.44.4...v0.44.5) (2026-07-09)
 
 
