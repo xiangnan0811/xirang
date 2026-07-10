@@ -9,8 +9,8 @@ import type { StatusPageItem } from "@/types/domain";
 vi.mock("@/lib/api/service-monitors", () => ({
   createServiceMonitorsApi: () => ({
     getStatusPage: vi.fn().mockResolvedValue([
-      { name: "up-svc", type: "http", status: "up", uptime_pct: 99.9, last_checked_at: null },
-      { name: "down-svc", type: "http", status: "down", uptime_pct: 0, last_checked_at: null },
+      { name: "up-svc", type: "http", status: "up", uptimePct: 99.9, lastCheckedAt: null },
+      { name: "down-svc", type: "http", status: "down", uptimePct: 0, lastCheckedAt: null },
     ] as StatusPageItem[]),
   }),
 }));

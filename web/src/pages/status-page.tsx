@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { DataSurface } from "@/components/ui/data-surface";
 import { createServiceMonitorsApi } from "@/lib/api/service-monitors";
+import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { formatTime } from "@/lib/date-utils";
 import type { StatusPageItem } from "@/types/domain";
 
@@ -51,17 +52,13 @@ export function StatusPage() {
     setLoading(true);
     const controller = new AbortController();
     void fetchStatus(controller.signal);
-
-    // Auto-refresh every 30s
-    const interval = setInterval(() => {
-      void fetchStatus();
-    }, 30_000);
-
     return () => {
       controller.abort();
-      clearInterval(interval);
     };
   }, [fetchStatus]);
+
+  // 每 30s 自动刷新；后台标签页不轮询，切回前台立即补拉一次。
+  useVisibilityPolling(() => { void fetchStatus(); }, 30_000);
 
   const overallStatus = items.length === 0
     ? "unknown"
@@ -162,11 +159,11 @@ export function StatusPage() {
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span>
-                        {t("serviceMonitor.fieldUptime")}: {(item.uptime_pct ?? 0).toFixed(1)}%
+                        {t("serviceMonitor.fieldUptime")}: {(item.uptimePct ?? 0).toFixed(1)}%
                       </span>
-                      {item.last_checked_at && (
+                      {item.lastCheckedAt && (
                         <span>
-                          {t("serviceMonitor.lastChecked")}: {formatTime(item.last_checked_at)}
+                          {t("serviceMonitor.lastChecked")}: {formatTime(item.lastCheckedAt)}
                         </span>
                       )}
                     </div>
