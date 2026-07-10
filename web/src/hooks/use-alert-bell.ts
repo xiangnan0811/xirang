@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
+import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import type { AlertRecord } from "@/types/domain";
 
 interface AlertBellState {
@@ -17,30 +18,22 @@ export function useAlertBell(token: string | null): AlertBellState {
   const abortRef = useRef<AbortController | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  const poll = useCallback(async () => {
+    if (!token) return;
     const controller = new AbortController();
     pollAbortRef.current = controller;
-
-    const poll = async () => {
-      if (!token) return;
-      try {
-        const data = await apiClient.getAlertUnreadCount(token);
-        if (!controller.signal.aborted) {
-          setUnreadCount(data);
-        }
-      } catch {
-        // 轮询异常时静默忽略，避免干扰用户体验
+    try {
+      const data = await apiClient.getAlertUnreadCount(token);
+      if (!controller.signal.aborted) {
+        setUnreadCount(data);
       }
-    };
-
-    void poll();
-    const id = setInterval(() => void poll(), 30_000);
-
-    return () => {
-      controller.abort();
-      clearInterval(id);
-    };
+    } catch {
+      // 轮询异常时静默忽略，避免干扰用户体验
+    }
   }, [token]);
+
+  // 每 30s 轮询未读告警；后台标签页不轮询，切回前台立即补拉一次。
+  useVisibilityPolling(() => { void poll(); }, 30_000);
 
   const fetchRecent = useCallback(async () => {
     if (!token) return;
@@ -63,15 +56,8 @@ export function useAlertBell(token: string | null): AlertBellState {
   }, [token]);
 
   const refresh = useCallback(() => {
-    if (!token) return;
-    void apiClient.getAlertUnreadCount(token).then((data) => {
-      if (!pollAbortRef.current?.signal.aborted) {
-        setUnreadCount(data);
-      }
-    }).catch(() => {
-      // 静默忽略
-    });
-  }, [token]);
+    void poll();
+  }, [poll]);
 
   return {
     unreadCount,
