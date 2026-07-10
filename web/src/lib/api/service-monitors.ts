@@ -1,41 +1,128 @@
-import type { NewServiceMonitorInput, ServiceMonitor, StatusPageItem } from "@/types/domain";
+import type {
+  HeaderKV,
+  HttpMethod,
+  NewServiceMonitorInput,
+  RawNewServiceMonitorInput,
+  RawServiceMonitor,
+  RawStatusPageItem,
+  ServiceMonitorView,
+  StatusPageItem,
+} from "@/types/domain";
+import { headersToJSON } from "@/lib/service-monitor-headers";
 import { request } from "./core";
 
 const BASE_PATH = "/service-monitors";
 
+const HTTP_METHODS: readonly HttpMethod[] = ["GET", "POST", "HEAD"];
+
+function normalizeHttpMethod(value: string | undefined): HttpMethod {
+  return HTTP_METHODS.includes((value ?? "").toUpperCase() as HttpMethod)
+    ? ((value as string).toUpperCase() as HttpMethod)
+    : "GET";
+}
+
+function safeParseHeaders(raw: string | undefined): HeaderKV[] {
+  if (!raw || raw === "{}") return [];
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object") {
+      return Object.entries(obj as Record<string, unknown>).map(
+        ([k, v]) => ({ key: k, value: String(v) })
+      );
+    }
+  } catch {
+    // 坏 JSON：退化为空，避免整条监控解析失败
+  }
+  return [];
+}
+
+function mapServiceMonitor(raw: RawServiceMonitor): ServiceMonitorView {
+  return {
+    id: raw.id,
+    name: raw.name,
+    description: raw.description ?? "",
+    type: raw.type === "tcp" ? "tcp" : "http",
+    target: raw.target,
+    intervalSeconds: Number(raw.interval_seconds) || 0,
+    timeoutSeconds: Number(raw.timeout_seconds) || 0,
+    httpMethod: normalizeHttpMethod(raw.http_method),
+    httpExpectedStatus: Number(raw.http_expected_status) || 0,
+    httpHeaderList: safeParseHeaders(raw.http_headers),
+    enabled: Boolean(raw.enabled),
+    lastStatus: (["up", "down", "unknown"].includes(raw.last_status) ? raw.last_status : "unknown") as ServiceMonitorView["lastStatus"],
+    uptimePct: Number(raw.uptime_pct) || 0,
+    lastCheckedAt: raw.last_checked_at ?? null,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+  };
+}
+
+function mapStatusPageItem(raw: RawStatusPageItem): StatusPageItem {
+  return {
+    name: raw.name,
+    type: raw.type,
+    status: (["up", "down", "unknown"].includes(raw.status) ? raw.status : "unknown") as StatusPageItem["status"],
+    uptimePct: Number(raw.uptime_pct) || 0,
+    lastCheckedAt: raw.last_checked_at ?? null,
+  };
+}
+
+function toRawInput(input: NewServiceMonitorInput): RawNewServiceMonitorInput {
+  const raw: RawNewServiceMonitorInput = {
+    name: input.name,
+    description: input.description,
+    type: input.type,
+    target: input.target,
+    interval_seconds: input.intervalSeconds,
+    timeout_seconds: input.timeoutSeconds,
+    http_method: input.httpMethod,
+    http_expected_status: input.httpExpectedStatus,
+    http_headers: input.httpHeaderList ? headersToJSON(input.httpHeaderList) : "{}",
+    enabled: input.enabled,
+  };
+  return raw;
+}
+
 export function createServiceMonitorsApi() {
   return {
-    async list(token: string, signal?: AbortSignal): Promise<ServiceMonitor[]> {
-      return (await request<ServiceMonitor[]>(BASE_PATH, { token, signal })) ?? [];
+    async list(token: string, signal?: AbortSignal): Promise<ServiceMonitorView[]> {
+      const raw = (await request<RawServiceMonitor[]>(BASE_PATH, { token, signal })) ?? [];
+      return raw.map(mapServiceMonitor);
     },
 
-    async get(token: string, id: number): Promise<ServiceMonitor> {
-      return await request<ServiceMonitor>(`${BASE_PATH}/${id}`, { token });
+    async get(token: string, id: number, signal?: AbortSignal): Promise<ServiceMonitorView> {
+      const raw = await request<RawServiceMonitor>(`${BASE_PATH}/${id}`, { token, signal });
+      return mapServiceMonitor(raw);
     },
 
-    async create(token: string, input: NewServiceMonitorInput): Promise<ServiceMonitor> {
-      return await request<ServiceMonitor>(BASE_PATH, {
+    async create(token: string, input: NewServiceMonitorInput, signal?: AbortSignal): Promise<ServiceMonitorView> {
+      const raw = await request<RawServiceMonitor>(BASE_PATH, {
         method: "POST",
-        body: input,
+        body: toRawInput(input),
         token,
+        signal,
       });
+      return mapServiceMonitor(raw);
     },
 
-    async update(token: string, id: number, input: NewServiceMonitorInput): Promise<ServiceMonitor> {
-      return await request<ServiceMonitor>(`${BASE_PATH}/${id}`, {
+    async update(token: string, id: number, input: NewServiceMonitorInput, signal?: AbortSignal): Promise<ServiceMonitorView> {
+      const raw = await request<RawServiceMonitor>(`${BASE_PATH}/${id}`, {
         method: "PUT",
-        body: input,
+        body: toRawInput(input),
         token,
+        signal,
       });
+      return mapServiceMonitor(raw);
     },
 
-    async delete(token: string, id: number): Promise<void> {
-      await request<void>(`${BASE_PATH}/${id}`, { method: "DELETE", token });
+    async delete(token: string, id: number, signal?: AbortSignal): Promise<void> {
+      await request<void>(`${BASE_PATH}/${id}`, { method: "DELETE", token, signal });
     },
 
     /** Public endpoint — no auth required. */
     async getStatusPage(signal?: AbortSignal): Promise<StatusPageItem[]> {
-      return (await request<StatusPageItem[]>("/status-page", { signal })) ?? [];
+      const raw = (await request<RawStatusPageItem[]>("/status-page", { signal })) ?? [];
+      return raw.map(mapStatusPageItem);
     },
   };
 }

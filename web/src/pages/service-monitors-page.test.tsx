@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ServiceMonitorsPage } from "./service-monitors-page";
-import type { ServiceMonitor } from "@/types/domain";
+import type { ServiceMonitorView } from "@/types/domain";
 
 const { apiMock, confirmMock, toastErrorMock } = vi.hoisted(() => ({
   apiMock: {
@@ -76,23 +76,23 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-const monitor: ServiceMonitor = {
+const monitor: ServiceMonitorView = {
   id: 1,
   name: "API",
   description: "public api",
   type: "http",
   target: "https://example.com/health",
-  interval_seconds: 60,
-  timeout_seconds: 10,
-  http_method: "GET",
-  http_expected_status: 200,
-  http_headers: "{}",
+  intervalSeconds: 60,
+  timeoutSeconds: 10,
+  httpMethod: "GET",
+  httpExpectedStatus: 200,
+  httpHeaderList: [],
   enabled: true,
-  last_status: "up",
-  uptime_pct: 99.9,
-  last_checked_at: "2026-05-06T10:00:00Z",
-  created_at: "2026-05-01T10:00:00Z",
-  updated_at: "2026-05-06T10:00:00Z",
+  lastStatus: "up",
+  uptimePct: 99.9,
+  lastCheckedAt: "2026-05-06T10:00:00Z",
+  createdAt: "2026-05-01T10:00:00Z",
+  updatedAt: "2026-05-06T10:00:00Z",
 };
 
 describe("ServiceMonitorsPage", () => {
@@ -121,7 +121,7 @@ describe("ServiceMonitorsPage", () => {
   it("does not render raw status palette classes for status dots or labels", async () => {
     apiMock.list.mockResolvedValueOnce([
       monitor,
-      { ...monitor, id: 2, name: "Down API", last_status: "down", uptime_pct: 0 },
+      { ...monitor, id: 2, name: "Down API", lastStatus: "down", uptimePct: 0 },
     ]);
     const { container } = render(<ServiceMonitorsPage />);
 
@@ -180,9 +180,9 @@ describe("ServiceMonitorsPage", () => {
     expect(apiMock.create).toHaveBeenCalledWith(
       "test-token",
       expect.objectContaining({
-        interval_seconds: 5,
-        timeout_seconds: 300,
-        http_expected_status: 100,
+        intervalSeconds: 5,
+        timeoutSeconds: 300,
+        httpExpectedStatus: 100,
       })
     );
   });

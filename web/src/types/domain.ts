@@ -1036,26 +1036,30 @@ export interface AutomationRuleInput {
   enabled?: boolean;
 }
 
-export interface ServiceMonitor {
+export type HttpMethod = "GET" | "POST" | "HEAD";
+
+/** Backend wire shape for ServiceMonitorView. Never consumed by components — mapped at the API boundary (lib/api/service-monitors.ts). */
+export interface RawServiceMonitor {
   id: number;
   name: string;
   description: string;
-  type: "http" | "tcp";
+  type: string;
   target: string;
   interval_seconds: number;
   timeout_seconds: number;
   http_method: string;
   http_expected_status: number;
-  http_headers: string; // JSON string from backend, parsed on client side
+  http_headers: string;
   enabled: boolean;
-  last_status: "up" | "down" | "unknown";
+  last_status: string;
   uptime_pct: number;
   last_checked_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface NewServiceMonitorInput {
+/** Backend wire shape for NewServiceMonitorInput (outbound). */
+export interface RawNewServiceMonitorInput {
   name: string;
   description?: string;
   type: "http" | "tcp";
@@ -1064,14 +1068,62 @@ export interface NewServiceMonitorInput {
   timeout_seconds?: number;
   http_method?: string;
   http_expected_status?: number;
-  http_headers?: string; // JSON.stringify(headersObject)
+  http_headers?: string;
   enabled?: boolean;
+}
+
+/** Backend wire shape for StatusPageItem. */
+export interface RawStatusPageItem {
+  name: string;
+  type: string;
+  status: string;
+  uptime_pct: number;
+  last_checked_at: string | null;
+}
+
+export interface ServiceMonitorView {
+  id: number;
+  /** Stable monitor identifier. */
+  name: string;
+  description: string;
+  type: "http" | "tcp";
+  target: string;
+  intervalSeconds: number;
+  timeoutSeconds: number;
+  httpMethod: HttpMethod;
+  httpExpectedStatus: number;
+  enabled: boolean;
+  httpHeaderList: HeaderKV[]; // parsed form; raw JSON string lives only in API boundary
+  lastStatus: "up" | "down" | "unknown";
+  uptimePct: number;
+  lastCheckedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewServiceMonitorInput {
+  name: string;
+  description?: string;
+  type: "http" | "tcp";
+  target: string;
+  intervalSeconds?: number;
+  timeoutSeconds?: number;
+  httpMethod?: HttpMethod;
+  httpExpectedStatus?: number;
+  httpHeaderList?: HeaderKV[];
+  enabled?: boolean;
+}
+
+/** Key/value pair used for HTTP monitor headers (UI editing + API boundary transport). */
+export interface HeaderKV {
+  key: string;
+  value: string;
 }
 
 export interface StatusPageItem {
   name: string;
   type: string;
   status: "up" | "down" | "unknown";
-  uptime_pct: number;
-  last_checked_at: string | null;
+  uptimePct: number;
+  lastCheckedAt: string | null;
 }

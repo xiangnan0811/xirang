@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import i18n from "@/i18n";
-import { getRefreshIntervalMs } from "@/hooks/use-user-preferences";
+import { useRefreshInterval } from "@/hooks/use-user-preferences";
+import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { formatTimeOnly } from "@/lib/api/core";
 
 // mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
 const loadMocks = () => import("@/data/mock");
-import { useIntegrationAlertOperations } from "@/hooks/use-console-integration-alert-operations";
-import { useNodeOperations } from "@/hooks/use-console-node-operations";
-import { usePolicyOperations } from "@/hooks/use-console-policy-operations";
-import { useTaskOperations } from "@/hooks/use-console-task-operations";
-import {
-  deriveOverview
-} from "@/hooks/use-console-data.utils";
+import { deriveOverview } from "@/hooks/use-console-data.utils";
+import { useNodesDomain } from "@/hooks/use-console-nodes-domain";
+import { useTasksDomain } from "@/hooks/use-console-tasks-domain";
+import { usePoliciesDomain } from "@/hooks/use-console-policies-domain";
+import { useAlertsIntegrationsDomain } from "@/hooks/use-console-alerts-integrations-domain";
 import type {
   AlertDeliveryRecord,
   AlertBulkRetryResult,
@@ -109,6 +108,8 @@ export interface ConsoleDataState {
 export function useConsoleData(token: string | null): ConsoleDataState {
   const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
 
+  // 域数组与全局 UI 状态仍由协调者集中持有，避免引入注册式 setter 通道
+  // （loadData 需直接写入各域 state，且需与 7 个 context 切片配合做重渲染隔离）。
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [policies, setPolicies] = useState<PolicyRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -124,11 +125,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
   const taskVersionRef = useRef(0);
-  const refreshNodesAbortRef = useRef<AbortController | null>(null);
-  const refreshPoliciesAbortRef = useRef<AbortController | null>(null);
-  const refreshTasksAbortRef = useRef<AbortController | null>(null);
-  const refreshSSHKeysAbortRef = useRef<AbortController | null>(null);
-  const refreshIntegrationsAbortRef = useRef<AbortController | null>(null);
 
   const markInventoryMutated = useCallback(() => {
     inventoryVersionRef.current += 1;
@@ -163,6 +159,65 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     },
     [demoModeEnabled]
   );
+
+  // 逐域接线下沉到独立 domain hook：每个 hook 自持 refreshX 与 abort/版本戳逻辑，
+  // 并将协调者的 state/setter/helper 透传给既有操作 hook（操作 hook 签名不变）。
+  const nodesDomain = useNodesDomain({
+    token,
+    demoModeEnabled,
+    nodes,
+    setNodes,
+    policies,
+    tasks,
+    setTasks,
+    setAlerts,
+    setSSHKeys,
+    setWarning,
+    inventoryVersionRef,
+    markInventoryMutated,
+    markTasksMutated,
+    ensureDemoWriteAllowed,
+    handleWriteApiError,
+  });
+
+  const tasksDomain = useTasksDomain({
+    token,
+    demoModeEnabled,
+    nodes,
+    policies,
+    tasks,
+    alerts,
+    setTasks,
+    setAlerts,
+    setWarning,
+    taskVersionRef,
+    markTasksMutated,
+    ensureDemoWriteAllowed,
+    handleWriteApiError,
+  });
+
+  const policiesDomain = usePoliciesDomain({
+    token,
+    policies,
+    setPolicies,
+    setTasks,
+    setAlerts,
+    markTasksMutated,
+    ensureDemoWriteAllowed,
+    handleWriteApiError,
+  });
+
+  const alertsIntegrationsDomain = useAlertsIntegrationsDomain({
+    token,
+    alerts,
+    integrations,
+    setAlerts,
+    setIntegrations,
+    setWarning,
+    ensureDemoWriteAllowed,
+    handleWriteApiError,
+    retryTask: tasksDomain.retryTask,
+  });
 
   const loadData = useCallback(async () => {
     loadAbortRef.current?.abort();
@@ -232,80 +287,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setLastSyncedAt(formatTimeOnly(new Date().toISOString()));
   }, [token, demoModeEnabled]);
 
-  const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {
-    if (!token) return;
-    refreshNodesAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshNodesAbortRef.current = controller;
-    const inventoryVersionAtStart = inventoryVersionRef.current;
-    try {
-      const result = await apiClient.getNodes(token, { signal: controller.signal });
-      if (inventoryVersionAtStart === inventoryVersionRef.current) {
-        setNodes(result);
-      }
-    } catch {
-      // 按需刷新失败时静默处理，不覆盖全局 warning
-    }
-  }, [token]);
-
-  const refreshPolicies = useCallback(async () => {
-    if (!token) return;
-    refreshPoliciesAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshPoliciesAbortRef.current = controller;
-    try {
-      const result = await apiClient.getPolicies(token);
-      setPolicies(result);
-    } catch {
-      // 按需刷新失败时静默处理
-    }
-  }, [token]);
-
-  const refreshTasks = useCallback(async (_options?: { limit?: number; offset?: number }) => {
-    if (!token) return;
-    refreshTasksAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshTasksAbortRef.current = controller;
-    const taskVersionAtStart = taskVersionRef.current;
-    try {
-      const result = await apiClient.getTasks(token);
-      if (taskVersionAtStart === taskVersionRef.current) {
-        setTasks(result);
-      }
-    } catch {
-      // 按需刷新失败时静默处理
-    }
-  }, [token]);
-
-  const refreshSSHKeys = useCallback(async () => {
-    if (!token) return;
-    refreshSSHKeysAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshSSHKeysAbortRef.current = controller;
-    const inventoryVersionAtStart = inventoryVersionRef.current;
-    try {
-      const result = await apiClient.getSSHKeys(token);
-      if (inventoryVersionAtStart === inventoryVersionRef.current) {
-        setSSHKeys(result);
-      }
-    } catch {
-      // 按需刷新失败时静默处理
-    }
-  }, [token]);
-
-  const refreshIntegrations = useCallback(async () => {
-    if (!token) return;
-    refreshIntegrationsAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshIntegrationsAbortRef.current = controller;
-    try {
-      const result = await apiClient.getIntegrations(token);
-      setIntegrations(result);
-    } catch {
-      // 按需刷新失败时静默处理
-    }
-  }, [token]);
-
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadData();
@@ -314,15 +295,15 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     };
   }, [loadData]);
 
-  useEffect(() => {
-    if (!token) return;
-    const ms = getRefreshIntervalMs();
-    if (ms <= 0) return; // 自动刷新已禁用
-    const interval = setInterval(() => {
-      void loadData();
-    }, ms);
-    return () => clearInterval(interval);
-  }, [token, loadData]);
+  const [refreshIntervalSeconds] = useRefreshInterval();
+
+  // 自动刷新：间隔取自响应式偏好（改设置即时重建定时器，无需重新挂载）；
+  // 后台标签页不轮询，切回前台立即补拉一次；关闭刷新（<=0）时停止。
+  useVisibilityPolling(
+    () => { void loadData(); },
+    refreshIntervalSeconds > 0 ? refreshIntervalSeconds * 1000 : 0,
+    { enabled: Boolean(token), immediate: false }
+  );
 
   const overview = useMemo(() => deriveOverview(nodes, policies, tasks, overviewSummary), [nodes, overviewSummary, policies, tasks]);
 
@@ -359,110 +340,20 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     return apiClient.getHealthIncidentTimeline(token, { windowHours: options?.windowHours, signal: options?.signal });
   }, [demoModeEnabled, token]);
 
-  const {
-    createSSHKey,
-    updateSSHKey,
-    deleteSSHKey,
-    createNode,
-    updateNode,
-    deleteNode,
-    deleteNodes,
-    testNodeConnection,
-    triggerNodeBackup
-  } = useNodeOperations({
-    token,
-    demoModeEnabled,
-    nodes,
-    policies,
-    tasks,
-    setNodes,
-    setTasks,
-    setAlerts,
-    setSSHKeys,
-    setWarning,
-    markInventoryMutated,
-    markTasksMutated,
-    ensureDemoWriteAllowed,
-    handleWriteApiError
-  });
-
-  const {
-    createTask,
-    updateTask,
-    deleteTask,
-    triggerTask,
-    cancelTask,
-    retryTask,
-    pauseTask,
-    resumeTask,
-    skipNextTask,
-    refreshTask,
-    fetchTaskLogs
-  } = useTaskOperations({
-    token,
-    demoModeEnabled,
-    nodes,
-    policies,
-    tasks,
-    alerts,
-    setTasks,
-    setAlerts,
-    setWarning,
-    markTasksMutated,
-    ensureDemoWriteAllowed,
-    handleWriteApiError
-  });
-
-  const {
-    createPolicy,
-    updatePolicy,
-    deletePolicy,
-    togglePolicy,
-    updatePolicySchedule
-  } = usePolicyOperations({
-    token,
-    policies,
-    setPolicies,
-    setTasks,
-    setAlerts,
-    markTasksMutated,
-    ensureDemoWriteAllowed,
-    handleWriteApiError
-  });
-
-  const {
-    addIntegration,
-    removeIntegration,
-    updateIntegration,
-    patchIntegration,
-    testIntegration,
-    toggleIntegration,
-    retryAlert,
-    acknowledgeAlert,
-    resolveAlert,
-    fetchAlertDeliveries,
-    fetchAlertDeliveryStats,
-    retryAlertDelivery,
-    retryFailedAlertDeliveries
-  } = useIntegrationAlertOperations({
-    token,
-    alerts,
-    integrations,
-    setAlerts,
-    setIntegrations,
-    setWarning,
-    ensureDemoWriteAllowed,
-    handleWriteApiError,
-    retryTask
-  });
+  // 稳定 refresh：避免在每次渲染时新建函数，从而破坏
+  // app-shell.tsx 中 sharedContextValue 的 useMemo（其依赖项含 refresh）。
+  const refresh = useCallback(() => {
+    setRefreshVersion((current) => current + 1);
+    void loadData();
+  }, [loadData]);
 
   return {
     overview,
-    nodes,
-    policies,
-    tasks,
-    alerts,
-    integrations,
+    nodes: nodesDomain.nodes,
+    policies: policiesDomain.policies,
+    tasks: tasksDomain.tasks,
+    alerts: alertsIntegrationsDomain.alerts,
+    integrations: alertsIntegrationsDomain.integrations,
     sshKeys,
     loading,
     warning,
@@ -472,57 +363,54 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     setGlobalSearch,
     fetchOverviewTraffic,
     fetchHealthIncidentTimeline,
-    refresh: () => {
-      setRefreshVersion((current) => current + 1);
-      void loadData();
-    },
-    refreshNodes,
-    refreshPolicies,
-    refreshTasks,
-    refreshSSHKeys,
-    refreshIntegrations,
+    refresh,
+    refreshNodes: nodesDomain.refreshNodes,
+    refreshPolicies: policiesDomain.refreshPolicies,
+    refreshTasks: tasksDomain.refreshTasks,
+    refreshSSHKeys: nodesDomain.refreshSSHKeys,
+    refreshIntegrations: alertsIntegrationsDomain.refreshIntegrations,
 
-    createNode,
-    updateNode,
-    deleteNode,
-    deleteNodes,
-    testNodeConnection,
-    triggerNodeBackup,
+    createNode: nodesDomain.createNode,
+    updateNode: nodesDomain.updateNode,
+    deleteNode: nodesDomain.deleteNode,
+    deleteNodes: nodesDomain.deleteNodes,
+    testNodeConnection: nodesDomain.testNodeConnection,
+    triggerNodeBackup: nodesDomain.triggerNodeBackup,
 
-    createPolicy,
-    updatePolicy,
-    deletePolicy,
-    createTask,
-    updateTask,
-    deleteTask,
-    triggerTask,
-    cancelTask,
-    retryTask,
-    pauseTask,
-    resumeTask,
-    skipNextTask,
-    refreshTask,
-    fetchTaskLogs,
-    togglePolicy,
-    updatePolicySchedule,
+    createPolicy: policiesDomain.createPolicy,
+    updatePolicy: policiesDomain.updatePolicy,
+    deletePolicy: policiesDomain.deletePolicy,
+    createTask: tasksDomain.createTask,
+    updateTask: tasksDomain.updateTask,
+    deleteTask: tasksDomain.deleteTask,
+    triggerTask: tasksDomain.triggerTask,
+    cancelTask: tasksDomain.cancelTask,
+    retryTask: tasksDomain.retryTask,
+    pauseTask: tasksDomain.pauseTask,
+    resumeTask: tasksDomain.resumeTask,
+    skipNextTask: tasksDomain.skipNextTask,
+    refreshTask: tasksDomain.refreshTask,
+    fetchTaskLogs: tasksDomain.fetchTaskLogs,
+    togglePolicy: policiesDomain.togglePolicy,
+    updatePolicySchedule: policiesDomain.updatePolicySchedule,
 
-    addIntegration,
-    removeIntegration,
-    toggleIntegration,
-    updateIntegration,
-    patchIntegration,
+    addIntegration: alertsIntegrationsDomain.addIntegration,
+    removeIntegration: alertsIntegrationsDomain.removeIntegration,
+    toggleIntegration: alertsIntegrationsDomain.toggleIntegration,
+    updateIntegration: alertsIntegrationsDomain.updateIntegration,
+    patchIntegration: alertsIntegrationsDomain.patchIntegration,
 
-    createSSHKey,
-    updateSSHKey,
-    deleteSSHKey,
+    createSSHKey: nodesDomain.createSSHKey,
+    updateSSHKey: nodesDomain.updateSSHKey,
+    deleteSSHKey: nodesDomain.deleteSSHKey,
 
-    retryAlert,
-    acknowledgeAlert,
-    resolveAlert,
-    fetchAlertDeliveries,
-    fetchAlertDeliveryStats,
-    retryAlertDelivery,
-    retryFailedAlertDeliveries,
-    testIntegration
+    retryAlert: alertsIntegrationsDomain.retryAlert,
+    acknowledgeAlert: alertsIntegrationsDomain.acknowledgeAlert,
+    resolveAlert: alertsIntegrationsDomain.resolveAlert,
+    fetchAlertDeliveries: alertsIntegrationsDomain.fetchAlertDeliveries,
+    fetchAlertDeliveryStats: alertsIntegrationsDomain.fetchAlertDeliveryStats,
+    retryAlertDelivery: alertsIntegrationsDomain.retryAlertDelivery,
+    retryFailedAlertDeliveries: alertsIntegrationsDomain.retryFailedAlertDeliveries,
+    testIntegration: alertsIntegrationsDomain.testIntegration
   };
 }

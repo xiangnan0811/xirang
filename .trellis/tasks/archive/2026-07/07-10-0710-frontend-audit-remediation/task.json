@@ -1,0 +1,32 @@
+{
+  "id": "0710-frontend-audit-remediation",
+  "name": "0710-frontend-audit-remediation",
+  "title": "前端深度审查修复：渲染隔离/域映射/轮询门控/状态拆分",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-10",
+  "completedAt": "2026-07-10",
+  "branch": "fix/frontend-audit-remediation",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-10-0710-a2-refresh-memoization",
+    "07-10-0710-a3-servicemonitor-mapping",
+    "07-10-0710-p1-poll-visibility",
+    "07-10-0710-p2-refresh-interval-reactive",
+    "07-10-0710-a1-split-console-data"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

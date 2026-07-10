@@ -18,35 +18,12 @@ import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import { createServiceMonitorsApi } from "@/lib/api/service-monitors";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewServiceMonitorInput, ServiceMonitor } from "@/types/domain";
+import type { HeaderKV, HttpMethod, NewServiceMonitorInput, ServiceMonitorView } from "@/types/domain";
 
 const HTTP_METHODS = ["GET", "POST", "HEAD"] as const;
 const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_SECONDS = 10;
 const DEFAULT_HTTP_EXPECTED_STATUS = 200;
-
-type HeaderKV = { key: string; value: string };
-
-function parseHeaders(raw: string): HeaderKV[] {
-  if (!raw || raw === "{}") return [];
-  try {
-    const obj = JSON.parse(raw);
-    if (typeof obj === "object" && obj !== null) {
-      return Object.entries(obj).map(([k, v]) => ({ key: k, value: String(v) }));
-    }
-  } catch { /* ignore */ }
-  return [];
-}
-
-function headersToJSON(kvs: HeaderKV[]): string {
-  const obj: Record<string, string> = {};
-  for (const kv of kvs) {
-    if (kv.key.trim()) {
-      obj[kv.key.trim()] = kv.value;
-    }
-  }
-  return JSON.stringify(obj);
-}
 
 function statusDot(status: string) {
   if (status === "up") return <span className="mr-1.5 inline-block size-2 rounded-full bg-success" aria-hidden="true" />;
@@ -65,11 +42,11 @@ export function ServiceMonitorsPage() {
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
-  const [monitors, setMonitors] = useState<ServiceMonitor[]>([]);
+  const [monitors, setMonitors] = useState<ServiceMonitorView[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [editorOpen, setEditorOpen] = useState(false);
-  const [editingMonitor, setEditingMonitor] = useState<ServiceMonitor | null>(null);
+  const [editingMonitor, setEditingMonitor] = useState<ServiceMonitorView | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Form state
@@ -79,9 +56,10 @@ export function ServiceMonitorsPage() {
   const [target, setTarget] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState("60");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
-  const [httpMethod, setHttpMethod] = useState("GET");
+  const [httpMethod, setHttpMethod] = useState<HttpMethod>("GET");
   const [httpExpectedStatus, setHttpExpectedStatus] = useState("200");
   const [httpHeaders, setHttpHeaders] = useState<HeaderKV[]>([]);
+
   const [enabled, setEnabled] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -112,11 +90,11 @@ export function ServiceMonitorsPage() {
       setDescription(editingMonitor.description ?? "");
       setType(editingMonitor.type as "http" | "tcp");
       setTarget(editingMonitor.target);
-      setIntervalSeconds(String(editingMonitor.interval_seconds));
-      setTimeoutSeconds(String(editingMonitor.timeout_seconds));
-      setHttpMethod(editingMonitor.http_method || "GET");
-      setHttpExpectedStatus(String(editingMonitor.http_expected_status));
-      setHttpHeaders(parseHeaders(editingMonitor.http_headers));
+      setIntervalSeconds(String(editingMonitor.intervalSeconds));
+      setTimeoutSeconds(String(editingMonitor.timeoutSeconds));
+      setHttpMethod(editingMonitor.httpMethod || "GET");
+      setHttpExpectedStatus(String(editingMonitor.httpExpectedStatus));
+      setHttpHeaders(editingMonitor.httpHeaderList ?? []);
       setEnabled(editingMonitor.enabled);
     } else {
       setName("");
@@ -138,12 +116,12 @@ export function ServiceMonitorsPage() {
     setEditorOpen(true);
   };
 
-  const openEditDialog = (monitor: ServiceMonitor) => {
+  const openEditDialog = (monitor: ServiceMonitorView) => {
     setEditingMonitor(monitor);
     setEditorOpen(true);
   };
 
-  const handleDelete = async (monitor: ServiceMonitor) => {
+  const handleDelete = async (monitor: ServiceMonitorView) => {
     if (!token) return;
     const ok = await confirm({
       title: t("serviceMonitor.confirmDeleteTitle"),
@@ -159,18 +137,18 @@ export function ServiceMonitorsPage() {
     }
   };
 
-  const handleToggleEnabled = async (monitor: ServiceMonitor) => {
+  const handleToggleEnabled = async (monitor: ServiceMonitorView) => {
     if (!token) return;
     try {
       const input: NewServiceMonitorInput = {
         name: monitor.name,
-        type: monitor.type as "http" | "tcp",
+        type: monitor.type,
         target: monitor.target,
-        interval_seconds: monitor.interval_seconds,
-        timeout_seconds: monitor.timeout_seconds,
-        http_method: monitor.http_method,
-        http_expected_status: monitor.http_expected_status,
-        http_headers: monitor.http_headers,
+        intervalSeconds: monitor.intervalSeconds,
+        timeoutSeconds: monitor.timeoutSeconds,
+        httpMethod: monitor.httpMethod,
+        httpExpectedStatus: monitor.httpExpectedStatus,
+        httpHeaderList: monitor.httpHeaderList,
         enabled: !monitor.enabled,
       };
       await createServiceMonitorsApi().update(token, monitor.id, input);
@@ -210,15 +188,15 @@ export function ServiceMonitorsPage() {
       description: description.trim() || undefined,
       type,
       target: target.trim(),
-      interval_seconds: intervalValue,
-      timeout_seconds: timeoutValue,
+      intervalSeconds: intervalValue,
+      timeoutSeconds: timeoutValue,
       enabled,
     };
 
     if (type === "http") {
-      input.http_method = httpMethod;
-      input.http_expected_status = expectedStatusValue;
-      input.http_headers = headersToJSON(httpHeaders);
+      input.httpMethod = httpMethod;
+      input.httpExpectedStatus = expectedStatusValue;
+      input.httpHeaderList = httpHeaders;
     }
 
     try {
@@ -257,9 +235,9 @@ export function ServiceMonitorsPage() {
   };
 
   const enabledCount = monitors.filter((monitor) => monitor.enabled).length;
-  const downCount = monitors.filter((monitor) => monitor.last_status === "down").length;
+  const downCount = monitors.filter((monitor) => monitor.lastStatus === "down").length;
   const unknownCount = monitors.filter(
-    (monitor) => !monitor.last_status || monitor.last_status === "unknown",
+    (monitor) => !monitor.lastStatus || monitor.lastStatus === "unknown",
   ).length;
 
   return (
@@ -371,14 +349,14 @@ export function ServiceMonitorsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center">
-                          {statusDot(monitor.last_status)}
-                          <span className={monitor.last_status === "down" ? "text-destructive" : ""}>
-                            {lastStatusLabel(monitor.last_status)}
+                          {statusDot(monitor.lastStatus)}
+                          <span className={monitor.lastStatus === "down" ? "text-destructive" : ""}>
+                            {lastStatusLabel(monitor.lastStatus)}
                           </span>
                         </span>
                       </td>
                       <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">
-                        {(monitor.uptime_pct ?? 0).toFixed(1)}%
+                        {(monitor.uptimePct ?? 0).toFixed(1)}%
                       </td>
                       <td className="px-4 py-3 text-center">
                         <Switch
@@ -579,7 +557,7 @@ export function ServiceMonitorsPage() {
                   id="sm-http-method"
                   containerClassName="w-full"
                   value={httpMethod}
-                  onChange={(event) => setHttpMethod(event.target.value)}
+                  onChange={(event) => setHttpMethod(event.target.value as HttpMethod)}
                 >
                   {HTTP_METHODS.map((m) => (
                     <option key={m} value={m}>{m}</option>
