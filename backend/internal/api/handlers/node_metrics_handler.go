@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"xirang/backend/internal/logger"
 	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
 
@@ -48,8 +47,6 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		Trend24h: map[string]float64{},
 	}
 
-	log := logger.Module("node_metrics").With().Uint64("node_id", id).Logger()
-
 	// "No samples yet" is a legitimate empty state for a just-created node;
 	// don't log it. Real DB errors (connection drops, schema drift) should
 	// surface so operators can see the signal instead of a zero-filled page.
@@ -70,17 +67,26 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		// No-op — node has no samples yet.
 	default:
-		log.Warn().Err(err).Msg("latest sample query failed")
+		// Real DB failures must not look like an empty healthy snapshot.
+		respondInternalError(c, err)
+		return
 	}
 
 	now := time.Now().UTC()
-	h.fillTrend(uint(id), now.Add(-1*time.Hour), now, resp.Trend1h)
-	h.fillTrend(uint(id), now.Add(-24*time.Hour), now, resp.Trend24h)
+	if err := h.fillTrend(uint(id), now.Add(-1*time.Hour), now, resp.Trend1h); err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if err := h.fillTrend(uint(id), now.Add(-24*time.Hour), now, resp.Trend24h); err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	if err := h.db.Model(&model.Alert{}).
 		Where("node_id = ? AND status = ?", id, "open").
 		Count(&resp.OpenAlerts).Error; err != nil {
-		log.Warn().Err(err).Msg("open alerts count failed")
+		respondInternalError(c, err)
+		return
 	}
 
 	// TaskRun has no direct node_id column; join through tasks table.
@@ -88,9 +94,11 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
 		Where("tasks.node_id = ? AND task_runs.status = ?", id, "running").
 		Count(&resp.RunningTasks).Error; err != nil {
-		log.Warn().Err(err).Msg("running tasks count failed")
+		respondInternalError(c, err)
+		return
 	}
 
+	c.Header("Cache-Control", "private, no-store")
 	respondOK(c, resp)
 }
 
@@ -161,17 +169,25 @@ func (h *NodeMetricsHandler) Metrics(c *gin.Context) {
 	}
 
 	resp := metricsSeriesResponse{Granularity: string(chosen)}
+	var series []metricSeries
+	var seriesErr error
 	switch chosen {
 	case metrics.GranularityRaw:
 		resp.BucketSeconds = 0
-		resp.Series = h.rawSeries(uint(id), from, to, fields)
+		series, seriesErr = h.rawSeries(uint(id), from, to, fields)
 	case metrics.GranularityHourly:
 		resp.BucketSeconds = 3600
-		resp.Series = h.hourlySeries(uint(id), from, to, fields)
+		series, seriesErr = h.hourlySeries(uint(id), from, to, fields)
 	case metrics.GranularityDaily:
 		resp.BucketSeconds = 86400
-		resp.Series = h.dailySeries(uint(id), from, to, fields)
+		series, seriesErr = h.dailySeries(uint(id), from, to, fields)
 	}
+	if seriesErr != nil {
+		respondInternalError(c, seriesErr)
+		return
+	}
+	resp.Series = series
+	c.Header("Cache-Control", "private, no-store")
 	respondOK(c, resp)
 }
 
@@ -198,10 +214,12 @@ func resolveFields(raw string) []metrics.Field {
 // happened between them.
 //
 // Raw-tier points use {"t", "v"} only — no avg/max.
-func (h *NodeMetricsHandler) rawSeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+func (h *NodeMetricsHandler) rawSeries(nodeID uint, from, to time.Time, fields []metrics.Field) ([]metricSeries, error) {
 	var rows []model.NodeMetricSample
-	h.db.Where("node_id = ? AND sampled_at >= ? AND sampled_at < ?", nodeID, from, to).
-		Order("sampled_at ASC").Find(&rows)
+	if err := h.db.Where("node_id = ? AND sampled_at >= ? AND sampled_at < ?", nodeID, from, to).
+		Order("sampled_at ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
 
 	out := make([]metricSeries, 0, len(fields))
 	for _, f := range fields {
@@ -218,7 +236,7 @@ func (h *NodeMetricsHandler) rawSeries(nodeID uint, from, to time.Time, fields [
 		pts := downsample(full, rawMaxPointsPerSeries)
 		out = append(out, metricSeries{Metric: string(f), Unit: fieldUnits[f], Points: pts})
 	}
-	return out
+	return out, nil
 }
 
 // downsample returns up to max equidistant points from the sorted input,
@@ -271,25 +289,29 @@ func rawFieldValue(r model.NodeMetricSample, f metrics.Field) *float64 {
 }
 
 // hourlySeries pulls from node_metric_samples_hourly. Points carry avg + max.
-func (h *NodeMetricsHandler) hourlySeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+func (h *NodeMetricsHandler) hourlySeries(nodeID uint, from, to time.Time, fields []metrics.Field) ([]metricSeries, error) {
 	var rows []model.NodeMetricSampleHourly
-	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
-		Order("bucket_start ASC").Find(&rows)
+	if err := h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
+		Order("bucket_start ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
 	return aggregateSeries(fields, len(rows), func(i int) (time.Time, map[metrics.Field][2]*float64) {
 		r := rows[i]
 		return r.BucketStart, hourlyFieldMap(r)
-	})
+	}), nil
 }
 
 // dailySeries pulls from node_metric_samples_daily. Shape matches hourly.
-func (h *NodeMetricsHandler) dailySeries(nodeID uint, from, to time.Time, fields []metrics.Field) []metricSeries {
+func (h *NodeMetricsHandler) dailySeries(nodeID uint, from, to time.Time, fields []metrics.Field) ([]metricSeries, error) {
 	var rows []model.NodeMetricSampleDaily
-	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
-		Order("bucket_start ASC").Find(&rows)
+	if err := h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
+		Order("bucket_start ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
 	return aggregateSeries(fields, len(rows), func(i int) (time.Time, map[metrics.Field][2]*float64) {
 		r := rows[i]
 		return r.BucketStart, dailyFieldMap(r)
-	})
+	}), nil
 }
 
 // aggregateSeries is the shared shape-builder for hourly & daily rows.
@@ -381,12 +403,16 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 
 	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
 	var rows []model.NodeMetricSampleDaily
-	h.db.Where("node_id = ? AND bucket_start >= ?", id, cutoff).
-		Order("bucket_start ASC").Find(&rows)
+	if err := h.db.Where("node_id = ? AND bucket_start >= ?", id, cutoff).
+		Order("bucket_start ASC").Find(&rows).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	resp := diskForecastResponse{}
 	if len(rows) == 0 {
 		resp.Forecast.Confidence = string(metrics.ConfidenceInsufficient)
+		c.Header("Cache-Control", "private, no-store")
 		respondOK(c, resp)
 		return
 	}
@@ -413,6 +439,7 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 		when := time.Now().UTC().Add(time.Duration(*f.DaysToFull*24) * time.Hour).Format("2006-01-02")
 		resp.Forecast.DateFull = &when
 	}
+	c.Header("Cache-Control", "private, no-store")
 	respondOK(c, resp)
 }
 
@@ -421,12 +448,14 @@ func (h *NodeMetricsHandler) DiskForecast(c *gin.Context) {
 // avoids biasing the trend toward short buckets with few raw samples
 // (e.g. a 3-sample hour counts 3, not equal to a 120-sample hour).
 // No-op if no buckets exist.
-func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[string]float64) {
+func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[string]float64) error {
 	var rows []model.NodeMetricSampleHourly
-	h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
-		Find(&rows)
+	if err := h.db.Where("node_id = ? AND bucket_start >= ? AND bucket_start < ?", nodeID, from, to).
+		Find(&rows).Error; err != nil {
+		return err
+	}
 	if len(rows) == 0 {
-		return
+		return nil
 	}
 	var cpuSum, memSum, diskSum, loadSum, latencySum float64
 	var cpuW, memW, diskW, loadW, latencyW int64
@@ -478,4 +507,5 @@ func (h *NodeMetricsHandler) fillTrend(nodeID uint, from, to time.Time, dst map[
 	if totalSum > 0 {
 		dst["probe_ok_ratio"] = float64(okSum) / float64(totalSum)
 	}
+	return nil
 }

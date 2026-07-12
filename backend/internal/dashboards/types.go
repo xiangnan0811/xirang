@@ -43,6 +43,11 @@ type QueryRequest struct {
 	Aggregation string    `json:"aggregation"`
 	Start       time.Time `json:"start"`
 	End         time.Time `json:"end"`
+	// OwnershipNodeIDs is server-side only (never bound from JSON). When
+	// OwnershipScoped is true, task-family providers restrict rows to tasks on
+	// these nodes via subquery instead of expanding all task IDs into IN lists.
+	OwnershipScoped  bool   `json:"-"`
+	OwnershipNodeIDs []uint `json:"-"`
 }
 
 // Filters mirrors model.PanelFilters but avoids an import cycle.

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,7 @@ func openBackupHealthTestDB(t *testing.T) *gorm.DB {
 
 func migrateBackupHealthTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 }
@@ -42,8 +43,8 @@ type backupHealthResponse struct {
 			Name         string     `json:"name"`
 			LastBackupAt *time.Time `json:"last_backup_at"`
 		} `json:"stale_nodes"`
-		StaleNodeCount    int `json:"stale_node_count"`
-		DegradedPolicies  []struct {
+		StaleNodeCount   int `json:"stale_node_count"`
+		DegradedPolicies []struct {
 			ID   uint   `json:"id"`
 			Name string `json:"name"`
 		} `json:"degraded_policies"`
@@ -63,8 +64,17 @@ type backupHealthResponse struct {
 }
 
 func callBackupHealth(t *testing.T, db *gorm.DB) (*httptest.ResponseRecorder, backupHealthResponse) {
+	return callBackupHealthWithRole(t, db, "admin", 1)
+}
+
+func callBackupHealthWithRole(t *testing.T, db *gorm.DB, role string, userID uint) (*httptest.ResponseRecorder, backupHealthResponse) {
 	t.Helper()
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, role)
+		c.Set(middleware.CtxUserID, userID)
+		c.Next()
+	})
 	handler := NewBackupHealthHandler(db)
 	r.GET("/overview/backup-health", handler.Get)
 
@@ -107,6 +117,38 @@ func TestBackupHealth_StaleNodes_NeverBackedUp(t *testing.T) {
 	}
 	if result.Data.StaleNodes[0].LastBackupAt != nil {
 		t.Fatalf("从未备份的节点 last_backup_at 应为 nil")
+	}
+}
+
+func TestBackupHealth_OperatorOnlySeesOwnedStaleNodes(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	owned := model.Node{Name: "owned-stale", Host: "10.0.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "owned-stale"}
+	other := model.Node{Name: "other-stale", Host: "10.0.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "other-stale"}
+	if err := db.Create(&owned).Error; err != nil {
+		t.Fatalf("create owned: %v", err)
+	}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	op := model.User{Username: "op-bh", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: owned.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+
+	resp, result := callBackupHealthWithRole(t, db, "operator", op.ID)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际 %d body=%s", resp.Code, resp.Body.String())
+	}
+	if result.Data.StaleNodeCount != 1 {
+		t.Fatalf("operator 应只看到自己拥有的过期节点，stale_node_count=%d", result.Data.StaleNodeCount)
+	}
+	if len(result.Data.StaleNodes) != 1 || result.Data.StaleNodes[0].Name != "owned-stale" {
+		t.Fatalf("期望仅 owned-stale，实际 %+v", result.Data.StaleNodes)
 	}
 }
 

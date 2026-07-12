@@ -47,12 +47,28 @@ type perNodeUsage struct {
 // @Failure      401  {object}  handlers.Response
 // @Router       /overview/storage-usage [get]
 func (h *StorageUsageHandler) Get(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	// 收集所有策略的目标路径
+	ownedIDs, needFilter, ownErr := ownershipNodeFilter(c, h.db)
+	if ownErr != nil {
+		respondInternalError(c, ownErr)
+		return
+	}
+	if needFilter && len(ownedIDs) == 0 {
+		respondOK(c, gin.H{"mount_points": []any{}, "per_node": []any{}})
+		return
+	}
+
+	// 收集策略的目标路径（operator 仅关联 owned 节点的策略）
 	var policies []model.Policy
-	if err := h.db.Select("id, name, target_path").Find(&policies).Error; err != nil {
+	policyQ := h.db.Select("id, name, target_path")
+	if needFilter {
+		policyQ = policyQ.Where("id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", ownedIDs)
+	}
+	if err := policyQ.Find(&policies).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -72,28 +88,33 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		}
 	}
 
+	// Mount-point totals reflect the whole volume. Operators must not learn
+	// shared-disk capacity/usage outside their nodes — only admin/viewer get
+	// Statfs aggregates; operators receive empty mount_points.
 	mountPoints := make([]mountPointInfo, 0)
-	for _, tp := range targetPaths {
-		if ctx.Err() != nil {
-			break
+	if !needFilter {
+		for _, tp := range targetPaths {
+			if ctx.Err() != nil {
+				break
+			}
+			var stat syscall.Statfs_t
+			if err := syscall.Statfs(tp, &stat); err != nil {
+				continue
+			}
+			totalGB := float64(stat.Blocks) * float64(stat.Bsize) / (1024 * 1024 * 1024)
+			freeGB := float64(stat.Bavail) * float64(stat.Bsize) / (1024 * 1024 * 1024)
+			usedGB := totalGB - freeGB
+			pct := 0.0
+			if totalGB > 0 {
+				pct = usedGB / totalGB * 100
+			}
+			mountPoints = append(mountPoints, mountPointInfo{
+				Path:    tp,
+				UsedGB:  round2(usedGB),
+				TotalGB: round2(totalGB),
+				Pct:     round2(pct),
+			})
 		}
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(tp, &stat); err != nil {
-			continue
-		}
-		totalGB := float64(stat.Blocks) * float64(stat.Bsize) / (1024 * 1024 * 1024)
-		freeGB := float64(stat.Bavail) * float64(stat.Bsize) / (1024 * 1024 * 1024)
-		usedGB := totalGB - freeGB
-		pct := 0.0
-		if totalGB > 0 {
-			pct = usedGB / totalGB * 100
-		}
-		mountPoints = append(mountPoints, mountPointInfo{
-			Path:    tp,
-			UsedGB:  round2(usedGB),
-			TotalGB: round2(totalGB),
-			Pct:     round2(pct),
-		})
 	}
 
 	// 按节点统计目录大小
@@ -122,9 +143,18 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 			NodeName string
 		}
 		var nodeRefs []nodeRef
-		h.db.Raw("SELECT DISTINCT n.id as node_id, n.name as node_name FROM nodes n "+
-			"INNER JOIN policy_nodes pn ON pn.node_id = n.id "+
-			"WHERE pn.policy_id IN ?", policyIDs).Scan(&nodeRefs)
+		nodeSQL := "SELECT DISTINCT n.id as node_id, n.name as node_name FROM nodes n " +
+			"INNER JOIN policy_nodes pn ON pn.node_id = n.id " +
+			"WHERE pn.policy_id IN ?"
+		nodeArgs := []any{policyIDs}
+		if needFilter {
+			nodeSQL += " AND n.id IN ?"
+			nodeArgs = append(nodeArgs, ownedIDs)
+		}
+		if err := h.db.Raw(nodeSQL, nodeArgs...).Scan(&nodeRefs).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 
 		nodeNameMap := make(map[string]nodeRef)
 		for _, nr := range nodeRefs {

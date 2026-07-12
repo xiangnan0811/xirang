@@ -60,38 +60,70 @@ type Policy struct {
 }
 
 func (p *Policy) BeforeSave(_ *gorm.DB) error {
-	if p.PreHook != "" {
-		encrypted, err := secure.EncryptIfNeeded(p.PreHook)
-		if err != nil {
-			return err
-		}
-		p.PreHook = encrypted
+	if err := encryptPolicyText(&p.PreHook); err != nil {
+		return err
 	}
-	if p.PostHook != "" {
-		encrypted, err := secure.EncryptIfNeeded(p.PostHook)
-		if err != nil {
-			return err
-		}
-		p.PostHook = encrypted
+	if err := encryptPolicyText(&p.PostHook); err != nil {
+		return err
+	}
+	// Drill verify scripts may embed credentials/paths — same protection as hooks.
+	if err := encryptPolicyText(&p.DrillPreVerify); err != nil {
+		return err
+	}
+	if err := encryptPolicyText(&p.DrillVerify); err != nil {
+		return err
+	}
+	if err := encryptPolicyText(&p.DrillPostVerify); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (p *Policy) AfterFind(_ *gorm.DB) error {
-	if p.PreHook != "" {
-		decrypted, err := secure.DecryptIfNeeded(p.PreHook)
-		if err != nil {
-			return err
-		}
-		p.PreHook = decrypted
+	if err := decryptPolicyText(&p.PreHook); err != nil {
+		return err
 	}
-	if p.PostHook != "" {
-		decrypted, err := secure.DecryptIfNeeded(p.PostHook)
-		if err != nil {
-			return err
-		}
-		p.PostHook = decrypted
+	if err := decryptPolicyText(&p.PostHook); err != nil {
+		return err
 	}
+	if err := decryptPolicyText(&p.DrillPreVerify); err != nil {
+		return err
+	}
+	if err := decryptPolicyText(&p.DrillVerify); err != nil {
+		return err
+	}
+	if err := decryptPolicyText(&p.DrillPostVerify); err != nil {
+		return err
+	}
+	return nil
+}
+
+func encryptPolicyText(field *string) error {
+	if field == nil || *field == "" {
+		return nil
+	}
+	if secure.IsEncrypted(*field) {
+		return nil
+	}
+	// Use EncryptString so whitespace-only scripts are sealed too.
+	// EncryptIfNeeded treats TrimSpace-empty values as skip (would leave plain).
+	encrypted, err := secure.EncryptString(*field)
+	if err != nil {
+		return err
+	}
+	*field = encrypted
+	return nil
+}
+
+func decryptPolicyText(field *string) error {
+	if field == nil || *field == "" {
+		return nil
+	}
+	decrypted, err := secure.DecryptIfNeeded(*field)
+	if err != nil {
+		return err
+	}
+	*field = decrypted
 	return nil
 }
 

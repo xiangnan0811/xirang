@@ -127,7 +127,9 @@ func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
 		t.Fatalf("写入 v1 设置失败: %v", err)
 	}
 
-	if got := CountV1EncryptedData(db); got != 1 {
+	if got, err := CountV1EncryptedData(db); err != nil {
+		t.Fatalf("统计 v1 失败: %v", err)
+	} else if got != 1 {
 		t.Fatalf("迁移前应统计到 1 条 v1 设置，实际 %d", got)
 	}
 	if err := MigrateEncryptionV1ToV2(db); err != nil {
@@ -148,8 +150,84 @@ func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
 	if plain != "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY" {
 		t.Fatalf("迁移后明文不匹配: %q", plain)
 	}
-	if got := CountV1EncryptedData(db); got != 0 {
+	if got, err := CountV1EncryptedData(db); err != nil {
+		t.Fatalf("统计 v1 失败: %v", err)
+	} else if got != 0 {
 		t.Fatalf("迁移后不应残留 v1 设置，实际 %d", got)
+	}
+}
+
+func TestEncryptPlaintextPolicyDrillScripts(t *testing.T) {
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", key)
+	secure.ResetForTesting()
+
+	db := openBootstrapTestDB(t)
+	if err := db.AutoMigrate(&model.Policy{}); err != nil {
+		t.Fatalf("migrate policies: %v", err)
+	}
+	// Leading/trailing whitespace must be preserved (no TrimSpace on migrate).
+	const prePlain = "  echo pre-plain  "
+	const midPlain = "echo mid-plain"
+	const postPlain = "\techo post-plain\n"
+	// Insert raw plaintext (skip hooks) — simulates pre-hook deployments.
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Exec(
+		`INSERT INTO policies (name, source_path, target_path, cron_spec, drill_pre_verify, drill_verify, drill_post_verify, enabled, retention_mode)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"plain-drill", "/src", "/dst", "0 * * * *",
+		prePlain, midPlain, postPlain,
+		true, "simple",
+	).Error; err != nil {
+		t.Fatalf("seed plain drill scripts: %v", err)
+	}
+
+	if got, err := CountPlaintextPolicyDrillScripts(db); err != nil {
+		t.Fatalf("count plain before: %v", err)
+	} else if got != 3 {
+		t.Fatalf("before encrypt expected 3 plaintext fields, got %d", got)
+	}
+
+	if err := EncryptPlaintextPolicyDrillScripts(db); err != nil {
+		t.Fatalf("encrypt plain: %v", err)
+	}
+	// Second run is a no-op.
+	if err := EncryptPlaintextPolicyDrillScripts(db); err != nil {
+		t.Fatalf("encrypt plain second pass: %v", err)
+	}
+
+	if got, err := CountPlaintextPolicyDrillScripts(db); err != nil {
+		t.Fatalf("count plain after: %v", err)
+	} else if got != 0 {
+		t.Fatalf("after encrypt expected 0 plaintext fields, got %d", got)
+	}
+
+	var raw struct {
+		Pre  string `gorm:"column:drill_pre_verify"`
+		Mid  string `gorm:"column:drill_verify"`
+		Post string `gorm:"column:drill_post_verify"`
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Table("policies").
+		Select("drill_pre_verify, drill_verify, drill_post_verify").
+		Where("name = ?", "plain-drill").Scan(&raw).Error; err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	for name, v := range map[string]string{"pre": raw.Pre, "mid": raw.Mid, "post": raw.Post} {
+		if !strings.HasPrefix(v, "enc:v2:") {
+			t.Fatalf("%s expected enc:v2 at rest, got %q", name, v)
+		}
+		if strings.Contains(v, "plain") {
+			t.Fatalf("%s still contains plaintext: %q", name, v)
+		}
+	}
+
+	var loaded model.Policy
+	if err := db.Where("name = ?", "plain-drill").First(&loaded).Error; err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.DrillPreVerify != prePlain || loaded.DrillVerify != midPlain || loaded.DrillPostVerify != postPlain {
+		t.Fatalf("AfterFind must preserve exact script bytes: pre=%q mid=%q post=%q",
+			loaded.DrillPreVerify, loaded.DrillVerify, loaded.DrillPostVerify)
 	}
 }
 

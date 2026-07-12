@@ -375,3 +375,146 @@ func TestBackupConfidenceOperatorOnlySeesOwnedPolicyTargets(t *testing.T) {
 		t.Fatalf("operator 响应 targets 不应包含非拥有节点: %+v", item.Targets)
 	}
 }
+
+// TestBackupConfidenceNoVisibleTasksDoesNotLeakUnownedDrill: operator sees a
+// shared policy via an owned node that has no tasks, while unowned sibling has
+// drill evidence — must not surface that evidence.
+func TestBackupConfidenceNoVisibleTasksDoesNotLeakUnownedDrill(t *testing.T) {
+	db := openBackupConfidenceTestDB(t)
+
+	ownedNode := model.Node{Name: "shared-owned-node", Host: "10.2.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "shared-owned"}
+	unownedNode := model.Node{Name: "shared-unowned-node", Host: "10.2.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "shared-unowned"}
+	for _, n := range []*model.Node{&ownedNode, &unownedNode} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	policy := model.Policy{Name: "shared-confidence", SourcePath: "/srv/shared", TargetPath: "/backup", CronSpec: "0 * * * *", Enabled: true, VerifyEnabled: true, DrillEnabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	for _, link := range []model.PolicyNode{
+		{PolicyID: policy.ID, NodeID: ownedNode.ID},
+		{PolicyID: policy.ID, NodeID: unownedNode.ID},
+	} {
+		if err := db.Create(&link).Error; err != nil {
+			t.Fatalf("创建策略节点关联失败: %v", err)
+		}
+	}
+	// Only unowned node has a task + successful drill.
+	unownedTask := model.Task{Name: "unowned-task", NodeID: unownedNode.ID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: "success", VerifyStatus: "passed", Enabled: true}
+	if err := db.Create(&unownedTask).Error; err != nil {
+		t.Fatalf("创建 unowned task 失败: %v", err)
+	}
+	now := time.Now()
+	backupRun := addRun(t, db, unownedTask.ID, "success", "cron", now.Add(-time.Hour), "passed")
+	_ = backupRun
+	drillRun := addRun(t, db, unownedTask.ID, "success", "drill", now.Add(-30*time.Minute), "passed")
+	addDrillEvidence(t, db, policy, unownedTask, drillRun, "success", true, "")
+
+	user := model.User{Username: "operator-shared-confidence", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: user.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	resp, result := callBackupConfidenceWithUser(t, db, "operator", user.ID)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(result.Data.Items) != 1 {
+		t.Fatalf("期望 1 项，实际: %d", len(result.Data.Items))
+	}
+	item := result.Data.Items[0]
+	codes := reasonCodes(item)
+	// Must treat drill as missing (no visible tasks), not healthy from unowned drill.
+	if !codes["drill_missing"] {
+		t.Fatalf("无可见任务时不应泄露 unowned 演练；期望 drill_missing，实际 reasons=%+v evidence=%+v", item.Reasons, item.Evidence)
+	}
+	for _, ev := range item.Evidence {
+		if ev.Type == "drill" && ev.Status != "missing" {
+			t.Fatalf("不应返回 unowned drill 证据: %+v", ev)
+		}
+	}
+	if item.Status == "healthy" {
+		t.Fatalf("无可见备份/演练时不应 healthy: status=%s", item.Status)
+	}
+}
+
+// TestBackupConfidenceDrillRequiresSandboxOwnership: owned source task with
+// unowned sandbox must not surface drill evidence.
+func TestBackupConfidenceDrillRequiresSandboxOwnership(t *testing.T) {
+	db := openBackupConfidenceTestDB(t)
+
+	source := model.Node{Name: "conf-src", Host: "10.4.0.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "conf-src"}
+	sandbox := model.Node{Name: "conf-sbx", Host: "10.4.0.2", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "conf-sbx"}
+	for _, n := range []*model.Node{&source, &sandbox} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	policy := model.Policy{Name: "conf-both-ends", SourcePath: "/srv/conf", TargetPath: "/backup", CronSpec: "0 * * * *", Enabled: true, VerifyEnabled: true, DrillEnabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	task := model.Task{Name: "conf-task", NodeID: source.ID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: "success", VerifyStatus: "passed", Enabled: true}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	now := time.Now()
+	addRun(t, db, task.ID, "success", "cron", now.Add(-time.Hour), "passed")
+	drillRun := addRun(t, db, task.ID, "success", "drill", now.Add(-30*time.Minute), "passed")
+	// Sandbox is unowned by the operator below.
+	evidence := model.RestoreDrillEvidence{
+		PolicyID:           policy.ID,
+		TaskID:             task.ID,
+		TaskRunID:          drillRun.ID,
+		SandboxNodeID:      sandbox.ID,
+		SandboxNodeName:    "conf-sbx",
+		SandboxPath:        "/tmp/xirang-drill",
+		Status:             "success",
+		ConfidenceEligible: true,
+		StartedAt:          &now,
+		FinishedAt:         &now,
+		DurationMs:         1000,
+		RestoreStatus:      "success",
+		VerifyStatus:       "success",
+		PostVerifyStatus:   "skipped",
+		CleanupStatus:      "success",
+		CreatedAt:          now,
+	}
+	if err := db.Create(&evidence).Error; err != nil {
+		t.Fatalf("创建演练证据失败: %v", err)
+	}
+
+	user := model.User{Username: "operator-src-only", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: source.ID, UserID: user.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	resp, result := callBackupConfidenceWithUser(t, db, "operator", user.ID)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(result.Data.Items) != 1 {
+		t.Fatalf("期望 1 项，实际: %d", len(result.Data.Items))
+	}
+	item := result.Data.Items[0]
+	codes := reasonCodes(item)
+	if !codes["drill_missing"] {
+		t.Fatalf("仅拥有源节点时不应看到沙箱演练证据，期望 drill_missing，实际: %+v evidence=%+v", item.Reasons, item.Evidence)
+	}
+	for _, ev := range item.Evidence {
+		if ev.Type == "drill" && ev.Status != "missing" {
+			t.Fatalf("不应返回 unowned-sandbox drill 证据: %+v", ev)
+		}
+	}
+}

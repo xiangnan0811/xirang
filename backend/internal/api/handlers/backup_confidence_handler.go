@@ -107,6 +107,8 @@ type confidencePolicyContext struct {
 // @Failure      403  {object}  handlers.Response
 // @Router       /overview/backup-confidence [get]
 func (h *BackupConfidenceHandler) Get(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+
 	now := time.Now()
 	policies, err := h.loadVisiblePolicies(c)
 	if err != nil {
@@ -214,17 +216,33 @@ func (h *BackupConfidenceHandler) loadPolicyContext(c *gin.Context, policy model
 		ctx.LatestSuccessfulBackupRun = latestSuccessfulBackupRun
 	}
 
-	var latestDrill model.RestoreDrillEvidence
-	drillQuery := h.db.WithContext(c.Request.Context()).Where("policy_id = ?", policy.ID)
+	// Only attach drill evidence when the operator can see both ends:
+	// source task (via visible taskIDs) AND sandbox node (owned set).
+	// No visible tasks → no policy-wide fallback (would leak unowned drills).
 	if len(taskIDs) > 0 {
-		drillQuery = drillQuery.Where("task_id IN ?", taskIDs)
-	}
-	err := drillQuery.Order("created_at desc, id desc").First(&latestDrill).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return ctx, err
-	}
-	if err == nil {
-		ctx.LatestDrill = &latestDrill
+		ownedIDs, needFilter, ownErr := ownershipNodeFilter(c, h.db)
+		if ownErr != nil {
+			return ctx, ownErr
+		}
+		drillQuery := h.db.WithContext(c.Request.Context()).
+			Where("policy_id = ? AND task_id IN ?", policy.ID, taskIDs)
+		if needFilter {
+			if len(ownedIDs) == 0 {
+				// No owned nodes → no sandbox authorization.
+			} else {
+				drillQuery = drillQuery.Where("sandbox_node_id IN ?", ownedIDs)
+			}
+		}
+		if !needFilter || len(ownedIDs) > 0 {
+			var latestDrill model.RestoreDrillEvidence
+			err := drillQuery.Order("created_at desc, id desc").First(&latestDrill).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return ctx, err
+			}
+			if err == nil {
+				ctx.LatestDrill = &latestDrill
+			}
+		}
 	}
 
 	alerts, err := h.loadOpenAlerts(c, policy, taskIDs, targetNodeIDs)

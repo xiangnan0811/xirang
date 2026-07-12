@@ -41,3 +41,9 @@ func resetForTest() {
 	defer registryMu.Unlock()
 	registry = nil
 }
+
+// ResetRegistryForTest clears the provider registry between tests so each
+// test can Register a provider bound to its own in-memory DB.
+func ResetRegistryForTest() {
+	resetForTest()
+}

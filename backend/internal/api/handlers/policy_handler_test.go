@@ -738,20 +738,30 @@ func TestDrillUpdateWithoutDrillFieldsPreservesExistingConfig(t *testing.T) {
 	db := openPolicyHandlerTestDB(t)
 
 	sandboxID := uint(42)
+	// Plaintext expected values (BeforeSave encrypts in-place on Create; do not
+	// compare against the mutated policyEntity fields).
+	const (
+		wantDrillCron       = "0 4 * * *"
+		wantDrillPath       = "/tmp/drill-preserve"
+		wantDrillPreVerify  = "test -d /tmp/drill-preserve"
+		wantDrillVerify     = "test -f /tmp/drill-preserve/ok"
+		wantDrillPostVerify = "true"
+	)
 	policyEntity := model.Policy{
-		Name:                "preserve-drill-config",
-		SourcePath:          "/data",
-		TargetPath:          config.BackupRoot,
-		CronSpec:            "0 2 * * *",
-		Enabled:             true,
-		DrillEnabled:        true,
-		DrillCron:           "0 4 * * *",
-		DrillTargetNodeID:   &sandboxID,
-		DrillRestorePath:    "/tmp/drill-preserve",
-		DrillPreVerify:      "test -d /tmp/drill-preserve",
-		DrillVerify:         "test -f /tmp/drill-preserve/ok",
-		DrillPostVerify:     "true",
-		DrillAutoCleanup:    false,
+		Name:              "preserve-drill-config",
+		SourcePath:        "/data",
+		TargetPath:        config.BackupRoot,
+		CronSpec:          "0 2 * * *",
+		Enabled:           true,
+		DrillEnabled:      true,
+		DrillCron:         wantDrillCron,
+		DrillTargetNodeID: &sandboxID,
+		DrillRestorePath:  wantDrillPath,
+		DrillPreVerify:    wantDrillPreVerify,
+		DrillVerify:       wantDrillVerify,
+		DrillPostVerify:   wantDrillPostVerify,
+		// GORM default:true on bool zero-value stores true on Create; use true for seed.
+		DrillAutoCleanup:    true,
 		MaxConcurrent:       1,
 		RetentionDays:       7,
 		VerifyEnabled:       true,
@@ -785,17 +795,17 @@ func TestDrillUpdateWithoutDrillFieldsPreservesExistingConfig(t *testing.T) {
 	if err := db.First(&updated, policyEntity.ID).Error; err != nil {
 		t.Fatalf("查询更新后策略失败: %v", err)
 	}
-	if !updated.DrillEnabled || updated.DrillCron != policyEntity.DrillCron || updated.DrillRestorePath != policyEntity.DrillRestorePath {
+	if !updated.DrillEnabled || updated.DrillCron != wantDrillCron || updated.DrillRestorePath != wantDrillPath {
 		t.Fatalf("drill 基础配置未保留: %+v", updated)
 	}
 	if updated.DrillTargetNodeID == nil || *updated.DrillTargetNodeID != sandboxID {
 		t.Fatalf("drill_target_node_id 未保留: %#v", updated.DrillTargetNodeID)
 	}
-	if updated.DrillPreVerify != policyEntity.DrillPreVerify || updated.DrillVerify != policyEntity.DrillVerify || updated.DrillPostVerify != policyEntity.DrillPostVerify {
+	if updated.DrillPreVerify != wantDrillPreVerify || updated.DrillVerify != wantDrillVerify || updated.DrillPostVerify != wantDrillPostVerify {
 		t.Fatalf("drill 校验脚本未保留: %+v", updated)
 	}
-	if updated.DrillAutoCleanup != policyEntity.DrillAutoCleanup {
-		t.Fatalf("drill_auto_cleanup 未保留: %v", updated.DrillAutoCleanup)
+	if !updated.DrillAutoCleanup {
+		t.Fatalf("drill_auto_cleanup 未保留为 true: %v", updated.DrillAutoCleanup)
 	}
 }
 
@@ -1123,5 +1133,267 @@ func TestInvalidRetentionMode(t *testing.T) {
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid retention_mode, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestPolicyListGetOperatorFiltersUnownedNodesAndDrillSummary ensures shared
+// policies only expose node_ids and latest_drill the operator is authorized to see.
+func TestPolicyListGetOperatorFiltersUnownedNodesAndDrillSummary(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	owned := model.Node{Name: "op-owned", Host: "10.1.0.1", BackupDir: "/backup/op-owned"}
+	unowned := model.Node{Name: "op-unowned", Host: "10.1.0.2", BackupDir: "/backup/op-unowned"}
+	for _, n := range []*model.Node{&owned, &unowned} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	policyEntity := model.Policy{Name: "shared-policy-leak", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	for _, link := range []model.PolicyNode{
+		{PolicyID: policyEntity.ID, NodeID: owned.ID},
+		{PolicyID: policyEntity.ID, NodeID: unowned.ID},
+	} {
+		if err := db.Create(&link).Error; err != nil {
+			t.Fatalf("创建策略节点关联失败: %v", err)
+		}
+	}
+
+	ownedTask := model.Task{Name: "owned-task", PolicyID: &policyEntity.ID, NodeID: owned.ID, ExecutorType: "rsync", Status: "success"}
+	unownedTask := model.Task{Name: "unowned-task", PolicyID: &policyEntity.ID, NodeID: unowned.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&ownedTask).Error; err != nil {
+		t.Fatalf("创建 owned task 失败: %v", err)
+	}
+	if err := db.Create(&unownedTask).Error; err != nil {
+		t.Fatalf("创建 unowned task 失败: %v", err)
+	}
+
+	// Only unowned task has drill evidence — must not appear for operator.
+	unownedRun := model.TaskRun{TaskID: unownedTask.ID, TriggerType: "drill", Status: "success"}
+	if err := db.Create(&unownedRun).Error; err != nil {
+		t.Fatalf("创建 unowned drill run 失败: %v", err)
+	}
+	started := time.Now().UTC()
+	if err := db.Create(&model.RestoreDrillEvidence{
+		PolicyID:           policyEntity.ID,
+		TaskID:             unownedTask.ID,
+		TaskRunID:          unownedRun.ID,
+		SandboxNodeID:      unowned.ID,
+		SandboxNodeName:    "sandbox-unowned",
+		SandboxPath:        "/tmp/drill-unowned",
+		Status:             "success",
+		ConfidenceEligible: true,
+		StartedAt:          &started,
+		FinishedAt:         &started,
+		DurationMs:         1000,
+	}).Error; err != nil {
+		t.Fatalf("创建 unowned drill evidence 失败: %v", err)
+	}
+
+	const operatorID = uint(42)
+	if err := db.Create(&model.NodeOwner{NodeID: owned.ID, UserID: operatorID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "operator")
+		c.Set("userID", operatorID)
+		c.Next()
+	})
+	r.GET("/policies", handler.List)
+	r.GET("/policies/:id", handler.Get)
+
+	// List
+	listReq := httptest.NewRequest(http.MethodGet, "/policies", nil)
+	listResp := httptest.NewRecorder()
+	r.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("List 期望 200，实际: %d body=%s", listResp.Code, listResp.Body.String())
+	}
+	var listEnvelope struct {
+		Data []struct {
+			ID          uint           `json:"id"`
+			NodeIDs     []uint         `json:"node_ids"`
+			LatestDrill map[string]any `json:"latest_drill"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &listEnvelope); err != nil {
+		t.Fatalf("解析 List 失败: %v", err)
+	}
+	if len(listEnvelope.Data) != 1 {
+		t.Fatalf("List 期望 1 条策略，实际: %d", len(listEnvelope.Data))
+	}
+	if !equalUintSlices(listEnvelope.Data[0].NodeIDs, []uint{owned.ID}) {
+		t.Fatalf("List node_ids 应仅含 owned=%d，实际: %v", owned.ID, listEnvelope.Data[0].NodeIDs)
+	}
+	if listEnvelope.Data[0].LatestDrill != nil {
+		t.Fatalf("List 不应泄露 unowned latest_drill: %#v", listEnvelope.Data[0].LatestDrill)
+	}
+
+	// Get
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyEntity.ID), nil)
+	getResp := httptest.NewRecorder()
+	r.ServeHTTP(getResp, getReq)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("Get 期望 200，实际: %d body=%s", getResp.Code, getResp.Body.String())
+	}
+	var getEnvelope struct {
+		Data struct {
+			NodeIDs     []uint         `json:"node_ids"`
+			LatestDrill map[string]any `json:"latest_drill"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(getResp.Body.Bytes(), &getEnvelope); err != nil {
+		t.Fatalf("解析 Get 失败: %v", err)
+	}
+	if !equalUintSlices(getEnvelope.Data.NodeIDs, []uint{owned.ID}) {
+		t.Fatalf("Get node_ids 应仅含 owned=%d，实际: %v", owned.ID, getEnvelope.Data.NodeIDs)
+	}
+	if getEnvelope.Data.LatestDrill != nil {
+		t.Fatalf("Get 不应泄露 unowned latest_drill: %#v", getEnvelope.Data.LatestDrill)
+	}
+}
+
+// TestPolicyLatestDrillRequiresBothSourceAndSandboxOwnership: owning only the
+// source task node or only the sandbox must not reveal latest_drill metadata.
+func TestPolicyLatestDrillRequiresBothSourceAndSandboxOwnership(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	source := model.Node{Name: "drill-src", Host: "10.3.0.1", BackupDir: "/backup/drill-src"}
+	sandbox := model.Node{Name: "drill-sbx", Host: "10.3.0.2", BackupDir: "/backup/drill-sbx"}
+	for _, n := range []*model.Node{&source, &sandbox} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	policyEntity := model.Policy{Name: "both-ends-policy", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policyEntity.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	taskEntity := model.Task{Name: "both-ends-task", PolicyID: &policyEntity.ID, NodeID: source.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: "failed"}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建 drill run 失败: %v", err)
+	}
+	started := time.Now().UTC()
+	if err := db.Create(&model.RestoreDrillEvidence{
+		PolicyID:           policyEntity.ID,
+		TaskID:             taskEntity.ID,
+		TaskRunID:          run.ID,
+		SandboxNodeID:      sandbox.ID,
+		SandboxNodeName:    "drill-sbx",
+		SandboxPath:        "/tmp/drill-both",
+		Status:             "failed",
+		FailedStep:         "verify",
+		ConfidenceEligible: false,
+		StartedAt:          &started,
+		FinishedAt:         &started,
+		DurationMs:         2500,
+	}).Error; err != nil {
+		t.Fatalf("创建演练证据失败: %v", err)
+	}
+
+	const sourceOnlyOp = uint(51)
+	const bothOp = uint(53)
+	if err := db.Create(&model.NodeOwner{NodeID: source.ID, UserID: sourceOnlyOp}).Error; err != nil {
+		t.Fatalf("source-only ownership: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: source.ID, UserID: bothOp}).Error; err != nil {
+		t.Fatalf("both source ownership: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: sandbox.ID, UserID: bothOp}).Error; err != nil {
+		t.Fatalf("both sandbox ownership: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	getLatest := func(userID uint) map[string]any {
+		t.Helper()
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			c.Set("role", "operator")
+			c.Set("userID", userID)
+			c.Next()
+		})
+		r.GET("/policies/:id", handler.Get)
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyEntity.ID), nil)
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("user %d 期望 200，实际 %d body=%s", userID, resp.Code, resp.Body.String())
+		}
+		var envelope struct {
+			Data struct {
+				LatestDrill map[string]any `json:"latest_drill"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("解析失败: %v", err)
+		}
+		return envelope.Data.LatestDrill
+	}
+
+	// Source-only: can see policy (union ownership) but must not see drill summary.
+	if drill := getLatest(sourceOnlyOp); drill != nil {
+		t.Fatalf("仅拥有源节点不应看到 latest_drill: %#v", drill)
+	}
+	// Sandbox-only cannot access policy at all — covered by
+	// TestPolicyGetSandboxOnlyCannotAccessPolicy.
+	both := getLatest(bothOp)
+	if both == nil {
+		t.Fatal("同时拥有源节点与沙箱应看到 latest_drill")
+	}
+	if both["task_run_id"] != float64(run.ID) || both["status"] != "failed" || both["failed_step"] != "verify" {
+		t.Fatalf("双端归属应返回完整摘要，实际: %#v", both)
+	}
+}
+
+// TestPolicyGetSandboxOnlyCannotAccessPolicy: operator owning only sandbox
+// (no source node) must not access the policy at all.
+func TestPolicyGetSandboxOnlyCannotAccessPolicy(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	source := model.Node{Name: "sbx-only-src", Host: "10.3.1.1", BackupDir: "/backup/sbx-only-src"}
+	sandbox := model.Node{Name: "sbx-only-sbx", Host: "10.3.1.2", BackupDir: "/backup/sbx-only-sbx"}
+	for _, n := range []*model.Node{&source, &sandbox} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	policyEntity := model.Policy{Name: "sbx-only-policy", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policyEntity.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatalf("创建策略节点关联失败: %v", err)
+	}
+	const sandboxOnlyOp = uint(61)
+	if err := db.Create(&model.NodeOwner{NodeID: sandbox.ID, UserID: sandboxOnlyOp}).Error; err != nil {
+		t.Fatalf("sandbox-only ownership: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "operator")
+		c.Set("userID", sandboxOnlyOp)
+		c.Next()
+	})
+	r.GET("/policies/:id", handler.Get)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/policies/%d", policyEntity.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("仅拥有沙箱应 403，实际 %d body=%s", resp.Code, resp.Body.String())
 	}
 }

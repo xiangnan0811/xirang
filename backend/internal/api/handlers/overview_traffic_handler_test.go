@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -27,17 +28,27 @@ func openOverviewTrafficTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func trafficTestRouter(handler *OverviewTrafficHandler) *gin.Engine {
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "admin")
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	r.GET("/overview/traffic", handler.Get)
+	return r
+}
+
 func TestOverviewTrafficRejectsInvalidWindow(t *testing.T) {
 	db := openOverviewTrafficTestDB(t)
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化采样表失败: %v", err)
 	}
 
-	r := gin.New()
 	handler := NewOverviewTrafficHandler(db, func() time.Time {
 		return time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	})
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=30d", nil)
 	resp := httptest.NewRecorder()
@@ -55,26 +66,37 @@ func TestOverviewTrafficFormatsTimestampInServiceLocalTimezone(t *testing.T) {
 	}
 
 	loc := time.FixedZone("CST", 8*3600)
-	now := time.Date(2026, 3, 8, 20, 0, 0, 0, loc)
-	sample := model.TaskTrafficSample{TaskID: 1, NodeID: 1, RunStartedAt: now.Add(-40 * time.Minute), SampledAt: now.Add(-40 * time.Minute), ThroughputMbps: 100}
+	// nowFn stays in service-local TZ for response formatting; samples are stored
+	// as UTC wall times (GORM/SQLite datetime has no offset — matching production writers).
+	nowLocal := time.Date(2026, 3, 8, 20, 0, 0, 0, loc)
+	sampledAtUTC := nowLocal.Add(-40 * time.Minute).UTC()
+	sample := model.TaskTrafficSample{
+		TaskID: 1, NodeID: 1,
+		RunStartedAt:   sampledAtUTC,
+		SampledAt:      sampledAtUTC,
+		ThroughputMbps: 100,
+	}
 	if err := db.Create(&sample).Error; err != nil {
 		t.Fatalf("写入采样失败: %v", err)
 	}
 
-	r := gin.New()
-	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return nowLocal })
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
 	r.ServeHTTP(resp, req)
 
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
 	var result struct {
 		Data struct {
 			GeneratedAt string `json:"generated_at"`
-			Points []struct {
-				Timestamp string `json:"timestamp"`
-				Label string `json:"label"`
+			Points      []struct {
+				Timestamp      string  `json:"timestamp"`
+				Label          string  `json:"label"`
 				ThroughputMbps float64 `json:"throughput_mbps"`
 			} `json:"points"`
 		} `json:"data"`
@@ -105,10 +127,9 @@ func TestOverviewTrafficReturnsZeroFilledSeriesWhenEmpty(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	r := gin.New()
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
@@ -176,9 +197,8 @@ func TestOverviewTrafficAveragesWithinBucketAcrossMinutes(t *testing.T) {
 		}
 	}
 
-	r := gin.New()
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
@@ -226,9 +246,8 @@ func TestOverviewTrafficUsesTaskRunForStartedCount(t *testing.T) {
 		t.Fatalf("写入 TaskRun 失败: %v", err)
 	}
 
-	r := gin.New()
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
@@ -284,9 +303,8 @@ func TestOverviewTrafficIncludesActivityAndEventCounts(t *testing.T) {
 		}
 	}
 
-	r := gin.New()
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
@@ -337,9 +355,8 @@ func TestOverviewTrafficAggregatesSamplesByWindowBucket(t *testing.T) {
 		}
 	}
 
-	r := gin.New()
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
 	resp := httptest.NewRecorder()
@@ -386,10 +403,9 @@ func TestOverviewTraffic24hReturns48Buckets(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	r := gin.New()
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=24h", nil)
 	resp := httptest.NewRecorder()
@@ -418,10 +434,9 @@ func TestOverviewTraffic7dReturns56Buckets(t *testing.T) {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	r := gin.New()
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
-	r.GET("/overview/traffic", handler.Get)
+	r := trafficTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=7d", nil)
 	resp := httptest.NewRecorder()
@@ -441,5 +456,108 @@ func TestOverviewTraffic7dReturns56Buckets(t *testing.T) {
 	}
 	if len(result.Data.Points) != 56 {
 		t.Fatalf("7d 应返回 56 个 bucket，实际: %d", len(result.Data.Points))
+	}
+}
+
+func TestOverviewTrafficSetsTruncatedWhenSampleCapHit(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	prevCap := trafficSampleCap
+	trafficSampleCap = 2
+	t.Cleanup(func() { trafficSampleCap = prevCap })
+
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	// Three samples in-window → cap=2 triggers Truncated.
+	for i := 0; i < 3; i++ {
+		sample := model.TaskTrafficSample{
+			TaskID:         uint(i + 1),
+			NodeID:         1,
+			RunStartedAt:   now.Add(-30 * time.Minute),
+			SampledAt:      now.Add(-time.Duration(10+i) * time.Minute),
+			ThroughputMbps: 50,
+		}
+		if err := db.Create(&sample).Error; err != nil {
+			t.Fatalf("写入采样失败: %v", err)
+		}
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r := trafficTestRouter(handler)
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data struct {
+			HasRealSamples bool `json:"has_real_samples"`
+			Truncated      bool `json:"truncated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if !result.Data.HasRealSamples {
+		t.Fatal("截断场景仍应 has_real_samples=true")
+	}
+	if !result.Data.Truncated {
+		t.Fatal("超过 trafficSampleCap 时应 truncated=true，避免缺失桶被伪装为零")
+	}
+}
+
+func TestOverviewTrafficSetsTruncatedWhenTaskRunCapHit(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	prevCap := trafficTaskRunCap
+	trafficTaskRunCap = 2
+	t.Cleanup(func() { trafficTaskRunCap = prevCap })
+
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	// Three started runs in-window → cap=2 triggers Truncated.
+	for i := 0; i < 3; i++ {
+		started := now.Add(-time.Duration(10+i) * time.Minute)
+		run := model.TaskRun{TaskID: uint(i + 1), Status: "success", StartedAt: &started}
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatalf("写入 TaskRun 失败: %v", err)
+		}
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r := trafficTestRouter(handler)
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data struct {
+			Truncated bool `json:"truncated"`
+			Points    []struct {
+				StartedCount int `json:"started_count"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if !result.Data.Truncated {
+		t.Fatal("超过 trafficTaskRunCap 时应 truncated=true")
+	}
+	totalStarted := 0
+	for _, p := range result.Data.Points {
+		totalStarted += p.StartedCount
+	}
+	if totalStarted != 2 {
+		t.Fatalf("截断后 started 合计应为 2，实际 %d", totalStarted)
 	}
 }
