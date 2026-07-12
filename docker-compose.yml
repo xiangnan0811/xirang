@@ -2,8 +2,10 @@ services:
   xirang:
     image: linnea7171/xirang:${IMAGE_TAG:-latest}
     container_name: xirang
-    # 复制 .env.deploy 为 .env 并修改必改项（ADMIN_INITIAL_PASSWORD / JWT_SECRET / DATA_ENCRYPTION_KEY）
-    # 若不提供 .env，容器将使用环境默认值启动（生产环境不推荐）
+    # 必须先复制 .env.deploy 为 .env 并填写生产必填项：
+    # JWT_SECRET(≥32) / DATA_ENCRYPTION_KEY(≥16) / METRICS_TOKEN(≥16，非占位符)
+    # ADMIN_INITIAL_PASSWORD 仅首次启动且库中尚无 admin 时需要。
+    # 缺少 .env 时 docker compose config/up 会失败；生产环境禁止依赖空密钥默认值。
     env_file:
       - .env
     environment:

@@ -65,13 +65,32 @@ func (h *AuthHandler) WithCaptchaStore(store *CaptchaStore) *AuthHandler {
 	return h
 }
 
+// verifyCaptchaAnswer validates a store-backed captcha challenge once.
+func verifyCaptchaAnswer(store *CaptchaStore, id, answerRaw string) bool {
+	if store == nil {
+		return false
+	}
+	id = strings.TrimSpace(id)
+	answerRaw = strings.TrimSpace(answerRaw)
+	if id == "" || answerRaw == "" {
+		return false
+	}
+	answerInt, err := strconv.Atoi(answerRaw)
+	if err != nil {
+		return false
+	}
+	return store.Verify(id, answerInt)
+}
+
 type loginRequest struct {
-	Username      string `json:"username" binding:"required"`
-	Password      string `json:"password" binding:"required"`
-	Captcha       string `json:"captcha"`
-	SecondCaptcha string `json:"second_captcha"`
-	CaptchaID     string `json:"captcha_id"`
-	CaptchaAnswer string `json:"captcha_answer"`
+	Username            string `json:"username" binding:"required"`
+	Password            string `json:"password" binding:"required"`
+	Captcha             string `json:"captcha"`
+	SecondCaptcha       string `json:"second_captcha"` // legacy free-form; ignored for security (use second_captcha_id/answer)
+	CaptchaID           string `json:"captcha_id"`
+	CaptchaAnswer       string `json:"captcha_answer"`
+	SecondCaptchaID     string `json:"second_captcha_id"`
+	SecondCaptchaAnswer string `json:"second_captcha_answer"`
 }
 
 type changePasswordRequest struct {
@@ -98,25 +117,31 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	captchaEnabled := h.captchaEnabled()
+	secondCaptchaEnabled := h.secondCaptchaEnabled()
 
-	if captchaEnabled && h.captchaStore == nil && strings.TrimSpace(req.Captcha) == "" {
-		respondBadRequest(c, "验证码不能为空")
-		return
-	}
-	if h.secondCaptchaEnabled() && strings.TrimSpace(req.SecondCaptcha) == "" {
-		respondBadRequest(c, "二次验证码不能为空")
-		return
-	}
-	if captchaEnabled && h.captchaStore != nil {
-		answerRaw := strings.TrimSpace(req.CaptchaAnswer)
-		id := strings.TrimSpace(req.CaptchaID)
-		if id == "" || answerRaw == "" {
+	// Primary captcha must use store-backed challenges only. A free-form
+	// non-empty captcha string (legacy) is never accepted — including when the
+	// store is missing (fail-closed, same as second captcha).
+	if captchaEnabled {
+		if h.captchaStore == nil {
+			respondBadRequest(c, "验证码不可用，请联系管理员")
+			return
+		}
+		if !verifyCaptchaAnswer(h.captchaStore, req.CaptchaID, req.CaptchaAnswer) {
 			respondBadRequest(c, "验证码错误或已过期")
 			return
 		}
-		answerInt, err := strconv.Atoi(answerRaw)
-		if err != nil || !h.captchaStore.Verify(id, answerInt) {
-			respondBadRequest(c, "验证码错误或已过期")
+	}
+	// Second captcha must use the same store-backed challenge/response as the
+	// primary captcha. A free-form non-empty second_captcha string is no longer
+	// accepted (that path provided only false security).
+	if secondCaptchaEnabled {
+		if h.captchaStore == nil {
+			respondBadRequest(c, "二次验证码不可用，请联系管理员")
+			return
+		}
+		if !verifyCaptchaAnswer(h.captchaStore, req.SecondCaptchaID, req.SecondCaptchaAnswer) {
+			respondBadRequest(c, "二次验证码错误或已过期")
 			return
 		}
 	}

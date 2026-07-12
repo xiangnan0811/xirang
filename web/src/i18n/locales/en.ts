@@ -161,6 +161,7 @@ const en = {
     username: "Username",
     password: "Password",
     captcha: "Captcha",
+    secondCaptcha: "Second captcha",
     usernamePlaceholder: "Enter username",
     passwordPlaceholder: "Enter password",
     captchaPlaceholder: "Enter the result",

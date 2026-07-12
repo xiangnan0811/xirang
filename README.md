@@ -25,10 +25,12 @@ git clone https://github.com/xiangnan0811/xirang.git
 cd xirang
 
 cp .env.deploy .env
-# 编辑 .env，至少填写：
-# ADMIN_INITIAL_PASSWORD=<强密码>
-# JWT_SECRET=<强随机字符串>
-# DATA_ENCRYPTION_KEY=<加密密钥>
+# 编辑 .env。生产/未声明 APP_ENV 时 JWT_SECRET、DATA_ENCRYPTION_KEY、METRICS_TOKEN 必填；
+# ADMIN_INITIAL_PASSWORD 仅首次启动且库中尚无 admin 时需要：
+# ADMIN_INITIAL_PASSWORD=<首次 admin 强密码>
+# JWT_SECRET=<≥32 字符强随机字符串>
+# DATA_ENCRYPTION_KEY=<≥16 字符强随机加密密钥>
+# METRICS_TOKEN=<≥16 字符强随机 token，可用 openssl rand -hex 32>
 # 生产环境建议固定稳定版：IMAGE_TAG=vX.Y.Z
 
 docker compose pull
@@ -52,7 +54,7 @@ docker compose up -d
 ```bash
 # 终端 1：后端 (:8080)
 cd backend
-ADMIN_INITIAL_PASSWORD='your-strong-password' APP_ENV=development \
+ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
   go run ./cmd/server
 
 # 终端 2：前端 (:5173)

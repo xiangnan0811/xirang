@@ -56,20 +56,39 @@ func GetEnvOrDefault(key, fallback string) string {
 	return value
 }
 
-// IsDevelopmentEnv returns true when APP_ENV, ENVIRONMENT, or GIN_MODE
-// indicates a development/debug runtime.
-func IsDevelopmentEnv() bool {
-	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
-	ginMode := strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE")))
-	return appEnv == "development" || environment == "development" || ginMode == "debug"
+// appEnvironment returns APP_ENV if set, else ENVIRONMENT. Empty if neither set.
+// GIN_MODE is not consulted here — see IsProductionEnv for release-mode legacy.
+func appEnvironment() string {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))); v != "" {
+		return v
+	}
+	return strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
 }
 
-// IsProductionEnv returns true when APP_ENV, ENVIRONMENT, or GIN_MODE
-// indicates a production/release runtime.
+// IsDevelopmentEnv returns true only when APP_ENV or ENVIRONMENT is explicitly
+// "development" (APP_ENV wins). GIN_MODE=debug never enables development
+// secret relaxations.
+func IsDevelopmentEnv() bool {
+	return appEnvironment() == "development"
+}
+
+// IsProductionEnv returns true when security hardening for production should apply.
+//
+// Only explicit APP_ENV/ENVIRONMENT=development opts out. Everything else —
+// including undeclared env, production/prod/staging aliases, and unknown
+// labels — fail closed as production so Swagger defaults off and
+// METRICS_TOKEN / CORS * protections remain active without requiring
+// GIN_MODE=release. APP_ENV=development always wins over GIN_MODE=release.
 func IsProductionEnv() bool {
-	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-	environment := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
-	ginMode := strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE")))
-	return appEnv == "production" || environment == "production" || ginMode == "release"
+	return !IsDevelopmentEnv()
+}
+
+// IsGinDebug reports whether GIN_MODE is "debug".
+func IsGinDebug() bool {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE"))) == "debug"
+}
+
+// IsGinRelease reports whether GIN_MODE is "release".
+func IsGinRelease() bool {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE"))) == "release"
 }

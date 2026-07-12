@@ -11,12 +11,12 @@
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `SERVER_ADDR` | string | `:8080` | 否 | 后端监听地址 |
-| `APP_ENV` | string | — | 否 | 应用环境（`development` / `production`），影响弱密钥检测等安全策略 |
-| `ENVIRONMENT` | string | — | 否 | `APP_ENV` 的回退变量（优先级低于 `APP_ENV`） |
-| `GIN_MODE` | string | — | 否 | `APP_ENV` 的回退变量（`debug` = development，`release` = production） |
+| `APP_ENV` | string | — | 否 | 应用环境。**优先**于 `ENVIRONMENT`。仅 `development` 放宽弱密钥/默认 JWT 与 METRICS/Swagger；**未设置**、`production`/`prod`/`staging` 及其它未知值一律按生产硬化（METRICS_TOKEN、CORS 禁止 `*`、Swagger 默认关） |
+| `ENVIRONMENT` | string | — | 否 | 仅当 `APP_ENV` **未设置**时作为回退；若 `APP_ENV=production`（或 prod/staging）则忽略 `ENVIRONMENT=development`（不会放宽密钥策略） |
+| `GIN_MODE` | string | — | 否 | Gin 运行模式（`debug` / `release`）。`debug` **不会**放宽密钥策略。生产硬化不依赖 `GIN_MODE`（未声明 APP_ENV 也 hardened）；`APP_ENV=development` 始终优先于 `GIN_MODE=release` |
 | `LOG_LEVEL` | string | 空（info） | 否 | 日志级别：`debug` / `info` / `warn` / `error` |
 
-**读取位置**：`SERVER_ADDR` → `backend/internal/config/config.go` 的 `Load`；`APP_ENV` / `ENVIRONMENT` / `GIN_MODE` → `backend/internal/util/env.go`；`LOG_LEVEL` → `backend/cmd/server/main.go`。
+**读取位置**：`SERVER_ADDR` → `backend/internal/config/config.go` 的 `Load`；`APP_ENV` / `ENVIRONMENT` → `backend/internal/util/env.go` 的 `IsDevelopmentEnv` / `IsProductionEnv`；`GIN_MODE` 仅影响 Gin 框架运行模式（`debug`/`release`），**不**决定开发/生产 CSP 或密钥策略——CSP 放宽分支只检查 `IsDevelopmentEnv()`（即 `APP_ENV`/`ENVIRONMENT`），见 `backend/internal/api/router.go`；`LOG_LEVEL` → `backend/cmd/server/main.go`。
 
 ## 2. 数据库
 
@@ -41,7 +41,7 @@
 | `LOGIN_FAIL_LOCK_DURATION` | duration | `15m` | 否 | 账号锁定持续时间 |
 | `LOGIN_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用登录验证码（settings 键 `login.captcha_enabled`，可通过设置 API 实时调整） |
 | `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
-| `ADMIN_INITIAL_PASSWORD` | string | — | 首次启动 | 初始 admin 账号密码，仅 bootstrap 阶段使用 |
+| `ADMIN_INITIAL_PASSWORD` | string | — | 仅首次无 admin | 初始 admin 密码；**仅库中尚无 admin 用户时** bootstrap 需要，已有 admin 后不必填、也不会因留空拒绝启动 |
 | `DATA_ENCRYPTION_KEY` | string | 开发环境自动生成随机密钥（重启后失效） | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 argon2id 派生） |
 | `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 数据；确认轮替完成后清理 |
 
@@ -52,10 +52,11 @@
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `CORS_ALLOWED_ORIGINS` | string | `http://localhost:5173,http://127.0.0.1:5173` | 否 | 跨域白名单（逗号分隔），留空时仅放行同主机 Origin（忽略端口）；生产环境禁止 `*` |
+| `TRUSTED_PROXIES` | string | `127.0.0.1,::1` | 否 | Gin 可信反向代理列表（逗号分隔 CIDR/IP），仅这些来源的 `X-Forwarded-For` / `X-Real-IP` 会影响 `ClientIP()`（登录/API 限流与审计）。设为空或 `none` 表示不信任任何代理（始终用直连地址）。非法 IP/CIDR **启动失败**（不静默降级）。**切勿**在公网入口上信任全网段 |
 | `WS_ALLOW_EMPTY_ORIGIN` | bool | `false` | 否 | WebSocket 是否允许空 Origin |
 | `WS_MAX_CONNECTIONS` | int | `100` | 否 | WebSocket 最大连接数 |
 
-**读取位置**：`CORS_ALLOWED_ORIGINS` / `WS_ALLOW_EMPTY_ORIGIN` → `backend/internal/config/config.go`；`WS_MAX_CONNECTIONS` → `backend/internal/ws/hub.go`。
+**读取位置**：`CORS_ALLOWED_ORIGINS` / `TRUSTED_PROXIES` / `WS_ALLOW_EMPTY_ORIGIN` → `backend/internal/config/config.go`；`WS_MAX_CONNECTIONS` → `backend/internal/ws/hub.go`。
 
 ## 5. SSH
 
@@ -159,7 +160,8 @@
 | `VITE_API_BASE_URL` | string | `/api/v1` | 否 | API 路径前缀 |
 | `VITE_PROXY_TARGET` | string | `http://127.0.0.1:8080` | 否 | 开发模式 Vite 代理目标（仅 `vite.config.ts` 使用） |
 | `VITE_DEV_API_DIRECT_URL` | string | — | 否 | 开发模式直连后端地址（`VITE_API_BASE_URL` 为相对路径时使用） |
-| `VITE_WS_URL` | string | 自动推导 | 否 | 自定义 WebSocket 地址 |
+| `VITE_WS_URL` | string | 自动推导 | 否 | 自定义 WebSocket 地址（构建时注入）。若指向非同源主机，生产 Nginx 需同时设置 `CSP_CONNECT_SRC_EXTRA`（见部署文档） |
+| `CSP_CONNECT_SRC_EXTRA` | string | 空 | 否 | All-in-One Nginx CSP `connect-src` 附加源（空格分隔，如 `wss://ws.example.com`）；默认仅 `'self'` |
 | `VITE_ENABLE_DEMO_MODE` | string | — | 否 | 设为 `true` 启用 mock 数据（仅演示/测试用，不连接真实服务器、SSH Key 或备份存储） |
 
 **读取位置**：`VITE_API_BASE_URL` / `VITE_DEV_API_DIRECT_URL` → `web/src/lib/api/core.ts` 和 WebSocket URL 推导；`VITE_PROXY_TARGET` → `web/vite.config.ts`；`VITE_WS_URL` → `web/src/lib/ws/logs-socket.ts`；`VITE_ENABLE_DEMO_MODE` → `web/src/hooks/use-console-data.ts`、`web/src/components/protected-route.tsx`、登录页与部分 demo 面板。
@@ -218,7 +220,8 @@ All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `METRICS_TOKEN` | string | 空 | 否 | Bearer token，留空时 `/metrics` 仍可公开访问（兼容旧行为）但会在日志中提示一次（每 10 分钟最多再提示一次）；设置后请求必须携带 `Authorization: Bearer <token>`，否则返回 401 |
+| `METRICS_TOKEN` | string | 空 | **生产必填** | Bearer token 保护 `/metrics`。除显式 `APP_ENV`/`ENVIRONMENT=development` 外一律要求非空、≥16 字符且非文档占位符（含未设置 APP_ENV），否则启动失败；开发环境可留空但会打采样 warn；设置后必须 `Authorization: Bearer <token>` |
+| `SWAGGER_ENABLED` | bool | 非生产默认 true；生产默认 false | 否 | 是否挂载 `/swagger/*`。生产默认关闭（完整 API 表面无需认证）；显式 `true` 可强制开启 |
 | `METRICS_RATE_LIMIT` | int | `5` | 否 | `/metrics` 独立限流桶（per IP）允许的请求次数，与 `/api` 限流分离 |
 | `METRICS_RATE_WINDOW` | duration | `1s` | 否 | 限流时间窗口（Go duration 格式）。默认 `5 req/s` 对应 Prometheus 通常 15-30s 一次抓取，留有充足余量；超过返回 429 |
 

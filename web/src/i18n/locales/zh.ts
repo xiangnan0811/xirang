@@ -161,6 +161,7 @@ const zh = {
     username: "用户名",
     password: "密码",
     captcha: "验证码",
+    secondCaptcha: "二次验证码",
     usernamePlaceholder: "请输入用户名",
     passwordPlaceholder: "请输入密码",
     captchaPlaceholder: "请输入计算结果",

@@ -17,7 +17,11 @@
 ```bash
 cd backend
 go mod tidy
-go run ./cmd/server
+# 未声明 APP_ENV 时按生产硬化：缺 JWT_SECRET / DATA_ENCRYPTION_KEY / METRICS_TOKEN 会拒绝启动。
+# 本地开发请显式设置 development，并在首次启动（库中尚无 admin）时提供初始密码。
+# 密码须同时含大写/小写字母、数字与特殊字符（见 auth.ValidatePasswordStrength）：
+ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
+  go run ./cmd/server
 ```
 
 默认监听：`127.0.0.1:8080`
@@ -52,7 +56,7 @@ go run ./cmd/server
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /overview | 🔒 仪表盘概览 |
+| GET | /overview | 🔒 仪表盘概览（`tasks:read`；operator 仅统计自己拥有的节点） |
 | GET | /overview/traffic | 🔒 任务流量趋势 |
 | GET | /overview/backup-health | 🔒 备份健康状态 |
 | GET | /overview/backup-confidence | 🔒 备份可信度 |
@@ -311,7 +315,7 @@ go run ./cmd/server
 | GET | /version/check | 🔒 检查更新 |
 | POST | /system/backup-db | 🔒 备份数据库 |
 | GET | /system/backups | 🔒 备份列表 |
-| GET | /system/encryption-status | 🔒 加密 V1 残留计数（admin；运维确认 V1 数据已全部迁移到 V2 后可退役 V1 解密支持） |
+| GET | /system/encryption-status | 🔒 加密迁移健康状态（admin）。返回 `v1_remaining_count`（enc:v1: 残留）、`plaintext_drill_script_field_count`（策略演练脚本明文残留字段数）；`healthy=true` 仅当两者均为 0。计数查询失败时返回 500，不报告 healthy。运维确认 V1/明文均已清理后可退役 V1 解密支持 |
 | POST | /system/verify-mount | 🔒 验证挂载点 |
 
 ### WebSocket
@@ -326,8 +330,8 @@ go run ./cmd/server
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /healthz | 健康检查（无需认证） |
-| GET | /metrics | Prometheus 指标（可选 Bearer 鉴权 + 限速；见 `METRICS_TOKEN`） |
-| GET | /swagger/*any | Swagger UI（无需认证） |
+| GET | /metrics | Prometheus 指标（生产必须 `METRICS_TOKEN` Bearer 鉴权 + 限速） |
+| GET | /swagger/*any | Swagger UI（生产默认关闭；`SWAGGER_ENABLED=true` 可强制开启） |
 | GET | /admin/metrics/rollup-status | 🔒 聚合器诊断（hourly/daily 最新桶 + 落后秒数），仅 admin |
 
 ## 执行器
@@ -344,13 +348,14 @@ go run ./cmd/server
 完整参考见 [docs/env-vars.md](../docs/env-vars.md)。
 
 关键必填项（生产环境）：
-- `ADMIN_INITIAL_PASSWORD`：初始 admin 密码
 - `JWT_SECRET`：JWT 签名密钥（≥32 字符）
-- `DATA_ENCRYPTION_KEY`：敏感字段加密密钥
+- `DATA_ENCRYPTION_KEY`：敏感字段加密密钥（≥16 字符）
+- `METRICS_TOKEN`：`/metrics` Bearer token（≥16 字符，非文档占位符）
+- `ADMIN_INITIAL_PASSWORD`：仅首次启动且库中尚无 admin 时需要（非每次启动必填）
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000060_credential_access_grants`。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000061_task_runs_traffic_indexes`。
 
 核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（43 个模型）
 

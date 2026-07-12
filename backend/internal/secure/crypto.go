@@ -56,9 +56,11 @@ func loadKey() {
 		}
 		generated := base64.StdEncoding.EncodeToString(buf)
 		raw = generated
+		// Never log the generated key material — logs may be retained or
+		// shipped off-host. Operators must set DATA_ENCRYPTION_KEY explicitly
+		// for durable local data.
 		logger.Log.Warn().
 			Str("hint", "set DATA_ENCRYPTION_KEY to a stable value for data persistence across restarts").
-			Str("generated_key", generated).
 			Msg("开发环境未设置 DATA_ENCRYPTION_KEY，已生成临时密钥，重启后数据将不可解密")
 	}
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { LoginPage } from "./login-page";
 
-const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, ApiErrorClass } = vi.hoisted(() => {
+const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, getCaptchaMock, ApiErrorClass } = vi.hoisted(() => {
   class ApiError extends Error {
     status: number;
     detail?: unknown;
@@ -21,6 +21,7 @@ const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, ApiErrorClass }
     loginMock: vi.fn(),
     apiLoginMock: vi.fn(),
     apiTotpLoginMock: vi.fn(),
+    getCaptchaMock: vi.fn(),
     ApiErrorClass: ApiError,
   };
 });
@@ -40,6 +41,7 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     login: apiLoginMock,
     totpLogin: apiTotpLoginMock,
+    getCaptcha: getCaptchaMock,
   },
 }));
 
@@ -90,6 +92,88 @@ describe("LoginPage", () => {
     loginMock.mockReset();
     apiLoginMock.mockReset();
     apiTotpLoginMock.mockReset();
+    getCaptchaMock.mockReset();
+    // Default: captcha channels off — no UI fields.
+    getCaptchaMock.mockResolvedValue({
+      enabled: false,
+      secondRequired: false,
+    });
+  });
+
+  it("enabled=false 时不渲染主验证码输入框", async () => {
+    renderLoginPage();
+    await waitFor(() => {
+      expect(getCaptchaMock).toHaveBeenCalled();
+    });
+    expect(screen.queryByLabelText("验证码")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("二次验证码")).not.toBeInTheDocument();
+  });
+
+  it("仅二次验证码开启时只渲染二次输入框，登录 payload 只带 secondCaptcha", async () => {
+    getCaptchaMock.mockResolvedValue({
+      enabled: false,
+      secondRequired: true,
+      secondId: "sec-1",
+      secondQuestion: "9 + 1 = ?",
+    });
+    apiLoginMock.mockResolvedValue({
+      token: "jwt-token",
+      user: { id: 1, username: "admin", role: "admin" },
+    });
+    const user = userEvent.setup();
+    renderLoginPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("二次验证码")).toBeInTheDocument();
+    });
+    expect(screen.getByText("9 + 1 = ?")).toBeInTheDocument();
+    expect(screen.queryByLabelText("验证码")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("用户名"), "admin");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.type(screen.getByLabelText("二次验证码"), "10");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(apiLoginMock).toHaveBeenCalledWith("admin", "secret", {
+        captchaId: undefined,
+        captchaAnswer: undefined,
+        secondCaptchaId: "sec-1",
+        secondCaptchaAnswer: "10",
+      });
+    });
+  });
+
+  it("主验证码开启时渲染主输入框，登录时带上 captcha 字段", async () => {
+    getCaptchaMock.mockResolvedValue({
+      enabled: true,
+      id: "cap-1",
+      question: "2 + 3 = ?",
+      secondRequired: false,
+    });
+    apiLoginMock.mockResolvedValue({
+      token: "jwt-token",
+      user: { id: 1, username: "admin", role: "admin" },
+    });
+    const user = userEvent.setup();
+    renderLoginPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("验证码")).toBeInTheDocument();
+    });
+    expect(screen.getByText("2 + 3 = ?")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("用户名"), "admin");
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.type(screen.getByLabelText("验证码"), "5");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    await waitFor(() => {
+      expect(apiLoginMock).toHaveBeenCalledWith("admin", "secret", {
+        captchaId: "cap-1",
+        captchaAnswer: "5",
+        secondCaptchaId: undefined,
+        secondCaptchaAnswer: undefined,
+      });
+    });
   });
 
   it("成功登录后调用 login 并跳转到 /app/overview", async () => {

@@ -708,3 +708,62 @@ func hasRoute(routes []gin.RouteInfo, method string, path string) bool {
 	}
 	return false
 }
+
+func TestSwaggerUIEnabledDefaultsAndOverride(t *testing.T) {
+	t.Run("production default off", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("SWAGGER_ENABLED", "")
+		t.Setenv("GIN_MODE", "")
+		if swaggerUIEnabled() {
+			t.Fatal("生产环境默认应关闭 Swagger UI")
+		}
+	})
+	t.Run("production force on", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("SWAGGER_ENABLED", "true")
+		if !swaggerUIEnabled() {
+			t.Fatal("SWAGGER_ENABLED=true 应强制开启")
+		}
+	})
+	t.Run("development default on", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("SWAGGER_ENABLED", "")
+		if !swaggerUIEnabled() {
+			t.Fatal("开发环境默认应开启 Swagger UI")
+		}
+	})
+	t.Run("development force off", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("SWAGGER_ENABLED", "false")
+		if swaggerUIEnabled() {
+			t.Fatal("SWAGGER_ENABLED=false 应强制关闭")
+		}
+	})
+	t.Run("gin release without app env defaults off", func(t *testing.T) {
+		t.Setenv("APP_ENV", "")
+		t.Setenv("ENVIRONMENT", "")
+		t.Setenv("GIN_MODE", "release")
+		t.Setenv("SWAGGER_ENABLED", "")
+		if swaggerUIEnabled() {
+			t.Fatal("仅 GIN_MODE=release 视为生产时 Swagger 应默认关闭")
+		}
+	})
+	t.Run("prod alias defaults off without gin release", func(t *testing.T) {
+		t.Setenv("APP_ENV", "prod")
+		t.Setenv("ENVIRONMENT", "")
+		t.Setenv("GIN_MODE", "")
+		t.Setenv("SWAGGER_ENABLED", "")
+		if swaggerUIEnabled() {
+			t.Fatal("APP_ENV=prod 应关闭 Swagger 默认开启")
+		}
+	})
+	t.Run("staging alias defaults off without gin release", func(t *testing.T) {
+		t.Setenv("APP_ENV", "staging")
+		t.Setenv("ENVIRONMENT", "")
+		t.Setenv("GIN_MODE", "debug")
+		t.Setenv("SWAGGER_ENABLED", "")
+		if swaggerUIEnabled() {
+			t.Fatal("APP_ENV=staging 即使 GIN_MODE=debug 也应关闭 Swagger 默认开启")
+		}
+	})
+}
