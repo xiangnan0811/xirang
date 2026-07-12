@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000059_ssh_key_scope_credential_audit`.
+  latest migration is `000061_task_runs_traffic_indexes`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -106,6 +106,10 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   persistence and decrypted at the service boundary for `GetEffective` /
   `GetAll`. New secret-like settings must be added to the service registry with
   `Sensitive: true` and to the v1-to-v2 encryption migration allowlist.
+- Overview traffic queries rely on paired `task_runs` indexes
+  `idx_task_runs_started_at` and `idx_task_runs_status_finished_at`. Preserve
+  both SQLite/PostgreSQL definitions and matching down migrations when changing
+  traffic-window predicates or index names.
 
 ## Scenario: Policy Hooks And Sensitive Settings At Rest
 
