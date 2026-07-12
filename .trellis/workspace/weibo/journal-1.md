@@ -498,3 +498,45 @@ Reviewed and fixed frontend visual polish, motion, responsive tab, and accessibi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: 完成全仓审计整改已落地批次
+
+**Date**: 2026-07-12
+**Task**: 完成全仓审计整改已落地批次
+**Branch**: `fix/07-11-audit-p1-security`
+
+### Summary
+
+完成并分批提交全仓审计及二次审查修复，校准 Trellis 任务与规范，归档六个已完成子任务；父任务保留 P3 质量债。
+
+### Main Changes
+
+- Runtime/security：收紧显式环境、生产密钥、metrics、trusted proxies、Swagger 与双 CAPTCHA 契约，并同步部署配置和文档。
+- Backend：统一 panel/overview/task/policy/drill ownership fail-closed，演练同时约束源任务节点与沙箱节点，加密演练脚本并增加 paired query indexes。
+- Frontend：在 API boundary 映射 credentials/node metrics/silences/auth DTO，完善节点详情 i18n、可见性轮询、AbortSignal、loading/empty/error 与确认对话框。
+- Trellis：补齐父子任务 PRD、design/implement 和可执行 specs；归档三个 backend 与三个 frontend 子任务，父任务当前为 6/7，P3 保持 active。
+- Verification：后端 go test ./...、golangci-lint（0 issues）、build；前端 npm run check（127 files / 547 tests + build）；文档、迁移配对、Compose、Nginx 与 diff checks 均通过。
+- Delivery：未 push、未创建 PR、未合并；mock 服务继续监听 0.0.0.0:5173，供人工验证。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `927e541` | (see git log) |
+| `5e40b00` | (see git log) |
+| `89f85cf` | (see git log) |
+| `47aeac7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
