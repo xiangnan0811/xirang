@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.8](https://github.com/xiangnan0811/xirang/compare/v0.44.7...v0.44.8) (2026-07-12)
+
+
+### 🐛 Bug Fixes
+
+* **build:** apply Go and quic-go security updates ([#369](https://github.com/xiangnan0811/xirang/issues/369)) ([2da978d](https://github.com/xiangnan0811/xirang/commit/2da978d15ced76314dce876f735187fa1c935d34))
+
 ## [0.44.7](https://github.com/xiangnan0811/xirang/compare/v0.44.6...v0.44.7) (2026-07-12)
 
 
