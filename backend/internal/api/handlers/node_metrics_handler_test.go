@@ -332,7 +332,9 @@ func TestFillTrend_WeightedBySampleCount(t *testing.T) {
 	}
 	h := NewNodeMetricsHandler(db)
 	dst := map[string]float64{}
-	h.fillTrend(1, now.Add(-3*time.Hour), now, dst)
+	if err := h.fillTrend(1, now.Add(-3*time.Hour), now, dst); err != nil {
+		t.Fatalf("fillTrend: %v", err)
+	}
 
 	expected := (10*3.0 + 50*120.0) / 123.0
 	got := dst["cpu_pct_avg"]

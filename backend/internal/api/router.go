@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +48,9 @@ type Dependencies struct {
 	MetricsToken      string
 	MetricsRateLimit  int
 	MetricsRateWindow time.Duration
+	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
+	// Empty = trust none (ClientIP uses RemoteAddr only).
+	TrustedProxies []string
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -53,6 +59,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		appCtx = context.Background()
 	}
 	router := gin.New()
+	// Empty TrustedProxies → trust no proxy headers (prevents ClientIP spoofing
+	// for rate limits). Non-empty → only listed CIDRs/IPs. Never leave Gin default
+	// (trust all) which would honor forged X-Forwarded-For from any client.
+	if err := router.SetTrustedProxies(dep.TrustedProxies); err != nil {
+		// Fail closed: invalid TRUSTED_PROXIES must not silently degrade to
+		// trust-none (wrong ClientIP breaks audit trails and rate limits) or
+		// trust-all (XFF spoofing). Config.Load validates the list first.
+		panic(fmt.Sprintf("TRUSTED_PROXIES invalid for Gin SetTrustedProxies: %v", err))
+	}
 	router.MaxMultipartMemory = 10 << 20 // 10 MB
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(middleware.PrometheusMetrics())
@@ -89,7 +104,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	})
 
 	captchaStore := handlers.NewCaptchaStore()
-	captchaHandler := handlers.NewCaptchaHandler(captchaStore)
+	captchaHandler := handlers.NewCaptchaHandler(captchaStore).WithSettingsService(dep.SettingsService)
 	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.SettingsService).WithDB(dep.DB).WithCaptchaStore(captchaStore)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
@@ -133,7 +148,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 
 	v1 := router.Group("/api/v1")
-	v1.GET("/auth/captcha", captchaHandler.GenerateCaptcha)
+	// Captcha is unauthenticated; rate-limit to reduce store spam / memory pressure.
+	v1.GET("/auth/captcha", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
 	v1.GET("/version", versionHandler.Info)
@@ -150,7 +166,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/auth/2fa/verify", authHandler.TOTPVerify)
 	secured.POST("/auth/2fa/disable", authHandler.TOTPDisable)
 	secured.POST("/auth/step-up", authHandler.StepUp)
-	secured.GET("/overview", overviewHandler.Get)
+	secured.GET("/overview", middleware.RBAC("tasks:read"), overviewHandler.Get)
 	secured.GET("/overview/traffic", middleware.RBAC("tasks:read"), overviewTrafficHandler.Get)
 	secured.GET("/overview/health-incident-timeline", middleware.RBAC("tasks:read"), healthIncidentTimelineHandler.Get)
 	secured.GET("/overview/backup-health", middleware.RBAC("tasks:read"), backupHealthHandler.Get)
@@ -403,9 +419,26 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		middleware.MetricsAuth(dep.MetricsToken),
 		gin.WrapH(promhttp.Handler()),
 	)
-	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// Swagger UI: disabled in production unless SWAGGER_ENABLED=true.
+	// Exposes full API surface without auth — never enable casually in prod.
+	if swaggerUIEnabled() {
+		router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
 
 	return router
+}
+
+func swaggerUIEnabled() bool {
+	raw := strings.TrimSpace(os.Getenv("SWAGGER_ENABLED"))
+	if raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err == nil {
+			return v
+		}
+	}
+	// Default: on outside production, off in production.
+	return !util.IsProductionEnv()
 }
 
 func resolveAllowedOrigin(origin string, requestHost string, allowList []string) string {

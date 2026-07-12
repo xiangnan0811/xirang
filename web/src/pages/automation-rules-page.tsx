@@ -256,16 +256,10 @@ export function AutomationRulesPage() {
     t(`automation.eventTypes.${type}`, type);
   const actionTypeLabel = (type: string) =>
     t(`automation.actionTypes.${type}`, type);
-  const filterFieldLabel = (key: string) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const labels = (t as any)("automation.filterFields", { returnObjects: true });
-    return labels?.[key] ?? key;
-  };
-  const configFieldLabel = (key: string) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const labels = (t as any)("automation.configFields", { returnObjects: true });
-    return labels?.[key] ?? key;
-  };
+  const filterFieldLabel = (key: string) =>
+    t(`automation.filterFields.${key}`, { defaultValue: key });
+  const configFieldLabel = (key: string) =>
+    t(`automation.configFields.${key}`, { defaultValue: key });
 
   const renderFilterSummary = (rule: AutomationRule) => {
     const entries = Object.entries(rule.event_filter ?? {});

@@ -106,7 +106,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
     // 收集所有时间戳并去重排序
     const timeSet = new Set<string>();
     for (const samples of Object.values(metricsMap)) {
-      for (const s of samples) timeSet.add(s.sampled_at);
+      for (const s of samples) timeSet.add(s.sampledAt);
     }
     const sortedTimes = Array.from(timeSet).sort();
 
@@ -114,7 +114,7 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
     const nodeIndices = new Map<number, Map<string, NodeMetricSample>>();
     for (const [nodeId, samples] of Object.entries(metricsMap)) {
       const idx = new Map<string, NodeMetricSample>();
-      for (const s of samples) idx.set(s.sampled_at, s);
+      for (const s of samples) idx.set(s.sampledAt, s);
       nodeIndices.set(Number(nodeId), idx);
     }
 
@@ -132,9 +132,9 @@ export function NodeMetricsPanel({ nodes, token }: Props) {
         const sample = nodeIndices.get(node.id)?.get(t);
         const key = `n${node.id}`;
         if (sample) {
-          cpuPoint[key] = parseFloat(sample.cpu_pct.toFixed(1));
-          memPoint[key] = parseFloat(sample.mem_pct.toFixed(1));
-          diskPoint[key] = parseFloat(sample.disk_pct.toFixed(1));
+          cpuPoint[key] = parseFloat(sample.cpuPct.toFixed(1));
+          memPoint[key] = parseFloat(sample.memPct.toFixed(1));
+          diskPoint[key] = parseFloat(sample.diskPct.toFixed(1));
         }
       }
 

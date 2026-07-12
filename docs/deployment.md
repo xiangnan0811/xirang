@@ -48,12 +48,16 @@ cd xirang
 cp .env.deploy .env
 ```
 
-至少填写这三个必填项：
+`docker-compose.yml` 通过 `env_file: .env` 注入配置；**缺少 `.env` 时 `docker compose config` / `up` 会失败**，不会静默回退到空密钥默认值。
+
+生产环境启动前至少填写以下密钥（未声明 `APP_ENV=development` 时，缺 `JWT_SECRET` / `DATA_ENCRYPTION_KEY` / `METRICS_TOKEN` 会拒绝启动）：
 
 ```env
+# 仅首次启动且库中尚无 admin 用户时需要；已有 admin 后可留空或删除
 ADMIN_INITIAL_PASSWORD=<首次登录 admin 的强密码>
-JWT_SECRET=<至少 16 字符的强随机字符串>
-DATA_ENCRYPTION_KEY=<强随机加密密钥>
+JWT_SECRET=<至少 32 字符的强随机字符串>
+DATA_ENCRYPTION_KEY=<至少 16 字符的强随机加密密钥>
+METRICS_TOKEN=<至少 16 字符的强随机 token，禁止文档占位符；可用 openssl rand -hex 32 生成>
 ```
 
 生产环境建议同时固定镜像版本：
@@ -69,6 +73,8 @@ APP_ENV=production
 TZ=Asia/Shanghai
 DB_TYPE=sqlite
 SQLITE_PATH=/data/xirang.db
+# 若前端构建时使用了外部 VITE_WS_URL，需在 Nginx CSP 中追加允许的 connect-src：
+# CSP_CONNECT_SRC_EXTRA=wss://ws.example.com
 ```
 
 完整变量说明见 [环境变量参考](env-vars.md)。
@@ -247,7 +253,7 @@ docker exec -it xirang sh -lc \
 
 ## Prometheus `/metrics`
 
-`/metrics` 是后端进程提供的 Prometheus 指标端点。生产环境建议配置随机 `METRICS_TOKEN`，否则端点保持公开兼容旧部署，但会暴露路由标签和流量画像。
+`/metrics` 是后端进程提供的 Prometheus 指标端点。**除显式 `APP_ENV=development` 外必须配置随机 `METRICS_TOKEN`**（含未声明 APP_ENV），否则进程拒绝启动。仅开发环境可留空 token 以兼容本地抓取，但会暴露路由标签和流量画像，并周期性打 warn 日志。
 
 All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz` 和前端静态资源，不会暴露 `/metrics`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
 

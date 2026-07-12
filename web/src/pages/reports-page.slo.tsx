@@ -17,6 +17,8 @@ import {
   parseSLOTags,
   type SLOInput,
 } from "@/lib/api/slo";
+import { getErrorMessage } from "@/lib/utils";
+import { useConfirm } from "@/hooks/use-confirm";
 import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOSummary } from "@/types/domain";
 
 const METRIC_TYPES = [
@@ -27,29 +29,47 @@ const METRIC_TYPES = [
 export function SLOPanel() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const isAdmin = role === "admin";
   const [rows, setRows] = useState<SLODefinition[]>([]);
   const [compliance, setCompliance] = useState<Record<number, SLOComplianceResult>>({});
+  /** Per-SLO compliance fetch failures — must not look like "insufficient data". */
+  const [complianceErrors, setComplianceErrors] = useState<Record<number, string>>({});
   const [summary, setSummary] = useState<SLOSummary | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<SLODefinition | null>(null);
+  // First paint must show loading (not empty) when a fetch is expected.
+  const [loading, setLoading] = useState(() => Boolean(token));
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
     if (!token) return;
-    const [list, sum] = await Promise.all([apiClient.listSLOs(token), apiClient.getSLOSummary(token)]);
-    setRows(list);
-    setSummary(sum);
-    const comps: Record<number, SLOComplianceResult> = {};
-    await Promise.all(
-      list.filter((r) => r.enabled).map(async (r) => {
-        try {
-          comps[r.id] = await apiClient.getSLOCompliance(token, r.id);
-        } catch {
-          /* ignore per-row errors */
-        }
-      })
-    );
-    setCompliance(comps);
+    setLoading(true);
+    setError(null);
+    try {
+      const [list, sum] = await Promise.all([apiClient.listSLOs(token), apiClient.getSLOSummary(token)]);
+      setRows(list);
+      setSummary(sum);
+      const comps: Record<number, SLOComplianceResult> = {};
+      const compErrs: Record<number, string> = {};
+      await Promise.all(
+        list.filter((r) => r.enabled).map(async (r) => {
+          try {
+            comps[r.id] = await apiClient.getSLOCompliance(token, r.id);
+          } catch (err) {
+            compErrs[r.id] = getErrorMessage(err, t("slo.complianceLoadFailed"));
+          }
+        })
+      );
+      setCompliance(comps);
+      setComplianceErrors(compErrs);
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setCompliance({});
+      setComplianceErrors({});
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -59,13 +79,17 @@ export function SLOPanel() {
 
   const handleDelete = async (row: SLODefinition) => {
     if (!token) return;
-    if (!window.confirm(t("slo.deleteConfirm", { name: row.name }))) return;
+    const ok = await confirm({
+      title: t("slo.deleteConfirm", { name: row.name }),
+      description: t("common.irreversible"),
+    });
+    if (!ok) return;
     try {
       await apiClient.deleteSLO(token, row.id);
       toast.success(t("common.success"));
       await refresh();
     } catch (err) {
-      toast.error((err as Error).message);
+      toast.error(getErrorMessage(err));
     }
   };
 
@@ -89,13 +113,20 @@ export function SLOPanel() {
         )}
       </div>
 
-      {/* Empty state or table */}
-      {rows.length === 0 ? (
+      {loading ? (
+        <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
+      ) : null}
+      {error && !loading ? (
+        <p className="text-sm text-destructive" role="alert">{error}</p>
+      ) : null}
+
+      {/* Empty only when loaded successfully with zero rows — never alongside error */}
+      {!loading && !error && rows.length === 0 ? (
         <EmptyState
           icon={Target}
           title={t("slo.panelEmpty")}
         />
-      ) : (
+      ) : !loading && !error && rows.length > 0 ? (
         <Card>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -113,6 +144,7 @@ export function SLOPanel() {
               <tbody>
                 {rows.map((row) => {
                   const c = compliance[row.id];
+                  const cErr = complianceErrors[row.id];
                   return (
                     <tr key={row.id} className="border-b border-border/20 last:border-0">
                       <td className="px-4 py-2">{row.name}</td>
@@ -127,7 +159,13 @@ export function SLOPanel() {
                         {c ? `${c.error_budget_remaining_pct.toFixed(0)}%` : "—"}
                       </td>
                       <td className="px-4 py-2">
-                        <StatusBadge status={c?.status ?? "insufficient_data"} />
+                        {cErr ? (
+                          <span className="text-destructive" role="alert" title={cErr}>
+                            {t("slo.complianceLoadFailed")}
+                          </span>
+                        ) : (
+                          <StatusBadge status={c?.status ?? "insufficient_data"} />
+                        )}
                       </td>
                       {isAdmin && (
                         <td className="px-4 py-2">
@@ -162,7 +200,9 @@ export function SLOPanel() {
             </table>
           </div>
         </Card>
-      )}
+      ) : null}
+
+      {dialog}
 
       {/* Dialogs */}
       <SLODialog

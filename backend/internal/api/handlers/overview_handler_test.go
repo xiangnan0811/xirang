@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,7 @@ func openOverviewTestDB(t *testing.T) *gorm.DB {
 
 func migrateOverviewTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskTrafficSample{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 }
@@ -37,8 +38,17 @@ func migrateOverviewTables(t *testing.T, db *gorm.DB) {
 func timePtr(t time.Time) *time.Time { return &t }
 
 func overviewGet(t *testing.T, db *gorm.DB) *httptest.ResponseRecorder {
+	return overviewGetAs(t, db, "admin", 1)
+}
+
+func overviewGetAs(t *testing.T, db *gorm.DB, role string, userID uint) *httptest.ResponseRecorder {
 	t.Helper()
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, role)
+		c.Set(middleware.CtxUserID, userID)
+		c.Next()
+	})
 	r.GET("/overview", NewOverviewHandler(db).Get)
 	req := httptest.NewRequest(http.MethodGet, "/overview", nil)
 	resp := httptest.NewRecorder()
@@ -76,6 +86,49 @@ func TestOverviewReturnsZeroCounts(t *testing.T) {
 	body := parseOverview(t, overviewGet(t, db))
 	if body.Data.CurrentThroughputMbps != 0 {
 		t.Errorf("无采样时吞吐应为 0，实际: %f", body.Data.CurrentThroughputMbps)
+	}
+}
+
+func TestOverviewCacheControlIsPrivateNoStore(t *testing.T) {
+	db := openOverviewTestDB(t)
+	migrateOverviewTables(t, db)
+
+	resp := overviewGet(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d", resp.Code)
+	}
+	cc := resp.Header().Get("Cache-Control")
+	if !strings.Contains(cc, "private") || !strings.Contains(cc, "no-store") {
+		t.Fatalf("overview 必须 private,no-store（防跨用户缓存泄露），实际 Cache-Control=%q", cc)
+	}
+	if strings.Contains(cc, "public") {
+		t.Fatalf("overview 禁止 public 缓存，实际 Cache-Control=%q", cc)
+	}
+}
+
+func TestOverviewOperatorOnlyCountsOwnedNodes(t *testing.T) {
+	db := openOverviewTestDB(t)
+	migrateOverviewTables(t, db)
+
+	n1 := model.Node{Name: "owned", Host: "h1", Username: "u", AuthType: "key", BackupDir: "o1", Status: "online"}
+	n2 := model.Node{Name: "other", Host: "h2", Username: "u", AuthType: "key", BackupDir: "o2", Status: "online"}
+	if err := db.Create(&n1).Error; err != nil {
+		t.Fatalf("create n1: %v", err)
+	}
+	if err := db.Create(&n2).Error; err != nil {
+		t.Fatalf("create n2: %v", err)
+	}
+	op := model.User{Username: "op-ov", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("create op: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: n1.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+
+	body := parseOverview(t, overviewGetAs(t, db, "operator", op.ID))
+	if body.Data.TotalNodes != 1 || body.Data.HealthyNodes != 1 {
+		t.Fatalf("operator overview 应只计 owned 节点，got total=%d healthy=%d", body.Data.TotalNodes, body.Data.HealthyNodes)
 	}
 }
 

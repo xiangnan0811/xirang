@@ -70,8 +70,9 @@ func validateDrillSandboxPath(path string) error {
 }
 
 // TriggerDrill 手动或 cron 触发一次恢复演练。
+// allowedSourceNodeIDs 为 nil 时不限制源节点（admin / cron）；非 nil 时仅从这些节点的任务中选源。
 // 返回创建的 drill TaskRun ID。
-func (m *Manager) TriggerDrill(policyID uint) (uint, error) {
+func (m *Manager) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint, error) {
 	if m.shuttingDown.Load() {
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
@@ -100,8 +101,8 @@ func (m *Manager) TriggerDrill(policyID uint) (uint, error) {
 		return 0, err
 	}
 
-	// 3. 查找关联任务（取第一个有成功记录的 rsync 任务）
-	task, err := m.findTaskForPolicy(policy.ID)
+	// 3. 查找关联任务（取第一个有成功记录的 rsync 任务；可按授权源节点过滤）
+	task, err := m.findTaskForPolicy(policy.ID, allowedSourceNodeIDs)
 	if err != nil {
 		return 0, err
 	}
@@ -129,16 +130,28 @@ func (m *Manager) TriggerDrill(policyID uint) (uint, error) {
 }
 
 // findTaskForPolicy 查找策略关联的任务（优先取有成功记录的，否则取第一个 rsync 任务）。
-func (m *Manager) findTaskForPolicy(policyID uint) (model.Task, error) {
-	var tasks []model.Task
-	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").
+// allowedSourceNodeIDs 非 nil 时仅在这些节点上查找（operator 授权边界）。
+func (m *Manager) findTaskForPolicy(policyID uint, allowedSourceNodeIDs []uint) (model.Task, error) {
+	if allowedSourceNodeIDs != nil && len(allowedSourceNodeIDs) == 0 {
+		return model.Task{}, fmt.Errorf("没有可演练的已授权备份任务")
+	}
+
+	q := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").
 		Where("policy_id = ?", policyID).
-		Where("executor_type IN ?", []string{"rsync", "restic", "rclone"}).
-		Find(&tasks).Error; err != nil {
+		Where("executor_type IN ?", []string{"rsync", "restic", "rclone"})
+	if allowedSourceNodeIDs != nil {
+		q = q.Where("node_id IN ?", allowedSourceNodeIDs)
+	}
+
+	var tasks []model.Task
+	if err := q.Find(&tasks).Error; err != nil {
 		return model.Task{}, fmt.Errorf("查询关联任务失败: %w", err)
 	}
 
 	if len(tasks) == 0 {
+		if allowedSourceNodeIDs != nil {
+			return model.Task{}, fmt.Errorf("没有可演练的已授权备份任务")
+		}
 		return model.Task{}, fmt.Errorf("该策略没有关联的备份任务")
 	}
 
@@ -269,7 +282,7 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		}
 		updateEvidence(updates)
 		m.logDispatcher.Dispatch(task.ID, runIDPtr, "error", sanitizedErr, "")
-		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,alertCode, sanitizedErr)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, alertCode, sanitizedErr)
 		m.dispatchDrillFailure(policy.ID, drillRunID)
 	}
 
@@ -498,14 +511,14 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 		finalError = "演习 post_verify 失败: " + postVerifyError
 		failedStep = "post_verify"
 		confidenceEligible = false
-		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,"drill_post_verify_failed", finalError)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_post_verify_failed", finalError)
 	}
 	if cleanupStatus == "failed" {
 		finalStatus = "failed"
 		finalError = "演习清理失败: " + cleanupError
 		failedStep = "cleanup"
 		confidenceEligible = false
-		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID,"drill_cleanup_failed", finalError)
+		_ = m.alertDispatcher.RaiseDrillFailure(policy.ID, policy.Name, sandboxNode.Name, sandboxNode.ID, "drill_cleanup_failed", finalError)
 	}
 
 	finishRun(finalStatus, finalError, finishedAt)
@@ -803,7 +816,7 @@ func (m *Manager) runDrillScan() {
 				Str("policy_name", p.Name).
 				Msg("触发恢复演练 (cron)")
 
-			if _, err := m.TriggerDrill(p.ID); err != nil {
+			if _, err := m.TriggerDrill(p.ID, nil); err != nil {
 				logger.Module("task").Warn().
 					Uint("policy_id", p.ID).
 					Err(err).Msg("触发恢复演练失败")

@@ -26,6 +26,8 @@ export type TrafficChartData = {
 export type TrafficChartMetrics = {
   chartData: TrafficChartData[];
   hasRealSamples: boolean;
+  /** Server hit sample/task-run row cap; counts may under-represent the window. */
+  truncated: boolean;
   peakThroughput: number;
   totalStartedCount: number;
   totalFailedCount: number;
@@ -93,6 +95,11 @@ export function OverviewTrafficChart({
             </InlineAlert>
           ) : (
             <>
+              {chartMetrics.truncated ? (
+                <InlineAlert tone="warning" className="mb-2">
+                  {t("overview.trafficTruncated")}
+                </InlineAlert>
+              ) : null}
               <div
                 role="img"
                 aria-label={

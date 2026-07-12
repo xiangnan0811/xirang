@@ -84,6 +84,10 @@ done
 
 echo "==> 后端已就绪，启动 nginx"
 
+# Optional CSP connect-src extras (space-separated origins) for external VITE_WS_URL builds.
+# Default empty → same-origin only.
+export CSP_CONNECT_SRC_EXTRA="${CSP_CONNECT_SRC_EXTRA:-}"
+
 # 通过 nginx 官方 entrypoint 处理模板（envsubst）后启动
 /docker-entrypoint.sh nginx -g 'daemon off;' &
 NGINX_PID=$!

@@ -431,6 +431,17 @@ respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
 - Evidence error fields must be sanitized before storage/return; do not expose tokens, SSH secrets, private keys, raw stack traces, raw SQL/encryption errors, command output/text, endpoints, hostnames, or raw paths.
 - Task/task-run log, task-run detail, and WebSocket task-log backfill read endpoints must apply response-time sanitization to stored runtime evidence so legacy rows cannot bypass current write-time sanitizers.
 - Remote command helpers that surface errors outside their package must hide non-empty command output before wrapping or logging the error; use a stable placeholder rather than raw stdout/stderr, paths, hosts, endpoints, or tokens.
+- For operator-triggered drills, authorization covers both ends of the restore:
+  the sandbox node must be owned and the source backup task must belong to an
+  owned node. A shared policy does not authorize using an unowned source task.
+- The drill manager's `allowedSourceNodeIDs` contract is intentional: `nil`
+  means unrestricted internal/admin/cron execution, while a non-nil empty slice
+  means the authenticated operator has no authorized source node and selection
+  must fail closed.
+- Operator reads of latest drill summaries, backup-confidence drill evidence,
+  and task-run drill evidence must require both an owned source-task node and an
+  owned `sandbox_node_id`. Owning only one end must not reveal task-run IDs or
+  evidence metadata from the other end.
 
 ### 4. Validation & Error Matrix
 
@@ -439,6 +450,9 @@ respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
 | Drill restore path is blank | Use the default sandbox path or reject configuration at the existing drill config boundary. |
 | Drill restore path is `/`, `/etc`, `/usr`, `/bin`, `/sbin`, `/boot`, `/dev`, `/proc`, `/sys`, `/run`, `/var/run`, or any subpath of those directories | Reject before restore/cleanup; record failed evidence with `failed_step="restore_path"` or `"cleanup_boundary"` when execution reached evidence recording. |
 | Sandbox node is missing, unreachable, or unauthorized by drill config | Do not create positive confidence evidence; return/record a failed drill. |
+| Operator owns the sandbox but no eligible source-task node | Reject the trigger; do not fall back to an unowned policy task. |
+| Operator owns a source-task node but not the sandbox | Return 403 before starting the drill. |
+| Operator reads evidence while owning only one end | Omit/deny the evidence according to the endpoint contract; never return its task-run identity. |
 | Restore phase fails | Set `status="failed"`, `failed_step="restore"`, `restore_status="failed"`, sanitized `restore_error`, and `confidence_eligible=false`. |
 | Pre-verify or verify fails | Set `status="failed"`, `failed_step="pre_verify"` or `"verify"`, `verify_status="failed"`, sanitized `verify_error`, and `confidence_eligible=false`. |
 | Post-verify fails | Set `status="failed"`, `failed_step="post_verify"`, `post_verify_status="failed"`, sanitized `post_verify_error`, and `confidence_eligible=false`. |
@@ -456,6 +470,9 @@ respondOK(c, backupConfidenceResponse{Items: []backupConfidenceItem{item}})
 
 - Migration tests or startup coverage must include both SQLite and PostgreSQL migration files for `000058_restore_drill_evidence` and later versions.
 - Backend drill tests must assert success evidence, restore/verify/post-verify failure evidence, cleanup failure evidence, `confidence_eligible=false` for unsafe outcomes, and sandbox path rejection for forbidden directories and subpaths.
+- Backend ownership tests must cover shared policies with owned and unowned
+  source nodes, unowned sandboxes, no-owned-node operators, and read paths that
+  require owned source plus owned sandbox.
 - Handler tests must assert policy list/detail includes `latest_drill` and task-run detail includes `drill_evidence` when present.
 - Handler tests must assert task-run detail without evidence still succeeds.
 - Frontend API tests must assert snake_case fields map to camelCase fields, including `latest_drill`, `drill_evidence`, `post_verify_finished_at`, and `trigger_type="drill"`.
@@ -553,4 +570,175 @@ Correct:
 
 ```go
 respondOK(c, healthIncidentTimelineResponse{Groups: groupedTimeline})
+```
+
+---
+
+## Scenario: Dashboard Panel Query Ownership
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing `POST /api/v1/dashboards/panel-query`, panel
+  filters, dashboard metric providers, task/node metric families, or ownership
+  helpers used by panel queries.
+- Applies to `panel_query_handler.go`, `dashboards.QueryRequest`, node/task
+  providers, and tests for explicit or empty panel filters.
+
+### 2. Signatures
+
+- Route: authenticated `POST /api/v1/dashboards/panel-query` with
+  `middleware.RBAC("dashboards:read")`.
+- Client filters: optional `node_ids` and `task_ids`.
+- Server-only fields: `OwnershipScoped` and `OwnershipNodeIDs`; both use
+  `json:"-"` and must never be accepted from a request body.
+- Ownership denial: standard 403 envelope with no partial series.
+
+### 3. Contracts
+
+- Admin/viewer retain the existing unscoped read behavior. Operator queries
+  must call `ownershipNodeFilter` and fail closed on unknown role or DB error.
+- For node-family metrics, an empty `node_ids` filter means all owned nodes,
+  not all nodes. An operator with no owned nodes receives an empty series.
+- For task-family metrics, an empty `task_ids` filter preserves aggregate
+  semantics but the provider must restrict tasks by `OwnershipNodeIDs` through
+  `tasks.node_id`; do not expand every task ID in the handler.
+- Every explicitly requested node or task must be owned. If any ID is missing
+  or unowned, reject the whole request with 403 rather than returning an owned
+  subset that hides the denial.
+- Authorization filters are computed by the server after JSON binding and may
+  not be overridden by dashboard definitions or client payloads.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Operator node metric with no `node_ids` and owned nodes | Query only owned IDs. |
+| Operator node metric with no owned nodes | Return an empty series. |
+| Operator explicitly includes one unowned node | Return 403; no query result. |
+| Operator task metric with empty `task_ids` | Scope provider query by owned task nodes. |
+| Operator explicitly requests a missing/unowned task | Return 403. |
+| Ownership lookup fails or role is unknown | Standard internal error; never run unscoped. |
+| Admin/viewer submits an empty filter | Preserve existing global read behavior. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an operator with nodes 2 and 7 requests `task.success_rate` without
+  task IDs; the provider uses a `tasks.node_id IN (2,7)` subquery.
+- Base: an operator owns no nodes; `node.cpu` returns `series: []` without
+  touching another tenant's samples.
+- Bad: leaving filters empty and relying on provider defaults, which aggregate
+  the entire fleet.
+
+### 6. Tests Required
+
+- Handler tests for node/task metric families, explicit owned/unowned/missing
+  IDs, empty filters, no-owned-node operators, admin/viewer behavior, and
+  ownership lookup errors.
+- Provider tests proving `OwnershipScoped=true` with an empty owned list
+  returns no task data and with owned IDs filters via task-node association.
+- Router tests must keep authentication plus `dashboards:read` middleware.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+dashboards.Query(ctx, db, QueryRequest{Filters: req.Filters})
+```
+
+Correct:
+
+```go
+filters, scoped, ownedIDs, denied, err := h.applyPanelQueryOwnership(c, req.Metric, req.Filters)
+// Handle err/denied, then pass server-only scoped/ownedIDs to QueryRequest.
+```
+
+---
+
+## Scenario: Dual Login CAPTCHA Challenge Contract
+
+### 1. Scope / Trigger
+
+- Trigger: changing login CAPTCHA settings, `GET /api/v1/auth/captcha`, login
+  request fields, CAPTCHA storage, unauthenticated rate limiting, or the
+  frontend login challenge UI/API mapper.
+- Settings: `login.captcha_enabled` and
+  `login.second_captcha_enabled`; the switches are independent.
+
+### 2. Signatures
+
+- Challenge response fields: `enabled`, optional `id`/`question`,
+  `second_required`, and optional `second_id`/`second_question`.
+- Login request fields: `captcha_id`/`captcha_answer` and
+  `second_captcha_id`/`second_captcha_answer`.
+- Challenge TTL: five minutes; verification uses one-time `LoadAndDelete`
+  semantics whether the answer succeeds or fails.
+- Both CAPTCHA generation and login routes use the configured login limiter.
+
+### 3. Contracts
+
+- Generate a challenge only for an enabled channel. Disabled channels return
+  their boolean flag without an ID/question so the UI does not show a field
+  that the backend ignores.
+- When both channels are enabled, generate two distinct IDs and validate both.
+  A primary challenge cannot satisfy the second channel or vice versa.
+- Enabled channels require a shared store-backed challenge. Missing store,
+  missing/invalid ID, non-numeric answer, expired challenge, wrong answer, or
+  replay must fail closed before password authentication.
+- Legacy free-form `captcha` and `second_captcha` strings are ignored for
+  authorization; non-empty text is not proof of a solved challenge.
+- The frontend maps raw snake_case challenge fields at the auth API boundary,
+  renders/submits only enabled channels, and clears/refetches challenge state
+  after a failed login attempt.
+
+### 4. Validation & Error Matrix
+
+| Primary | Second | Challenge response and login requirement |
+|---|---|---|
+| off | off | Flags only; neither answer required. |
+| on | off | Primary ID/question; primary answer required. |
+| off | on | Second ID/question; second answer required. |
+| on | on | Two distinct challenges; both answers required. |
+
+| Failure | Expected result |
+|---|---|
+| Enabled channel has no store | Generic channel-unavailable 400; do not authenticate. |
+| Wrong, expired, malformed, or replayed answer | Generic wrong/expired 400. |
+| Challenge endpoint exceeds login limiter | Standard 429 envelope and `Retry-After`. |
+| Disabled channel receives extra legacy fields | Ignore them; they cannot enable/bypass a channel. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: only second CAPTCHA is enabled; the UI shows its question and login
+  submits `second_captcha_id` plus `second_captcha_answer`.
+- Base: both switches are off; the login form has no CAPTCHA input.
+- Bad: accepting any non-empty `second_captcha` string or reusing the primary
+  ID for both validations.
+
+### 6. Tests Required
+
+- Backend tests for all four switch combinations, distinct IDs, correct and
+  wrong answers, one-time replay rejection, missing store, legacy free-form
+  rejection, and limiter middleware on challenge generation.
+- Frontend auth mapper/login tests for the same four combinations, optional
+  field mapping, payload keys, field clearing, and refresh after failures.
+- Full backend and frontend gates after changing this contract.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if secondEnabled && strings.TrimSpace(req.SecondCaptcha) != "" {
+    // accepted without a server-issued challenge
+}
+```
+
+Correct:
+
+```go
+if secondEnabled && !verifyCaptchaAnswer(store, req.SecondCaptchaID, req.SecondCaptchaAnswer) {
+    respondBadRequest(c, "二次验证码错误或已过期")
+    return
+}
 ```

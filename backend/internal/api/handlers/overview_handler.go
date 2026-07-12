@@ -30,6 +30,12 @@ func NewOverviewHandler(db *gorm.DB) *OverviewHandler {
 func (h *OverviewHandler) Get(c *gin.Context) {
 	since24h := time.Now().UTC().Add(-24 * time.Hour)
 
+	ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
 	type overviewCounts struct {
 		TotalNodes     int64
 		HealthyNodes   int64
@@ -39,24 +45,47 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 	}
 
 	var counts overviewCounts
-	row := h.db.Raw(`
-		SELECT
-			(SELECT COUNT(*) FROM nodes) AS total_nodes,
-			(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS healthy_nodes,
-			(SELECT COUNT(*) FROM policies WHERE enabled = true) AS active_policies,
-			(SELECT COUNT(*) FROM tasks WHERE status = ?) AS running_tasks,
-			(SELECT COUNT(*) FROM tasks WHERE status = ? AND created_at >= ?) AS failed_tasks
-	`, string(task.StatusRunning), string(task.StatusFailed), since24h).Row()
+	if needFilter {
+		// Operator: scope inventory and task stats to owned nodes only.
+		if len(ownedIDs) == 0 {
+			counts = overviewCounts{}
+		} else {
+			row := h.db.Raw(`
+				SELECT
+					(SELECT COUNT(*) FROM nodes WHERE id IN ?) AS total_nodes,
+					(SELECT COUNT(*) FROM nodes WHERE status = 'online' AND id IN ?) AS healthy_nodes,
+					(SELECT COUNT(DISTINCT p.id) FROM policies p
+						INNER JOIN policy_nodes pn ON pn.policy_id = p.id
+						WHERE p.enabled = true AND pn.node_id IN ?) AS active_policies,
+					(SELECT COUNT(*) FROM tasks WHERE status = ? AND node_id IN ?) AS running_tasks,
+					(SELECT COUNT(*) FROM tasks WHERE status = ? AND created_at >= ? AND node_id IN ?) AS failed_tasks
+			`, ownedIDs, ownedIDs, ownedIDs, string(task.StatusRunning), ownedIDs, string(task.StatusFailed), since24h, ownedIDs).Row()
+			if err := row.Scan(&counts.TotalNodes, &counts.HealthyNodes, &counts.ActivePolicies, &counts.RunningTasks, &counts.FailedTasks); err != nil {
+				respondInternalError(c, err)
+				return
+			}
+		}
+	} else {
+		row := h.db.Raw(`
+			SELECT
+				(SELECT COUNT(*) FROM nodes) AS total_nodes,
+				(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS healthy_nodes,
+				(SELECT COUNT(*) FROM policies WHERE enabled = true) AS active_policies,
+				(SELECT COUNT(*) FROM tasks WHERE status = ?) AS running_tasks,
+				(SELECT COUNT(*) FROM tasks WHERE status = ? AND created_at >= ?) AS failed_tasks
+		`, string(task.StatusRunning), string(task.StatusFailed), since24h).Row()
 
-	if err := row.Scan(&counts.TotalNodes, &counts.HealthyNodes, &counts.ActivePolicies, &counts.RunningTasks, &counts.FailedTasks); err != nil {
-		respondInternalError(c, err)
-		return
+		if err := row.Scan(&counts.TotalNodes, &counts.HealthyNodes, &counts.ActivePolicies, &counts.RunningTasks, &counts.FailedTasks); err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	// 聚合当前吞吐：每个 running 任务取最近 60s 内最新采样，求和
 	var currentThroughput float64
 	cutoff := time.Now().UTC().Add(-60 * time.Second)
-	throughputRow := h.db.Raw(`
+	if !needFilter || len(ownedIDs) > 0 {
+		throughputSQL := `
 		SELECT COALESCE(SUM(t.throughput_mbps), 0)
 		FROM task_traffic_samples t
 		INNER JOIN (
@@ -66,15 +95,29 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 				AND tasks.status = ?
 				AND tasks.last_run_at IS NOT NULL
 				AND s.run_started_at = tasks.last_run_at
-			WHERE s.sampled_at >= ?
+			WHERE s.sampled_at >= ?`
+		args := []any{string(task.StatusRunning), cutoff}
+		if needFilter {
+			throughputSQL += ` AND tasks.node_id IN ?`
+			args = append(args, ownedIDs)
+		}
+		throughputSQL += `
 			GROUP BY s.task_id
 		) latest ON t.id = latest.max_id
-	`, string(task.StatusRunning), cutoff).Row()
-	if throughputRow != nil {
-		_ = throughputRow.Scan(&currentThroughput)
+	`
+		throughputRow := h.db.Raw(throughputSQL, args...).Row()
+		if throughputRow != nil {
+			if err := throughputRow.Scan(&currentThroughput); err != nil {
+				// sql.ErrNoRows is not expected from SUM COALESCE; treat any scan error as 500.
+				respondInternalError(c, err)
+				return
+			}
+		}
 	}
 
-	c.Header("Cache-Control", "public, max-age=30")
+	// User-scoped (operator ownership filters apply). Never allow shared
+	// caches/CDN to reuse one user's overview for another.
+	c.Header("Cache-Control", "private, no-store")
 	respondOK(c, gin.H{
 		"totalNodes":            counts.TotalNodes,
 		"healthyNodes":          counts.HealthyNodes,

@@ -237,7 +237,7 @@ func TestTriggerDrillPolicyNotFound(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 
-	_, err := m.TriggerDrill(99999)
+	_, err := m.TriggerDrill(99999, nil)
 	if err == nil {
 		t.Fatal("期望错误（策略不存在），实际无错误")
 	}
@@ -260,7 +260,7 @@ func TestTriggerDrillNotEnabled(t *testing.T) {
 	}
 	db.Create(&policy)
 
-	_, err := m.TriggerDrill(policy.ID)
+	_, err := m.TriggerDrill(policy.ID, nil)
 	if err == nil {
 		t.Fatal("期望错误（演习未启用），实际无错误")
 	}
@@ -285,7 +285,7 @@ func TestTriggerDrillNoSandbox(t *testing.T) {
 	}
 	db.Create(&policy)
 
-	_, err := m.TriggerDrill(policy.ID)
+	_, err := m.TriggerDrill(policy.ID, nil)
 	if err == nil {
 		t.Fatal("期望错误（未配置沙箱），实际无错误")
 	}
@@ -359,7 +359,7 @@ func TestFindTaskForPolicyNoTasks(t *testing.T) {
 	}
 	db.Create(&policy)
 
-	_, err := m.findTaskForPolicy(policy.ID)
+	_, err := m.findTaskForPolicy(policy.ID, nil)
 	if err == nil {
 		t.Fatal("期望错误（无关联任务），实际无错误")
 	}
@@ -392,7 +392,7 @@ func TestFindTaskForPolicyWithTasks(t *testing.T) {
 	}
 	db.Create(&task)
 
-	found, err := m.findTaskForPolicy(policy.ID)
+	found, err := m.findTaskForPolicy(policy.ID, nil)
 	if err != nil {
 		t.Fatalf("不应报错，实际: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 	// task2 有成功记录
 	db.Create(&model.TaskRun{TaskID: task2.ID, TriggerType: "manual", Status: "success"})
 
-	found, err := m.findTaskForPolicy(policy.ID)
+	found, err := m.findTaskForPolicy(policy.ID, nil)
 	if err != nil {
 		t.Fatalf("查找任务失败: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestTriggerDrillSandboxNotFound(t *testing.T) {
 	}
 	db.Create(&policy)
 
-	_, err := m.TriggerDrill(policy.ID)
+	_, err := m.TriggerDrill(policy.ID, nil)
 	if err == nil {
 		t.Fatal("期望错误（沙箱不存在），实际无错误")
 	}
@@ -560,7 +560,7 @@ func TestTriggerDrillSuccessReturnsRunID(t *testing.T) {
 		t.Fatalf("创建任务失败: %v", err)
 	}
 
-	runID, err := m.TriggerDrill(policy.ID)
+	runID, err := m.TriggerDrill(policy.ID, nil)
 	if err != nil {
 		t.Fatalf("TriggerDrill 不应报错: %v", err)
 	}
@@ -926,7 +926,7 @@ func TestTriggerDrillNoAssociatedTask(t *testing.T) {
 	}
 
 	// 未创建关联任务
-	_, err := m.TriggerDrill(policy.ID)
+	_, err := m.TriggerDrill(policy.ID, nil)
 	if err == nil {
 		t.Fatal("期望错误（无关联任务），实际无错误")
 	}

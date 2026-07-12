@@ -27,6 +27,7 @@ type OverviewTrafficSeriesResponse = {
   window: OverviewTrafficWindow;
   bucket_minutes: number;
   has_real_samples: boolean;
+  truncated?: boolean;
   generated_at: string;
   points: OverviewTrafficPointResponse[];
 };
@@ -55,6 +56,7 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
     window: payload?.window ?? "1h",
     bucketMinutes: Number(payload?.bucket_minutes || 5),
     hasRealSamples: Boolean(payload?.has_real_samples),
+    truncated: Boolean(payload?.truncated),
     generatedAt: payload?.generated_at ?? "",
     points: Array.isArray(payload?.points)
       ? payload.points.map((point) => ({

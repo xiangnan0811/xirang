@@ -1,0 +1,31 @@
+{
+  "id": "07-11-b-p1-dev-env-hardening",
+  "name": "07-11-b-p1-dev-env-hardening",
+  "title": "P1: 开发环境密钥 hardening",
+  "description": "Separate explicit development mode from Gin debug mode and harden production startup secret validation.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "backend",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-11",
+  "completedAt": "2026-07-12",
+  "branch": "fix/07-11-audit-p1-security",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-11-07-11-full-stack-audit-remediation",
+  "relatedFiles": [
+    "backend/internal/util/env.go",
+    "backend/internal/config/config.go",
+    "backend/internal/bootstrap/bootstrap.go",
+    "backend/internal/secure/crypto.go"
+  ],
+  "notes": "The secondary review expanded this child to include production JWT/DEK/metrics validation, existing-admin bootstrap behavior, trusted proxy validation, and secret-safe bootstrap logging.",
+  "meta": {}
+}

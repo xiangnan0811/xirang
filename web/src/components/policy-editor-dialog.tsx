@@ -22,7 +22,8 @@ import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor"
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context.hooks";
 import { toast } from "@/components/ui/toast-sonner";
-import type { AppCredential, EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord, ProfileSchema } from "@/types/domain";
+import type { AppCredential, ProfileSchema } from "@/lib/api/credentials";
+import type { EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -186,7 +187,7 @@ export function PolicyEditorDialog({
 
   const selectedProfileMeta = profiles.find((p) => p.id === draft.app_profile);
   const filteredCredentials = credentials.filter(
-    (c) => !draft.app_profile ? false : c.type === selectedProfileMeta?.credential_type
+    (c) => !draft.app_profile ? false : c.type === selectedProfileMeta?.credentialType
   );
   const sourceNodeIds = new Set(draft.nodeIds);
   const sandboxNodes = nodes.filter((n) => !sourceNodeIds.has(n.id));

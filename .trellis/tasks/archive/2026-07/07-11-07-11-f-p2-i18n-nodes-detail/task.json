@@ -1,0 +1,31 @@
+{
+  "id": "07-11-f-p2-i18n-nodes-detail",
+  "name": "07-11-f-p2-i18n-nodes-detail",
+  "title": "P2: 节点详情 i18n",
+  "description": "Complete node-detail localization and preserve accessible, explicit loading/error/unknown states.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "frontend",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-11",
+  "completedAt": "2026-07-12",
+  "branch": "fix/07-11-audit-p1-security",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-11-07-11-full-stack-audit-remediation",
+  "relatedFiles": [
+    "web/src/features/nodes-detail",
+    "web/src/pages/nodes-detail-page.tsx",
+    "web/src/i18n/locales/zh.ts",
+    "web/src/i18n/locales/en.ts"
+  ],
+  "notes": "The secondary review added unknown-status handling, shared status polling, remount-on-node-change keys, and explicit tab error states to the original i18n scope.",
+  "meta": {}
+}

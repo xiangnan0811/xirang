@@ -8175,6 +8175,15 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "second_captcha": {
+                    "description": "legacy free-form field; ignored. Use second_captcha_id/answer",
+                    "type": "string"
+                },
+                "second_captcha_answer": {
+                    "description": "answer for second math captcha when login.second_captcha_enabled",
+                    "type": "string"
+                },
+                "second_captcha_id": {
+                    "description": "challenge id from GET /auth/captcha second_id when second captcha enabled",
                     "type": "string"
                 },
                 "username": {

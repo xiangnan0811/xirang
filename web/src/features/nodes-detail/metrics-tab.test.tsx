@@ -12,7 +12,7 @@ class ResizeObserverStub {
 
 const mockData = {
   granularity: "hourly" as const,
-  bucket_seconds: 3600,
+  bucketSeconds: 3600,
   series: [
     {
       metric: "cpu_pct",

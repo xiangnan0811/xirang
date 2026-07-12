@@ -783,6 +783,15 @@ func TestInferTaskExecutorKeepsExplicitValue(t *testing.T) {
 	}
 }
 
+func withAdminRole(r *gin.Engine) *gin.Engine {
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "admin")
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	return r
+}
+
 func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
@@ -795,7 +804,7 @@ func TestTaskCreateRejectsLocalExecutorFromRequest(t *testing.T) {
 	}
 
 	handler := NewTaskHandler(db, nil)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.POST("/tasks", handler.Create)
 
 	body := fmt.Sprintf(`{"name":"task-local","node_id":%d,"executor_type":"local","rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)
@@ -819,7 +828,7 @@ func TestTaskCreateRejectsUnknownNodeReference(t *testing.T) {
 	}
 
 	handler := NewTaskHandler(db, nil)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.POST("/tasks", handler.Create)
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"name":"task-a","node_id":999,"rsync_source":"/data/src","rsync_target":"/backup/dst"}`))
@@ -899,7 +908,7 @@ func TestTaskCreateReturnsInternalErrorWhenTaskRefValidationQueryFails(t *testin
 	// 不执行 AutoMigrate，触发引用校验查询失败，验证返回 500 而非 400。
 
 	handler := NewTaskHandler(db, nil)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.POST("/tasks", handler.Create)
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"name":"task-a","node_id":1,"rsync_source":"/data/src","rsync_target":"/backup/dst"}`))
@@ -930,7 +939,7 @@ func TestTaskCreateSyncFailureCompensatesByDeletingTask(t *testing.T) {
 		syncErrs: []error{errors.New("sync failed")},
 	}
 	handler := NewTaskHandler(db, runner)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.POST("/tasks", handler.Create)
 
 	body := fmt.Sprintf(`{"name":"task-a","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)
@@ -987,7 +996,7 @@ func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
 		syncErrs: []error{errors.New("sync failed"), nil},
 	}
 	handler := NewTaskHandler(db, runner)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.PUT("/tasks/:id", handler.Update)
 
 	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/new","rsync_target":"/backup/new","cron_spec":"*/10 * * * *"}`, node.ID)
@@ -1045,7 +1054,7 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 
 	runner := &mockTaskRunner{}
 	handler := NewTaskHandler(db, runner)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.PUT("/tasks/:id", handler.Update)
 
 	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, node.ID)
@@ -1093,7 +1102,7 @@ func TestTaskUpdateRejectsUnknownPolicyReference(t *testing.T) {
 	}
 
 	handler := NewTaskHandler(db, nil)
-	r := gin.New()
+	r := withAdminRole(gin.New())
 	r.PUT("/tasks/:id", handler.Update)
 
 	req := httptest.NewRequest(
@@ -1203,5 +1212,67 @@ func TestTaskDeleteDoesNotRemoveScheduleWhenDBDeleteFails(t *testing.T) {
 	}
 	if len(runner.removeCalls) != 0 {
 		t.Fatalf("数据库删除失败时不应先移除调度，实际 removeCalls=%+v", runner.removeCalls)
+	}
+}
+
+// Empty query (no status/node/policy filters) must still scope operator lists to owned nodes.
+func TestTaskListEmptyFiltersScopesToOwnedNodesForOperator(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	operator := model.User{Username: "list-op", Role: "operator", PasswordHash: "hash"}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	ownedNode := model.Node{Name: "owned", Host: "10.0.0.1", Username: "root", AuthType: "key", BackupDir: "owned"}
+	otherNode := model.Node{Name: "other", Host: "10.0.0.2", Username: "root", AuthType: "key", BackupDir: "other"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建 owned 节点失败: %v", err)
+	}
+	if err := db.Create(&otherNode).Error; err != nil {
+		t.Fatalf("创建 other 节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+	ownedTask := model.Task{Name: "owned-task", NodeID: ownedNode.ID, ExecutorType: "rsync", Status: "pending", RsyncSource: "/a", RsyncTarget: "/b"}
+	otherTask := model.Task{Name: "other-task", NodeID: otherNode.ID, ExecutorType: "rsync", Status: "running", RsyncSource: "/c", RsyncTarget: "/d"}
+	if err := db.Create(&ownedTask).Error; err != nil {
+		t.Fatalf("创建 owned 任务失败: %v", err)
+	}
+	if err := db.Create(&otherTask).Error; err != nil {
+		t.Fatalf("创建 other 任务失败: %v", err)
+	}
+
+	handler := NewTaskHandler(db, nil)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, operator.ID)
+		c.Next()
+	})
+	r.GET("/tasks", handler.List)
+
+	// No status / node_id / policy_id / keyword — pure empty filter path.
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data []model.Task `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if len(result.Data) != 1 {
+		t.Fatalf("空 filter 下 operator 应只见 owned 任务，实际 %d 条: %+v", len(result.Data), result.Data)
+	}
+	if result.Data[0].ID != ownedTask.ID {
+		t.Fatalf("期望 owned task id=%d，实际 id=%d", ownedTask.ID, result.Data[0].ID)
 	}
 }

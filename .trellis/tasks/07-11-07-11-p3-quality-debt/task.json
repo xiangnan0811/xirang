@@ -1,0 +1,32 @@
+{
+  "id": "07-11-p3-quality-debt",
+  "name": "07-11-p3-quality-debt",
+  "title": "P3: 质量债清理",
+  "description": "Track lower-priority quality debt separately from the completed audit-remediation children.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "fullstack",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-11",
+  "completedAt": null,
+  "branch": "fix/07-11-audit-p1-security",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-11-07-11-full-stack-audit-remediation",
+  "relatedFiles": [
+    "backend/internal/api/router.go",
+    "backend/internal/bootstrap/bootstrap.go",
+    "web/src/main.tsx",
+    "web/src/pages/automation-rules-page.tsx",
+    "deploy/nginx/templates/default.conf.template"
+  ],
+  "notes": "Partial only: CAPTCHA rate limiting, structured bootstrap logging, Service Worker controllerchange, automation any cleanup, and CSP tightening are done. Middleware envelope sweep, panel-editor RAF ref, WebSocket auth evaluation, and remaining log cleanup stay deferred; do not archive this child.",
+  "meta": {}
+}

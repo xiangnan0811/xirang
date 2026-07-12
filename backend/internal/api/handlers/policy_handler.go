@@ -20,8 +20,12 @@ import (
 
 // drillTriggerer 定义恢复演练触发接口，由 *task.Manager 实现。
 // 独立接口便于测试注入，避免 handler 直接依赖 task 包。
+//
+// allowedSourceNodeIDs:
+//   - nil → 不限制源节点（admin / 系统 cron）
+//   - 非 nil（含空切片）→ 仅从这些节点上的备份任务中选源（operator）
 type drillTriggerer interface {
-	TriggerDrill(policyID uint) (uint, error)
+	TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint, error)
 }
 
 type PolicyHandler struct {
@@ -322,6 +326,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 				respondBadRequest(c, "沙箱节点不能与备份源节点相同")
 				return
 			}
+		}
+		if sandboxOK, sandboxErr := authorizeNodeOwnership(c, h.db, *req.DrillTargetNodeID); sandboxErr != nil {
+			respondInternalError(c, sandboxErr)
+			return
+		} else if !sandboxOK {
+			respondForbidden(c, "无权将未拥有的节点指定为沙箱节点")
+			return
 		}
 		if err := policy.ValidateDrillRestorePath(drillRestorePath); err != nil {
 			respondBadRequest(c, err.Error())
@@ -673,6 +684,13 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				}
 			}
 		}
+		if sandboxOK, sandboxErr := authorizeNodeOwnership(c, h.db, *drillTargetNodeIDUpdate); sandboxErr != nil {
+			respondInternalError(c, sandboxErr)
+			return
+		} else if !sandboxOK {
+			respondForbidden(c, "无权将未拥有的节点指定为沙箱节点")
+			return
+		}
 		if err := policy.ValidateDrillRestorePath(drillPathUpdate); err != nil {
 			respondBadRequest(c, err.Error())
 			return
@@ -949,6 +967,31 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 		respondForbidden(c, "无权访问该策略")
 		return
 	}
+	// Sandbox (drill target) must also be owned — source-node ownership alone
+	// must not authorize writes on an unowned restore host.
+	if policy.DrillTargetNodeID != nil && *policy.DrillTargetNodeID > 0 {
+		sandboxOK, sandboxErr := authorizeNodeOwnership(c, h.db, *policy.DrillTargetNodeID)
+		if sandboxErr != nil {
+			respondInternalError(c, sandboxErr)
+			return
+		}
+		if !sandboxOK {
+			respondForbidden(c, "无权使用该策略的沙箱节点执行恢复演练")
+			return
+		}
+	}
+	// Shared-policy operators may only drill using backup tasks on nodes they own.
+	// Nil allowed set = unrestricted (admin); non-nil filters findTaskForPolicy.
+	var allowedSourceNodeIDs []uint
+	if ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+		respondInternalError(c, err)
+		return
+	} else if needFilter {
+		allowedSourceNodeIDs = ownedIDs
+		if allowedSourceNodeIDs == nil {
+			allowedSourceNodeIDs = []uint{}
+		}
+	}
 	if !policy.DrillEnabled {
 		respondBadRequest(c, "该策略未启用恢复演练")
 		return
@@ -959,7 +1002,7 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 		return
 	}
 
-	taskRunID, err := h.drillTriggerer.TriggerDrill(policy.ID)
+	taskRunID, err := h.drillTriggerer.TriggerDrill(policy.ID, allowedSourceNodeIDs)
 	if err != nil {
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:       "drill.trigger",
@@ -1010,15 +1053,11 @@ func buildLatestDrillSummary(e model.RestoreDrillEvidence) *latestDrillSummary {
 }
 
 func (h *PolicyHandler) latestDrillSummary(c *gin.Context, policyID uint) (*latestDrillSummary, error) {
-	var evidence model.RestoreDrillEvidence
-	err := h.db.WithContext(c.Request.Context()).Where("policy_id = ?", policyID).Order("created_at desc, id desc").First(&evidence).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
+	summaries, err := h.latestDrillSummaries(c, []model.Policy{{ID: policyID}})
 	if err != nil {
 		return nil, err
 	}
-	return buildLatestDrillSummary(evidence), nil
+	return summaries[policyID], nil
 }
 
 func (h *PolicyHandler) latestDrillSummaries(c *gin.Context, policies []model.Policy) (map[uint]*latestDrillSummary, error) {
@@ -1031,8 +1070,28 @@ func (h *PolicyHandler) latestDrillSummaries(c *gin.Context, policies []model.Po
 		policyIDs = append(policyIDs, p.ID)
 	}
 
+	ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		return nil, err
+	}
+	// Operators must not see drill evidence from tasks/sandboxes they do not own.
+	if needFilter && len(ownedIDs) == 0 {
+		return result, nil
+	}
+
+	query := h.db.WithContext(c.Request.Context()).Where("policy_id IN ?", policyIDs)
+	if needFilter {
+		// Align with TriggerDrill: both the source-task node AND the sandbox
+		// must be owned. Owning only one end must not reveal task_run_id,
+		// status, failed_step, or timestamps from the other end.
+		query = query.Where(
+			"task_id IN (SELECT id FROM tasks WHERE node_id IN ?) AND sandbox_node_id IN ?",
+			ownedIDs, ownedIDs,
+		)
+	}
+
 	var evidences []model.RestoreDrillEvidence
-	if err := h.db.WithContext(c.Request.Context()).Where("policy_id IN ?", policyIDs).Order("policy_id asc, created_at desc, id desc").Find(&evidences).Error; err != nil {
+	if err := query.Order("policy_id asc, created_at desc, id desc").Find(&evidences).Error; err != nil {
 		return nil, err
 	}
 	for _, evidence := range evidences {
@@ -1054,11 +1113,28 @@ func (h *PolicyHandler) policyNodeIDsByPolicyID(c *gin.Context, policies []model
 		policyIDs = append(policyIDs, p.ID)
 	}
 
+	ownedIDs, needFilter, err := ownershipNodeFilter(c, h.db)
+	if err != nil {
+		return nil, err
+	}
+	ownedSet := make(map[uint]struct{}, len(ownedIDs))
+	if needFilter {
+		for _, id := range ownedIDs {
+			ownedSet[id] = struct{}{}
+		}
+	}
+
 	var links []model.PolicyNode
 	if err := h.db.WithContext(c.Request.Context()).Where("policy_id IN ?", policyIDs).Order("policy_id asc, node_id asc").Find(&links).Error; err != nil {
 		return nil, err
 	}
 	for _, link := range links {
+		// Shared policies: only return node IDs the operator is authorized to see.
+		if needFilter {
+			if _, ok := ownedSet[link.NodeID]; !ok {
+				continue
+			}
+		}
 		result[link.PolicyID] = append(result[link.PolicyID], link.NodeID)
 	}
 	return result, nil
@@ -1093,9 +1169,17 @@ func buildPolicyResponse(p model.Policy, nodeIDs []uint, latestDrill *latestDril
 	}
 	preHook := ""
 	postHook := ""
+	drillPreVerify := ""
+	drillVerify := ""
+	drillPostVerify := ""
 	if includeHooks {
+		// Hooks and drill verify scripts may embed paths/commands/credentials.
+		// Only admin (includeHooks) receives them; operator/viewer get empty strings.
 		preHook = p.PreHook
 		postHook = p.PostHook
+		drillPreVerify = p.DrillPreVerify
+		drillVerify = p.DrillVerify
+		drillPostVerify = p.DrillPostVerify
 	}
 	return gin.H{
 		"id":                    p.ID,
@@ -1123,9 +1207,9 @@ func buildPolicyResponse(p model.Policy, nodeIDs []uint, latestDrill *latestDril
 		"drill_cron":            p.DrillCron,
 		"drill_target_node_id":  p.DrillTargetNodeID,
 		"drill_restore_path":    p.DrillRestorePath,
-		"drill_pre_verify":      p.DrillPreVerify,
-		"drill_verify":          p.DrillVerify,
-		"drill_post_verify":     p.DrillPostVerify,
+		"drill_pre_verify":      drillPreVerify,
+		"drill_verify":          drillVerify,
+		"drill_post_verify":     drillPostVerify,
 		"drill_auto_cleanup":    p.DrillAutoCleanup,
 		"app_profile":           p.AppProfile,
 		"app_credential_id":     p.AppCredentialID,

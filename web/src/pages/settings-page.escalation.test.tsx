@@ -54,6 +54,14 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+const confirmMock = vi.fn().mockResolvedValue(true);
+vi.mock("@/hooks/use-confirm", () => ({
+  useConfirm: () => ({
+    confirm: confirmMock,
+    dialog: null,
+  }),
+}));
+
 // ---- fixtures ----
 
 const makePolicy = (overrides?: Partial<EscalationPolicy>): EscalationPolicy => ({
@@ -70,8 +78,7 @@ const makePolicy = (overrides?: Partial<EscalationPolicy>): EscalationPolicy => 
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Suppress window.confirm in tests
-  vi.spyOn(window, "confirm").mockReturnValue(true);
+  confirmMock.mockResolvedValue(true);
 });
 
 describe("SettingsPageEscalation", () => {

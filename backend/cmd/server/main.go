@@ -93,6 +93,12 @@ func main() {
 			log.Error().Err(err).Msg("加密数据迁移失败，v1 数据仍可正常解密")
 		}
 	}
+	// Drill verify scripts were plain at rest before model hooks; always encrypt
+	// residual plaintext (idempotent). Failure must abort startup — otherwise
+	// scripts may remain readable at rest with no health signal.
+	if err := bootstrap.EncryptPlaintextPolicyDrillScripts(db); err != nil {
+		log.Fatal().Err(err).Msg("策略演练脚本明文加密失败，拒绝启动")
+	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
@@ -271,6 +277,7 @@ func main() {
 		AlertDispatcher:   alertDispatcher,
 		MetricsToken:      cfg.MetricsToken,
 		MetricsRateLimit:  cfg.MetricsRateLimit,
+		TrustedProxies:    cfg.TrustedProxies,
 		MetricsRateWindow: cfg.MetricsRateWindow,
 	})
 

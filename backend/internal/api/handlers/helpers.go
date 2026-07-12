@@ -171,10 +171,8 @@ func ownershipNodeFilter(c *gin.Context, db *gorm.DB) ([]uint, bool, error) {
 
 func authorizeNodeOwnership(c *gin.Context, db *gorm.DB, nodeID uint) (bool, error) {
 	role := middleware.CurrentRole(c)
-	// 兼容未挂认证中间件的单元测试/内部直接调用场景；生产路由会先注入角色。
-	if role == "" {
-		return true, nil
-	}
+	// Fail-closed: empty/unknown role is denied (aligns with ownershipNodeFilter).
+	// Tests and production routes must set role via AuthMiddleware / c.Set(CtxRole, ...).
 	if role == "admin" || role == "viewer" {
 		return true, nil
 	}
@@ -192,7 +190,7 @@ func authorizeNodeOwnership(c *gin.Context, db *gorm.DB, nodeID uint) (bool, err
 
 func authorizeNodeOwnershipSet(c *gin.Context, db *gorm.DB, nodeIDs []uint) (map[uint]struct{}, error) {
 	role := middleware.CurrentRole(c)
-	if role == "" || role == "admin" || role == "viewer" {
+	if role == "admin" || role == "viewer" {
 		allowed := make(map[uint]struct{}, len(nodeIDs))
 		for _, nodeID := range nodeIDs {
 			allowed[nodeID] = struct{}{}
@@ -200,6 +198,7 @@ func authorizeNodeOwnershipSet(c *gin.Context, db *gorm.DB, nodeIDs []uint) (map
 		return allowed, nil
 	}
 	if role != "operator" {
+		// Empty or unknown role → deny all (fail-closed).
 		return map[uint]struct{}{}, nil
 	}
 
@@ -220,8 +219,12 @@ func authorizeNodeOwnershipSet(c *gin.Context, db *gorm.DB, nodeIDs []uint) (map
 // 策略已通过 Preload("Nodes") 加载节点列表。
 func authorizePolicyOwnership(c *gin.Context, db *gorm.DB, p model.Policy) (bool, error) {
 	role := middleware.CurrentRole(c)
-	if role == "" || role == "admin" || role == "viewer" {
+	if role == "admin" || role == "viewer" {
 		return true, nil
+	}
+	if role != "operator" {
+		// Empty or unknown role → deny (fail-closed).
+		return false, nil
 	}
 	if len(p.Nodes) == 0 {
 		return false, nil

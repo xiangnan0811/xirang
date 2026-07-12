@@ -1,81 +1,114 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
 import type { NodeDetailTabProps } from "./types";
 
 export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
+  const { t } = useTranslation();
   const [node, setNode] = useState<NodeRecord | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start loading when we expect a fetch so stale content cannot paint first frame.
+  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
+  const [error, setError] = useState(false);
+  // nodeId that `node` was loaded for — ignore mismatched stale state.
+  const [loadedForId, setLoadedForId] = useState<number | null>(null);
 
   const fetchNode = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0) {
+      setLoading(false);
+      setNode(null);
+      setLoadedForId(null);
+      return;
+    }
     setLoading(true);
+    setError(false);
     try {
       const nodes = await apiClient.getNodes(token, { signal });
       if (!signal.aborted) {
         setNode(nodes.find((n) => n.id === nodeId) ?? null);
+        setLoadedForId(nodeId);
       }
     } catch {
-      // ignore aborts and network errors
+      if (!signal.aborted) {
+        setNode(null);
+        setLoadedForId(nodeId);
+        setError(true);
+      }
     } finally {
       if (!signal.aborted) setLoading(false);
     }
   }, [nodeId, token]);
 
   useEffect(() => {
+    // Drop previous identity immediately (also remounted via key={nodeId} on parent).
+    setNode(null);
+    setLoadedForId(null);
+    setError(false);
+    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchNode(controller.signal);
     return () => controller.abort();
-  }, [fetchNode]);
+  }, [fetchNode, nodeId, token]);
 
-  if (loading) return <p className="text-sm text-muted-foreground">加载中…</p>;
-  if (!node) return <p className="text-sm text-muted-foreground">未找到该节点。</p>;
+  if (loading || (token && nodeId > 0 && loadedForId !== nodeId && !error)) {
+    return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.loading")}</p>;
+  }
+  if (error) {
+    return (
+      <p className="text-sm text-destructive" role="alert">
+        {t("nodes.nodeDetail.profileError")}
+      </p>
+    );
+  }
+  if (node == null || node.id !== nodeId || loadedForId !== nodeId) {
+    return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.profileNotFound")}</p>;
+  }
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2" data-testid="profile-tab">
       <section className="rounded-md border border-border bg-card p-4">
-        <h3 className="text-base font-medium">基础信息</h3>
+        <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileBasic")}</h3>
         <dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-2 text-sm">
-          <dt className="text-muted-foreground">名称</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileName")}</dt>
           <dd>{node.name}</dd>
-          <dt className="text-muted-foreground">地址</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileAddress")}</dt>
           <dd>
             {node.host}:{node.port}
           </dd>
-          <dt className="text-muted-foreground">用户名</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileUsername")}</dt>
           <dd>{node.username}</dd>
-          <dt className="text-muted-foreground">标签</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileTags")}</dt>
           <dd>{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
-          <dt className="text-muted-foreground">状态</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileStatus")}</dt>
           <dd>{node.status}</dd>
-          <dt className="text-muted-foreground">备份目录</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileBackupDir")}</dt>
           <dd>{node.backupDir || "-"}</dd>
         </dl>
       </section>
 
       <section className="rounded-md border border-border bg-card p-4">
-        <h3 className="text-base font-medium">时间 &amp; 维护窗</h3>
+        <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileTimeMaint")}</h3>
         <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-          <dt className="text-muted-foreground">最近探测</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastProbe")}</dt>
           <dd>
             {node.lastProbeAt ? new Date(node.lastProbeAt).toLocaleString() : "-"}
           </dd>
-          <dt className="text-muted-foreground">最后在线</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastSeen")}</dt>
           <dd>
             {node.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "-"}
           </dd>
-          <dt className="text-muted-foreground">最近备份</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
           <dd>
             {node.lastBackupAt ? new Date(node.lastBackupAt).toLocaleString() : "-"}
           </dd>
-          <dt className="text-muted-foreground">维护窗口</dt>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileMaintWindow")}</dt>
           <dd>
             {node.maintenanceStart || node.maintenanceEnd
               ? `${node.maintenanceStart ?? "?"} → ${node.maintenanceEnd ?? "?"}`
-              : "未设置"}
+              : t("nodes.nodeDetail.profileMaintUnset")}
           </dd>
-          <dt className="text-muted-foreground">归档</dt>
-          <dd>{node.archived ? "是" : "否"}</dd>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileArchived")}</dt>
+          <dd>{node.archived ? t("nodes.nodeDetail.yes") : t("nodes.nodeDetail.no")}</dd>
         </dl>
       </section>
     </div>

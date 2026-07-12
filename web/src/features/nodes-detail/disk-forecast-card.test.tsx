@@ -3,10 +3,10 @@ import { render, screen } from "@testing-library/react";
 import DiskForecastCard from "./disk-forecast-card";
 
 const mockData = {
-  disk_gb_total: 500,
-  disk_gb_used_now: 312.5,
-  daily_growth_gb: 1.8,
-  forecast: { days_to_full: 104, date_full: "2026-07-30", confidence: "medium" as const },
+  diskGbTotal: 500,
+  diskGbUsedNow: 312.5,
+  dailyGrowthGb: 1.8,
+  forecast: { daysToFull: 104, dateFull: "2026-07-30", confidence: "medium" as const },
 };
 
 const { mockUseDiskForecast } = vi.hoisted(() => ({
@@ -26,7 +26,7 @@ describe("DiskForecastCard", () => {
   test("renders days_to_full and confidence copy", () => {
     render(<DiskForecastCard nodeId={1} token="test-token" />);
     expect(screen.getByText(/104/)).toBeInTheDocument();
-    expect(screen.getByTestId("confidence").textContent).toMatch(/中/);
+    expect(screen.getByTestId("confidence").textContent).toMatch(/中|medium|Confidence/i);
     expect(mockUseDiskForecast).toHaveBeenCalledWith(1, "test-token");
   });
 

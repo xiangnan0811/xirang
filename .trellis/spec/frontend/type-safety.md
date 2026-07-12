@@ -349,6 +349,97 @@ return mapCredentialAccessGrant(raw);
 
 ---
 
+## Scenario: Audit Wave API Boundary Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing credential records, application credentials,
+  node metric status/history/forecast, alert silences, or login CAPTCHA API
+  payloads.
+- Applies to `credentials.ts`, `app-credentials.ts`,
+  `node-metrics-api.ts`, `silences.ts`, `auth-api.ts`, shared domain types, and
+  every component consuming those clients.
+
+### 2. Signatures
+
+- Wire response/request fields remain snake_case inside private `Raw*` types.
+- Components receive camelCase domain fields such as `createdAt`,
+  `lastValidatedAt`, `nodeId`, `probedAt`, `matchNodeId`, `matchTags`,
+  `startsAt`, `secondRequired`, and `secondQuestion`.
+- Mutation inputs are camelCase; the API wrapper serializes snake_case just
+  before `request()`.
+
+### 3. Contracts
+
+- Do not export raw DTOs for component use. Each module owns defensive `map*`
+  functions and returns domain models from its public client methods.
+- Guard every collection with `Array.isArray`; malformed or missing
+  collections map to `[]`.
+- Normalize numeric IDs, metric values, timestamps expressed as numbers, and
+  forecast fields with shared finite-number helpers or an equally bounded
+  mapper. No `NaN` or `Infinity` may enter React state.
+- Unknown status/type strings must degrade to an existing non-success,
+  non-authorizing domain value. Do not cast arbitrary wire strings into unions.
+- Optional timestamps and secret/config fields preserve absence explicitly;
+  do not create `Invalid Date`, invent credentials, or copy secret mutation
+  input back into record responses.
+- Silence tag/category/node matching is mapped before UI formatting. The UI
+  may not fall back to raw `match_tags`/`match_node_id` fields.
+- CAPTCHA challenge fields follow the independent-channel contract in the
+  backend spec: map optional raw fields only when their corresponding flag is
+  enabled and submit only the active challenge IDs/answers.
+
+### 4. Validation & Error Matrix
+
+| Raw condition | Domain result |
+|---|---|
+| Array field is missing or malformed | `[]`. |
+| Numeric field is non-finite | Safe finite fallback; never `NaN`. |
+| Optional time is null/missing | Consistent `undefined`/empty contract. |
+| Status/type is unknown | Safe non-success fallback. |
+| Silence mutation input is camelCase | Wrapper serializes the exact snake_case request fields. |
+| Only second CAPTCHA is enabled | Domain has second challenge only; login sends only second keys. |
+| Request fails or is aborted | No partially mapped/stale object is committed to state. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `match_node_id` and `match_tags` become `matchNodeId` and `matchTags`
+  in `silences.ts`; the Settings page never reads wire fields.
+- Base: a missing metrics history array maps to `[]` and renders the normal
+  empty state.
+- Bad: `request<NodeMetricHistory>()` where the domain type is camelCase but
+  the server returns snake_case, followed by component-level fallback access.
+
+### 6. Tests Required
+
+- Mapper tests per affected module covering representative full payloads,
+  missing arrays/optional fields, invalid numeric values, and unknown enums.
+- Mutation tests asserting exact snake_case request bodies from camelCase
+  inputs and ensuring secrets are not synthesized into record models.
+- Consumer tests must use camelCase fixtures; a raw snake_case fixture in a
+  component test is a boundary regression.
+- Auth tests must cover all four independent CAPTCHA switch combinations and
+  the exact submitted payload keys.
+- Run `env -u NODE_ENV npm run check` after any cross-module type change.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const rows = await request<Silence[]>("/silences", { token });
+return rows; // domain type falsely describes the snake_case wire object
+```
+
+Correct:
+
+```ts
+const rows = await request<RawSilence[]>("/silences", { token });
+return (Array.isArray(rows) ? rows : []).map(mapSilence);
+```
+
+---
+
 ## Scenario: SSH Key Scope Mapping
 
 ### 1. Scope / Trigger

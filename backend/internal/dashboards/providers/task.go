@@ -70,6 +70,7 @@ func (p *TaskStatsProvider) querySuccessRate(ctx context.Context, req dashboards
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, status, finished_at").
 		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", req.Start, req.End)
+	q = applyTaskOwnershipScope(q, req)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
@@ -85,7 +86,7 @@ func (p *TaskStatsProvider) querySuccessRate(ctx context.Context, req dashboards
 		b := r.FinishedAt.Unix() / int64(step) * int64(step)
 		groupKey := r.TaskID
 		if len(req.Filters.TaskIDs) == 0 {
-			groupKey = 0 // aggregated series
+			groupKey = 0 // aggregated series (fleet or ownership-scoped fleet)
 		}
 		m, ok := grouped[groupKey]
 		if !ok {
@@ -116,6 +117,7 @@ func (p *TaskStatsProvider) queryThroughput(ctx context.Context, req dashboards.
 	q := p.db.WithContext(ctx).Table("task_traffic_samples").
 		Select("task_id, throughput_mbps, sampled_at").
 		Where("sampled_at >= ? AND sampled_at < ?", req.Start, req.End)
+	q = applyTaskOwnershipScope(q, req)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
@@ -157,6 +159,7 @@ func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.Qu
 	q := p.db.WithContext(ctx).Table("task_runs").
 		Select("task_id, duration_ms, finished_at").
 		Where("finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ? AND duration_ms > 0", req.Start, req.End)
+	q = applyTaskOwnershipScope(q, req)
 	if len(req.Filters.TaskIDs) > 0 {
 		q = q.Where("task_id IN ?", req.Filters.TaskIDs)
 	}
@@ -186,6 +189,19 @@ func (p *TaskStatsProvider) queryDuration(ctx context.Context, req dashboards.Qu
 	resp := buildReduceSeries(grouped, taskNames, step, req.Aggregation)
 	resp.Truncated = truncated
 	return resp, nil
+}
+
+// applyTaskOwnershipScope restricts task_runs / task_traffic_samples to tasks
+// whose node is in OwnershipNodeIDs when OwnershipScoped is set. Empty owned
+// set yields no rows via a never-true predicate (avoids expanding huge IN lists).
+func applyTaskOwnershipScope(q *gorm.DB, req dashboards.QueryRequest) *gorm.DB {
+	if !req.OwnershipScoped {
+		return q
+	}
+	if len(req.OwnershipNodeIDs) == 0 {
+		return q.Where("1 = 0")
+	}
+	return q.Where("task_id IN (SELECT id FROM tasks WHERE node_id IN ?)", req.OwnershipNodeIDs)
 }
 
 func keysOf(m map[uint]map[int64][2]int) []uint {

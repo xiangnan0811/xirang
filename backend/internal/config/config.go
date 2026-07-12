@@ -27,6 +27,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -37,12 +38,12 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
-	ListenAddr               string
-	DBType                   string
-	SQLitePath               string
-	PostgresDSN              string
-	JWTSecret                string
-	JWTTTL                   time.Duration
+	ListenAddr  string
+	DBType      string
+	SQLitePath  string
+	PostgresDSN string
+	JWTSecret   string
+	JWTTTL      time.Duration
 	RsyncBinary string
 	// Overlap note: TaskTrafficRetentionDays is also defined in
 	// settings.Service as "retention.task_traffic_days". Config provides the
@@ -52,12 +53,12 @@ type Config struct {
 	// as "retention.task_run_days". Config provides the default at startup;
 	// settings.Service can override at runtime.
 	TaskRunRetentionDays int
-	AllowedOrigins           []string
-	WSAllowEmptyOrigin       bool
+	AllowedOrigins       []string
+	WSAllowEmptyOrigin   bool
 	// Overlap note: LoginRateLimit is also defined in settings.Service as
 	// "login.rate_limit". Config provides the default at startup;
 	// settings.Service can override at runtime.
-	LoginRateLimit  int
+	LoginRateLimit int
 	// Overlap note: LoginRateWindow is also defined in settings.Service as
 	// "login.rate_window". Config provides the default at startup;
 	// settings.Service can override at runtime.
@@ -69,9 +70,9 @@ type Config struct {
 	// Overlap note: LoginFailLockDuration is also defined in settings.Service
 	// as "login.fail_lock_duration". Config provides the default at startup;
 	// settings.Service can override at runtime.
-	LoginFailLockDuration          time.Duration
-	LoginGlobalFailLockThreshold   int
-	LoginGlobalFailLockDuration    time.Duration
+	LoginFailLockDuration        time.Duration
+	LoginGlobalFailLockThreshold int
+	LoginGlobalFailLockDuration  time.Duration
 	// Overlap note: NodeProbeInterval is also defined in settings.Service as
 	// "node.probe_interval". Config provides the default at startup;
 	// settings.Service can override at runtime.
@@ -83,15 +84,15 @@ type Config struct {
 	// Overlap note: NodeProbeConcurrency is also defined in settings.Service as
 	// "node.probe_concurrency". Config provides the default at startup;
 	// settings.Service can override at runtime.
-	NodeProbeConcurrency     int
+	NodeProbeConcurrency int
 	// Overlap note: RetentionCheckInterval is also defined in settings.Service
 	// as "retention.check_interval". Config provides the default at startup;
 	// settings.Service can override at runtime.
-	RetentionCheckInterval   time.Duration
+	RetentionCheckInterval time.Duration
 	// Overlap note: BackupStorageMinFreeGB is also defined in settings.Service
 	// as "storage.min_free_gb". Config provides the default at startup;
 	// settings.Service can override at runtime.
-	BackupStorageMinFreeGB   int
+	BackupStorageMinFreeGB int
 	// Overlap note: BackupStorageMaxUsagePct is also defined in
 	// settings.Service as "storage.max_usage_pct". Config provides the default
 	// at startup; settings.Service can override at runtime.
@@ -101,6 +102,10 @@ type Config struct {
 	MetricsRateWindow        time.Duration
 	SSHStrictHostKeyChecking bool
 	SSHAutoAcceptNewHosts    bool
+	// TrustedProxies is the Gin trusted reverse-proxy CIDR list used for
+	// ClientIP() (rate limit / audit). Empty means trust no proxies — X-Forwarded-For
+	// from untrusted clients is ignored. Default is loopback only (all-in-one nginx).
+	TrustedProxies []string
 }
 
 // Load reads environment variables and returns a validated Config. It exits early
@@ -119,7 +124,7 @@ func Load() (Config, error) {
 			jwtSecret = "xirang-dev-secret"
 			log.Printf("warn: 使用默认 JWT_SECRET，仅适用于开发环境，生产环境必须设置 JWT_SECRET")
 		} else {
-			return Config{}, fmt.Errorf("JWT_SECRET 环境变量未设置（仅 APP_ENV=development 可省略）")
+			return Config{}, fmt.Errorf("JWT_SECRET 环境变量未设置（仅 APP_ENV/ENVIRONMENT=development 可省略；GIN_MODE=debug 不会放宽该要求）")
 		}
 	}
 
@@ -273,6 +278,25 @@ func Load() (Config, error) {
 	}
 	cfg.SSHAutoAcceptNewHosts = sshAutoAccept
 
+	// TRUSTED_PROXIES: CSV of CIDRs/IPs Gin may trust for X-Forwarded-For.
+	// Default loopback only (all-in-one nginx → app). Set empty to trust none:
+	// TRUSTED_PROXIES=  (or "none") disables header-based ClientIP entirely.
+	// Invalid entries fail Load() — never silently degrade ClientIP trust.
+	if raw, ok := os.LookupEnv("TRUSTED_PROXIES"); ok {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.EqualFold(trimmed, "none") {
+			cfg.TrustedProxies = []string{}
+		} else {
+			proxies := splitCSV(trimmed)
+			if err := validateTrustedProxies(proxies); err != nil {
+				return Config{}, err
+			}
+			cfg.TrustedProxies = proxies
+		}
+	} else {
+		cfg.TrustedProxies = []string{"127.0.0.1", "::1"}
+	}
+
 	if !cfg.SSHStrictHostKeyChecking && !util.IsDevelopmentEnv() {
 		log.Printf("warn: SSH_STRICT_HOST_KEY_CHECKING 已关闭，生产环境建议开启以防御中间人攻击")
 	}
@@ -293,11 +317,11 @@ func Load() (Config, error) {
 
 	if !util.IsDevelopmentEnv() {
 		if IsWeakJWTSecret(cfg.JWTSecret) {
-			return Config{}, fmt.Errorf("必须配置强 JWT_SECRET（仅 APP_ENV=development 可使用默认值）")
+			return Config{}, fmt.Errorf("必须配置强 JWT_SECRET（仅 APP_ENV/ENVIRONMENT=development 可使用默认值；GIN_MODE=debug 不会放宽该要求）")
 		}
 		encryptionKey := strings.TrimSpace(os.Getenv("DATA_ENCRYPTION_KEY"))
 		if IsWeakDataEncryptionKey(encryptionKey) {
-			return Config{}, fmt.Errorf("必须配置强 DATA_ENCRYPTION_KEY（仅 APP_ENV=development 可省略）")
+			return Config{}, fmt.Errorf("必须配置强 DATA_ENCRYPTION_KEY（仅 APP_ENV/ENVIRONMENT=development 可省略；GIN_MODE=debug 不会放宽该要求）")
 		}
 	}
 	if util.IsProductionEnv() {
@@ -305,6 +329,9 @@ func Load() (Config, error) {
 			if strings.TrimSpace(origin) == "*" {
 				return Config{}, fmt.Errorf("生产环境禁止将 CORS_ALLOWED_ORIGINS 配置为 *")
 			}
+		}
+		if IsWeakMetricsToken(cfg.MetricsToken) {
+			return Config{}, fmt.Errorf("生产环境必须设置强 METRICS_TOKEN（非空、≥16 字符、非文档占位符）以保护 /metrics 端点")
 		}
 	}
 
@@ -324,6 +351,20 @@ func splitCSV(raw string) []string {
 		items = append(items, value)
 	}
 	return items
+}
+
+// validateTrustedProxies ensures each entry is a valid IP or CIDR so Gin
+// SetTrustedProxies cannot fail at runtime with ambiguous ClientIP behavior.
+func validateTrustedProxies(proxies []string) error {
+	for _, p := range proxies {
+		if net.ParseIP(p) != nil {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(p); err != nil {
+			return fmt.Errorf("TRUSTED_PROXIES 含非法条目 %q（须为 IP 或 CIDR）", p)
+		}
+	}
+	return nil
 }
 
 // isProductionEnv 和 isDevelopmentEnv 已迁移至 util.IsProductionEnv / util.IsDevelopmentEnv
@@ -387,4 +428,26 @@ func IsWeakDataEncryptionKey(value string) bool {
 	}
 	_, weak := weakSet[trimmed]
 	return weak
+}
+
+// IsWeakMetricsToken returns true if the metrics bearer token is empty, too
+// short, a known documentation placeholder, or low-entropy.
+func IsWeakMetricsToken(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) < 16 {
+		return true
+	}
+	weakSet := map[string]struct{}{
+		"<set-strong-random-metrics-token>": {},
+		"set-strong-random-metrics-token":   {},
+		"change-me":                         {},
+		"change-me-metrics-token":           {},
+		"metrics-token":                     {},
+		"xirang-metrics-token":              {},
+		"please-change-this-metrics-token":  {},
+	}
+	if _, weak := weakSet[trimmed]; weak {
+		return true
+	}
+	return hasLowEntropy(trimmed)
 }

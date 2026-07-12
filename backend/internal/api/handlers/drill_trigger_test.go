@@ -15,12 +15,16 @@ import (
 
 // mockDrillTriggerer 实现 drillTriggerer 接口，用于测试注入。
 type mockDrillTriggerer struct {
-	fn func(policyID uint) (uint, error)
+	fn                   func(policyID uint, allowedSourceNodeIDs []uint) (uint, error)
+	lastAllowedNodeIDs   []uint
+	sawAllowedNodeFilter bool
 }
 
-func (m *mockDrillTriggerer) TriggerDrill(policyID uint) (uint, error) {
+func (m *mockDrillTriggerer) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint, error) {
+	m.lastAllowedNodeIDs = allowedSourceNodeIDs
+	m.sawAllowedNodeFilter = allowedSourceNodeIDs != nil
 	if m.fn != nil {
-		return m.fn(policyID)
+		return m.fn(policyID, allowedSourceNodeIDs)
 	}
 	return 42, nil
 }
@@ -42,14 +46,18 @@ func TestDrillTriggerSuccess(t *testing.T) {
 	}
 
 	handler := NewPolicyHandler(db, nil)
-	handler.drillTriggerer = &mockDrillTriggerer{
-		fn: func(policyID uint) (uint, error) {
+	mock := &mockDrillTriggerer{
+		fn: func(policyID uint, allowedSourceNodeIDs []uint) (uint, error) {
 			if policyID != policy.ID {
 				return 0, fmt.Errorf("策略 ID 不匹配: %d != %d", policyID, policy.ID)
+			}
+			if allowedSourceNodeIDs != nil {
+				return 0, fmt.Errorf("admin 不应传入源节点过滤")
 			}
 			return 42, nil
 		},
 	}
+	handler.drillTriggerer = mock
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
@@ -84,6 +92,9 @@ func TestDrillTriggerSuccess(t *testing.T) {
 			t.Fatalf("task_run_id 应为 42，实际: %v", runID)
 		}
 	}
+	if mock.sawAllowedNodeFilter {
+		t.Fatal("admin 触发演练不应限制源节点")
+	}
 }
 
 func TestDrillTriggerAllowsOperatorOwningPolicyNode(t *testing.T) {
@@ -113,14 +124,18 @@ func TestDrillTriggerAllowsOperatorOwningPolicyNode(t *testing.T) {
 	}
 
 	handler := NewPolicyHandler(db, nil)
-	handler.drillTriggerer = &mockDrillTriggerer{
-		fn: func(policyID uint) (uint, error) {
+	mock := &mockDrillTriggerer{
+		fn: func(policyID uint, allowedSourceNodeIDs []uint) (uint, error) {
 			if policyID != policy.ID {
 				return 0, fmt.Errorf("策略 ID 不匹配: %d != %d", policyID, policy.ID)
+			}
+			if len(allowedSourceNodeIDs) != 1 || allowedSourceNodeIDs[0] != node.ID {
+				return 0, fmt.Errorf("期望仅允许 owned 源节点 %d，实际: %v", node.ID, allowedSourceNodeIDs)
 			}
 			return 77, nil
 		},
 	}
+	handler.drillTriggerer = mock
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -144,6 +159,102 @@ func TestDrillTriggerAllowsOperatorOwningPolicyNode(t *testing.T) {
 	data, ok := envelope.Data.(map[string]interface{})
 	if !ok || data["task_run_id"] != float64(77) {
 		t.Fatalf("响应 task_run_id 不符合预期: %#v", envelope.Data)
+	}
+	if !mock.sawAllowedNodeFilter {
+		t.Fatal("operator 触发演练必须传入源节点授权过滤")
+	}
+}
+
+// TestDrillTriggerRejectsUnownedSharedSource 共享策略：operator 仅拥有部分源节点时，
+// 不得用未拥有源节点的备份任务触发演练（通过 allowedSourceNodeIDs 过滤）。
+func TestDrillTriggerRejectsUnownedSharedSource(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+
+	owned := model.Node{Name: "shared-owned", Host: "10.0.0.11", BackupDir: "/backup/shared-owned"}
+	unowned := model.Node{Name: "shared-unowned", Host: "10.0.0.12", BackupDir: "/backup/shared-unowned"}
+	sandbox := model.Node{Name: "shared-sandbox", Host: "10.0.0.13", BackupDir: "/backup/shared-sandbox"}
+	for _, n := range []*model.Node{&owned, &unowned, &sandbox} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("创建节点失败: %v", err)
+		}
+	}
+	sandboxID := sandbox.ID
+	policy := model.Policy{
+		Name:              "shared-policy-drill",
+		SourcePath:        "/tmp/src",
+		TargetPath:        "/tmp/dst",
+		CronSpec:          "@daily",
+		DrillEnabled:      true,
+		DrillCron:         "@every 5m",
+		DrillTargetNodeID: &sandboxID,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	for _, link := range []model.PolicyNode{
+		{PolicyID: policy.ID, NodeID: owned.ID},
+		{PolicyID: policy.ID, NodeID: unowned.ID},
+	} {
+		if err := db.Create(&link).Error; err != nil {
+			t.Fatalf("创建策略节点关联失败: %v", err)
+		}
+	}
+	const operatorID = uint(9)
+	if err := db.Create(&model.NodeOwner{NodeID: owned.ID, UserID: operatorID}).Error; err != nil {
+		t.Fatalf("创建 owned owner 失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: sandbox.ID, UserID: operatorID}).Error; err != nil {
+		t.Fatalf("创建 sandbox owner 失败: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	mock := &mockDrillTriggerer{
+		fn: func(policyID uint, allowedSourceNodeIDs []uint) (uint, error) {
+			// Must not include unowned node — caller is responsible for filter.
+			for _, id := range allowedSourceNodeIDs {
+				if id == unowned.ID {
+					return 0, fmt.Errorf("allowed set leaked unowned node %d", unowned.ID)
+				}
+			}
+			if len(allowedSourceNodeIDs) == 0 {
+				return 0, fmt.Errorf("expected owned nodes in filter")
+			}
+			return 88, nil
+		},
+	}
+	handler.drillTriggerer = mock
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "operator")
+		c.Set("userID", operatorID)
+		c.Next()
+	})
+	r.POST("/policies/:id/drill-trigger", handler.TriggerDrill)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/policies/%d/drill-trigger", policy.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200（仅用 owned 源），实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+	// ownershipNodeFilter returns all nodes the operator owns (source + sandbox),
+	// not policy-scoped — but must never include the unowned shared source.
+	if len(mock.lastAllowedNodeIDs) == 0 {
+		t.Fatal("operator 应传入非空 allowedSourceNodeIDs")
+	}
+	hasOwnedSource := false
+	for _, id := range mock.lastAllowedNodeIDs {
+		if id == unowned.ID {
+			t.Fatalf("allowedSourceNodeIDs 含未拥有节点: %v", mock.lastAllowedNodeIDs)
+		}
+		if id == owned.ID {
+			hasOwnedSource = true
+		}
+	}
+	if !hasOwnedSource {
+		t.Fatalf("allowedSourceNodeIDs 应包含 owned 源节点 %d，实际: %v", owned.ID, mock.lastAllowedNodeIDs)
 	}
 }
 

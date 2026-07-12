@@ -1,44 +1,59 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { AlertRecord, AlertStatus } from "@/types/domain";
 import { buildAlertJumpHref } from "./alert-jump";
 import type { NodeDetailTabProps } from "./types";
 
-// AlertStatus uses "acked" (not "acknowledged") per domain.ts
 type Filter = AlertStatus; // "open" | "acked" | "resolved"
 
-const FILTER_LABELS: Record<Filter, string> = {
-  open: "未处理",
-  acked: "已确认",
-  resolved: "已解决",
-};
-
 export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
+  const { t } = useTranslation();
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [loading, setLoading] = useState(false);
+  // First paint must show loading (not empty) when a fetch is expected.
+  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
+  const [error, setError] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
 
+  const filterLabels: Record<Filter, string> = {
+    open: t("nodes.nodeDetail.alertsFilterOpen"),
+    acked: t("nodes.nodeDetail.alertsFilterAcked"),
+    resolved: t("nodes.nodeDetail.alertsFilterResolved"),
+  };
+
   const fetchAlerts = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0) {
+      setLoading(false);
+      setAlerts([]);
+      setError(false);
+      return;
+    }
     setLoading(true);
+    setError(false);
     try {
       const rows = await apiClient.getAlerts(token, { signal });
       if (!signal.aborted) {
         setAlerts(rows ?? []);
       }
     } catch {
-      // ignore aborts and network errors
+      if (!signal.aborted) {
+        setAlerts([]);
+        setError(true);
+      }
     } finally {
       if (!signal.aborted) setLoading(false);
     }
   }, [nodeId, token]);
 
   useEffect(() => {
+    setAlerts([]);
+    setError(false);
+    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchAlerts(controller.signal);
     return () => controller.abort();
-  }, [fetchAlerts]);
+  }, [fetchAlerts, token, nodeId]);
 
   const filtered = alerts.filter((a) => a.nodeId === nodeId && a.status === filter);
 
@@ -59,15 +74,20 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
                 : "bg-muted text-muted-foreground")
             }
           >
-            {FILTER_LABELS[f]}
+            {filterLabels[f]}
           </button>
         ))}
       </div>
 
-      {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
-      {!loading && filtered.length === 0 && (
+      {loading && <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.loading")}</p>}
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {t("nodes.nodeDetail.alertsError")}
+        </p>
+      )}
+      {!loading && !error && filtered.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          该节点暂无{FILTER_LABELS[filter]}告警。
+          {t("nodes.nodeDetail.alertsEmpty", { status: filterLabels[filter] })}
         </p>
       )}
       {filtered.length > 0 && (
@@ -85,7 +105,7 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
                   </span>
                 </div>
                 <p className="mt-1 text-sm truncate">
-                  {a.message || a.errorCode || "未命名告警"}
+                  {a.message || a.errorCode || t("nodes.nodeDetail.alertsUnnamed")}
                 </p>
               </div>
               <Link
@@ -93,7 +113,7 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
                 data-testid={`alert-jump-${a.id}`}
                 className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
               >
-                查看关联指标 →
+                {t("nodes.nodeDetail.alertsViewMetrics")}
               </Link>
             </li>
           ))}

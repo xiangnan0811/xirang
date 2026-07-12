@@ -193,10 +193,10 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 }
 
 // EncryptionStatus godoc
-// @Summary      查询加密 V1 残留状态
-// @Description  返回当前数据库中仍以 enc:v1: 前缀加密的字段总数。运维侧用于
-// @Description  判断是否所有敏感字段都已迁移到 V2 (argon2id)，是后续退役 V1
-// @Description  解密支持的前置条件。返回 0 表示可以安全裁掉 V1 兼容代码。
+// @Summary      查询加密迁移健康状态
+// @Description  返回 enc:v1: 残留数量与策略演练脚本明文残留数量。运维侧用于
+// @Description  判断敏感字段是否均已迁移到 V2，以及历史明文 drill 脚本是否已密封。
+// @Description  healthy=true 表示两者均为 0。
 // @Tags         system
 // @Security     Bearer
 // @Produce      json
@@ -205,10 +205,21 @@ func (h *SystemHandler) ListBackups(c *gin.Context) {
 // @Failure      403  {object}  handlers.Response
 // @Router       /system/encryption-status [get]
 func (h *SystemHandler) EncryptionStatus(c *gin.Context) {
-	count := bootstrap.CountV1EncryptedData(h.db)
+	v1Count, err := bootstrap.CountV1EncryptedData(h.db)
+	if err != nil {
+		// Never report healthy when residual counts cannot be verified.
+		respondInternalError(c, err)
+		return
+	}
+	plainDrill, err := bootstrap.CountPlaintextPolicyDrillScripts(h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	respondOK(c, gin.H{
-		"v1_remaining_count": count,
-		"healthy":            count == 0,
+		"v1_remaining_count":                 v1Count,
+		"plaintext_drill_script_field_count": plainDrill,
+		"healthy":                            v1Count == 0 && plainDrill == 0,
 	})
 }
 

@@ -30,6 +30,9 @@ export function LoginPage() {
   const [captchaId, setCaptchaId] = useState<string | null>(null);
   const [captchaQuestion, setCaptchaQuestion] = useState<string | null>(null);
   const [captchaAnswer, setCaptchaAnswer] = useState("");
+  const [secondCaptchaId, setSecondCaptchaId] = useState<string | null>(null);
+  const [secondCaptchaQuestion, setSecondCaptchaQuestion] = useState<string | null>(null);
+  const [secondCaptchaAnswer, setSecondCaptchaAnswer] = useState("");
 
   // 2FA 步骤状态
   const [requires2FA, setRequires2FA] = useState(false);
@@ -62,13 +65,33 @@ export function LoginPage() {
   const fetchCaptcha = async () => {
     try {
       const data = await apiClient.getCaptcha();
-      setCaptchaId(data.id);
-      setCaptchaQuestion(data.question);
-      setCaptchaAnswer("");
+      // Only show challenges the backend actually validates (enabled flags).
+      if (data.enabled && data.id && data.question) {
+        setCaptchaId(data.id);
+        setCaptchaQuestion(data.question);
+        setCaptchaAnswer("");
+      } else {
+        setCaptchaId(null);
+        setCaptchaQuestion(null);
+        setCaptchaAnswer("");
+      }
+      if (data.secondRequired && data.secondId && data.secondQuestion) {
+        setSecondCaptchaId(data.secondId);
+        setSecondCaptchaQuestion(data.secondQuestion);
+        setSecondCaptchaAnswer("");
+      } else {
+        setSecondCaptchaId(null);
+        setSecondCaptchaQuestion(null);
+        setSecondCaptchaAnswer("");
+      }
     } catch {
-      // 验证码接口不可用（未启用），隐藏验证码区域
+      // 验证码接口不可用，隐藏验证码区域
       setCaptchaId(null);
       setCaptchaQuestion(null);
+      setCaptchaAnswer("");
+      setSecondCaptchaId(null);
+      setSecondCaptchaQuestion(null);
+      setSecondCaptchaAnswer("");
     }
   };
 
@@ -97,12 +120,12 @@ export function LoginPage() {
     setError(null);
 
     try {
-      const result = await apiClient.login(
-        username,
-        password,
-        captchaId ?? undefined,
-        captchaQuestion ? captchaAnswer : undefined
-      );
+      const result = await apiClient.login(username, password, {
+        captchaId: captchaId ?? undefined,
+        captchaAnswer: captchaQuestion ? captchaAnswer : undefined,
+        secondCaptchaId: secondCaptchaId ?? undefined,
+        secondCaptchaAnswer: secondCaptchaQuestion ? secondCaptchaAnswer : undefined,
+      });
 
       if (result.requires_2fa && result.login_token) {
         setLoginToken(result.login_token);
@@ -337,6 +360,25 @@ export function LoginPage() {
                       inputMode="numeric"
                       value={captchaAnswer}
                       onChange={(event) => setCaptchaAnswer(event.target.value)}
+                      placeholder={t("login.captchaPlaceholder")}
+                      autoComplete="off"
+                      required
+                    />
+                  </div>
+                ) : null}
+
+                {secondCaptchaQuestion ? (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="second-captcha-answer">
+                      {t("login.secondCaptcha")}
+                    </label>
+                    <p className="text-sm text-muted-foreground">{secondCaptchaQuestion}</p>
+                    <Input
+                      id="second-captcha-answer"
+                      type="text"
+                      inputMode="numeric"
+                      value={secondCaptchaAnswer}
+                      onChange={(event) => setSecondCaptchaAnswer(event.target.value)}
                       placeholder={t("login.captchaPlaceholder")}
                       autoComplete="off"
                       required

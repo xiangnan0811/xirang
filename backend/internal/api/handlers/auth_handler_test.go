@@ -12,6 +12,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pquerna/otp/totp"
@@ -386,5 +387,157 @@ func TestVerifyTOTPNoSetup(t *testing.T) {
 		`{"code":"123456"}`)
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// ---------- Primary captcha fail-closed ----------
+
+func TestLoginPrimaryCaptchaRejectsWhenStoreMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openAuthHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("初始化 system_settings 失败: %v", err)
+	}
+
+	adminPass := "FAKE_AdminPass2026!_FOR_TEST_ONLY"
+	_ = seedUser(t, db, "admin", "admin", adminPass)
+
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5,
+		FailLockDuration:  time.Minute,
+	})
+	settingsSvc := settings.NewService(db)
+	if err := settingsSvc.Update("login.captcha_enabled", "true"); err != nil {
+		t.Fatalf("启用验证码失败: %v", err)
+	}
+	// Intentionally no CaptchaStore — must fail closed (legacy free-form captcha
+	// string must never authenticate).
+	authHandler := NewAuthHandler(service, jwtManager, settingsSvc).WithDB(db)
+
+	router := gin.New()
+	router.POST("/auth/login", authHandler.Login)
+
+	resp := jsonRequest(t, router, http.MethodPost, "/auth/login", "",
+		fmt.Sprintf(`{"username":"admin","password":%q,"captcha":"anything-non-empty"}`, adminPass))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("CaptchaStore 未注入时期望 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "验证码") {
+		t.Fatalf("期望验证码不可用提示，实际: %s", resp.Body.String())
+	}
+}
+
+func TestLoginPrimaryCaptchaRejectsLegacyFreeFormWhenStorePresent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openAuthHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("初始化 system_settings 失败: %v", err)
+	}
+
+	adminPass := "FAKE_AdminPass2026!_FOR_TEST_ONLY"
+	_ = seedUser(t, db, "admin", "admin", adminPass)
+
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5,
+		FailLockDuration:  time.Minute,
+	})
+	settingsSvc := settings.NewService(db)
+	if err := settingsSvc.Update("login.captcha_enabled", "true"); err != nil {
+		t.Fatalf("启用验证码失败: %v", err)
+	}
+	store := NewCaptchaStore()
+	authHandler := NewAuthHandler(service, jwtManager, settingsSvc).WithDB(db).WithCaptchaStore(store)
+
+	router := gin.New()
+	router.POST("/auth/login", authHandler.Login)
+
+	// Free-form captcha without captcha_id/answer must fail.
+	resp := jsonRequest(t, router, http.MethodPost, "/auth/login", "",
+		fmt.Sprintf(`{"username":"admin","password":%q,"captcha":"12"}`, adminPass))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("legacy captcha 期望 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// ---------- Second captcha (login.second_captcha_enabled) ----------
+
+func TestLoginSecondCaptchaRejectsLegacyFreeFormOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openAuthHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("初始化 system_settings 失败: %v", err)
+	}
+
+	adminPass := "FAKE_AdminPass2026!_FOR_TEST_ONLY"
+	adminUser := seedUser(t, db, "admin", "admin", adminPass)
+	_ = adminUser
+
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5,
+		FailLockDuration:  time.Minute,
+	})
+	settingsSvc := settings.NewService(db)
+	if err := settingsSvc.Update("login.second_captcha_enabled", "true"); err != nil {
+		t.Fatalf("启用二次验证码失败: %v", err)
+	}
+	store := NewCaptchaStore()
+	authHandler := NewAuthHandler(service, jwtManager, settingsSvc).WithDB(db).WithCaptchaStore(store)
+
+	router := gin.New()
+	router.POST("/auth/login", authHandler.Login)
+
+	// legacy free-form second_captcha alone must NOT satisfy the gate
+	resp := jsonRequest(t, router, http.MethodPost, "/auth/login", "",
+		fmt.Sprintf(`{"username":"admin","password":%q,"second_captcha":"anything"}`, adminPass))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("仅 legacy second_captcha 期望 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "二次验证码") {
+		t.Fatalf("期望二次验证码错误提示，实际: %s", resp.Body.String())
+	}
+}
+
+func TestLoginSecondCaptchaRequiresStoreBackedChallenge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openAuthHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("初始化 system_settings 失败: %v", err)
+	}
+
+	adminPass := "FAKE_AdminPass2026!_FOR_TEST_ONLY"
+	_ = seedUser(t, db, "admin", "admin", adminPass)
+
+	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5,
+		FailLockDuration:  time.Minute,
+	})
+	settingsSvc := settings.NewService(db)
+	if err := settingsSvc.Update("login.second_captcha_enabled", "true"); err != nil {
+		t.Fatalf("启用二次验证码失败: %v", err)
+	}
+	store := NewCaptchaStore()
+	store.Set("second-ok", 9)
+	authHandler := NewAuthHandler(service, jwtManager, settingsSvc).WithDB(db).WithCaptchaStore(store)
+
+	router := gin.New()
+	router.POST("/auth/login", authHandler.Login)
+
+	// wrong second answer
+	resp := jsonRequest(t, router, http.MethodPost, "/auth/login", "",
+		fmt.Sprintf(`{"username":"admin","password":%q,"second_captcha_id":"second-ok","second_captcha_answer":"1"}`, adminPass))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("错误二次验证码期望 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+
+	// re-seed after consume-on-fail
+	store.Set("second-ok", 9)
+	resp = jsonRequest(t, router, http.MethodPost, "/auth/login", "",
+		fmt.Sprintf(`{"username":"admin","password":%q,"second_captcha_id":"second-ok","second_captcha_answer":"9"}`, adminPass))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("正确二次验证码期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 }

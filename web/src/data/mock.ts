@@ -537,6 +537,7 @@ export function buildMockOverviewTrafficSeries(window: OverviewTrafficWindow): O
     window,
     bucketMinutes: config.bucketMinutes,
     hasRealSamples: true,
+    truncated: false,
     generatedAt: now.toISOString(),
     points: Array.from({ length: config.count }, (_, index) => {
       const pointTime = new Date(now.getTime() - (config.count - 1 - index) * config.bucketMinutes * 60_000);

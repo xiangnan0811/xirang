@@ -304,6 +304,7 @@ describe("overview api", () => {
           window: "24h",
           bucket_minutes: 30,
           has_real_samples: true,
+          truncated: true,
           generated_at: "2026-03-07T12:00:00Z",
           points: [
             {
@@ -329,6 +330,7 @@ describe("overview api", () => {
     expect(result.window).toBe("24h");
     expect(result.bucketMinutes).toBe(30);
     expect(result.hasRealSamples).toBe(true);
+    expect(result.truncated).toBe(true);
     expect(result.points).toEqual([
       {
         timestamp: "2026-03-07T11:00:00Z",

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import TrendChart from "./trend-chart";
 import type { Range as TrendChartRange } from "./trend-chart";
 import { useNodeMetrics } from "./use-node-metrics";
@@ -10,18 +11,6 @@ const RANGES: Range[] = ["24h", "7d", "30d", "90d"];
 
 type Granularity = "auto" | "raw" | "hourly" | "daily";
 const GRANULARITIES: Granularity[] = ["auto", "raw", "hourly", "daily"];
-
-// Each entry is a standalone chart section; the field name maps 1:1 with a
-// metric returned by /nodes/:id/metric-series.
-const METRICS: Array<{ field: string; label: string; unit: string }> = [
-  { field: "cpu_pct", label: "CPU", unit: "%" },
-  { field: "mem_pct", label: "内存", unit: "%" },
-  { field: "disk_pct", label: "磁盘", unit: "%" },
-  { field: "load1", label: "负载 1m", unit: "" },
-  { field: "latency_ms", label: "探测延迟", unit: "ms" },
-  { field: "probe_ok_ratio", label: "在线率", unit: "" },
-];
-const ALL_FIELDS = METRICS.map((m) => m.field);
 
 type SeriesPoint = { t: string; avg?: number; max?: number; v?: number };
 type SeriesItem = { metric: string; unit: string; points: SeriesPoint[] };
@@ -73,15 +62,25 @@ function triggerDownload(csv: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-// Map the outer tab Range (includes "90d") to TrendChart's Range (max "30d").
 function toChartRange(r: Range): TrendChartRange {
   if (r === "90d") return "30d";
   return r as TrendChartRange;
 }
 
 export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
+  const { t } = useTranslation();
   const [range, setRange] = useState<Range>("24h");
   const [granularity, setGranularity] = useState<Granularity>("auto");
+
+  const METRICS: Array<{ field: string; label: string; unit: string }> = [
+    { field: "cpu_pct", label: "CPU", unit: "%" },
+    { field: "mem_pct", label: t("nodes.nodeDetail.metricMem"), unit: "%" },
+    { field: "disk_pct", label: t("nodes.nodeDetail.metricDisk"), unit: "%" },
+    { field: "load1", label: t("nodes.nodeDetail.metricLoad"), unit: "" },
+    { field: "latency_ms", label: t("nodes.nodeDetail.metricLatency"), unit: "ms" },
+    { field: "probe_ok_ratio", label: t("nodes.nodeDetail.metricUptime"), unit: "" },
+  ];
+  const ALL_FIELDS = METRICS.map((m) => m.field);
 
   const { from, to } = useMemo(() => {
     const now = new Date();
@@ -89,7 +88,7 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
     return { from: fromDt.toISOString(), to: now.toISOString() };
   }, [range]);
 
-  const { data } = useNodeMetrics({
+  const { data, isLoading, error } = useNodeMetrics({
     nodeId,
     token,
     from,
@@ -100,7 +99,7 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
 
   const handleExport = () => {
     if (!data) return;
-    const csv = toCSV(data.granularity, data.bucket_seconds, data.series);
+    const csv = toCSV(data.granularity, data.bucketSeconds, data.series);
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     triggerDownload(csv, `node-${nodeId}-metrics-${ts}.csv`);
   };
@@ -111,9 +110,14 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
 
   return (
     <div className="flex flex-col gap-6" data-testid="metrics-tab">
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {t("nodes.nodeDetail.metricsError")}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-3" role="toolbar">
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">时间窗</span>
+          <span className="text-muted-foreground">{t("nodes.nodeDetail.metricsTimeRange")}</span>
           <select
             data-testid="range-select"
             value={range}
@@ -128,7 +132,7 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
           </select>
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">粒度</span>
+          <span className="text-muted-foreground">{t("nodes.nodeDetail.metricsGranularity")}</span>
           <select
             data-testid="granularity-select"
             value={granularity}
@@ -144,7 +148,10 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
         </label>
         {data && (
           <span className="text-xs text-muted-foreground">
-            当前：{data.granularity}（bucket_seconds={data.bucket_seconds}）
+            {t("nodes.nodeDetail.metricsCurrent", {
+              granularity: data.granularity,
+              bucketSeconds: data.bucketSeconds,
+            })}
           </span>
         )}
         <button
@@ -154,7 +161,7 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
           disabled={!data}
           className="ml-auto rounded-md border border-border bg-card px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
         >
-          导出 CSV
+          {t("nodes.nodeDetail.metricsExportCsv")}
         </button>
       </div>
 
@@ -180,7 +187,6 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
                 series={chartSeries}
                 range={toChartRange(range)}
                 onRangeChange={(r) => {
-                  // TrendChart's range type tops out at "30d"; map back to tab Range.
                   if (r === "1h" || r === "6h") {
                     setRange("24h");
                   } else {
@@ -188,6 +194,7 @@ export default function MetricsTab({ nodeId, token }: NodeDetailTabProps) {
                   }
                 }}
                 height={200}
+                loading={isLoading}
               />
             </section>
           );

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,25 @@ func TestLoadRejectsWeakSecretsInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsWeakSecretsWhenGinModeDebugButNotDevAppEnv(t *testing.T) {
+	// GIN_MODE=debug must not relax secret hardening.
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "debug")
+	t.Setenv("JWT_SECRET", "")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望 APP_ENV=production + GIN_MODE=debug 时缺少 JWT_SECRET 返回错误")
+	}
+}
+
 func TestLoadRejectsWeakSecretsWhenEnvUnset(t *testing.T) {
 	t.Setenv("DB_TYPE", "sqlite")
 	t.Setenv("JWT_TTL", "2h")
@@ -98,12 +118,91 @@ func TestLoadAcceptsStrongSecretsInProduction(t *testing.T) {
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
 	t.Setenv("APP_ENV", "production")
-	t.Setenv("JWT_SECRET", "super-strong-secret-for-production")
-	t.Setenv("DATA_ENCRYPTION_KEY", "prod-encryption-key-very-strong")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "FAKE_METRICS_TOKEN_FOR_TEST_ONLY")
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("期望生产环境强密钥配置可通过，实际错误: %v", err)
+	}
+}
+
+func TestLoadRejectsMissingMetricsTokenInProduction(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望生产环境缺少 METRICS_TOKEN 时返回错误")
+	}
+}
+
+func TestLoadRejectsPlaceholderMetricsTokenInProduction(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "<set-strong-random-metrics-token>")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望生产环境拒绝文档占位 METRICS_TOKEN")
+	}
+}
+
+func TestLoadRequiresMetricsTokenWhenOnlyGinRelease(t *testing.T) {
+	// Legacy deploy: GIN_MODE=release without APP_ENV must still force metrics token.
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "release")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望 GIN_MODE=release 且无 APP_ENV 时缺少 METRICS_TOKEN 返回错误")
+	}
+}
+
+func TestLoadRequiresMetricsTokenWhenAppEnvUnsetEvenWithoutGinRelease(t *testing.T) {
+	// Undeclared env must not skip METRICS_TOKEN when GIN_MODE is empty/debug.
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望未声明 APP_ENV 时缺少 METRICS_TOKEN 返回错误")
 	}
 }
 
@@ -122,9 +221,10 @@ func TestLoadRejectsWildcardOriginInProduction(t *testing.T) {
 	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
 	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
 	t.Setenv("APP_ENV", "production")
-	t.Setenv("JWT_SECRET", "super-strong-secret-for-production")
-	t.Setenv("DATA_ENCRYPTION_KEY", "prod-encryption-key-very-strong")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "*")
+	t.Setenv("METRICS_TOKEN", "FAKE_METRICS_TOKEN_FOR_TEST_ONLY")
 
 	if _, err := Load(); err == nil {
 		t.Fatalf("期望生产环境禁止 CORS 通配符")
@@ -243,5 +343,94 @@ func TestLoadRejectsInvalidTaskTrafficRetentionDays(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatalf("期望非法保留天数配置返回错误")
+	}
+}
+
+func TestLoadRequiresMetricsTokenForStagingAlias(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "staging")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望 APP_ENV=staging 时缺少 METRICS_TOKEN 返回错误")
+	}
+}
+
+func TestLoadRequiresMetricsTokenForProdAlias(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("LOGIN_RATE_LIMIT", "10")
+	t.Setenv("LOGIN_RATE_WINDOW", "1m")
+	t.Setenv("LOGIN_FAIL_LOCK_THRESHOLD", "5")
+	t.Setenv("LOGIN_FAIL_LOCK_DURATION", "15m")
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("GIN_MODE", "debug")
+	t.Setenv("JWT_SECRET", "FAKE_JWT_SECRET_FOR_PRODUCTION_TEST_ONLY_32CH")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://xirang.example.com")
+	t.Setenv("METRICS_TOKEN", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("期望 APP_ENV=prod 即使 GIN_MODE=debug 也强制 METRICS_TOKEN")
+	}
+}
+
+func TestLoadRejectsInvalidTrustedProxies(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,not-a-cidr,10.0.0.0/8")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("期望非法 TRUSTED_PROXIES 返回错误，实际成功")
+	}
+	if !strings.Contains(err.Error(), "TRUSTED_PROXIES") {
+		t.Fatalf("错误应提及 TRUSTED_PROXIES，实际: %v", err)
+	}
+}
+
+func TestLoadAcceptsValidTrustedProxies(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.0/8")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("合法 TRUSTED_PROXIES 不应失败: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 3 {
+		t.Fatalf("期望 3 条代理，实际: %v", cfg.TrustedProxies)
+	}
+}
+
+func TestLoadTrustedProxiesNoneIsEmpty(t *testing.T) {
+	t.Setenv("DB_TYPE", "sqlite")
+	t.Setenv("JWT_TTL", "2h")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("GIN_MODE", "")
+	t.Setenv("TRUSTED_PROXIES", "none")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("TRUSTED_PROXIES=none 不应失败: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("期望空列表，实际: %v", cfg.TrustedProxies)
 	}
 }

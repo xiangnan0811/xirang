@@ -50,8 +50,8 @@ function makeNodes(count: number): NodeRecord[] {
 function makeSamples(nodeId: number) {
   return {
     items: [
-      { id: 1, node_id: nodeId, cpu_pct: 45, mem_pct: 60, disk_pct: 30, load_1m: 1.2, sampled_at: "2026-03-27T10:00:00Z" },
-      { id: 2, node_id: nodeId, cpu_pct: 50, mem_pct: 65, disk_pct: 31, load_1m: 1.5, sampled_at: "2026-03-27T10:05:00Z" },
+      { id: 1, nodeId: nodeId, cpuPct: 45, memPct: 60, diskPct: 30, load1m: 1.2, sampledAt: "2026-03-27T10:00:00Z" },
+      { id: 2, nodeId: nodeId, cpuPct: 50, memPct: 65, diskPct: 31, load1m: 1.5, sampledAt: "2026-03-27T10:05:00Z" },
     ],
   };
 }
@@ -59,12 +59,12 @@ function makeSamples(nodeId: number) {
 function makeSpikySamples(nodeId: number) {
   return {
     items: [
-      { id: 1, node_id: nodeId, cpu_pct: 20, mem_pct: 60, disk_pct: 30, load_1m: 1.2, sampled_at: "2026-03-27T10:00:00Z" },
-      { id: 2, node_id: nodeId, cpu_pct: 22, mem_pct: 61, disk_pct: 31, load_1m: 1.3, sampled_at: "2026-03-27T10:05:00Z" },
-      { id: 3, node_id: nodeId, cpu_pct: 24, mem_pct: 62, disk_pct: 32, load_1m: 1.4, sampled_at: "2026-03-27T10:10:00Z" },
-      { id: 4, node_id: nodeId, cpu_pct: 26, mem_pct: 63, disk_pct: 33, load_1m: 1.5, sampled_at: "2026-03-27T10:15:00Z" },
-      { id: 5, node_id: nodeId, cpu_pct: 28, mem_pct: 64, disk_pct: 34, load_1m: 1.6, sampled_at: "2026-03-27T10:20:00Z" },
-      { id: 6, node_id: nodeId, cpu_pct: 100, mem_pct: 65, disk_pct: 35, load_1m: 1.7, sampled_at: "2026-03-27T10:25:00Z" },
+      { id: 1, nodeId: nodeId, cpuPct: 20, memPct: 60, diskPct: 30, load1m: 1.2, sampledAt: "2026-03-27T10:00:00Z" },
+      { id: 2, nodeId: nodeId, cpuPct: 22, memPct: 61, diskPct: 31, load1m: 1.3, sampledAt: "2026-03-27T10:05:00Z" },
+      { id: 3, nodeId: nodeId, cpuPct: 24, memPct: 62, diskPct: 32, load1m: 1.4, sampledAt: "2026-03-27T10:10:00Z" },
+      { id: 4, nodeId: nodeId, cpuPct: 26, memPct: 63, diskPct: 33, load1m: 1.5, sampledAt: "2026-03-27T10:15:00Z" },
+      { id: 5, nodeId: nodeId, cpuPct: 28, memPct: 64, diskPct: 34, load1m: 1.6, sampledAt: "2026-03-27T10:20:00Z" },
+      { id: 6, nodeId: nodeId, cpuPct: 100, memPct: 65, diskPct: 35, load1m: 1.7, sampledAt: "2026-03-27T10:25:00Z" },
     ],
   };
 }

@@ -1,0 +1,31 @@
+{
+  "id": "07-11-f-p2-domain-mapping-wave1",
+  "name": "07-11-f-p2-domain-mapping-wave1",
+  "title": "P2: Domain 映射 Wave1",
+  "description": "Normalize credential, node-metrics, silence, and related auth DTOs at typed frontend API boundaries.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "frontend",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-11",
+  "completedAt": "2026-07-12",
+  "branch": "fix/07-11-audit-p1-security",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-11-07-11-full-stack-audit-remediation",
+  "relatedFiles": [
+    "web/src/lib/api/credentials.ts",
+    "web/src/lib/api/node-metrics-api.ts",
+    "web/src/lib/api/silences.ts",
+    "web/src/types/domain.ts"
+  ],
+  "notes": "Implementation and mapper/consumer regression tests are complete in the working tree; raw snake_case DTOs remain private to API modules.",
+  "meta": {}
+}

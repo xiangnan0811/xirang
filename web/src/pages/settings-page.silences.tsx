@@ -36,12 +36,12 @@ const ALERT_TYPES = [
 
 function describeMatch(s: Silence, t: TFunction): string {
   const parts: string[] = []
-  if (s.match_node_id) parts.push(`#${s.match_node_id}`)
-  if (s.match_category) {
-    const type = ALERT_TYPES.find((a) => a.value === s.match_category)
-    parts.push(type ? t(type.i18nKey) : s.match_category)
+  if (s.matchNodeId) parts.push(`#${s.matchNodeId}`)
+  if (s.matchCategory) {
+    const type = ALERT_TYPES.find((a) => a.value === s.matchCategory)
+    parts.push(type ? t(type.i18nKey) : s.matchCategory)
   }
-  const tags = parseSilenceTags(s)
+  const tags = s.matchTags.length ? s.matchTags : parseSilenceTags(s)
   if (tags.length) parts.push(tags.join(","))
   return parts.length ? parts.join(" · ") : t("silences.nodeAll")
 }
@@ -126,11 +126,11 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
     }
     const input: SilenceInput = {
       name: name.trim(),
-      match_node_id: matchNodeId ? Number(matchNodeId) : null,
-      match_category: matchCategory,
-      match_tags: tags,
-      starts_at: new Date(startsAt).toISOString(),
-      ends_at: new Date(endsAt).toISOString(),
+      matchNodeId: matchNodeId ? Number(matchNodeId) : null,
+      matchCategory: matchCategory,
+      matchTags: tags,
+      startsAt: new Date(startsAt).toISOString(),
+      endsAt: new Date(endsAt).toISOString(),
       note: note.trim() || undefined,
     }
     setSubmitting(true)
@@ -348,10 +348,10 @@ export function SilencesPanel() {
                     <td className="py-2 pr-4 font-medium">{s.name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{describeMatch(s, t)}</td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                      {formatWindow(s.starts_at, s.ends_at)}
+                      {formatWindow(s.startsAt, s.endsAt)}
                     </td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                      {remaining(s.ends_at, t)}
+                      {remaining(s.endsAt, t)}
                     </td>
                     <td className="py-2">
                       <Button

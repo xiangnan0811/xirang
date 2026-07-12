@@ -181,6 +181,8 @@ type healthIncidentPolicyRunRow struct {
 // @Failure      401  {object}  handlers.Response
 // @Router       /overview/health-incident-timeline [get]
 func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+
 	now := time.Now().UTC()
 	windowHours := parseHealthIncidentWindowHours(c.Query("window_hours"))
 	since := now.Add(-time.Duration(windowHours) * time.Hour)

@@ -8,11 +8,12 @@
 
 | 变量 | 用途 | 建议 |
 |---|---|---|
-| `ADMIN_INITIAL_PASSWORD` | 首次启动创建 `admin` 用户 | 使用一次性强密码，登录后尽快修改。 |
-| `JWT_SECRET` | JWT 签名密钥 | 至少 16 字符，建议使用密码管理器生成。 |
-| `DATA_ENCRYPTION_KEY` | 敏感字段加密密钥 | 使用强随机值，建议 32 字节 base64。 |
+| `ADMIN_INITIAL_PASSWORD` | 首次启动且库中尚无 `admin` 时创建该用户 | 一次性强密码，登录后尽快修改；**已有 admin 后不再需要**，也不会因留空而拒绝启动。 |
+| `JWT_SECRET` | JWT 签名密钥 | 至少 32 字符强随机字符串；可用 `openssl rand -hex 32`。 |
+| `DATA_ENCRYPTION_KEY` | 敏感字段加密密钥 | 至少 16 字符；建议 32 字节 base64。 |
+| `METRICS_TOKEN` | 保护 `/metrics` 的 Bearer token | 至少 16 字符强随机值，禁止文档占位符；可用 `openssl rand -hex 32`。 |
 
-`APP_ENV=production` 时弱密钥或缺失必填项会导致服务拒绝启动。
+除显式 `APP_ENV`/`ENVIRONMENT=development` 外（含未声明环境），弱密钥或缺失 `JWT_SECRET` / `DATA_ENCRYPTION_KEY` / `METRICS_TOKEN` 会导致服务拒绝启动。`GIN_MODE` 不会放宽该策略。`ADMIN_INITIAL_PASSWORD` 仅在库中不存在 admin 用户时由 bootstrap 校验。
 
 ## HTTPS
 

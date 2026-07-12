@@ -58,6 +58,16 @@ func doSettingsAnomalySmoke(r *gin.Engine, method, path, body string) *httptest.
 	return w
 }
 
+// injectAdminRole seeds admin role/user for handlers that call ownershipNodeFilter
+// (fail-closed when role is missing). Production routes get this from AuthMiddleware.
+func injectAdminRole() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Set(middleware.CtxRole, "admin")
+		c.Next()
+	}
+}
+
 func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("JWT_SECRET", "change-me-in-production")
@@ -218,6 +228,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {
@@ -369,6 +380,7 @@ func TestSettingsSecurityRiskSummaryAdminRecoveryPostureCriticalWhenNoAdmin(t *t
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {
@@ -414,6 +426,7 @@ func TestSettingsSecurityRiskSummaryAdminRecoveryPostureInfoWhenHealthy(t *testi
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {
@@ -483,6 +496,7 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureWarningWhenNoPolicies(t 
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {
@@ -516,6 +530,7 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureAvoidsDuplicateMissingSu
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {
@@ -573,6 +588,7 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureInfoWhenHealthy(t *testi
 
 	handler := NewSettingsHandler(db, settings.NewService(db))
 	r := gin.New()
+	r.Use(injectAdminRole())
 	r.GET("/settings/security-risk-summary", handler.SecurityRiskSummary)
 	resp := doSettingsAnomalySmoke(r, http.MethodGet, "/settings/security-risk-summary", "")
 	if resp.Code != http.StatusOK {

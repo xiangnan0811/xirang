@@ -46,6 +46,14 @@ vi.mock("sonner", () => ({
   },
 }));
 
+const confirmMock = vi.fn().mockResolvedValue(true);
+vi.mock("@/hooks/use-confirm", () => ({
+  useConfirm: () => ({
+    confirm: confirmMock,
+    dialog: null,
+  }),
+}));
+
 function createImportFile(data: Record<string, unknown>): File {
   const file = new File([JSON.stringify(data)], "xirang-config.json", { type: "application/json" });
   Object.defineProperty(file, "text", {
@@ -74,7 +82,7 @@ describe("ConfigExportImport", () => {
       value: vi.fn(),
     });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmMock.mockResolvedValue(true);
   });
 
   it("opens a grant dialog, requests step-up and grant, then imports without storing grant material", async () => {

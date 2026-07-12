@@ -4,8 +4,11 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
+
+	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -67,43 +70,95 @@ func (s *CaptchaStore) Verify(id string, answer int) bool {
 // CaptchaHandler 处理验证码相关请求。
 type CaptchaHandler struct {
 	captchaStore *CaptchaStore
+	settingsSvc  *settings.Service
 }
 
 func NewCaptchaHandler(store *CaptchaStore) *CaptchaHandler {
 	return &CaptchaHandler{captchaStore: store}
 }
 
+// WithSettingsService injects settings for dual-captcha flags.
+func (h *CaptchaHandler) WithSettingsService(svc *settings.Service) *CaptchaHandler {
+	h.settingsSvc = svc
+	return h
+}
+
+func (h *CaptchaHandler) captchaEnabled() bool {
+	if h.settingsSvc == nil {
+		return false
+	}
+	return strings.ToLower(h.settingsSvc.GetEffective("login.captcha_enabled")) == "true"
+}
+
+func (h *CaptchaHandler) secondCaptchaEnabled() bool {
+	if h.settingsSvc == nil {
+		return false
+	}
+	return strings.ToLower(h.settingsSvc.GetEffective("login.second_captcha_enabled")) == "true"
+}
+
+type captchaChallenge struct {
+	id       string
+	question string
+}
+
+func (h *CaptchaHandler) generateChallenge() (captchaChallenge, error) {
+	a, err := rand.Int(rand.Reader, big.NewInt(20))
+	if err != nil {
+		return captchaChallenge{}, err
+	}
+	b, err := rand.Int(rand.Reader, big.NewInt(20))
+	if err != nil {
+		return captchaChallenge{}, err
+	}
+	numA := int(a.Int64()) + 1
+	numB := int(b.Int64()) + 1
+	id := generateCaptchaID()
+	h.captchaStore.Set(id, numA+numB)
+	return captchaChallenge{
+		id:       id,
+		question: fmt.Sprintf("%d + %d = ?", numA, numB),
+	}, nil
+}
+
 // GenerateCaptcha godoc
 // @Summary      生成数学验证码
-// @Description  生成一道加法题并返回验证码 ID 和题目，答案在登录时提交校验
+// @Description  按 login.captcha_enabled / login.second_captcha_enabled 生成挑战。
+// @Description  关闭的通道不返回 id/question，避免前端展示“必填但不校验”的假挑战。
 // @Tags         auth
 // @Produce      json
 // @Success      200  {object}  handlers.Response
 // @Router       /auth/captcha [get]
 func (h *CaptchaHandler) GenerateCaptcha(c *gin.Context) {
-	a, err := rand.Int(rand.Reader, big.NewInt(20))
-	if err != nil {
-		respondInternalError(c, fmt.Errorf("生成验证码失败: %w", err))
-		return
-	}
-	b, err := rand.Int(rand.Reader, big.NewInt(20))
-	if err != nil {
-		respondInternalError(c, fmt.Errorf("生成验证码失败: %w", err))
-		return
+	primaryOn := h.captchaEnabled()
+	secondOn := h.secondCaptchaEnabled()
+
+	payload := gin.H{
+		"enabled":         primaryOn,
+		"second_required": secondOn,
 	}
 
-	// 取值范围 1–20
-	numA := int(a.Int64()) + 1
-	numB := int(b.Int64()) + 1
-	answer := numA + numB
+	if primaryOn {
+		primary, err := h.generateChallenge()
+		if err != nil {
+			respondInternalError(c, fmt.Errorf("生成验证码失败: %w", err))
+			return
+		}
+		payload["id"] = primary.id
+		payload["question"] = primary.question
+	}
 
-	id := generateCaptchaID()
-	h.captchaStore.Set(id, answer)
+	if secondOn {
+		second, err := h.generateChallenge()
+		if err != nil {
+			respondInternalError(c, fmt.Errorf("生成二次验证码失败: %w", err))
+			return
+		}
+		payload["second_id"] = second.id
+		payload["second_question"] = second.question
+	}
 
-	respondOK(c, gin.H{
-		"id":       id,
-		"question": fmt.Sprintf("%d + %d = ?", numA, numB),
-	})
+	respondOK(c, payload)
 }
 
 // generateCaptchaID 用 crypto/rand 生成一个 UUID 格式的字符串。
