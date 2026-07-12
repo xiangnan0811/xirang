@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.7](https://github.com/xiangnan0811/xirang/compare/v0.44.6...v0.44.7) (2026-07-12)
+
+
+### 🐛 Bug Fixes
+
+* harden security ownership and operational resilience ([#367](https://github.com/xiangnan0811/xirang/issues/367)) ([b0deb89](https://github.com/xiangnan0811/xirang/commit/b0deb897e2a07dba4840bb66607b26f3f1788a58))
+
 ## [0.44.6](https://github.com/xiangnan0811/xirang/compare/v0.44.5...v0.44.6) (2026-07-10)
 
 
