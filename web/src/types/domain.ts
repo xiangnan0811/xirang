@@ -60,6 +60,8 @@ export interface OverviewTrafficSeries {
   window: OverviewTrafficWindow;
   bucketMinutes: number;
   hasRealSamples: boolean;
+  /** True when server hit sample/task-run row cap; series may under-count. */
+  truncated?: boolean;
   generatedAt: string;
   points: OverviewTrafficPoint[];
 }
@@ -762,16 +764,29 @@ export interface StorageUsageData {
   perNode: NodeStorageInfo[];
 }
 
+/** Domain shape for app credentials (API maps wire snake_case → camelCase). */
 export interface AppCredential {
   id: number;
   name: string;
   type: string;
   description: string;
   config: Record<string, string>;
-  has_password: boolean;
-  reference_count: number;
-  created_at: string;
-  updated_at: string;
+  hasPassword: boolean;
+  referenceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Create/update form input for app credentials (camelCase; API maps to wire). */
+export interface AppCredentialInput {
+  type: string;
+  name: string;
+  description?: string;
+  host?: string;
+  port?: string;
+  user?: string;
+  password?: string;
+  containerName?: string;
 }
 
 export interface ConfigField {
@@ -786,9 +801,9 @@ export interface ProfileSchema {
   id: string;
   name: string;
   description: string;
-  credential_type: string;
-  is_docker: boolean;
-  config_schema: ConfigField[];
+  credentialType: string;
+  isDocker: boolean;
+  configSchema: ConfigField[];
 }
 
 export type SLOMetricType = "availability" | "success_rate";
@@ -932,30 +947,30 @@ export type PanelQueryResult = {
   truncated?: boolean;
 };
 
-/** Silence matches the backend shape at `/silences`. match_tags arrives from
- *  older records as a JSON-encoded string, from newer ones as an array, and
- *  from either as null. parseSilenceTags (lib/api/silences) normalizes. */
+/** Domain silence after API mapping. Wire match_tags (string|array|null) is
+ *  normalized to string[] in mapSilence. */
 export interface Silence {
   id: number;
   name: string;
-  match_node_id: number | null;
-  match_category: string;
-  match_tags: string | string[] | null;
-  starts_at: string;
-  ends_at: string;
-  created_by: number;
+  matchNodeId: number | null;
+  matchCategory: string;
+  matchTags: string[];
+  startsAt: string;
+  endsAt: string;
+  createdBy: number;
   note: string;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
+/** Create silence form input (camelCase; API maps to wire snake_case). */
 export interface SilenceInput {
   name: string;
-  match_node_id: number | null;
-  match_category: string;
-  match_tags: string[];
-  starts_at: string;
-  ends_at: string;
+  matchNodeId: number | null;
+  matchCategory: string;
+  matchTags: string[];
+  startsAt: string;
+  endsAt: string;
   note?: string;
 }
 

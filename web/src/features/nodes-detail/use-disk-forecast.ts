@@ -17,7 +17,9 @@ export function useDiskForecast(nodeId: number, token: NodeDetailAuthToken) {
     setIsLoading(true);
     setError(null);
     try {
-      const resp = await apiClient.getDiskForecast(token, nodeId);
+      const resp = await apiClient.getDiskForecast(token, nodeId, {
+        signal: controller.signal,
+      });
       if (!controller.signal.aborted) {
         setData(resp);
       }

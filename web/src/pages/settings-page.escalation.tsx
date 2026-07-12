@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api/client";
 import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
+import { useConfirm } from "@/hooks/use-confirm";
 import type { EscalationPolicy } from "@/types/domain";
 
 function formatDate(iso: string): string {
@@ -28,6 +29,7 @@ function severityBadgeTone(sev: string): "destructive" | "warning" | "neutral" {
 export function SettingsPageEscalation() {
   const { t } = useTranslation();
   const { token } = useAuth();
+  const { confirm, dialog } = useConfirm();
 
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,14 +41,20 @@ export function SettingsPageEscalation() {
   const refresh = useCallback(() => {
     if (!token) return;
     setLoading(true);
-    apiClient.listEscalationPolicies(token)
+    const controller = new AbortController();
+    apiClient.listEscalationPolicies(token, { signal: controller.signal })
       .then(setPolicies)
-      .catch((err) => toast.error(getErrorMessage(err)))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, [token]);
 
   useEffect(() => {
-    refresh();
+    return refresh();
   }, [refresh]);
 
   const handleOpenNew = () => {
@@ -103,7 +111,10 @@ export function SettingsPageEscalation() {
 
   const handleDelete = async (policy: EscalationPolicy) => {
     if (!token) return;
-    const confirmed = window.confirm(t("escalation.deleteConfirm", { name: policy.name }));
+    const confirmed = await confirm({
+      title: t("escalation.deleteConfirm", { name: policy.name }),
+      description: t("common.irreversible"),
+    });
     if (!confirmed) return;
     setDeletingId(policy.id);
     try {
@@ -128,7 +139,7 @@ export function SettingsPageEscalation() {
 
       <CardContent>
         {loading ? (
-          <p className="text-sm text-muted-foreground">加载中…</p>
+          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : policies.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
             <p className="text-sm font-medium">{t("escalation.empty.title")}</p>
@@ -207,6 +218,7 @@ export function SettingsPageEscalation() {
         policy={editingPolicy}
         onSaved={handleSaved}
       />
+      {dialog}
     </Card>
   );
 }

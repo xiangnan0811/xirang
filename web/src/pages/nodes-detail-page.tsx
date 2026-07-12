@@ -37,7 +37,28 @@ export function NodesDetailPage() {
 
   const tabParam = params.get("tab");
   const activeTab: TabId = isTabId(tabParam) ? tabParam : "overview";
-  const { data: status, isLoading } = useNodeStatus(nodeId, token);
+  // Single shared poll for page header + overview tab (avoid double /status).
+  const { data: status, isLoading, error: statusError } = useNodeStatus(nodeId, token);
+
+  // Prefer last known status while background-refreshing. Only show loading on
+  // first fetch / after clear; never paint failed/empty/never-probed as "offline".
+  let statusBadge: string;
+  let badgeClass = "bg-muted text-muted-foreground";
+  if (status?.probedAt) {
+    // Online/offline only meaningful after at least one probe sample.
+    if (status.online) {
+      statusBadge = t("nodes.statusOnline");
+      badgeClass = "bg-success/10 text-success";
+    } else {
+      statusBadge = t("nodes.statusOffline");
+    }
+  } else if (isLoading) {
+    statusBadge = t("nodes.nodeDetail.statusLoading");
+  } else {
+    // No sample yet (or status poll failed after clear) → unknown, not offline.
+    statusBadge = t("nodes.nodeDetail.statusUnknown");
+    badgeClass = "bg-warning/10 text-warning";
+  }
 
   const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params);
@@ -80,11 +101,6 @@ export function NodesDetailPage() {
     focusTab(nextTab);
   };
 
-  const statusBadge = isLoading ? t("nodes.nodeDetail.statusLoading") : status?.online ? t("nodes.statusOnline") : t("nodes.statusOffline");
-  const badgeClass = status?.online
-    ? "bg-success/10 text-success"
-    : "bg-muted text-muted-foreground";
-
   return (
     <div className="flex flex-col gap-6">
       <PageHero
@@ -95,9 +111,14 @@ export function NodesDetailPage() {
             <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeClass}`}>
               {statusBadge}
             </span>
-            {status?.probed_at && (
-              <span>{t("nodes.nodeDetail.probedAt", { time: new Date(status.probed_at).toLocaleString() })}</span>
-            )}
+            {statusError ? (
+              <span className="text-destructive" role="alert">
+                {t("nodes.nodeDetail.statusLoadFailed")}
+              </span>
+            ) : null}
+            {!statusError && status?.probedAt ? (
+              <span>{t("nodes.nodeDetail.probedAt", { time: new Date(status.probedAt).toLocaleString() })}</span>
+            ) : null}
           </div>
         }
       />
@@ -147,25 +168,31 @@ export function NodesDetailPage() {
           hidden={activeTab !== tab.id}
         >
           {activeTab === "overview" && tab.id === "overview" ? (
-            <OverviewTab nodeId={nodeId} token={token} />
+            <OverviewTab
+              key={`overview-${nodeId}`}
+              nodeId={nodeId}
+              token={token}
+              status={status}
+              statusError={statusError}
+            />
           ) : null}
           {activeTab === "metrics" && tab.id === "metrics" ? (
-            <MetricsTab nodeId={nodeId} token={token} />
+            <MetricsTab key={`metrics-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "tasks" && tab.id === "tasks" ? (
-            <TasksTab nodeId={nodeId} token={token} />
+            <TasksTab key={`tasks-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "alerts" && tab.id === "alerts" ? (
-            <AlertsTab nodeId={nodeId} token={token} />
+            <AlertsTab key={`alerts-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "profile" && tab.id === "profile" ? (
-            <ProfileTab nodeId={nodeId} token={token} />
+            <ProfileTab key={`profile-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "log-config" && tab.id === "log-config" ? (
-            <LogConfigTab nodeId={nodeId} token={token} />
+            <LogConfigTab key={`log-config-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "anomaly" && tab.id === "anomaly" ? (
-            <AnomalyTab nodeId={nodeId} token={token} />
+            <AnomalyTab key={`anomaly-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
         </div>
       ))}

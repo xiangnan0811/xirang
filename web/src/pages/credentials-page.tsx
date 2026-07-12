@@ -15,7 +15,7 @@ import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
   createCredentialsApi,
-  type AppCredentialResponse,
+  type AppCredential,
 } from "@/lib/api/credentials";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -24,12 +24,12 @@ export function CredentialsPage() {
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
-  const [credentials, setCredentials] = useState<AppCredentialResponse[]>([]);
+  const [credentials, setCredentials] = useState<AppCredential[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingCredential, setEditingCredential] =
-    useState<AppCredentialResponse | null>(null);
+    useState<AppCredential | null>(null);
 
   const fetchCredentials = useCallback(async () => {
     if (!token) return;
@@ -53,12 +53,12 @@ export function CredentialsPage() {
     setEditorOpen(true);
   };
 
-  const openEditDialog = (cred: AppCredentialResponse) => {
+  const openEditDialog = (cred: AppCredential) => {
     setEditingCredential(cred);
     setEditorOpen(true);
   };
 
-  const handleDelete = async (cred: AppCredentialResponse) => {
+  const handleDelete = async (cred: AppCredential) => {
     if (!token) return;
     const ok = await confirm({
       title: t("credentials.confirmDeleteTitle"),
@@ -101,9 +101,9 @@ export function CredentialsPage() {
   };
 
   const totalCredentials = credentials.length;
-  const passwordConfigured = credentials.filter((cred) => cred.has_password).length;
+  const passwordConfigured = credentials.filter((cred) => cred.hasPassword).length;
   const referencedCredentials = credentials.filter(
-    (cred) => cred.reference_count > 0,
+    (cred) => cred.referenceCount > 0,
   ).length;
   const unusedCredentials = totalCredentials - referencedCredentials;
   const totalMeta = `${t("common.all")} ${totalCredentials}`;
@@ -213,7 +213,7 @@ export function CredentialsPage() {
                         {cred.description || "—"}
                       </td>
                       <td className="hidden px-4 py-3 text-center sm:table-cell">
-                        {cred.has_password ? (
+                        {cred.hasPassword ? (
                           <Badge tone="success">
                             {t("credentials.configured")}
                           </Badge>
@@ -224,8 +224,8 @@ export function CredentialsPage() {
                         )}
                       </td>
                       <td className="hidden px-4 py-3 text-center sm:table-cell">
-                        {cred.reference_count > 0 ? (
-                          <Badge tone="info">{cred.reference_count}</Badge>
+                        {cred.referenceCount > 0 ? (
+                          <Badge tone="info">{cred.referenceCount}</Badge>
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}

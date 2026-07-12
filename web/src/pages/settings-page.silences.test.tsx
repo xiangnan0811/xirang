@@ -32,8 +32,7 @@ vi.mock("@/lib/api/silences", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/silences")>("@/lib/api/silences")
   return {
     ...actual,
-    parseSilenceTags: (s: { match_tags: string | string[] | null }) =>
-      Array.isArray(s.match_tags) ? s.match_tags : [],
+    parseSilenceTags: (s: { matchTags: string[] }) => s.matchTags ?? [],
   }
 })
 
@@ -47,15 +46,15 @@ vi.mock("@/lib/api/client", () => ({
       {
         id: 1,
         name: "maint-A",
-        match_node_id: 1,
-        match_category: "XR-NODE",
-        match_tags: ["prod"],
-        starts_at: "2026-04-19T00:00:00Z",
-        ends_at: "2026-04-19T02:00:00Z",
-        created_by: 1,
+        matchNodeId: 1,
+        matchCategory: "XR-NODE",
+        matchTags: ["prod"],
+        startsAt: "2026-04-19T00:00:00Z",
+        endsAt: "2026-04-19T02:00:00Z",
+        createdBy: 1,
         note: "",
-        created_at: "",
-        updated_at: "",
+        createdAt: "",
+        updatedAt: "",
       },
     ]),
     createSilence: vi.fn(),

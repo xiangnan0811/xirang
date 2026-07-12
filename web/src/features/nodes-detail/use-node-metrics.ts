@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
+import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import type { MetricSeriesResponse } from "@/lib/api/node-metrics-api";
 import type { NodeDetailAuthToken } from "./types";
 
@@ -13,33 +14,53 @@ type Params = {
   refetchMs?: number;
 };
 
-export function useNodeMetrics({ nodeId, token, from, to, fields, granularity = "auto", refetchMs }: Params) {
+export function useNodeMetrics({
+  nodeId,
+  token,
+  from,
+  to,
+  fields,
+  granularity = "auto",
+  refetchMs,
+}: Params) {
   const [data, setData] = useState<MetricSeriesResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // First paint must show loading (not empty) when a fetch is expected.
+  const [isLoading, setIsLoading] = useState(() => Boolean(token && nodeId > 0));
   const [error, setError] = useState<unknown>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const fieldsKey = fields?.join(",");
 
   const fetchOnce = useCallback(async () => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0) {
+      setIsLoading(false);
+      setData(null);
+      setError(null);
+      return;
+    }
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setIsLoading(true);
     setError(null);
     try {
-      const resp = await apiClient.getMetricSeries(token, nodeId, {
-        from,
-        to,
-        fields: fields,
-        granularity,
-      });
+      const resp = await apiClient.getMetricSeries(
+        token,
+        nodeId,
+        {
+          from,
+          to,
+          fields,
+          granularity,
+        },
+        { signal: controller.signal },
+      );
       if (!controller.signal.aborted) {
         setData(resp);
       }
     } catch (e) {
       if (!controller.signal.aborted) {
+        setData(null);
         setError(e);
       }
     } finally {
@@ -50,19 +71,29 @@ export function useNodeMetrics({ nodeId, token, from, to, fields, granularity = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, nodeId, from, to, fieldsKey, granularity]);
 
+  // Clear stale series immediately when node/range identity changes, and keep
+  // isLoading true so consumers do not flash chartEmpty ("暂无数据").
   useEffect(() => {
-    void fetchOnce();
-    if (refetchMs && refetchMs > 0) {
-      const id = setInterval(() => void fetchOnce(), refetchMs);
-      return () => {
-        clearInterval(id);
-        abortRef.current?.abort();
-      };
+    setData(null);
+    setError(null);
+    if (token && nodeId > 0) {
+      setIsLoading(true);
+    } else {
+      setIsLoading(false);
     }
+    void fetchOnce();
     return () => {
       abortRef.current?.abort();
     };
-  }, [fetchOnce, refetchMs]);
+  }, [fetchOnce, token, nodeId]);
+
+  useVisibilityPolling(
+    () => {
+      void fetchOnce();
+    },
+    refetchMs && refetchMs > 0 ? refetchMs : 0,
+    { enabled: Boolean(refetchMs && refetchMs > 0 && token && nodeId > 0), immediate: false },
+  );
 
   return { data, isLoading, error };
 }

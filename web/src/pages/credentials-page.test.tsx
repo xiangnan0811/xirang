@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { CredentialsPage } from "./credentials-page";
-import type { AppCredentialResponse } from "@/lib/api/credentials";
+import type { AppCredential } from "@/lib/api/credentials";
 
 const {
   confirmMock,
@@ -47,7 +47,7 @@ vi.mock("@/components/credential-editor-dialog", () => ({
     editingCredential,
     open,
   }: {
-    editingCredential?: AppCredentialResponse | null;
+    editingCredential?: AppCredential | null;
     open: boolean;
   }) =>
     open ? (
@@ -72,17 +72,17 @@ vi.mock("@/lib/api/credentials", () => ({
   }),
 }));
 
-const credentials: AppCredentialResponse[] = [
+const credentials: AppCredential[] = [
   {
     id: 1,
     name: "Prod MySQL",
     type: "mysql",
     description: "Primary database",
     config: {},
-    has_password: true,
-    reference_count: 2,
-    created_at: "2026-05-13T10:00:00Z",
-    updated_at: "2026-05-13T10:00:00Z",
+    hasPassword: true,
+    referenceCount: 2,
+    createdAt: "2026-05-13T10:00:00Z",
+    updatedAt: "2026-05-13T10:00:00Z",
   },
   {
     id: 2,
@@ -90,10 +90,10 @@ const credentials: AppCredentialResponse[] = [
     type: "docker",
     description: "",
     config: {},
-    has_password: false,
-    reference_count: 0,
-    created_at: "2026-05-13T11:00:00Z",
-    updated_at: "2026-05-13T11:00:00Z",
+    hasPassword: false,
+    referenceCount: 0,
+    createdAt: "2026-05-13T11:00:00Z",
+    updatedAt: "2026-05-13T11:00:00Z",
   },
 ];
 

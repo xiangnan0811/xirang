@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { TaskRecord, TaskStatus } from "@/types/domain";
@@ -13,35 +14,58 @@ const FILTER_STATUSES: Record<Filter, TaskStatus[]> = {
 };
 
 export default function TasksTab({ nodeId, token }: NodeDetailTabProps) {
+  const { t } = useTranslation();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
-  const [loading, setLoading] = useState(false);
+  // First paint must show loading (not empty) when a fetch is expected.
+  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
+  const [error, setError] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
 
+  const filterLabels: Record<Filter, string> = {
+    all: t("nodes.nodeDetail.tasksFilterAll"),
+    running: t("nodes.nodeDetail.tasksFilterRunning"),
+    failed: t("nodes.nodeDetail.tasksFilterFailed"),
+  };
+
   const fetchTasks = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0) {
+      setLoading(false);
+      setTasks([]);
+      setError(false);
+      return;
+    }
     setLoading(true);
+    setError(false);
     try {
       const all = await apiClient.getTasks(token, { signal });
       if (!signal.aborted) {
-        setTasks(all.filter((t) => t.nodeId === nodeId));
+        setTasks(all.filter((row) => row.nodeId === nodeId));
       }
     } catch {
-      // ignore aborts and network errors
+      if (!signal.aborted) {
+        setTasks([]);
+        setError(true);
+      }
     } finally {
       if (!signal.aborted) setLoading(false);
     }
   }, [nodeId, token]);
 
   useEffect(() => {
+    // Drop previous node's tasks immediately on node switch; keep loading so
+    // consumers do not flash tasksEmpty before the fetch settles.
+    setTasks([]);
+    setError(false);
+    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchTasks(controller.signal);
     return () => controller.abort();
-  }, [fetchTasks]);
+  }, [fetchTasks, token, nodeId]);
 
-  const filtered = tasks.filter((t) => {
+  const filtered = tasks.filter((row) => {
     const statuses = FILTER_STATUSES[filter];
     if (statuses.length === 0) return true;
-    return statuses.includes(t.status);
+    return statuses.includes(row.status);
   });
 
   return (
@@ -61,42 +85,47 @@ export default function TasksTab({ nodeId, token }: NodeDetailTabProps) {
                 : "bg-muted text-muted-foreground")
             }
           >
-            {f === "all" ? "全部" : f === "running" ? "运行中" : "近期失败"}
+            {filterLabels[f]}
           </button>
         ))}
       </div>
 
-      {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
-      {!loading && filtered.length === 0 && (
-        <p className="text-sm text-muted-foreground">该节点暂无关联任务记录。</p>
+      {loading && <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.loading")}</p>}
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {t("nodes.nodeDetail.tasksError")}
+        </p>
+      )}
+      {!loading && !error && filtered.length === 0 && (
+        <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.tasksEmpty")}</p>
       )}
       {filtered.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="min-w-full text-sm">
             <thead className="bg-muted">
               <tr>
-                <th className="px-3 py-2 text-left font-medium">任务</th>
-                <th className="px-3 py-2 text-left font-medium">状态</th>
-                <th className="px-3 py-2 text-left font-medium">最近运行</th>
-                <th className="px-3 py-2 text-left font-medium">下次运行</th>
+                <th className="px-3 py-2 text-left font-medium">{t("nodes.nodeDetail.tasksColName")}</th>
+                <th className="px-3 py-2 text-left font-medium">{t("nodes.nodeDetail.tasksColStatus")}</th>
+                <th className="px-3 py-2 text-left font-medium">{t("nodes.nodeDetail.tasksColLastRun")}</th>
+                <th className="px-3 py-2 text-left font-medium">{t("nodes.nodeDetail.tasksColNextRun")}</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((t) => (
-                <tr key={t.id} className="border-t border-border hover:bg-muted/40">
+              {filtered.map((row) => (
+                <tr key={row.id} className="border-t border-border hover:bg-muted/40">
                   <td className="px-3 py-2">
                     <Link to="/app/tasks" className="hover:underline">
-                      {t.name}
+                      {row.name}
                     </Link>
                   </td>
                   <td className="px-3 py-2">
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{t.status}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{row.status}</span>
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {t.startedAt ? new Date(t.startedAt).toLocaleString() : "-"}
+                    {row.startedAt ? new Date(row.startedAt).toLocaleString() : "-"}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {t.nextRunAt ? new Date(t.nextRunAt).toLocaleString() : "-"}
+                    {row.nextRunAt ? new Date(row.nextRunAt).toLocaleString() : "-"}
                   </td>
                 </tr>
               ))}

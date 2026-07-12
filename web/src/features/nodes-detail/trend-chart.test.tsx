@@ -44,6 +44,13 @@ describe("TrendChart", () => {
   test("shows empty state when no series", () => {
     render(<TrendChart series={[]} range="24h" onRangeChange={() => {}} />);
     expect(screen.getByText(/暂无数据/)).toBeInTheDocument();
+    expect(screen.getByTestId("trend-chart-empty")).toBeInTheDocument();
+  });
+
+  test("shows loading instead of empty when loading and no series", () => {
+    render(<TrendChart series={[]} range="24h" onRangeChange={() => {}} loading />);
+    expect(screen.queryByText(/暂无数据/)).toBeNull();
+    expect(screen.getByTestId("trend-chart-loading")).toBeInTheDocument();
   });
 
   test("respects fields filter — no empty state when matching series exists", () => {

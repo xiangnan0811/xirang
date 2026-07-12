@@ -1,14 +1,18 @@
-import type { AppCredential, ProfileSchema } from "@/types/domain";
-import { request } from "./core";
+import { createCredentialsApi, type AppCredential, type ProfileSchema } from "./credentials";
 
+/**
+ * Compatibility façade used by policy-editor and other call sites.
+ * Always maps wire snake_case → camelCase domain types (via credentials API).
+ */
 export function createAppCredentialsApi() {
+  const api = createCredentialsApi();
   return {
     async getCredentials(token: string, signal?: AbortSignal): Promise<AppCredential[]> {
-      return (await request<AppCredential[]>("/app-credentials", { token, signal })) ?? [];
+      return api.list(token, signal);
     },
 
     async getProfiles(token: string, signal?: AbortSignal): Promise<ProfileSchema[]> {
-      return (await request<ProfileSchema[]>("/app-credentials/profiles", { token, signal })) ?? [];
+      return api.listProfiles(token, signal);
     },
   };
 }

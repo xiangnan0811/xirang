@@ -8,8 +8,8 @@ import { Select } from "@/components/ui/select";
 import { useAuth } from "@/context/auth-context.hooks";
 import {
   createCredentialsApi,
+  type AppCredential,
   type AppCredentialInput,
-  type AppCredentialResponse,
   type ConfigField,
   type ProfileSchema,
 } from "@/lib/api/credentials";
@@ -18,7 +18,7 @@ import { getErrorMessage } from "@/lib/utils";
 type CredentialEditorDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editingCredential?: AppCredentialResponse | null;
+  editingCredential?: AppCredential | null;
   onSaved: () => void;
 };
 
@@ -76,13 +76,13 @@ export function CredentialEditorDialog({
   }, [open, editingCredential]);
 
   const selectedProfile = useMemo(
-    () => profiles.find((p) => p.credential_type === selectedProfileId) ?? null,
+    () => profiles.find((p) => p.credentialType === selectedProfileId) ?? null,
     [profiles, selectedProfileId],
   );
 
   const profileOptions = useMemo(() => {
-    const nonDocker = profiles.filter((p) => !p.is_docker);
-    const docker = profiles.filter((p) => p.is_docker);
+    const nonDocker = profiles.filter((p) => !p.isDocker);
+    const docker = profiles.filter((p) => p.isDocker);
     return { nonDocker, docker };
   }, [profiles]);
 
@@ -115,7 +115,7 @@ export function CredentialEditorDialog({
     }
 
     // Validate required fields
-    for (const field of profile.config_schema) {
+    for (const field of profile.configSchema) {
       if (field.required && !fieldValues[field.key]?.trim()) {
         // For password on edit, allow empty (means preserve)
         if (field.type === "password" && isEditing) continue;
@@ -127,7 +127,7 @@ export function CredentialEditorDialog({
     }
 
     // Validate container_name for docker types
-    if (profile.is_docker && !fieldValues.container_name?.trim()) {
+    if (profile.isDocker && !fieldValues.container_name?.trim()) {
       toast.error(t("credentials.validation.containerNameRequired"));
       return;
     }
@@ -143,7 +143,7 @@ export function CredentialEditorDialog({
         port: fieldValues.port?.trim() || undefined,
         user: fieldValues.user?.trim() || undefined,
         password: fieldValues.password?.trim() || undefined,
-        container_name: profile.is_docker
+        containerName: profile.isDocker
           ? fieldValues.container_name?.trim() || undefined
           : undefined,
       };
@@ -297,7 +297,7 @@ export function CredentialEditorDialog({
           {profileOptions.nonDocker.length > 0 && (
             <optgroup label={t("credentials.groupNonDocker")}>
               {profileOptions.nonDocker.map((p) => (
-                <option key={p.id} value={p.credential_type}>
+                <option key={p.id} value={p.credentialType}>
                   {p.name}
                 </option>
               ))}
@@ -306,7 +306,7 @@ export function CredentialEditorDialog({
           {profileOptions.docker.length > 0 && (
             <optgroup label={t("credentials.groupDocker")}>
               {profileOptions.docker.map((p) => (
-                <option key={p.id} value={p.credential_type}>
+                <option key={p.id} value={p.credentialType}>
                   {p.name}
                 </option>
               ))}
@@ -321,7 +321,7 @@ export function CredentialEditorDialog({
       </div>
 
       {/* Dynamic config fields */}
-      {selectedProfile?.config_schema?.map((field) =>
+      {selectedProfile?.configSchema?.map((field) =>
         field.type === "password"
           ? renderPasswordField(field)
           : renderField(field),

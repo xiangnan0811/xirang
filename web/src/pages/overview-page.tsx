@@ -324,6 +324,7 @@ export function OverviewPage() {
     return {
       chartData,
       hasRealSamples: Boolean(trafficData?.hasRealSamples),
+      truncated: Boolean(trafficData?.truncated),
       peakThroughput,
       totalStartedCount,
       totalFailedCount,

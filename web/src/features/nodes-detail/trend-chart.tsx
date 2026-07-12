@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   CartesianGrid,
   ComposedChart,
@@ -29,6 +30,8 @@ type TrendChartProps = {
   onRangeChange: (r: Range) => void;
   fields?: string[];
   height?: number;
+  /** When true and series is empty, show loading instead of chartEmpty. */
+  loading?: boolean;
 };
 
 // Union-all timestamps from the input series to build a single frame whose
@@ -139,7 +142,9 @@ export default function TrendChart({
   onRangeChange,
   fields,
   height = 240,
+  loading = false,
 }: TrendChartProps) {
+  const { t } = useTranslation();
   const visible =
     fields && fields.length > 0
       ? series.filter((s) => fields.includes(s.metric))
@@ -183,7 +188,7 @@ export default function TrendChart({
             variant="ghost"
             size="icon"
             className="ml-auto size-7"
-            aria-label="放大图表"
+            aria-label={t("nodes.nodeDetail.chartZoomAria")}
             onClick={() => setZoomOpen(true)}
           >
             <Maximize2 className="size-3.5" aria-hidden />
@@ -197,17 +202,18 @@ export default function TrendChart({
         <div
           style={{ height }}
           className="flex items-center justify-center text-sm text-muted-foreground"
+          data-testid={loading ? "trend-chart-loading" : "trend-chart-empty"}
         >
-          暂无数据
+          {loading ? t("common.loading") : t("nodes.nodeDetail.chartEmpty")}
         </div>
       )}
 
       <Dialog open={zoomOpen} onOpenChange={setZoomOpen}>
         <DialogContent className="max-w-[min(95vw,1100px)]">
           <DialogHeader>
-            <DialogTitle>指标趋势</DialogTitle>
+            <DialogTitle>{t("nodes.nodeDetail.chartTitle")}</DialogTitle>
             <DialogDescription className="sr-only">
-              放大视图：指标历史趋势，鼠标悬停查看具体数值。
+              {t("nodes.nodeDetail.chartZoomDesc")}
             </DialogDescription>
             <DialogCloseButton />
           </DialogHeader>

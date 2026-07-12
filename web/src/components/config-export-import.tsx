@@ -7,6 +7,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { useConfirm } from "@/hooks/use-confirm";
 import { getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -18,6 +19,7 @@ type ConfigGrantMode = "import" | "sensitive-export";
 export function ConfigExportImport() {
   const { t } = useTranslation();
   const { token, role, ensureStepUpProof } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [sensitiveExporting, setSensitiveExporting] = useState(false);
@@ -70,10 +72,14 @@ export function ConfigExportImport() {
     setGrantDialogOpen(true);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!window.confirm(t('configExport.importConfirm'))) {
+    const ok = await confirm({
+      title: t("configExport.importConfirm"),
+      description: t("common.irreversible"),
+    });
+    if (!ok) {
       resetGrantPromptState();
       return;
     }
@@ -248,6 +254,7 @@ export function ConfigExportImport() {
           </form>
         </DialogContent>
       </Dialog>
+      {dialog}
     </>
   );
 }

@@ -95,12 +95,26 @@ describe("NodesDetailPage", () => {
     mockUseNodeStatus.mockReturnValue({
       data: {
         online: true,
-        probed_at: null,
-        current: {},
-        trend_1h: {},
-        trend_24h: {},
-        open_alerts: 0,
-        running_tasks: 0,
+        probedAt: null,
+        current: { cpuPct: 0, memPct: 0, diskPct: 0, load1: 0, latencyMs: null },
+        trend1h: {
+          cpuPctAvg: 0,
+          memPctAvg: 0,
+          diskPctAvg: 0,
+          load1Avg: 0,
+          latencyMsAvg: null,
+          probeOkRatio: null,
+        },
+        trend24h: {
+          cpuPctAvg: 0,
+          memPctAvg: 0,
+          diskPctAvg: 0,
+          load1Avg: 0,
+          latencyMsAvg: null,
+          probeOkRatio: null,
+        },
+        openAlerts: 0,
+        runningTasks: 0,
       },
       isLoading: false,
       error: null,
@@ -108,15 +122,67 @@ describe("NodesDetailPage", () => {
     });
   });
 
-  it("overview tab is active by default", () => {
+  it("overview tab is active by default and receives shared status (no second poll)", () => {
     renderAt("/app/nodes/42");
     const overviewTab = screen.getByRole("tab", { name: /概览/ });
     expect(overviewTab).toHaveAttribute("aria-selected", "true");
     expect(mockUseNodeStatus).toHaveBeenCalledWith(42, "test-token");
-    expect(mockTabs.overview).toHaveBeenCalledWith({
-      nodeId: 42,
-      token: "test-token",
+    expect(mockUseNodeStatus).toHaveBeenCalledTimes(1);
+    expect(mockTabs.overview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: 42,
+        token: "test-token",
+        status: expect.objectContaining({ online: true }),
+        statusError: null,
+      }),
+    );
+  });
+
+  it("renders unknown status (not offline) when status poll fails", () => {
+    mockUseNodeStatus.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: new Error("network"),
+      refetch: vi.fn(),
     });
+    renderAt("/app/nodes/42?tab=metrics");
+    expect(screen.getByText("未知")).toBeInTheDocument();
+    expect(screen.getByText("状态加载失败")).toBeInTheDocument();
+    expect(screen.queryByText("离线")).not.toBeInTheDocument();
+  });
+
+  it("renders unknown (not offline) when node has never been probed", () => {
+    mockUseNodeStatus.mockReturnValue({
+      data: {
+        online: false,
+        probedAt: null,
+        current: { cpuPct: 0, memPct: 0, diskPct: 0, load1: 0, latencyMs: null },
+        trend1h: {
+          cpuPctAvg: 0,
+          memPctAvg: 0,
+          diskPctAvg: 0,
+          load1Avg: 0,
+          latencyMsAvg: null,
+          probeOkRatio: null,
+        },
+        trend24h: {
+          cpuPctAvg: 0,
+          memPctAvg: 0,
+          diskPctAvg: 0,
+          load1Avg: 0,
+          latencyMsAvg: null,
+          probeOkRatio: null,
+        },
+        openAlerts: 0,
+        runningTasks: 0,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderAt("/app/nodes/42");
+    expect(screen.getByText("未知")).toBeInTheDocument();
+    expect(screen.queryByText("离线")).not.toBeInTheDocument();
   });
 
   it("?tab=metrics activates the metrics tab", () => {
