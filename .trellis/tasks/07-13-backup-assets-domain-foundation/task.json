@@ -1,7 +1,7 @@
 {
-  "id": "backup-data-explorer-design",
-  "name": "backup-data-explorer-design",
-  "title": "备份数据资产浏览与预览功能设计",
+  "id": "backup-assets-domain-foundation",
+  "name": "backup-assets-domain-foundation",
+  "title": "备份资产领域基础",
   "description": "",
   "status": "planning",
   "dev_type": null,
@@ -10,18 +10,16 @@
   "priority": "P2",
   "creator": "weibo",
   "assignee": "weibo",
-  "createdAt": "2026-07-12",
+  "createdAt": "2026-07-13",
   "completedAt": null,
-  "branch": "codex/backup-data-explorer-design",
+  "branch": "codex/backup-assets-domain-foundation",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "07-13-backup-assets-domain-foundation"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
   "notes": "",
   "meta": {}
