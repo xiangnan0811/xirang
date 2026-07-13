@@ -85,7 +85,7 @@
 - [x] 所有新增 settings 通过 registry/default/sensitivity/restart 测试，`backup_assets.enabled` 保持 false。
 - [x] focused backend、frontend、双数据库 migration 与全仓质量门禁通过；提交不包含公开资产路由、Provider mutation 或 feature enablement。
 - [x] 新增 settings/env 参考与 `DATA_ENCRYPTION_LEGACY_KEY` 的 domain-key rewrap 说明和实际代码一致。
-- [ ] 独立分支 PR 的 required CI 全绿，合并后自动化已检查，本地 `main` 已同步后才允许创建 Child 2。
+- [x] 独立分支 PR 的 required CI 全绿，合并后自动化已检查，本地 `main` 已同步后才允许创建 Child 2。
 
 ## Out Of Scope
 
@@ -103,3 +103,4 @@
 - 用户于 2026-07-13 同意采用 planning parent + 顺序创建子任务的交付方式，并同意在新会话中推进 Child 1。
 - 创建 Child 1 不等于启动实施；本任务在 focused planning package 通过 review gate 前保持了 `planning`。
 - 用户于 2026-07-13 明确批准 focused package；随后仅启动 Child 1，任务状态转为 `in_progress`，父任务继续保持 `planning`。
+- 用户于 2026-07-13 明确批准 squash merge PR #372；合并提交为 `9d8215f`，主分支 CI 与 Release Please 均成功，本地 `main` 已同步。
