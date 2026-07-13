@@ -11,6 +11,18 @@
 - 本任务无前置子任务；必须从已经包含父规划包的最新 `main` 开始。
 - 本任务属于复杂跨层变更。进入实施前必须补齐并复核 focused `design.md` 与 `implement.md`，然后由用户明确授权执行 `task.py start`。
 
+## Confirmed Code Evidence
+
+- 当前分支为 `codex/backup-assets-domain-foundation`，seed commit 为 `743aa94`，其直接基线 `4ea4c2b` 是已通过 PR #371 合并到 `main` 的父规划包；开始 focused planning 时工作区干净。
+- SQLite 与 PostgreSQL 当前最高 migration 都是 `000061_task_runs_traffic_indexes`，`000062` 在两端均未被占用。
+- 当前没有 `backend/internal/backupasset` 包、备份资产基础表、RecoveryPoint 租约或 PostgreSQL migration apply/down CI harness。
+- 当前 step-up JWT 只有通用 `purpose=step_up`；签发请求只提交 TOTP code，验证器不接收 expected action，终端 WebSocket 也接受任意有效通用 proof。前端只在 sessionStorage 保存一个全局 proof。
+- 当前九个高风险动作边界为 SSH Key 导出、终端打开、配置导入、敏感配置导出、快照恢复、任务恢复、任务手工触发、任务批量触发和批量命令创建；它们必须与八个新资产动作一起迁移为 action-bound proof。
+- 当前 `secure` 包的 `enc:v2` 字符串加密适合字段加密，但没有带 domain/version AAD 的小型数据密钥包装 envelope，也不能用上一把 v2 KEK 对 domain key 执行 rewrap；Child 1 必须增加独立 wrapping primitive，不能复用大内容加密。
+- 当前 HTTP `AuditLogger` 跳过 GET/HEAD，且现有单链不能安全裁剪历史；备份资产 list/preview/read 因此必须使用独立 typed action registry、专用 sanitizer 和 segment/checkpoint chain。
+- 当前 settings registry 有 34 项且支持 DB > env > default、Sensitive 和 RequiresRestart；Child 1 新增设置必须沿用该 registry，并同步环境变量参考。
+- 当前 `Task` 没有归档时间，`TaskRun`/旧 `SnapshotFileIndex` 也没有可信恢复点身份；本任务只增加可空 `tasks.archived_at` 和独立 lineage 基础，不改变现有 Task 删除行为。
+
 ## Requirements
 
 ### Domain And Identity
@@ -50,6 +62,7 @@
 - 审计不得保存 raw path/name/query/snippet/content/ticket/cookie/JWT/credential/Provider locator；低熵关联使用独立 keyed Audit Fingerprint，不使用裸 hash。
 - 注册安全默认 settings：`backup_assets.enabled=false`、Catalog batch/build timeout、repository reconcile interval、审计 segment/retention、lease duration/heartbeat/absolute deadline。路径/密钥设置标记 RequiresRestart，秘密值标记 Sensitive。
 - 本任务不增加公开 backup asset route，不执行 Provider publication/read/delete，不迁移现有 Provider 数据，也不启用 UI。feature gate 在 Child 1 合并后仍默认关闭。
+- 新 settings 的环境变量、默认值和 KEK 轮换语义必须同步到 `docs/env-vars.md` 及后端环境示例；不得把规划文档发布为用户功能说明。
 
 ## Constraints
 
@@ -60,17 +73,18 @@
 
 ## Acceptance Criteria
 
-- [ ] focused `design.md` 与 `implement.md` 已基于最新 `main`、父规划和相关 Trellis specs 完成并经用户复核。
-- [ ] Repository/RecoveryPoint/AssetRef/capability/state machine 的全部合法与非法组合有单元测试，包含 mutable-head stable ID、retirement/purge 边界和 Command unsupported。
-- [ ] SQLite/PostgreSQL `000062` migrations 均通过真实 apply/down、FK/index/UTC 检查，且 CI 不允许缺失 PostgreSQL 验证。
-- [ ] model、公开 DTO、日志和审计测试证明 access binding、credential、locator 与 Provider 原始错误不会泄露。
-- [ ] versioned keyring 与四个基础 key domains 通过生成、rewrap、轮换重叠、丢失影响和分域测试。
-- [ ] RecoveryPointLease 通过 acquire/renew/release/takeover、absolute deadline、旧 fence 拒绝和重启 reconciliation 测试。
-- [ ] purpose-bound step-up 覆盖现有后端/前端全部 caller，缺失/未知/旧通用 proof 被拒绝，完整 cross-purpose matrix 通过，终端仅接受 `terminal.open`。
-- [ ] 新权限在所有 role maps 一致，Viewer 无存在性泄漏，purge 不由 manage 推导，恢复结果权限规则被固定测试。
-- [ ] typed asset audit registry、sanitizer、segment/checkpoint continuity 和 keyed fingerprint 基础测试通过。
-- [ ] 所有新增 settings 通过 registry/default/sensitivity/restart 测试，`backup_assets.enabled` 保持 false。
-- [ ] focused backend、frontend、双数据库 migration 与全仓质量门禁通过；提交不包含公开资产路由、Provider mutation 或 feature enablement。
+- [x] focused `design.md` 与 `implement.md` 已基于最新 `main`、父规划和相关 Trellis specs 完成并经用户复核。
+- [x] Repository/RecoveryPoint/AssetRef/capability/state machine 的全部合法与非法组合有单元测试，包含 mutable-head stable ID、retirement/purge 边界和 Command unsupported。
+- [x] SQLite/PostgreSQL `000062` migrations 均通过真实 apply/down、FK/index/UTC 检查，且 CI 不允许缺失 PostgreSQL 验证。
+- [x] model、公开 DTO、日志和审计测试证明 access binding、credential、locator 与 Provider 原始错误不会泄露。
+- [x] versioned keyring 与四个基础 key domains 通过生成、rewrap、轮换重叠、丢失影响和分域测试。
+- [x] RecoveryPointLease 通过 acquire/renew/release/takeover、absolute deadline、旧 fence 拒绝和重启 reconciliation 测试。
+- [x] purpose-bound step-up 覆盖现有后端/前端全部 caller，缺失/未知/旧通用 proof 被拒绝，完整 cross-purpose matrix 通过，终端仅接受 `terminal.open`。
+- [x] 新权限在所有 role maps 一致，Viewer 无存在性泄漏，purge 不由 manage 推导，恢复结果权限规则被固定测试。
+- [x] typed asset audit registry、sanitizer、segment/checkpoint continuity 和 keyed fingerprint 基础测试通过。
+- [x] 所有新增 settings 通过 registry/default/sensitivity/restart 测试，`backup_assets.enabled` 保持 false。
+- [x] focused backend、frontend、双数据库 migration 与全仓质量门禁通过；提交不包含公开资产路由、Provider mutation 或 feature enablement。
+- [x] 新增 settings/env 参考与 `DATA_ENCRYPTION_LEGACY_KEY` 的 domain-key rewrap 说明和实际代码一致。
 - [ ] 独立分支 PR 的 required CI 全绿，合并后自动化已检查，本地 `main` 已同步后才允许创建 Child 2。
 
 ## Out Of Scope
@@ -87,4 +101,5 @@
 ## Notes
 
 - 用户于 2026-07-13 同意采用 planning parent + 顺序创建子任务的交付方式，并同意在新会话中推进 Child 1。
-- 创建 Child 1 不等于启动实施；当前状态必须保持 `planning`，直到 focused planning package 再次通过 review gate。
+- 创建 Child 1 不等于启动实施；本任务在 focused planning package 通过 review gate 前保持了 `planning`。
+- 用户于 2026-07-13 明确批准 focused package；随后仅启动 Child 1，任务状态转为 `in_progress`，父任务继续保持 `planning`。

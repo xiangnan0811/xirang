@@ -28,22 +28,23 @@ type stepUpRequiredData struct {
 }
 
 type stepUpAuditOperation struct {
-	Action    string
-	Purpose   string
-	Operation string
+	ExpectedAction auth.StepUpAction
+	Action         string
+	Purpose        string
+	Operation      string
 }
 
-func RequireStepUp(db *gorm.DB, jwtManager *auth.JWTManager, action, purpose, operation string) gin.HandlerFunc {
-	return RequireStepUpIf(db, jwtManager, action, purpose, operation, nil)
+func RequireStepUp(db *gorm.DB, jwtManager *auth.JWTManager, expectedAction auth.StepUpAction, purpose, operation string) gin.HandlerFunc {
+	return RequireStepUpIf(db, jwtManager, expectedAction, purpose, operation, nil)
 }
 
-func RequireStepUpIf(db *gorm.DB, jwtManager *auth.JWTManager, action, purpose, operation string, predicate func(*gin.Context) bool) gin.HandlerFunc {
+func RequireStepUpIf(db *gorm.DB, jwtManager *auth.JWTManager, expectedAction auth.StepUpAction, purpose, operation string, predicate func(*gin.Context) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if predicate != nil && !predicate(c) {
 			c.Next()
 			return
 		}
-		if !enforceStepUpForContext(c, db, jwtManager, stepUpAuditOperation{Action: action, Purpose: purpose, Operation: operation}) {
+		if !enforceStepUpForContext(c, db, jwtManager, stepUpAuditOperation{ExpectedAction: expectedAction, Action: string(expectedAction), Purpose: purpose, Operation: operation}) {
 			c.Abort()
 			return
 		}
@@ -51,11 +52,16 @@ func RequireStepUpIf(db *gorm.DB, jwtManager *auth.JWTManager, action, purpose, 
 	}
 }
 
-func EnforceStepUp(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, action, purpose, operation string) bool {
-	return enforceStepUpForContext(c, db, jwtManager, stepUpAuditOperation{Action: action, Purpose: purpose, Operation: operation})
+func EnforceStepUp(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, expectedAction auth.StepUpAction, purpose, operation string) bool {
+	return enforceStepUpForContext(c, db, jwtManager, stepUpAuditOperation{ExpectedAction: expectedAction, Action: string(expectedAction), Purpose: purpose, Operation: operation})
 }
 
 func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, op stepUpAuditOperation) bool {
+	if !auth.IsValidStepUpAction(op.ExpectedAction) {
+		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "invalid_action")
+		respondStepUpRequired(c)
+		return false
+	}
 	userID := middleware.CurrentUserID(c)
 	role := middleware.CurrentRole(c)
 	proof := strings.TrimSpace(c.GetHeader(StepUpHeaderName))
@@ -64,7 +70,7 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 		respondStepUpRequired(c)
 		return false
 	}
-	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role)
+	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, op.ExpectedAction)
 	if err != nil {
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
 		respondStepUpRequired(c)
@@ -74,7 +80,7 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 	return true
 }
 
-func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string, userID uint, role string) (*auth.Claims, error) {
+func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string, userID uint, role string, expectedAction auth.StepUpAction) (*auth.Claims, error) {
 	if db == nil || jwtManager == nil {
 		return nil, fmt.Errorf("step-up 验证服务不可用")
 	}
@@ -82,12 +88,18 @@ func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string,
 	if proof == "" {
 		return nil, fmt.Errorf("缺少 step-up proof")
 	}
+	if !auth.IsValidStepUpAction(expectedAction) {
+		return nil, fmt.Errorf("step-up action 无效")
+	}
 	claims, err := jwtManager.ParseToken(proof)
 	if err != nil {
 		return nil, fmt.Errorf("step-up proof 无效")
 	}
 	if claims.Purpose != auth.PurposeStepUp {
 		return nil, fmt.Errorf("step-up proof 用途不匹配")
+	}
+	if claims.StepUpAction != expectedAction {
+		return nil, fmt.Errorf("step-up proof 动作不匹配")
 	}
 	if claims.UserID == 0 || claims.UserID != userID {
 		return nil, fmt.Errorf("step-up proof 用户不匹配")

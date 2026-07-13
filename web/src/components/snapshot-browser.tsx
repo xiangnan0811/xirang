@@ -15,6 +15,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
 import type { ResticSnapshot, ResticEntry } from "@/lib/api/snapshots-api";
@@ -153,7 +154,10 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
     setRestoring(true);
     setGrantError(null);
     try {
-      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
+      const proof = await ensureStepUpProof(
+        STEP_UP_ACTIONS.snapshotRestore,
+        { persist: false, reuseCached: false },
+      );
       await apiClient.requestSnapshotRestoreCredentialGrant(
         token,
         {
@@ -372,4 +376,3 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
     </div>
   );
 }
-

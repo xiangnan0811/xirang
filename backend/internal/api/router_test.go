@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,49 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
+	files := []string{
+		"router.go",
+		"handlers/batch_handler.go",
+		"handlers/task_handler.go",
+		"handlers/terminal_handler.go",
+		"handlers/credential_access_grant.go",
+	}
+	combined := ""
+	for _, path := range files {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		combined += "\n" + string(contents)
+	}
+	for _, actionConstant := range []string{
+		"auth.StepUpActionSSHKeyExport",
+		"auth.StepUpActionTerminalOpen",
+		"auth.StepUpActionConfigImport",
+		"auth.StepUpActionConfigExport",
+		"auth.StepUpActionSnapshotRestore",
+		"auth.StepUpActionTaskRestoreTrigger",
+		"auth.StepUpActionTaskManualTrigger",
+		"auth.StepUpActionTaskBatchTrigger",
+		"auth.StepUpActionBatchCommandCreate",
+	} {
+		if !strings.Contains(combined, actionConstant) {
+			t.Errorf("production step-up caller is missing explicit %s", actionConstant)
+		}
+	}
+	for _, forbidden := range []string{
+		`RequireStepUp(dep.DB, dep.JWTManager, "`,
+		`RequireStepUpIf(dep.DB, dep.JWTManager, "`,
+		`EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantAction`,
+		`validateStepUpProof(h.db, h.jwtManager, authMsg.StepUpProof, claims.UserID, claims.Role)`,
+	} {
+		if strings.Contains(combined, forbidden) {
+			t.Errorf("step-up caller lacks explicit typed action: %s", forbidden)
+		}
+	}
+}
 
 func TestResolveAllowedOrigin(t *testing.T) {
 	if got := resolveAllowedOrigin("https://xirang.example.com", "xirang.example.com:8080", []string{"https://xirang.example.com"}); got != "https://xirang.example.com" {
@@ -273,7 +317,7 @@ func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("生成 %s token 失败: %v", role, err)
 		}
-		proof, _, err := jwtManager.GenerateStepUpToken(user)
+		proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionTerminalOpen)
 		if err != nil {
 			t.Fatalf("生成 %s step-up proof 失败: %v", role, err)
 		}

@@ -93,6 +93,7 @@ func signExpiredStepUpProofForTest(t *testing.T, user model.User) string {
 		Username:     user.Username,
 		Role:         user.Role,
 		Purpose:      auth.PurposeStepUp,
+		StepUpAction: auth.StepUpActionTaskManualTrigger,
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        fmt.Sprintf("expired-step-up-%d", user.ID),
@@ -120,11 +121,96 @@ func generatePrimaryToken(t *testing.T, manager *auth.JWTManager, user model.Use
 
 func generateStepUpProof(t *testing.T, manager *auth.JWTManager, user model.User) string {
 	t.Helper()
-	proof, _, err := manager.GenerateStepUpToken(user)
+	return generateStepUpProofForAction(t, manager, user, auth.StepUpActionTaskManualTrigger)
+}
+
+func generateStepUpProofForAction(t *testing.T, manager *auth.JWTManager, user model.User, action auth.StepUpAction) string {
+	t.Helper()
+	proof, _, err := manager.GenerateStepUpToken(user, action)
 	if err != nil {
 		t.Fatalf("生成 step-up proof 失败: %v", err)
 	}
 	return proof
+}
+
+func TestStepUpRequestRequiresKnownAction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "step-up-action-request", "admin")
+	primaryToken := generatePrimaryToken(t, manager, user)
+	handler := NewAuthHandler(nil, manager, nil).WithDB(db)
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/auth/step-up", handler.StepUp)
+	code := currentStepUpCode(t, user)
+
+	for _, body := range []string{
+		fmt.Sprintf(`{"code":%q}`, code),
+		fmt.Sprintf(`{"code":%q,"step_up_action":"future.action"}`, code),
+	} {
+		resp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", primaryToken, "", body)
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("unknown/missing step_up_action should return 400, got %d: %s", resp.Code, resp.Body.String())
+		}
+	}
+}
+
+func TestStepUpProofRejectsMissingLegacyGenericAction(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "legacy-generic-proof", "admin")
+	now := time.Now()
+	claims := auth.Claims{
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		Purpose:      auth.PurposeStepUp,
+		TokenVersion: user.TokenVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "legacy-generic-proof-marker",
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+			Subject:   fmt.Sprintf("%d", user.ID),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	proof, err := token.SignedString([]byte(stepUpTestJWTSecret))
+	if err != nil {
+		t.Fatalf("sign legacy generic proof: %v", err)
+	}
+	if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, auth.StepUpActionTerminalOpen); err == nil {
+		t.Fatal("legacy generic step-up proof unexpectedly accepted")
+	}
+}
+
+func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "pairwise-step-up", "admin")
+	actions := auth.AllStepUpActions()
+	accepted := 0
+	rejected := 0
+	for _, issuedAction := range actions {
+		proof := generateStepUpProofForAction(t, manager, user, issuedAction)
+		for _, expectedAction := range actions {
+			_, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, expectedAction)
+			if issuedAction == expectedAction {
+				if err != nil {
+					t.Fatalf("matching action %q rejected: %v", issuedAction, err)
+				}
+				accepted++
+				continue
+			}
+			if err == nil {
+				t.Fatalf("proof for %q accepted as %q", issuedAction, expectedAction)
+			}
+			rejected++
+		}
+	}
+	if accepted != 17 || rejected != 272 {
+		t.Fatalf("pairwise matrix accepted=%d rejected=%d, want 17/272", accepted, rejected)
+	}
 }
 
 func performStepUpRequest(t *testing.T, router *gin.Engine, method, path, token, proof, body string) *httptest.ResponseRecorder {
@@ -200,7 +286,7 @@ func TestAuthHandlerStepUpIssuesProofForEnabledTOTP(t *testing.T) {
 	router.Use(middleware.AuthMiddleware(manager, db))
 	router.POST("/auth/step-up", handler.StepUp)
 
-	resp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", primaryToken, "", fmt.Sprintf(`{"code":%q}`, currentStepUpCode(t, user)))
+	resp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", primaryToken, "", fmt.Sprintf(`{"code":%q,"step_up_action":%q}`, currentStepUpCode(t, user), auth.StepUpActionTaskManualTrigger))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("step-up 成功期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
@@ -221,11 +307,11 @@ func TestAuthHandlerStepUpIssuesProofForEnabledTOTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析返回 proof 失败: %v", err)
 	}
-	if claims.Purpose != auth.PurposeStepUp || claims.UserID != user.ID || claims.TokenVersion != user.TokenVersion {
+	if claims.Purpose != auth.PurposeStepUp || claims.StepUpAction != auth.StepUpActionTaskManualTrigger || claims.UserID != user.ID || claims.TokenVersion != user.TokenVersion {
 		t.Fatalf("返回 proof claims 不符合预期: %+v", claims)
 	}
 
-	events := loadCredentialAuditEvents(t, db, "auth.step_up")
+	events := loadCredentialAuditEvents(t, db, string(auth.StepUpActionTaskManualTrigger))
 	if len(events) != 1 || events[0].Outcome != credentialaudit.OutcomeSuccess || events[0].UserID != user.ID {
 		t.Fatalf("step-up 成功审计事件不符合预期: %+v", events)
 	}
@@ -253,7 +339,7 @@ func TestAuthHandlerStepUpRejectsDisabledOrInvalidTOTP(t *testing.T) {
 	router.Use(middleware.AuthMiddleware(manager, db))
 	router.POST("/auth/step-up", handler.StepUp)
 
-	disabledResp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", primaryToken, "", fmt.Sprintf(`{"code":%q}`, validCode))
+	disabledResp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", primaryToken, "", fmt.Sprintf(`{"code":%q,"step_up_action":%q}`, validCode, auth.StepUpActionTaskManualTrigger))
 	if disabledResp.Code != http.StatusForbidden {
 		t.Fatalf("TOTP disabled step-up 期望 403，实际: %d，响应: %s", disabledResp.Code, disabledResp.Body.String())
 	}
@@ -265,12 +351,12 @@ func TestAuthHandlerStepUpRejectsDisabledOrInvalidTOTP(t *testing.T) {
 	if invalidCode == currentStepUpCode(t, enabledUser) {
 		invalidCode = invalidCode[:len(invalidCode)-1] + "8"
 	}
-	invalidResp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", enabledToken, "", fmt.Sprintf(`{"code":%q}`, invalidCode))
+	invalidResp := performStepUpRequest(t, router, http.MethodPost, "/auth/step-up", enabledToken, "", fmt.Sprintf(`{"code":%q,"step_up_action":%q}`, invalidCode, auth.StepUpActionTaskManualTrigger))
 	if invalidResp.Code != http.StatusForbidden {
 		t.Fatalf("invalid TOTP step-up 期望 403，实际: %d，响应: %s", invalidResp.Code, invalidResp.Body.String())
 	}
 
-	events := loadCredentialAuditEvents(t, db, "auth.step_up")
+	events := loadCredentialAuditEvents(t, db, string(auth.StepUpActionTaskManualTrigger))
 	if len(events) != 2 || events[0].Outcome != credentialaudit.OutcomeBlocked || events[1].Outcome != credentialaudit.OutcomeFailure {
 		t.Fatalf("step-up 失败/blocked 审计事件不符合预期: %+v", events)
 	}
@@ -293,7 +379,7 @@ func TestStepUpMiddlewareValidatesMissingInvalidExpiredWrongUserAndTokenVersion(
 	newRouter := func() *gin.Engine {
 		router := gin.New()
 		router.Use(middleware.AuthMiddleware(manager, db))
-		router.GET("/protected", RequireStepUp(db, manager, "task.manual_trigger", "task_command", "task_run"), func(c *gin.Context) {
+		router.GET("/protected", RequireStepUp(db, manager, auth.StepUpActionTaskManualTrigger, "task_command", "task_run"), func(c *gin.Context) {
 			respondOK(c, gin.H{"ok": true})
 		})
 		return router
@@ -385,7 +471,7 @@ func TestStepUpPreservesRBACAndOwnershipDenials(t *testing.T) {
 	handler := NewTaskHandler(db, runner).WithJWTManager(manager)
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(db), RequireStepUp(db, manager, "task.manual_trigger", "task_command", "task_run"), handler.Trigger)
+	router.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(db), RequireStepUp(db, manager, auth.StepUpActionTaskManualTrigger, "task_command", "task_run"), handler.Trigger)
 
 	resp := performStepUpRequest(t, router, http.MethodPost, fmt.Sprintf("/tasks/%d/trigger", taskEntity.ID), operatorToken, "", "")
 	if resp.Code != http.StatusForbidden || !strings.Contains(resp.Body.String(), "无权访问该任务") {
@@ -402,12 +488,12 @@ func TestConfigExportStepUpOnlyWhenIncludingSensitiveValues(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "config-admin", "admin")
 	adminToken := generatePrimaryToken(t, manager, admin)
-	adminProof := generateStepUpProof(t, manager, admin)
+	adminProof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
 
 	handler := NewConfigHandler(db, nil)
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, "config.export", "config_export", "settings_export_sensitive", func(c *gin.Context) bool {
+	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, auth.StepUpActionConfigExport, "config_export", "settings_export_sensitive", func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), handler.Export)
 
@@ -423,13 +509,14 @@ func TestConfigExportStepUpOnlyWhenIncludingSensitiveValues(t *testing.T) {
 	}
 }
 
-func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
+func TestTerminalAcceptsOnlyTerminalOpenProof(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "terminal-admin", "admin")
 	adminToken := generatePrimaryToken(t, manager, admin)
-	adminProof := generateStepUpProof(t, manager, admin)
+	adminProof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen)
+	wrongActionProof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskManualTrigger)
 	now := time.Now().UTC()
 	grant := model.CredentialAccessGrant{
 		RequesterUserID:     admin.ID,
@@ -485,6 +572,10 @@ func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
 	if invalidProofErr.Code != websocket.ClosePolicyViolation || !strings.Contains(invalidProofErr.Text, "需要二次验证") {
 		t.Fatalf("无效 step-up proof 应 policy violation，实际: %+v", invalidProofErr)
 	}
+	wrongActionErr := dialAndAuth(t, wsURL+"?node_id=1", wrongActionProof)
+	if wrongActionErr.Code != websocket.ClosePolicyViolation || !strings.Contains(wrongActionErr.Text, "需要二次验证") {
+		t.Fatalf("非 terminal.open proof 应被终端拒绝，实际: %+v", wrongActionErr)
+	}
 	validProofErr := dialAndAuth(t, wsURL, adminProof)
 	if validProofErr.Code != websocket.CloseInvalidFramePayloadData || !strings.Contains(validProofErr.Text, "缺少 node_id") {
 		t.Fatalf("有效 step-up proof 应通过 step-up gate 后再失败于 node_id 校验，实际: %+v", validProofErr)
@@ -499,10 +590,10 @@ func TestTerminalWebSocketRequiresStepUpProofInAuthMessage(t *testing.T) {
 	}
 
 	events := loadCredentialAuditEvents(t, db, "terminal.open")
-	if len(events) != 7 {
-		t.Fatalf("终端 step-up/grant 应写入 7 条凭据审计事件，实际: %+v", events)
+	if len(events) != 8 {
+		t.Fatalf("终端 step-up/grant 应写入 8 条凭据审计事件，实际: %+v", events)
 	}
-	if events[0].Outcome != credentialaudit.OutcomeBlocked || events[1].Outcome != credentialaudit.OutcomeBlocked || events[2].Outcome != credentialaudit.OutcomeSuccess || events[3].Outcome != credentialaudit.OutcomeSuccess || events[4].Outcome != credentialaudit.OutcomeBlocked || events[5].Outcome != credentialaudit.OutcomeSuccess || events[6].Outcome != credentialaudit.OutcomeSuccess {
+	if events[0].Outcome != credentialaudit.OutcomeBlocked || events[1].Outcome != credentialaudit.OutcomeBlocked || events[2].Outcome != credentialaudit.OutcomeBlocked || events[3].Outcome != credentialaudit.OutcomeSuccess || events[4].Outcome != credentialaudit.OutcomeSuccess || events[5].Outcome != credentialaudit.OutcomeBlocked || events[6].Outcome != credentialaudit.OutcomeSuccess || events[7].Outcome != credentialaudit.OutcomeSuccess {
 		t.Fatalf("终端 step-up/grant 审计 outcome 不符合预期: %+v", events)
 	}
 	for _, event := range events {

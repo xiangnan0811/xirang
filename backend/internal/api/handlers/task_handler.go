@@ -648,7 +648,7 @@ func (h *TaskHandler) BatchTrigger(c *gin.Context) {
 		tasksToTrigger = append(tasksToTrigger, tid)
 	}
 
-	if len(tasksToTrigger) > 0 && !EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
+	if len(tasksToTrigger) > 0 && !EnforceStepUp(c, h.db, h.jwtManager, auth.StepUpActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
 		return
 	}
 	if len(tasksToTrigger) > 0 && !EnforceTaskBatchTriggerCredentialGrants(c, h.db, tasksToTrigger) {
@@ -806,7 +806,6 @@ func taskCredentialAuditMetadata(triggerType string, task model.Task, ok bool) m
 	}
 	return metadata
 }
-
 
 func parseTaskSort(raw string) string {
 	const defaultOrder = "created_at desc, id desc"

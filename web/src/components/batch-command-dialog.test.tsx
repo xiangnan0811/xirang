@@ -2,15 +2,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { BatchCommandDialog } from "./batch-command-dialog";
 import type { NodeRecord } from "@/types/domain";
 
 const { requestBatchCommandCredentialGrantMock, createBatchCommandMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions, onOpenChangeMock, onSuccessMock } = vi.hoisted(() => {
   const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
-  const stepUpHookMock = vi.fn((options?: unknown) => {
+  const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => {
+    stepUpHookMock.lastAction = stepUpAction;
     stepUpHookMock.lastOptions = options;
     return withStepUpMock;
-  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+  }) as ReturnType<typeof vi.fn> & { lastAction?: unknown; lastOptions?: unknown };
 
   return {
     requestBatchCommandCredentialGrantMock: vi.fn(),
@@ -84,6 +86,7 @@ describe("BatchCommandDialog", () => {
     createBatchCommandMock.mockResolvedValue({ batchId: "batch-1", retain: false });
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
     useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
   });
 
@@ -118,6 +121,7 @@ describe("BatchCommandDialog", () => {
     await user.click(screen.getByRole("button", { name: "确认并验证" }));
 
     await waitFor(() => expect(requestBatchCommandCredentialGrantMock).toHaveBeenCalledTimes(1));
+    expect(useStepUpActionMock.lastAction).toBe(STEP_UP_ACTIONS.batchCommandCreate);
     expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
     expect(withStepUpMock).toHaveBeenCalledWith(expect.any(Function));
     expect(apiClient.requestBatchCommandCredentialGrant).toHaveBeenCalledWith("auth-marker", {

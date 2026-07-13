@@ -17,6 +17,7 @@ import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -48,7 +49,10 @@ export function AlertCenter({
 }: AlertCenterProps) {
   const { t } = useTranslation();
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
+  const withStepUp = useStepUpAction(
+    STEP_UP_ACTIONS.taskManualTrigger,
+    { persist: false, reuseCached: false },
+  );
 
   // --- 筛选状态 ---
   const {

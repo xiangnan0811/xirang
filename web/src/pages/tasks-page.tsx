@@ -17,6 +17,7 @@ import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewTaskInput, TaskRecord, TaskRunRecord } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
@@ -94,7 +95,10 @@ export function TasksPage() {
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const { token: authToken } = useAuth();
-  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
+  const withStepUp = useStepUpAction(
+    STEP_UP_ACTIONS.taskBatchTrigger,
+    { persist: false, reuseCached: false },
+  );
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);

@@ -5,6 +5,7 @@ import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { buildDemoTask } from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
@@ -45,7 +46,10 @@ export function useTaskOperations({
   handleWriteApiError
 }: UseTaskOperationsParams) {
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
-  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
+  const withStepUp = useStepUpAction(
+    STEP_UP_ACTIONS.taskManualTrigger,
+    { persist: false, reuseCached: false },
+  );
 
   const createTask = useCallback(async (input: NewTaskInput): Promise<number> => {
     const result = await exec(i18n.t("tasks.actions.createTask"), (t) => apiClient.createTask(t, input));

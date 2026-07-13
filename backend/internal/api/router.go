@@ -255,7 +255,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)
 	secured.POST("/ssh-keys/batch-delete", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchDelete)
-	secured.GET("/ssh-keys/export", middleware.RBAC("ssh_keys:read"), handlers.RequireStepUp(dep.DB, dep.JWTManager, "ssh_key.export", sshutil.PurposeSSHKeyExport, "ssh_export"), sshKeyHandler.Export)
+	secured.GET("/ssh-keys/export", middleware.RBAC("ssh_keys:read"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionSSHKeyExport, sshutil.PurposeSSHKeyExport, "ssh_export"), sshKeyHandler.Export)
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
 	secured.PUT("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Update)
 	secured.DELETE("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Delete)
@@ -318,12 +318,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/tasks/:id", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Delete)
 	secured.GET("/tasks/:id/runs", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskRunHandler.ListByTask)
 	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
-	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), handlers.RequireTaskManualTriggerCredentialGrant(dep.DB), taskHandler.Trigger)
+	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), handlers.RequireTaskManualTriggerCredentialGrant(dep.DB), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Cancel)
 	secured.POST("/tasks/:id/pause", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Pause)
 	secured.POST("/tasks/:id/resume", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Resume)
 	secured.POST("/tasks/:id/skip-next", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.SkipNext)
-	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), handlers.RequireTaskRestoreCredentialGrant(dep.DB), taskHandler.Restore)
+	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskRestoreTrigger, sshutil.PurposeTaskRestore, "task_restore"), handlers.RequireTaskRestoreCredentialGrant(dep.DB), taskHandler.Restore)
 	secured.GET("/tasks/:id/backup-files", middleware.RequireRole("admin"), fileHandler.ListTaskBackupFiles)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
@@ -343,7 +343,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListSnapshots)
 	secured.GET("/tasks/:id/snapshots/:sid/files", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotHandler.ListFiles)
-	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), handlers.RequireSnapshotRestoreCredentialGrant(dep.DB), snapshotHandler.Restore)
+	secured.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), handlers.RequireSnapshotRestoreCredentialGrant(dep.DB), snapshotHandler.Restore)
 	secured.GET("/tasks/:id/snapshots/diff", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotDiffHandler.Diff)
 	secured.GET("/tasks/:id/snapshots/search", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), snapshotSearchHandler.Search)
 
@@ -352,12 +352,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
 	secured.DELETE("/settings/:key", middleware.RequireRole("admin"), settingsHandler.Delete)
 
-	secured.GET("/config/export", middleware.RequireRole("admin"), handlers.RequireStepUpIf(dep.DB, dep.JWTManager, handlers.CredentialGrantActionConfigExport, handlers.CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+	secured.GET("/config/export", middleware.RequireRole("admin"), handlers.RequireStepUpIf(dep.DB, dep.JWTManager, auth.StepUpActionConfigExport, handlers.CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), handlers.RequireConfigExportCredentialGrantIf(dep.DB, func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), configHandler.Export)
-	secured.POST("/config/import", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, handlers.CredentialGrantActionConfigImport, handlers.CredentialGrantPurposeConfigImport, "settings_import"), handlers.RequireConfigImportCredentialGrant(dep.DB), configHandler.Import)
+	secured.POST("/config/import", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionConfigImport, handlers.CredentialGrantPurposeConfigImport, "settings_import"), handlers.RequireConfigImportCredentialGrant(dep.DB), configHandler.Import)
 
 	silenceHandler := handlers.NewSilenceHandler(dep.DB)
 	// Writes are admin-only per P5b spec — silences are a platform-level ops

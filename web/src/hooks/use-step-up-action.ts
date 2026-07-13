@@ -2,8 +2,9 @@ import { useCallback } from "react";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { StepUpProofOptions } from "@/context/auth-context.shared";
 import { isStepUpRequiredError } from "@/lib/api/core";
+import type { StepUpAction } from "@/lib/api/totp-api";
 
-export function useStepUpAction(options?: StepUpProofOptions) {
+export function useStepUpAction(stepUpAction: StepUpAction, options?: StepUpProofOptions) {
   const { ensureStepUpProof, clearStepUpProof } = useAuth();
   const hasOptions = options?.persist !== undefined || options?.reuseCached !== undefined;
   const persist = options?.persist;
@@ -17,16 +18,16 @@ export function useStepUpAction(options?: StepUpProofOptions) {
         throw error;
       }
       const proof = hasOptions
-        ? await ensureStepUpProof({ persist, reuseCached })
-        : await ensureStepUpProof();
+        ? await ensureStepUpProof(stepUpAction, { persist, reuseCached })
+        : await ensureStepUpProof(stepUpAction);
       try {
         return await action(proof);
       } catch (retryError) {
         if (isStepUpRequiredError(retryError)) {
-          clearStepUpProof();
+          clearStepUpProof(stepUpAction);
         }
         throw retryError;
       }
     }
-  }, [clearStepUpProof, ensureStepUpProof, hasOptions, persist, reuseCached]);
+  }, [clearStepUpProof, ensureStepUpProof, hasOptions, persist, reuseCached, stepUpAction]);
 }

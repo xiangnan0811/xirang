@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { STEP_UP_ACTIONS } from "./api/totp-api";
 import { clearStepUpProof, readStepUpProof, saveStepUpProof } from "./step-up-storage";
 
 describe("step-up proof storage", () => {
@@ -7,31 +10,59 @@ describe("step-up proof storage", () => {
     localStorage.clear();
   });
 
-  it("仅将 proof 保存到 sessionStorage 且按过期时间读取", () => {
+  it("isolates proofs by action in one versioned session map", () => {
     const now = Date.now();
-    const expiresAt = now + 60_000;
-    saveStepUpProof("  proof-1  ", expiresAt);
+    saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, " terminal-proof ", now + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "task-proof", now + 120_000);
 
-    expect(readStepUpProof(now)).toEqual({ proof: "proof-1", expiresAt });
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("proof-1");
-    expect(localStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.terminalOpen, now)).toEqual({
+      proof: "terminal-proof",
+      expiresAt: now + 60_000,
+    });
+    expect(readStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, now)).toEqual({
+      proof: "task-proof",
+      expiresAt: now + 120_000,
+    });
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("terminal.open");
+    expect(localStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 
-  it("过期 proof 会被清理", () => {
+  it("expires one action without clearing another", () => {
     const now = Date.now();
-    saveStepUpProof("proof-2", now + 1_000);
+    saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "terminal-proof", now + 1_000);
+    saveStepUpProof(STEP_UP_ACTIONS.configExport, "config-proof", now + 10_000);
 
-    expect(readStepUpProof(now + 1_001)).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.terminalOpen, now + 1_001)).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.configExport, now + 1_001)?.proof).toBe("config-proof");
+  });
+
+  it("clears one action or all actions", () => {
+    const now = Date.now();
+    saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "terminal-proof", now + 10_000);
+    saveStepUpProof(STEP_UP_ACTIONS.configExport, "config-proof", now + 10_000);
+
+    clearStepUpProof(STEP_UP_ACTIONS.terminalOpen);
+    expect(readStepUpProof(STEP_UP_ACTIONS.terminalOpen, now)).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.configExport, now)?.proof).toBe("config-proof");
+
+    clearStepUpProof();
+    expect(readStepUpProof(STEP_UP_ACTIONS.configExport, now)).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
+  });
+
+  it("deletes legacy generic keys without promoting their proof", () => {
+    sessionStorage.setItem("xirang-step-up-proof", "legacy-generic-proof");
+    sessionStorage.setItem("xirang-step-up-expires-at", String(Date.now() + 60_000));
+
+    expect(readStepUpProof(STEP_UP_ACTIONS.terminalOpen)).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.taskManualTrigger)).toBeNull();
     expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
     expect(sessionStorage.getItem("xirang-step-up-expires-at")).toBeNull();
   });
 
-  it("clearStepUpProof 会移除 session 中的 proof", () => {
-    saveStepUpProof("proof-3", Date.now() + 10_000);
+  it("remains a dependency leaf so API core cannot form a storage cycle", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "src/lib/step-up-storage.ts"), "utf8");
 
-    clearStepUpProof();
-
-    expect(readStepUpProof()).toBeNull();
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(source).not.toMatch(/(?:from|import\s*\()[^\n]*totp-api/);
   });
 });

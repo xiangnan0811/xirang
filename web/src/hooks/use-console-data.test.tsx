@@ -1,13 +1,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
 import { useConsoleData } from "./use-console-data";
 
 const { apiClientMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
-  const stepUpHookMock = vi.fn((options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+  const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+    stepUpHookMock.lastAction = stepUpAction;
     stepUpHookMock.lastOptions = options;
     return action();
-  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+  }) as ReturnType<typeof vi.fn> & { lastAction?: unknown; lastOptions?: unknown };
 
   return {
     oneShotStepUpOptions: { persist: false, reuseCached: false },
@@ -179,6 +181,7 @@ function createTrafficSeries(window: OverviewTrafficSeries["window"] = "1h"): Ov
 describe("useConsoleData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     apiClientMock.getPolicies.mockResolvedValue([]);
     apiClientMock.getTasks.mockResolvedValue([]);
@@ -314,6 +317,7 @@ describe("useConsoleData", () => {
       await result.current.triggerTask(202);
     });
 
+    expect(useStepUpActionMock.lastAction).toBe(STEP_UP_ACTIONS.taskManualTrigger);
     expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
     expect(apiClientMock.requestTaskManualTriggerCredentialGrant).toHaveBeenCalledWith("token-1", {
       taskId: 202,

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { RestoreConfirmDialog } from "./restore-confirm-dialog";
 
 const {
@@ -100,7 +101,10 @@ describe("RestoreConfirmDialog", () => {
     await user.click(screen.getByRole("button", { name: "申请授权并恢复" }));
 
     await waitFor(() => expect(requestTaskRestoreCredentialGrantMock).toHaveBeenCalledTimes(1));
-    expect(ensureStepUpProofMock).toHaveBeenCalledWith({ persist: false, reuseCached: false });
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.taskRestoreTrigger,
+      { persist: false, reuseCached: false },
+    );
     expect(apiClient.requestTaskRestoreCredentialGrant).toHaveBeenCalledWith(
       "auth-marker",
       { taskId: 101, reason: "恢复误删目录", requestedTtlSeconds: 600 },

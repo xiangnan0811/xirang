@@ -43,9 +43,9 @@
 | `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
 | `ADMIN_INITIAL_PASSWORD` | string | — | 仅首次无 admin | 初始 admin 密码；**仅库中尚无 admin 用户时** bootstrap 需要，已有 admin 后不必填、也不会因留空拒绝启动 |
 | `DATA_ENCRYPTION_KEY` | string | 开发环境自动生成随机密钥（重启后失效） | 生产必填 | 敏感字段（密码、私钥）加密密钥，支持 32 字节 base64 或任意字符串（自动 argon2id 派生） |
-| `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 数据；确认轮替完成后清理 |
+| `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 字段，并作为上一把 v2 KEK rewrap 小型 domain-key envelope；两类迁移均验证完成后再清理 |
 
-**读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go` 和 `backend/internal/config/config.go`；`DATA_ENCRYPTION_LEGACY_KEY` → `backend/internal/secure/crypto.go`。
+**读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go`、`backend/internal/secure/keyring.go` 和 `backend/internal/config/config.go`；`DATA_ENCRYPTION_LEGACY_KEY` → `backend/internal/secure/crypto.go` 与 `backend/internal/secure/keyring.go`。
 
 ## 4. 跨域与 WebSocket
 
@@ -82,8 +82,19 @@
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 | `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
+| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；基础版本保持关闭，且不因此注册公开资产路由 |
+| `BACKUP_ASSETS_CATALOG_BATCH_SIZE` | int | `2000` | 否 | 目录构建批次大小，范围 `1..100000` |
+| `BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT` | duration | `30m` | 否 | 单次目录构建超时，范围 `1m..24h` |
+| `BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL` | duration | `15m` | 否 | 仓库元数据对账间隔，范围 `1m..24h` |
+| `BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS` | int | `10000` | 否 | typed 资产审计每段最大事件数，范围 `100..1000000` |
+| `BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE` | duration | `24h` | 否 | typed 资产审计每段最大持续时间，范围 `1h..168h` |
+| `BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS` | int | `180` | 否 | 资产审计事件明细保留天数，范围 `1..3650` |
+| `BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS` | int | `2555` | 否 | 审计 segment checkpoint 保留天数，范围 `180..36500` |
+| `BACKUP_ASSETS_LEASE_DURATION` | duration | `5m` | 否 | RecoveryPoint 短租约时长，范围 `30s..30m` |
+| `BACKUP_ASSETS_LEASE_HEARTBEAT` | duration | `60s` | 否 | 租约心跳间隔，范围 `10s..5m`，且必须小于短租约时长 |
+| `BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE` | duration | `168h` | 否 | 租约绝对截止时间，范围 `5m..168h`；takeover/renew 不得延长该截止时间 |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry 与 `backend/internal/backupasset` foundation service（DB override > env > default，均可动态调整）。
 
 ## 7. 节点探测
 
@@ -255,11 +266,11 @@ scrape_configs:
 
 ## 敏感字段加密策略
 
-Xirang 会加密存储密码、私钥、TOTP 密钥、通知通道 endpoint/secret、HTTP 代理地址等敏感字段。生产环境必须设置 `DATA_ENCRYPTION_KEY`；密钥轮替期间可临时设置 `DATA_ENCRYPTION_LEGACY_KEY` 解密旧数据。
+Xirang 会加密存储密码、私钥、TOTP 密钥、通知通道 endpoint/secret、HTTP 代理地址等敏感字段。生产环境必须设置 `DATA_ENCRYPTION_KEY`；密钥轮替期间可临时设置 `DATA_ENCRYPTION_LEGACY_KEY` 解密旧字段，并 rewrap 备份资产 domain-key v2 envelope。
 
 运营建议：
 
 - 把 `DATA_ENCRYPTION_KEY` 放入环境变量或密钥管理系统，不要写入公开文档、Issue 或日志。
-- 轮替密钥时，先设置新的 `DATA_ENCRYPTION_KEY` 并保留旧密钥到 `DATA_ENCRYPTION_LEGACY_KEY`，确认历史数据可读并完成重写后再移除旧密钥。
+- 轮替密钥时，先设置新的 `DATA_ENCRYPTION_KEY` 并保留旧密钥到 `DATA_ENCRYPTION_LEGACY_KEY`；确认历史字段可读、完成字段重写，并验证所有 domain key 已 rewrap 后再移除旧密钥。
 - 备份数据库前确认密钥备份策略；只有数据库备份而没有加密密钥时，敏感字段无法恢复明文。
 - 详细安全建议见 [安全加固](admin/security.md)。

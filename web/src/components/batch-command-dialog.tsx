@@ -6,6 +6,7 @@ import { FormDialog } from "@/components/ui/form-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NodeRecord } from "@/types/domain";
 
 export type BatchCommandResult = {
@@ -54,7 +55,10 @@ export function BatchCommandDialog({
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [acknowledgement, setAcknowledgement] = useState("");
-  const withStepUp = useStepUpAction({ persist: false, reuseCached: false });
+  const withStepUp = useStepUpAction(
+    STEP_UP_ACTIONS.batchCommandCreate,
+    { persist: false, reuseCached: false },
+  );
   const batchErrorId = "batch-command-error";
 
   useEffect(() => {

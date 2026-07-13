@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { SnapshotBrowser } from "./snapshot-browser";
 
 const {
@@ -103,7 +104,10 @@ describe("SnapshotBrowser", () => {
     await user.click(screen.getByRole("button", { name: "申请授权并恢复" }));
 
     await waitFor(() => expect(requestSnapshotRestoreCredentialGrantMock).toHaveBeenCalledTimes(1));
-    expect(requestOneTimeStepUpProofMock).toHaveBeenCalledWith({ persist: false, reuseCached: false });
+    expect(requestOneTimeStepUpProofMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.snapshotRestore,
+      { persist: false, reuseCached: false },
+    );
     expect(apiClient.requestSnapshotRestoreCredentialGrant).toHaveBeenCalledWith(
       "auth-marker",
       { taskId: 101, reason: "恢复误删文件", requestedTtlSeconds: 600 },

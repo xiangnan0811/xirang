@@ -78,7 +78,7 @@ func TestBatchCreateMissingGrantDoesNotDecryptInlineCredentials(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "batch-create-grant-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)
 	node := model.Node{
 		Name:      "batch-create-gated-node",
 		Host:      "redacted",
@@ -116,7 +116,7 @@ func TestBatchCreateRequiresAllNodeGrantsBeforeCreatingTasks(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "batch-create-all-grants-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)
 	nodeA := model.Node{Name: "batch-grant-node-a", Host: "redacted-a", Port: 22, Username: "root", AuthType: "key", BackupDir: "batch-grant-node-a"}
 	nodeB := model.Node{Name: "batch-grant-node-b", Host: "redacted-b", Port: 22, Username: "root", AuthType: "key", BackupDir: "batch-grant-node-b"}
 	if err := db.Create(&nodeA).Error; err != nil {

@@ -30,14 +30,14 @@ const (
 	CredentialGrantStatusExpired   = "expired"
 	CredentialGrantStatusRevoked   = "revoked"
 
-	CredentialGrantActionTerminalOpen      = "terminal.open"
-	CredentialGrantActionConfigImport      = "config.import"
-	CredentialGrantActionConfigExport      = "config.export"
-	CredentialGrantActionSnapshotRestore   = "snapshot.restore"
-	CredentialGrantActionTaskRestore       = "task.restore_trigger"
-	CredentialGrantActionTaskManualTrigger = "task.manual_trigger"
-	CredentialGrantActionTaskBatchTrigger  = "task.batch_trigger"
-	CredentialGrantActionBatchCommand      = "batch_command.create"
+	CredentialGrantActionTerminalOpen      = string(auth.StepUpActionTerminalOpen)
+	CredentialGrantActionConfigImport      = string(auth.StepUpActionConfigImport)
+	CredentialGrantActionConfigExport      = string(auth.StepUpActionConfigExport)
+	CredentialGrantActionSnapshotRestore   = string(auth.StepUpActionSnapshotRestore)
+	CredentialGrantActionTaskRestore       = string(auth.StepUpActionTaskRestoreTrigger)
+	CredentialGrantActionTaskManualTrigger = string(auth.StepUpActionTaskManualTrigger)
+	CredentialGrantActionTaskBatchTrigger  = string(auth.StepUpActionTaskBatchTrigger)
+	CredentialGrantActionBatchCommand      = string(auth.StepUpActionBatchCommandCreate)
 	CredentialGrantPurposeConfigImport     = "config_import"
 	CredentialGrantPurposeConfigExport     = "config_export"
 
@@ -185,7 +185,7 @@ func (h *CredentialAccessGrantHandler) RequestTerminalGrant(c *gin.Context) {
 		respondBadRequest(c, "节点 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, "terminal_grant")
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionTerminalOpen, CredentialGrantActionTerminalOpen, sshutil.PurposeTerminal, "terminal_grant")
 	if !ok {
 		return
 	}
@@ -219,7 +219,7 @@ func (h *CredentialAccessGrantHandler) RequestConfigImportGrant(c *gin.Context) 
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, "settings_import")
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionConfigImport, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, "settings_import")
 	if !ok {
 		return
 	}
@@ -241,7 +241,7 @@ func (h *CredentialAccessGrantHandler) RequestConfigExportGrant(c *gin.Context) 
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive")
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionConfigExport, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive")
 	if !ok {
 		return
 	}
@@ -267,7 +267,7 @@ func (h *CredentialAccessGrantHandler) RequestSnapshotRestoreGrant(c *gin.Contex
 		respondBadRequest(c, "任务 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore")
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionSnapshotRestore, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore")
 	if !ok {
 		return
 	}
@@ -309,7 +309,7 @@ func (h *CredentialAccessGrantHandler) RequestTaskRestoreGrant(c *gin.Context) {
 		respondBadRequest(c, "任务 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore")
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionTaskRestoreTrigger, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore")
 	if !ok {
 		return
 	}
@@ -341,7 +341,7 @@ func (h *CredentialAccessGrantHandler) RequestTaskManualTriggerGrant(c *gin.Cont
 		respondBadRequest(c, "任务 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run", []string{"admin", "operator"})
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionTaskManualTrigger, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run", []string{"admin", "operator"})
 	if !ok {
 		return
 	}
@@ -373,7 +373,7 @@ func (h *CredentialAccessGrantHandler) RequestTaskBatchTriggerGrant(c *gin.Conte
 		respondBadRequest(c, "任务 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run", []string{"admin", "operator"})
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionTaskBatchTrigger, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run", []string{"admin", "operator"})
 	if !ok {
 		return
 	}
@@ -409,7 +409,7 @@ func (h *CredentialAccessGrantHandler) RequestBatchCommandGrant(c *gin.Context) 
 		respondBadRequest(c, "节点 ID 无效")
 		return
 	}
-	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run", []string{"admin", "operator"})
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionBatchCommandCreate, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run", []string{"admin", "operator"})
 	if !ok {
 		return
 	}
@@ -473,16 +473,16 @@ type credentialGrantCreateInput struct {
 	RequestedTTLSeconds int
 }
 
-func (h *CredentialAccessGrantHandler) validateGrantRequest(c *gin.Context, reasonValue string, ttlSeconds int, action, purpose, operation string) (string, time.Duration, bool) {
-	return h.validateGrantRequestForRoles(c, reasonValue, ttlSeconds, action, purpose, operation, []string{"admin"})
+func (h *CredentialAccessGrantHandler) validateGrantRequest(c *gin.Context, reasonValue string, ttlSeconds int, expectedAction auth.StepUpAction, action, purpose, operation string) (string, time.Duration, bool) {
+	return h.validateGrantRequestForRoles(c, reasonValue, ttlSeconds, expectedAction, action, purpose, operation, []string{"admin"})
 }
 
-func (h *CredentialAccessGrantHandler) validateGrantRequestForRoles(c *gin.Context, reasonValue string, ttlSeconds int, action, purpose, operation string, allowedRoles []string) (string, time.Duration, bool) {
+func (h *CredentialAccessGrantHandler) validateGrantRequestForRoles(c *gin.Context, reasonValue string, ttlSeconds int, expectedAction auth.StepUpAction, action, purpose, operation string, allowedRoles []string) (string, time.Duration, bool) {
 	if h.db == nil {
 		respondInternalError(c, fmt.Errorf("credential grant db unavailable"))
 		return "", 0, false
 	}
-	if !enforceStepUpForContext(c, h.db, h.jwtManager, stepUpAuditOperation{Action: action, Purpose: purpose, Operation: operation}) {
+	if !enforceStepUpForContext(c, h.db, h.jwtManager, stepUpAuditOperation{ExpectedAction: expectedAction, Action: action, Purpose: purpose, Operation: operation}) {
 		return "", 0, false
 	}
 	if err := validateGrantRequesterContext(c, h.db, allowedRoles); err != nil {

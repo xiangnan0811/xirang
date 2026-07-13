@@ -1,4 +1,8 @@
 import { request } from "./core";
+import type { StepUpAction } from "@/lib/step-up-storage";
+
+export { ALL_STEP_UP_ACTIONS, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
+export type { StepUpAction } from "@/lib/step-up-storage";
 
 export interface TOTPSetupResponse {
   secret: string;
@@ -58,11 +62,11 @@ export function createTOTPApi() {
       });
     },
 
-    async requestStepUpProof(token: string, code: string): Promise<StepUpProofResponse> {
+    async requestStepUpProof(token: string, code: string, action: StepUpAction): Promise<StepUpProofResponse> {
       return request<StepUpProofResponse>("/auth/step-up", {
         method: "POST",
         token,
-        body: { code },
+        body: { code, step_up_action: action },
       });
     },
   };

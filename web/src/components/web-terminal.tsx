@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/core";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { ReconnectingSocket } from "@/lib/ws/reconnecting-socket";
 
 // Terminal color palette is intentionally decoupled from the Xirang site
@@ -119,7 +120,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     setGrantSubmitting(true);
     setGrantError(null);
     try {
-      const proof = await ensureStepUpProof();
+      const proof = await ensureStepUpProof(STEP_UP_ACTIONS.terminalOpen);
       await apiClient.requestTerminalCredentialGrant(
         token,
         { nodeId, reason, requestedTtlSeconds: TERMINAL_GRANT_TTL_SECONDS },
@@ -158,7 +159,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     const timerId = setTimeout(() => {
       void (async () => {
         try {
-          stepUpProof = await ensureStepUpProof();
+          stepUpProof = await ensureStepUpProof(STEP_UP_ACTIONS.terminalOpen);
         } catch (error) {
           if (active) {
             const message = error instanceof Error ? error.message : t("terminal.stepUpFailed");
@@ -216,7 +217,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
               return;
             }
             if (event.code === 1008) {
-              clearStepUpProof();
+              clearStepUpProof(STEP_UP_ACTIONS.terminalOpen);
               socket?.close(1008, "step-up-required");
             }
             const detail = event.reason

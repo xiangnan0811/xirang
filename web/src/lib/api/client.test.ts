@@ -189,7 +189,7 @@ describe("apiClient 任务请求约束", () => {
     });
   });
 
-  it("step-up proof 请求只提交 TOTP code", async () => {
+  it("step-up proof 请求提交 TOTP code 和精确 action", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(
         200,
@@ -197,13 +197,16 @@ describe("apiClient 任务请求约束", () => {
       )
     );
 
-    await apiClient.requestStepUpProof("token-task", "123456");
+    await apiClient.requestStepUpProof("token-task", "123456", "task.manual_trigger");
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/auth/step-up");
     expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({ Authorization: "Bearer token-task" });
-    expect(JSON.parse(String(init.body))).toEqual({ code: "123456" });
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: "123456",
+      step_up_action: "task.manual_trigger",
+    });
   });
 
   it("batch command 请求会附加 step-up proof header", async () => {

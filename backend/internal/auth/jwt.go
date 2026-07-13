@@ -23,11 +23,12 @@ const (
 )
 
 type Claims struct {
-	UserID       uint   `json:"uid"`
-	Username     string `json:"username"`
-	Role         string `json:"role"`
-	Purpose      string `json:"purpose,omitempty"`
-	TokenVersion uint   `json:"ver"`
+	UserID       uint         `json:"uid"`
+	Username     string       `json:"username"`
+	Role         string       `json:"role"`
+	Purpose      string       `json:"purpose,omitempty"`
+	StepUpAction StepUpAction `json:"step_up_action,omitempty"`
+	TokenVersion uint         `json:"ver"`
 	jwt.RegisteredClaims
 }
 
@@ -95,7 +96,10 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 	return token.SignedString(m.secret)
 }
 
-func (m *JWTManager) GenerateStepUpToken(user model.User) (string, time.Time, error) {
+func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction) (string, time.Time, error) {
+	if !IsValidStepUpAction(action) {
+		return "", time.Time{}, fmt.Errorf("step-up action 无效")
+	}
 	now := time.Now()
 	expiresAt := now.Add(StepUpProofTTL)
 	tokenID, err := generateTokenID()
@@ -107,6 +111,7 @@ func (m *JWTManager) GenerateStepUpToken(user model.User) (string, time.Time, er
 		Username:     user.Username,
 		Role:         user.Role,
 		Purpose:      PurposeStepUp,
+		StepUpAction: action,
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,

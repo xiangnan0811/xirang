@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import WebTerminal from "./web-terminal";
 
 const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGrantMock, socketInstances } = vi.hoisted(() => {
@@ -116,6 +117,7 @@ describe("WebTerminal", () => {
     await waitFor(() => expect(socketInstances).toHaveLength(1));
     expect(clearStepUpProofMock).not.toHaveBeenCalled();
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.terminalOpen);
     expect(socketInstances[0].options.url).toBe("wss://ops.example.test/api/v1/ws/terminal?node_id=7");
     expect(JSON.parse(socketInstances[0].sent[0] ?? "{}")).toEqual({
       type: "auth",
@@ -138,6 +140,7 @@ describe("WebTerminal", () => {
     });
 
     expect(clearStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(clearStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.terminalOpen);
     expect(socketInstances[0].closed).toBe(true);
   });
 
@@ -172,6 +175,9 @@ describe("WebTerminal", () => {
     );
     await waitFor(() => expect(socketInstances).toHaveLength(2));
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(3);
+    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(1, STEP_UP_ACTIONS.terminalOpen);
+    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(2, STEP_UP_ACTIONS.terminalOpen);
+    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(3, STEP_UP_ACTIONS.terminalOpen);
     expect(JSON.stringify({ ...localStorage })).not.toContain("CREDENTIAL_GRANT_REQUIRED");
     expect(JSON.stringify({ ...sessionStorage })).not.toContain("CREDENTIAL_GRANT_REQUIRED");
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("处理告警");
