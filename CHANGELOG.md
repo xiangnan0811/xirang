@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.0](https://github.com/xiangnan0811/xirang/compare/v0.44.8...v0.45.0) (2026-07-13)
+
+
+### ✨ Features
+
+* add backup asset domain foundation ([#372](https://github.com/xiangnan0811/xirang/issues/372)) ([9d8215f](https://github.com/xiangnan0811/xirang/commit/9d8215f8d18d70e522cb8965ccb584d0a0f5162a))
+
 ## [0.44.8](https://github.com/xiangnan0811/xirang/compare/v0.44.7...v0.44.8) (2026-07-12)
 
 
