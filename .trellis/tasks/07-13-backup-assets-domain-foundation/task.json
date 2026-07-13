@@ -16,7 +16,7 @@
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
-  "pr_url": null,
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/372",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",

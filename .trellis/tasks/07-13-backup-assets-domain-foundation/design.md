@@ -1,6 +1,6 @@
 # 备份资产领域基础：Focused Technical Design
 
-- **状态：** focused review 已于 2026-07-13 获批；implementation in progress
+- **状态：** focused review 已于 2026-07-13 获批；implementation complete，PR #372 gate in progress
 - **日期：** 2026-07-13
 - **父契约：** 07-12-backup-data-explorer-design 的 prd.md、design.md 与 implement.md Child 1
 - **实现基线：** main@4ea4c2b，当前分支 seed@743aa94

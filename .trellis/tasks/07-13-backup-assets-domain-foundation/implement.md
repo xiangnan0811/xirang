@@ -2,7 +2,7 @@
 
 > **For the implementing Codex session:** REQUIRED SUB-SKILLS: load trellis-before-dev, superpowers:test-driven-development, and superpowers:executing-plans. This repository is in Codex inline mode; do not dispatch implement/check sub-agents. Execute the checkboxes in order.
 
-**Status:** Focused package approved on 2026-07-13; task activated and implementation in progress.
+**Status:** Focused package approved on 2026-07-13; implementation complete and PR #372 gate in progress.
 
 **Goal:** Add the disabled-by-default domain, schema, key, lease, authorization, step-up, audit, and migration-parity foundation required by every later backup-asset child, without exposing an asset route or touching Provider bytes.
 
@@ -563,8 +563,8 @@ implement.jsonl and check.jsonl remain the seed example in inline mode and are n
 
 ## 13. Commit, PR and post-merge gate
 
-- [ ] Run verification-before-completion and trellis-check only after every prior gate passes.
-- [ ] Stage exact paths from Section 1, never whole backend/web directories:
+- [x] Run verification-before-completion and trellis-check only after every prior gate passes.
+- [x] Stage exact paths from Section 1, never whole backend/web directories:
 
     git add .trellis/tasks/07-13-backup-assets-domain-foundation/prd.md .trellis/tasks/07-13-backup-assets-domain-foundation/design.md .trellis/tasks/07-13-backup-assets-domain-foundation/implement.md .trellis/tasks/07-13-backup-assets-domain-foundation/task.json
     git add backend/internal/model/backup_asset.go backend/internal/model/backup_asset_catalog.go backend/internal/model/backup_asset_audit.go backend/internal/model/backup_asset_lease.go backend/internal/model/task.go
@@ -578,18 +578,18 @@ implement.jsonl and check.jsonl remain the seed example in inline mode and are n
     git add web/src/components/batch-command-dialog.tsx web/src/components/batch-command-dialog.test.tsx web/src/components/config-export-import.tsx web/src/components/config-export-import.test.tsx web/src/components/restore-confirm-dialog.tsx web/src/components/restore-confirm-dialog.test.tsx web/src/components/snapshot-browser.tsx web/src/components/snapshot-browser.test.tsx web/src/components/ssh-key-export-dialog.tsx web/src/components/ssh-key-export-dialog.test.tsx web/src/components/web-terminal.tsx web/src/components/web-terminal.test.tsx web/src/pages/tasks-page.tsx web/src/pages/tasks-page.test.tsx web/src/pages/notifications/alert-center.tsx web/src/pages/notifications-page.test.tsx
     git add backend/.env.example backend/.env.production.example .env.deploy docs/env-vars.md .github/workflows/ci.yml
 
-- [ ] Inspect staged paths/content:
+- [x] Inspect staged paths/content:
 
     git diff --cached --name-only
     git diff --cached --check
 
   Expected: exact manifest only and no whitespace errors.
 
-- [ ] Commit:
+- [x] Commit:
 
     git commit -m "feat: add backup asset domain foundation"
 
-- [ ] Push the branch, open a PR to main, and monitor every required CI job. The PostgreSQL migration job is required, not allowed to skip or remain missing.
+- [x] Push the branch and open PR #372 to main. The PostgreSQL migration job ran in required mode and passed.
 - [ ] Fix failures on this branch, push, and continue monitoring until all required checks pass.
 - [ ] After squash merge, monitor Release Please and applicable post-merge automation. This foundation is feature-disabled; record explicitly whether a formal GitHub Release/Docker publish was expected and what occurred.
 - [ ] Fast-forward local main to origin/main before creating Child 2. Child 2 must depend on the merged Child 1 commit, not this unmerged branch.
@@ -623,4 +623,6 @@ implement.jsonl and check.jsonl remain the seed example in inline mode and are n
 - Negative scans found no zero-argument frontend proof caller, legacy backend token issuance, production feature enablement, public backup-asset route, Provider implementation/mutation path, or changed path outside the exact manifest.
 - Review hardening added red/green regressions for strict wrapped-key envelope EOF, raw Provider-value non-disclosure, unique-only lease conflict classification, and rejection of raw step-up JWTs in typed asset audit IDs.
 - Spec-sync judgment: no `.trellis/spec/` update. Shared migration, error, logging, type-safety, branch, and cross-layer conventions were followed without changing them; the new contracts are feature-specific and are fully captured by this focused design, executable tests, and the parent program package. Adding a shared spec file would duplicate those contracts and violate the approved exact manifest.
-- Remaining gates: exact staging, commit, push/PR, required CI, then maintainer-authorized merge/post-merge automation and local `main` synchronization before Child 2.
+- Exact staging, commit, push, and PR creation completed. The first PR CI cycle passed Backend Test & Build, Frontend Test & Build, Docker Build, PostgreSQL Migration Parity, Migration UTC Safety, Doc Freshness, and PR Title.
+- GitGuardian incident 34776511 was a fake JWT-shaped test fixture in historical commit 973c706. The fixture was replaced in 93f035d and the maintainer classified the incident as a test false positive. The App-owned stale check suite could not be re-requested through the GitHub API, so this bookkeeping-only follow-up is used to trigger a fresh scan without rewriting history.
+- Remaining gates: refreshed GitGuardian and required CI green, explicit maintainer merge authorization, squash merge, post-merge automation review, and local `main` synchronization before Child 2.
