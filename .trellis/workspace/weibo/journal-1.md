@@ -540,3 +540,36 @@ Reviewed and fixed frontend visual polish, motion, responsive tab, and accessibi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Child 1 备份资产领域基础交付与归档
+
+**Date**: 2026-07-13
+**Task**: Child 1 备份资产领域基础交付与归档
+**Branch**: `codex/archive-backup-assets-domain-foundation`
+
+### Summary
+
+完成备份资产领域基础、双数据库 000062、分域密钥、租约、purpose-bound step-up、RBAC、typed 审计与默认关闭设置；PR #372 全绿后 squash merge，主分支 CI/Release Please 成功并创建 0.45.0 发布 PR #373，本地 main 已同步。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9d8215f8d18d70e522cb8965ccb584d0a0f5162a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
