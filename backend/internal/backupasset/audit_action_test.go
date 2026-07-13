@@ -135,7 +135,7 @@ func TestAuditRejectsNonOpaqueResourceIdentifiers(t *testing.T) {
 }
 
 func TestAuditRejectsRawStepUpProofInsteadOfOpaqueProofID(t *testing.T) {
-	rawJWT := "eyJhbGciOiJIUzI1NiJ9.eyJwdXJwb3NlIjoic3RlcF91cCJ9.FAKE_SIGNATURE_FOR_TEST_ONLY"
+	rawJWT := "FAKE_JWT_HEADER_FOR_TEST_ONLY.FAKE_JWT_PAYLOAD_FOR_TEST_ONLY.FAKE_JWT_SIGNATURE_FOR_TEST_ONLY"
 	if _, err := NewAuditEvent(AuditEventInput{
 		Action:        AuditActionAssetDownload,
 		StepUpProofID: rawJWT,
