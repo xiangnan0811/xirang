@@ -3,16 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
 const { apiClientMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
   const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
-  const stepUpHookMock = vi.fn((options?: unknown) => {
+  const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => {
+    stepUpHookMock.lastAction = stepUpAction;
     stepUpHookMock.lastOptions = options;
     return withStepUpMock;
-  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+  }) as ReturnType<typeof vi.fn> & { lastAction?: unknown; lastOptions?: unknown };
 
   return {
     apiClientMock: {
@@ -265,6 +267,7 @@ describe("TasksPage", () => {
     withStepUpMock.mockClear();
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
     useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     createContext();
   });
@@ -489,7 +492,10 @@ describe("TasksPage", () => {
 
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ title: "批量触发任务" }));
     expect(withStepUpMock).toHaveBeenCalledTimes(1);
-    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
+    expect(useStepUpActionMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.taskBatchTrigger,
+      oneShotStepUpOptions,
+    );
     expect(withStepUpMock).toHaveBeenCalledWith(expect.any(Function));
     expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
       taskIds: [102, 101],

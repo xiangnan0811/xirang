@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import type { StepUpAction } from "@/lib/api/totp-api";
 
 export type AuthRole = "admin" | "operator" | "viewer";
 
@@ -31,8 +32,8 @@ export type AuthContextValue = {
   ) => void;
   logout: () => void;
   setTotpEnabled: (enabled: boolean) => void;
-  ensureStepUpProof: (options?: StepUpProofOptions) => Promise<string>;
-  clearStepUpProof: () => void;
+  ensureStepUpProof: (action: StepUpAction, options?: StepUpProofOptions) => Promise<string>;
+  clearStepUpProof: (action?: StepUpAction) => void;
 };
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

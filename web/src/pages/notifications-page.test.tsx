@@ -4,6 +4,7 @@ import { render as rtlRender, screen, waitFor, type RenderOptions } from "@testi
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { NotificationsPage } from "./notifications-page";
 
 // Router wrapper: AlertList's "查看关联指标" Link needs a router context (added in
@@ -30,10 +31,11 @@ const {
   useStepUpActionMock,
   oneShotStepUpOptions,
 } = vi.hoisted(() => {
-  const stepUpHookMock = vi.fn((options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+  const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+    stepUpHookMock.lastAction = stepUpAction;
     stepUpHookMock.lastOptions = options;
     return action("step-up-marker");
-  }) as ReturnType<typeof vi.fn> & { lastOptions?: unknown };
+  }) as ReturnType<typeof vi.fn> & { lastAction?: unknown; lastOptions?: unknown };
 
   return {
     toastSuccessMock: vi.fn(),
@@ -342,6 +344,7 @@ describe("NotificationsPage", () => {
     mockTriggerTask.mockReset();
     mockRequestTaskManualTriggerCredentialGrant.mockReset();
     useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     mockGetAlerts.mockReset();
     setupDefaultMocks();
@@ -458,6 +461,7 @@ describe("NotificationsPage", () => {
         requestedTtlSeconds: 600,
       }, "step-up-marker");
     });
+    expect(useStepUpActionMock.lastAction).toBe(STEP_UP_ACTIONS.taskManualTrigger);
     expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
     expect(mockTriggerTask).toHaveBeenCalledWith("test-token", 101, "step-up-marker");
     expect(mockRequestTaskManualTriggerCredentialGrant.mock.invocationCallOrder[0]).toBeLessThan(mockTriggerTask.mock.invocationCallOrder[0]);

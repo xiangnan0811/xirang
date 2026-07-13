@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"xirang/backend/internal/backupasset"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -221,6 +223,40 @@ func TestHasPermission_UnknownRole(t *testing.T) {
 func TestHasPermission_UnknownPermission(t *testing.T) {
 	if HasPermission("admin", "nonexistent:perm") {
 		t.Error("admin 不应有不存在权限的定义")
+	}
+}
+
+func TestBackupAssetPermissionsRoleMatrix(t *testing.T) {
+	for _, permission := range backupasset.BackupAssetPermissions {
+		if !HasPermission("admin", permission) {
+			t.Errorf("admin is missing %s", permission)
+		}
+	}
+	for _, permission := range []string{
+		backupasset.PermissionBackupAssetsList,
+		backupasset.PermissionBackupAssetsPreview,
+	} {
+		if !HasPermission("operator", permission) {
+			t.Errorf("operator is missing %s", permission)
+		}
+	}
+	for _, permission := range []string{
+		backupasset.PermissionBackupAssetsDownload,
+		backupasset.PermissionBackupAssetsExport,
+		backupasset.PermissionBackupAssetsRecover,
+		backupasset.PermissionBackupRepositoriesManage,
+		backupasset.PermissionBackupRepositoriesPurge,
+	} {
+		if HasPermission("operator", permission) {
+			t.Errorf("operator unexpectedly has %s", permission)
+		}
+	}
+	for _, role := range []string{"viewer", "unknown", ""} {
+		for _, permission := range backupasset.BackupAssetPermissions {
+			if HasPermission(role, permission) {
+				t.Errorf("role %q unexpectedly has %s", role, permission)
+			}
+		}
 	}
 }
 

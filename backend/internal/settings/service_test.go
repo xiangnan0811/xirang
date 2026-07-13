@@ -27,13 +27,110 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func TestRegistry(t *testing.T) {
 	svc := NewService(setupTestDB(t))
 	defs := svc.Registry()
-	if len(defs) != 34 {
-		t.Errorf("expected 34 definitions, got %d", len(defs))
+	seenKeys := make(map[string]bool, len(defs))
+	seenEnv := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		if seenKeys[def.Key] {
+			t.Fatalf("duplicate setting key %q", def.Key)
+		}
+		if seenEnv[def.EnvVar] {
+			t.Fatalf("duplicate setting env var %q", def.EnvVar)
+		}
+		seenKeys[def.Key] = true
+		seenEnv[def.EnvVar] = true
 	}
 	// 确认返回副本，不影响全局 registry
 	defs[0].Key = "mutated"
 	if registry[0].Key == "mutated" {
 		t.Error("Registry() should return a copy, not a reference")
+	}
+}
+
+func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
+	type expectedDefinition struct {
+		env          string
+		defaultValue string
+		settingType  SettingType
+		min          string
+		max          string
+		minDuration  string
+		maxDuration  string
+	}
+	want := map[string]expectedDefinition{
+		"backup_assets.enabled":                         {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
+		"backup_assets.catalog_batch_size":              {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.catalog_build_timeout":           {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.repository_reconcile_interval":   {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.audit_segment_max_events":        {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", "10000", TypeInt, "100", "1000000", "", ""},
+		"backup_assets.audit_segment_max_age":           {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.audit_detail_retention_days":     {"BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", "180", TypeInt, "1", "3650", "", ""},
+		"backup_assets.audit_checkpoint_retention_days": {"BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", "2555", TypeInt, "180", "36500", "", ""},
+		"backup_assets.lease_duration":                  {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
+		"backup_assets.lease_heartbeat":                 {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
+		"backup_assets.lease_absolute_deadline":         {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
+	}
+	defs := NewService(setupTestDB(t)).Registry()
+	got := make(map[string]SettingDef, len(want))
+	for _, def := range defs {
+		if strings.HasPrefix(def.Key, "backup_assets.") {
+			got[def.Key] = def
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want))
+	}
+	for key, expected := range want {
+		def, ok := got[key]
+		if !ok {
+			t.Fatalf("missing setting %s", key)
+		}
+		if def.EnvVar != expected.env || def.CodeDefault != expected.defaultValue || def.Type != expected.settingType ||
+			def.Min != expected.min || def.Max != expected.max || def.MinDuration != expected.minDuration || def.MaxDuration != expected.maxDuration {
+			t.Errorf("setting %s mismatch: %+v", key, def)
+		}
+		if def.Sensitive || def.RequiresRestart {
+			t.Errorf("foundation setting %s must be dynamic and non-sensitive", key)
+		}
+	}
+
+	t.Setenv("BACKUP_ASSETS_ENABLED", "")
+	service := NewService(setupTestDB(t))
+	if got := service.GetEffective("backup_assets.enabled"); got != "false" {
+		t.Fatalf("backup assets default=%q, want false", got)
+	}
+}
+
+func TestMaxDurationValidation(t *testing.T) {
+	service := NewService(setupTestDB(t))
+	if err := service.Validate("backup_assets.catalog_build_timeout", "24h"); err != nil {
+		t.Fatalf("24h maximum rejected: %v", err)
+	}
+	if err := service.Validate("backup_assets.catalog_build_timeout", "24h1s"); err == nil {
+		t.Fatal("duration above MaxDuration unexpectedly accepted")
+	}
+	if err := validateRegistryDefinitions([]SettingDef{{
+		Key: "test.duration", EnvVar: "TEST_DURATION", CodeDefault: "1m", Type: TypeDuration, MaxDuration: "not-a-duration",
+	}}); err == nil {
+		t.Fatal("malformed MaxDuration definition unexpectedly accepted")
+	}
+}
+
+func TestBackupAssetSettingsLeaseHeartbeatMustBeLowerThanDuration(t *testing.T) {
+	valid := map[string]string{
+		"backup_assets.lease_duration":          "5m",
+		"backup_assets.lease_heartbeat":         "60s",
+		"backup_assets.lease_absolute_deadline": "168h",
+	}
+	if err := ValidateBackupAssetFoundationConfig(valid); err != nil {
+		t.Fatalf("valid foundation lease config rejected: %v", err)
+	}
+	invalid := map[string]string{
+		"backup_assets.lease_duration":          "5m",
+		"backup_assets.lease_heartbeat":         "5m",
+		"backup_assets.lease_absolute_deadline": "168h",
+	}
+	if err := ValidateBackupAssetFoundationConfig(invalid); err == nil {
+		t.Fatal("heartbeat equal to lease duration unexpectedly accepted")
 	}
 }
 
@@ -247,8 +344,8 @@ func TestGetAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 34 {
-		t.Errorf("expected 34 settings, got %d", len(all))
+	if len(all) != len(registry) {
+		t.Errorf("expected %d settings, got %d", len(registry), len(all))
 	}
 	if all["login.rate_limit"].Source != "db" {
 		t.Errorf("expected source 'db', got '%s'", all["login.rate_limit"].Source)

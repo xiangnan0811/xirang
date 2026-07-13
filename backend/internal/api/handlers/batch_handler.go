@@ -119,7 +119,7 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		}
 		nodes = append(nodes, batchNode{ID: nodeID, Name: nodeName})
 	}
-	if !EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, "batch_run") {
+	if !EnforceStepUp(c, h.db, h.jwtManager, auth.StepUpActionBatchCommandCreate, sshutil.PurposeBatchCommand, "batch_run") {
 		return
 	}
 	grantNodeIDs := make([]uint, 0, len(nodes))

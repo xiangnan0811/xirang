@@ -5,6 +5,7 @@ import { FormDialog } from "@/components/ui/form-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 
 const TASK_RESTORE_GRANT_REASON_MAX_LENGTH = 240;
 const TASK_RESTORE_GRANT_TTL_SECONDS = 600;
@@ -66,7 +67,10 @@ export function RestoreConfirmDialog({
     setSaving(true);
     setError("");
     try {
-      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
+      const proof = await ensureStepUpProof(
+        STEP_UP_ACTIONS.taskRestoreTrigger,
+        { persist: false, reuseCached: false },
+      );
       await apiClient.requestTaskRestoreCredentialGrant(
         token,
         { taskId, reason, requestedTtlSeconds: TASK_RESTORE_GRANT_TTL_SECONDS },

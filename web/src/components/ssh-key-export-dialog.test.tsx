@@ -1,6 +1,17 @@
+import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, isStepUpRequiredError } from "@/lib/api/core";
 import { fetchSSHKeyExportFile } from "@/lib/api/ssh-keys-api";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { SSHKeyExportDialog } from "./ssh-key-export-dialog";
+
+const { useStepUpActionMock } = vi.hoisted(() => ({
+  useStepUpActionMock: vi.fn(() => vi.fn()),
+}));
+
+vi.mock("@/hooks/use-step-up-action", () => ({
+  useStepUpAction: useStepUpActionMock,
+}));
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -15,6 +26,7 @@ describe("fetchSSHKeyExportFile", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    useStepUpActionMock.mockClear();
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -34,6 +46,21 @@ describe("fetchSSHKeyExportFile", () => {
         "X-Xirang-Step-Up": "proof-1",
       },
     });
+  });
+
+  it("binds SSH key export to its exact step-up action", () => {
+    render(
+      <SSHKeyExportDialog
+        open
+        onOpenChange={vi.fn()}
+        sshKeys={[]}
+        selectedKeyIds={[]}
+        stats={{ total: 0, inUse: 0 }}
+        token="FAKE_AUTH_TOKEN_FOR_TEST_ONLY"
+      />,
+    );
+
+    expect(useStepUpActionMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.sshKeyExport);
   });
 
   it("direct download 会保留 STEP_UP_REQUIRED envelope 供 prompt/retry 识别", async () => {

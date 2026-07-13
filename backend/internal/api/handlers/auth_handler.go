@@ -411,7 +411,8 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 }
 
 type stepUpRequest struct {
-	Code string `json:"code" binding:"required"`
+	Code         string            `json:"code" binding:"required"`
+	StepUpAction auth.StepUpAction `json:"step_up_action" binding:"required"`
 }
 
 type stepUpResponse struct {
@@ -430,6 +431,10 @@ func (h *AuthHandler) StepUp(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
+	if !auth.IsValidStepUpAction(req.StepUpAction) {
+		respondBadRequest(c, "step_up_action 不合法")
+		return
+	}
 	userID := c.GetUint(middleware.CtxUserID)
 	if userID == 0 {
 		respondUnauthorized(c, "未登录")
@@ -441,21 +446,21 @@ func (h *AuthHandler) StepUp(c *gin.Context) {
 		return
 	}
 	if !user.TOTPEnabled || strings.TrimSpace(user.TOTPSecret) == "" {
-		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeBlocked, "unavailable")
+		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{ExpectedAction: req.StepUpAction, Action: string(req.StepUpAction), Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeBlocked, "unavailable")
 		respondForbidden(c, "请先启用两步验证")
 		return
 	}
 	if !auth.ValidateTOTP(user.TOTPSecret, req.Code) {
-		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeFailure, "failed")
+		writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{ExpectedAction: req.StepUpAction, Action: string(req.StepUpAction), Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeFailure, "failed")
 		respondForbidden(c, "二次验证失败")
 		return
 	}
-	proof, expiresAt, err := h.jwtManager.GenerateStepUpToken(user)
+	proof, expiresAt, err := h.jwtManager.GenerateStepUpToken(user, req.StepUpAction)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("生成 step-up proof 失败: %w", err))
 		return
 	}
-	writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{Action: "auth.step_up", Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeSuccess, "issued")
+	writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{ExpectedAction: req.StepUpAction, Action: string(req.StepUpAction), Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeSuccess, "issued")
 	respondOK(c, stepUpResponse{Proof: proof, ExpiresAt: expiresAt.UTC(), ProofTTLSeconds: stepUpProofTTLSeconds})
 }
 

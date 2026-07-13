@@ -60,6 +60,7 @@ type SettingDef struct {
 	Min             string      `json:"min,omitempty"`
 	Max             string      `json:"max,omitempty"`
 	MinDuration     string      `json:"min_duration,omitempty"` // 安全下限（duration 类型）
+	MaxDuration     string      `json:"max_duration,omitempty"` // 安全上限（duration 类型）
 	RequiresRestart bool        `json:"requires_restart"`
 	Sensitive       bool        `json:"sensitive"`
 }
@@ -164,33 +165,105 @@ var registry = []SettingDef{
 	{Key: "smtp.password", EnvVar: "SMTP_PASS", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 密码（生产环境建议通过环境变量注入而非入库）", Sensitive: true},
 	{Key: "smtp.from", EnvVar: "SMTP_FROM", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "发件人地址；为空时回退到 smtp.user"},
 	{Key: "smtp.require_tls", EnvVar: "SMTP_REQUIRE_TLS", CodeDefault: "true", Type: TypeBool, Category: "alerting", Description: "强制 TLS 连接（465 隐式 / 587 STARTTLS）；false 回退明文"},
+	{Key: "backup_assets.enabled", EnvVar: "BACKUP_ASSETS_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产领域功能"},
+	{Key: "backup_assets.catalog_batch_size", EnvVar: "BACKUP_ASSETS_CATALOG_BATCH_SIZE", CodeDefault: "2000", Type: TypeInt, Category: "backup_assets", Description: "目录构建批次大小", Min: "1", Max: "100000"},
+	{Key: "backup_assets.catalog_build_timeout", EnvVar: "BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "目录构建超时", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.repository_reconcile_interval", EnvVar: "BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份仓库对账间隔", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.audit_segment_max_events", EnvVar: "BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "资产审计分段最大事件数", Min: "100", Max: "1000000"},
+	{Key: "backup_assets.audit_segment_max_age", EnvVar: "BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "资产审计分段最大持续时间", MinDuration: "1h", MaxDuration: "168h"},
+	{Key: "backup_assets.audit_detail_retention_days", EnvVar: "BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", CodeDefault: "180", Type: TypeInt, Category: "backup_assets", Description: "资产审计明细保留天数", Min: "1", Max: "3650"},
+	{Key: "backup_assets.audit_checkpoint_retention_days", EnvVar: "BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", CodeDefault: "2555", Type: TypeInt, Category: "backup_assets", Description: "资产审计检查点保留天数", Min: "180", Max: "36500"},
+	{Key: "backup_assets.lease_duration", EnvVar: "BACKUP_ASSETS_LEASE_DURATION", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 短租约时长", MinDuration: "30s", MaxDuration: "30m"},
+	{Key: "backup_assets.lease_heartbeat", EnvVar: "BACKUP_ASSETS_LEASE_HEARTBEAT", CodeDefault: "60s", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 租约心跳间隔", MinDuration: "10s", MaxDuration: "5m"},
+	{Key: "backup_assets.lease_absolute_deadline", EnvVar: "BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", CodeDefault: "168h", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 租约绝对截止时间", MinDuration: "5m", MaxDuration: "168h"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
 var registryMap map[string]*SettingDef
 
 func init() {
+	if err := validateRegistryDefinitions(registry); err != nil {
+		panic(err)
+	}
 	registryMap = make(map[string]*SettingDef, len(registry))
 	for i := range registry {
 		def := &registry[i]
 		registryMap[def.Key] = def
-		// 启动时校验 Min/Max 定义合法性
-		if def.Min != "" && def.Type == TypeInt {
-			if _, err := strconv.Atoi(def.Min); err != nil {
-				panic(fmt.Sprintf("settings: invalid Min for %s: %s", def.Key, def.Min))
-			}
+	}
+}
+
+func validateRegistryDefinitions(definitions []SettingDef) error {
+	seenKeys := make(map[string]bool, len(definitions))
+	seenEnv := make(map[string]bool, len(definitions))
+	for index := range definitions {
+		def := &definitions[index]
+		if strings.TrimSpace(def.Key) == "" || strings.TrimSpace(def.EnvVar) == "" {
+			return fmt.Errorf("settings: key and EnvVar are required")
 		}
-		if def.Max != "" && def.Type == TypeInt {
-			if _, err := strconv.Atoi(def.Max); err != nil {
-				panic(fmt.Sprintf("settings: invalid Max for %s: %s", def.Key, def.Max))
-			}
+		if seenKeys[def.Key] {
+			return fmt.Errorf("settings: duplicate key %s", def.Key)
 		}
-		if def.MinDuration != "" {
-			if _, err := time.ParseDuration(def.MinDuration); err != nil {
-				panic(fmt.Sprintf("settings: invalid MinDuration for %s: %s", def.Key, def.MinDuration))
+		if seenEnv[def.EnvVar] {
+			return fmt.Errorf("settings: duplicate EnvVar %s", def.EnvVar)
+		}
+		seenKeys[def.Key] = true
+		seenEnv[def.EnvVar] = true
+
+		switch def.Type {
+		case TypeInt:
+			if def.MinDuration != "" || def.MaxDuration != "" {
+				return fmt.Errorf("settings: duration bounds on int setting %s", def.Key)
 			}
+			var min, max int
+			var err error
+			if def.Min != "" {
+				min, err = strconv.Atoi(def.Min)
+				if err != nil {
+					return fmt.Errorf("settings: invalid Min for %s: %s", def.Key, def.Min)
+				}
+			}
+			if def.Max != "" {
+				max, err = strconv.Atoi(def.Max)
+				if err != nil {
+					return fmt.Errorf("settings: invalid Max for %s: %s", def.Key, def.Max)
+				}
+			}
+			if def.Min != "" && def.Max != "" && min > max {
+				return fmt.Errorf("settings: Min exceeds Max for %s", def.Key)
+			}
+		case TypeDuration:
+			if def.Min != "" || def.Max != "" {
+				return fmt.Errorf("settings: integer bounds on duration setting %s", def.Key)
+			}
+			var min, max time.Duration
+			var err error
+			if def.MinDuration != "" {
+				min, err = time.ParseDuration(def.MinDuration)
+				if err != nil || min <= 0 {
+					return fmt.Errorf("settings: invalid MinDuration for %s: %s", def.Key, def.MinDuration)
+				}
+			}
+			if def.MaxDuration != "" {
+				max, err = time.ParseDuration(def.MaxDuration)
+				if err != nil || max <= 0 {
+					return fmt.Errorf("settings: invalid MaxDuration for %s: %s", def.Key, def.MaxDuration)
+				}
+			}
+			if def.MinDuration != "" && def.MaxDuration != "" && min > max {
+				return fmt.Errorf("settings: MinDuration exceeds MaxDuration for %s", def.Key)
+			}
+		case TypeBool, TypeString:
+			if def.Min != "" || def.Max != "" || def.MinDuration != "" || def.MaxDuration != "" {
+				return fmt.Errorf("settings: unsupported bounds on %s", def.Key)
+			}
+		default:
+			return fmt.Errorf("settings: invalid type for %s: %s", def.Key, def.Type)
+		}
+		if err := validateValue(def, def.CodeDefault); err != nil {
+			return fmt.Errorf("settings: invalid default for %s: %w", def.Key, err)
 		}
 	}
+	return nil
 }
 
 // Registry 返回所有设置定义（返回副本避免外部修改）
@@ -421,6 +494,56 @@ func validateValue(def *SettingDef, value string) error {
 				return fmt.Errorf("设置项 %s 值不能小于 %s", def.Key, def.MinDuration)
 			}
 		}
+		if def.MaxDuration != "" {
+			maxD, _ := time.ParseDuration(def.MaxDuration)
+			if d > maxD {
+				return fmt.Errorf("设置项 %s 值不能大于 %s", def.Key, def.MaxDuration)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateBackupAssetFoundationConfig validates the cross-setting constraints
+// that cannot be enforced by validating one registry value at a time.
+func ValidateBackupAssetFoundationConfig(values map[string]string) error {
+	keys := []string{
+		"backup_assets.enabled",
+		"backup_assets.catalog_batch_size",
+		"backup_assets.catalog_build_timeout",
+		"backup_assets.repository_reconcile_interval",
+		"backup_assets.audit_segment_max_events",
+		"backup_assets.audit_segment_max_age",
+		"backup_assets.audit_detail_retention_days",
+		"backup_assets.audit_checkpoint_retention_days",
+		"backup_assets.lease_duration",
+		"backup_assets.lease_heartbeat",
+		"backup_assets.lease_absolute_deadline",
+	}
+	resolved := make(map[string]string, len(keys))
+	for _, key := range keys {
+		def := findDef(key)
+		if def == nil {
+			return fmt.Errorf("缺少备份资产设置定义: %s", key)
+		}
+		value := def.CodeDefault
+		if override, ok := values[key]; ok {
+			value = override
+		}
+		if err := validateValue(def, value); err != nil {
+			return err
+		}
+		resolved[key] = value
+	}
+
+	leaseDuration, _ := time.ParseDuration(resolved["backup_assets.lease_duration"])
+	heartbeat, _ := time.ParseDuration(resolved["backup_assets.lease_heartbeat"])
+	absoluteDeadline, _ := time.ParseDuration(resolved["backup_assets.lease_absolute_deadline"])
+	if heartbeat >= leaseDuration {
+		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
+	}
+	if absoluteDeadline < leaseDuration {
+		return fmt.Errorf("backup_assets.lease_absolute_deadline 不能小于 backup_assets.lease_duration")
 	}
 	return nil
 }

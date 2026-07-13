@@ -7,6 +7,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { useConfirm } from "@/hooks/use-confirm";
 import { getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
@@ -128,7 +129,10 @@ export function ConfigExportImport() {
     try {
       const file = getSelectedImportFile();
       await parseImportFile(file);
-      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
+      const proof = await ensureStepUpProof(
+        STEP_UP_ACTIONS.configImport,
+        { persist: false, reuseCached: false },
+      );
       await apiClient.requestConfigImportCredentialGrant(token, {
         reason,
         requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,
@@ -148,7 +152,10 @@ export function ConfigExportImport() {
     setSensitiveExporting(true);
     setGrantError(null);
     try {
-      const proof = await ensureStepUpProof({ persist: false, reuseCached: false });
+      const proof = await ensureStepUpProof(
+        STEP_UP_ACTIONS.configExport,
+        { persist: false, reuseCached: false },
+      );
       await apiClient.requestConfigExportCredentialGrant(token, {
         reason,
         requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,

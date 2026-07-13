@@ -43,7 +43,7 @@ func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *t
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
 
-	proof, expiresAt, err := manager.GenerateStepUpToken(user)
+	proof, expiresAt, err := manager.GenerateStepUpToken(user, StepUpActionTaskManualTrigger)
 	if err != nil {
 		t.Fatalf("生成 step-up proof 失败: %v", err)
 	}
@@ -57,6 +57,9 @@ func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *t
 	}
 	if claims.Purpose != PurposeStepUp {
 		t.Fatalf("期望 purpose=%q，实际 %q", PurposeStepUp, claims.Purpose)
+	}
+	if claims.StepUpAction != StepUpActionTaskManualTrigger {
+		t.Fatalf("期望 step_up_action=%q，实际 %q", StepUpActionTaskManualTrigger, claims.StepUpAction)
 	}
 	if claims.UserID != user.ID || claims.Username != user.Username || claims.Role != user.Role || claims.TokenVersion != user.TokenVersion {
 		t.Fatalf("step-up claims 未包含当前用户身份、角色和 token version: %+v", claims)

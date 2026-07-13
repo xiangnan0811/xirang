@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PropsWithChildren } from "react";
 import { AuthContext, type AuthContextValue } from "@/context/auth-context.shared";
 import { ApiError } from "@/lib/api/core";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { useStepUpAction } from "./use-step-up-action";
 
 function createStepUpRequiredError() {
@@ -45,12 +46,13 @@ describe("useStepUpAction", () => {
       .mockRejectedValueOnce(createStepUpRequiredError())
       .mockResolvedValueOnce("ok");
 
-    const { result } = renderHook(() => useStepUpAction(), { wrapper });
+    const { result } = renderHook(() => useStepUpAction(STEP_UP_ACTIONS.taskManualTrigger), { wrapper });
     await expect(result.current(action)).resolves.toBe("ok");
 
     expect(action).toHaveBeenNthCalledWith(1);
     expect(clearStepUpProof).not.toHaveBeenCalled();
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(ensureStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.taskManualTrigger);
     expect(action).toHaveBeenNthCalledWith(2, "proof-1");
   });
 
@@ -60,10 +62,11 @@ describe("useStepUpAction", () => {
       .mockRejectedValueOnce(createStepUpRequiredError())
       .mockRejectedValueOnce(createStepUpRequiredError());
 
-    const { result } = renderHook(() => useStepUpAction(), { wrapper });
+    const { result } = renderHook(() => useStepUpAction(STEP_UP_ACTIONS.taskManualTrigger), { wrapper });
     await expect(result.current(action)).rejects.toBeInstanceOf(ApiError);
 
     expect(clearStepUpProof).toHaveBeenCalledTimes(1);
+    expect(clearStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.taskManualTrigger);
     expect(action).toHaveBeenNthCalledWith(2, "proof-2");
   });
 
@@ -73,10 +76,10 @@ describe("useStepUpAction", () => {
       .mockRejectedValueOnce(createStepUpRequiredError())
       .mockResolvedValueOnce("ok");
 
-    const { result } = renderHook(() => useStepUpAction({ persist: false, reuseCached: false }), { wrapper });
+    const { result } = renderHook(() => useStepUpAction(STEP_UP_ACTIONS.batchCommandCreate, { persist: false, reuseCached: false }), { wrapper });
     await expect(result.current(action)).resolves.toBe("ok");
 
-    expect(ensureStepUpProof).toHaveBeenCalledWith({ persist: false, reuseCached: false });
+    expect(ensureStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.batchCommandCreate, { persist: false, reuseCached: false });
     expect(action).toHaveBeenNthCalledWith(2, "proof-one-shot");
   });
 });

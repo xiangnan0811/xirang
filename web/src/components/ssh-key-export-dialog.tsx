@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { createSSHKeysApi, fetchSSHKeyExportFile } from "@/lib/api/ssh-keys-api";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { isStepUpRequiredError } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import type { SSHKeyRecord } from "@/types/domain";
@@ -97,7 +98,7 @@ export function SSHKeyExportDialog({
   const [format, setFormat] = useState<ExportFormat>("authorized_keys");
   const [scope, setScope] = useState<ExportScope>("all");
   const [downloading, setDownloading] = useState(false);
-  const withStepUp = useStepUpAction();
+  const withStepUp = useStepUpAction(STEP_UP_ACTIONS.sshKeyExport);
 
   // 根据 scope 筛选出预览使用的密钥列表
   const filteredKeys = useMemo(() => {

@@ -6,6 +6,7 @@ import { AuthProvider } from "./auth-context";
 import { useAuth } from "./auth-context.hooks";
 import { saveStepUpProof } from "@/lib/step-up-storage";
 import { apiClient } from "@/lib/api/client";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
@@ -28,8 +29,8 @@ function AuthProbe() {
       <button type="button" onClick={() => login("auth-marker", "alice", "admin", 1, true)}>登录</button>
       <button type="button" onClick={() => logout()}>退出</button>
       <button type="button" onClick={() => setTotpEnabled(false)}>关闭两步验证</button>
-      <button type="button" onClick={() => void ensureStepUpProof().then(setStepUpProof)}>请求二次验证</button>
-      <button type="button" onClick={() => void ensureStepUpProof({ persist: false, reuseCached: false }).then(setStepUpProof)}>请求一次性二次验证</button>
+      <button type="button" onClick={() => void ensureStepUpProof(STEP_UP_ACTIONS.taskManualTrigger).then(setStepUpProof)}>请求二次验证</button>
+      <button type="button" onClick={() => void ensureStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, { persist: false, reuseCached: false }).then(setStepUpProof)}>请求一次性二次验证</button>
     </div>
   );
 }
@@ -94,7 +95,7 @@ describe("AuthProvider", () => {
 
   it("登录、退出和关闭两步验证会清理 session 级 step-up proof", async () => {
     const user = userEvent.setup();
-    saveStepUpProof("proof-before-login-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "proof-before-login-marker", Date.now() + 60_000);
 
     render(
       <AuthProvider>
@@ -103,19 +104,19 @@ describe("AuthProvider", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "登录" }));
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
 
-    saveStepUpProof("proof-before-disable-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.configExport, "proof-before-disable-marker", Date.now() + 60_000);
     await user.click(screen.getByRole("button", { name: "关闭两步验证" }));
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
 
-    saveStepUpProof("proof-before-logout-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "proof-before-logout-marker", Date.now() + 60_000);
     await user.click(screen.getByRole("button", { name: "退出" }));
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 
   it("ensureStepUpProof 会复用未过期 proof", async () => {
-    saveStepUpProof("cached-step-up-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
 
     render(
       <AuthProvider>
@@ -128,13 +129,13 @@ describe("AuthProvider", () => {
     });
 
     expect(screen.getByTestId("step-up-proof").textContent).toBe("cached-step-up-marker");
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("cached-step-up-marker");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("cached-step-up-marker");
     expect(screen.queryByText("需要二次验证")).toBeNull();
   });
 
   it("可请求一次性 step-up proof 而不复用且清除 sessionStorage proof", async () => {
     const user = userEvent.setup();
-    saveStepUpProof("cached-step-up-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
     requestStepUpProofMock.mockResolvedValueOnce({
       proof: "one-time-step-up-marker",
       expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -148,14 +149,14 @@ describe("AuthProvider", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "登录" }));
-    saveStepUpProof("cached-step-up-marker", Date.now() + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
     await user.click(screen.getByRole("button", { name: "请求一次性二次验证" }));
     expect(await screen.findByRole("dialog", { name: "需要二次验证" })).toBeInTheDocument();
     await user.type(screen.getByLabelText("验证器验证码"), "123456");
     await user.click(screen.getByRole("button", { name: "验证" }));
 
     await waitFor(() => expect(screen.getByTestId("step-up-proof").textContent).toBe("one-time-step-up-marker"));
-    expect(requestStepUpProofMock).toHaveBeenCalledWith("auth-marker", "123456");
-    expect(sessionStorage.getItem("xirang-step-up-proof")).toBeNull();
+    expect(requestStepUpProofMock).toHaveBeenCalledWith("auth-marker", "123456", STEP_UP_ACTIONS.taskManualTrigger);
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 });

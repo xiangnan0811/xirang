@@ -213,7 +213,7 @@ func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *test
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "grant-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen)
 	node := seedCredentialGrantNode(t, db)
 	router := newCredentialGrantTestRouter(db, manager)
 
@@ -287,7 +287,7 @@ func TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "grant-config-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
 	router := newCredentialGrantTestRouter(db, manager)
 
 	oversizedReason := strings.Repeat("配置恢复", 90)
@@ -359,10 +359,10 @@ func TestConfigExportCredentialGrantRequestCreatesSystemScopedGrantWithValidatio
 	operator := seedStepUpUser(t, db, "grant-config-export-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	operatorToken := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
 	router := newCredentialGrantTestRouter(db, manager)
 
-	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", operatorToken, generateStepUpProof(t, manager, operator),
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/config-export", operatorToken, generateStepUpProofForAction(t, manager, operator, auth.StepUpActionConfigExport),
 		`{"reason":"例行导出","requested_ttl_seconds":600}`)
 	if operatorResp.Code != http.StatusForbidden {
 		t.Fatalf("operator 不应申请配置导出授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
@@ -445,12 +445,12 @@ func TestSnapshotRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidati
 	operator := seedStepUpUser(t, db, "grant-snapshot-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	operatorToken := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
 	taskEntity := seedCredentialGrantTask(t, db, "restic")
 	nonResticTask := seedCredentialGrantTask(t, db, "rsync")
 	router := newCredentialGrantTestRouter(db, manager)
 
-	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/snapshot-restore", operatorToken, generateStepUpProof(t, manager, operator),
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/snapshot-restore", operatorToken, generateStepUpProofForAction(t, manager, operator, auth.StepUpActionSnapshotRestore),
 		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, taskEntity.ID))
 	if operatorResp.Code != http.StatusForbidden {
 		t.Fatalf("operator 不应申请快照恢复授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
@@ -545,7 +545,7 @@ func TestTaskRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAn
 	operator := seedStepUpUser(t, db, "grant-task-restore-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	operatorToken := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
 	taskEntity := seedCredentialGrantTask(t, db, "rsync")
 	seedSuccessfulCredentialGrantTaskRun(t, db, taskEntity.ID)
 	unsupportedTask := seedCredentialGrantTask(t, db, "command")
@@ -553,7 +553,7 @@ func TestTaskRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAn
 	noSuccessTask := seedCredentialGrantTask(t, db, "restic")
 	router := newCredentialGrantTestRouter(db, manager)
 
-	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", operatorToken, generateStepUpProof(t, manager, operator),
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-restore", operatorToken, generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskRestoreTrigger),
 		fmt.Sprintf(`{"task_id":%d,"reason":"例行恢复","requested_ttl_seconds":600}`, taskEntity.ID))
 	if operatorResp.Code != http.StatusForbidden {
 		t.Fatalf("operator 不应申请任务恢复授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
@@ -658,7 +658,7 @@ func TestCredentialAccessGrantRequestRequiresAdminAndStepUpAndValidReason(t *tes
 	router := newCredentialGrantTestRouter(db, manager)
 	body := fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":600}`, node.ID)
 
-	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", operatorToken, generateStepUpProof(t, manager, operator), body)
+	operatorResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", operatorToken, generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTerminalOpen), body)
 	if operatorResp.Code != http.StatusForbidden {
 		t.Fatalf("operator 不应申请终端授权，实际: %d，响应: %s", operatorResp.Code, operatorResp.Body.String())
 	}
@@ -666,23 +666,23 @@ func TestCredentialAccessGrantRequestRequiresAdminAndStepUpAndValidReason(t *tes
 	missingProofResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, "", body)
 	assertStepUpRequiredEnvelope(t, missingProofResp)
 
-	emptyReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProof(t, manager, admin), fmt.Sprintf(`{"node_id":%d,"reason":"   ","requested_ttl_seconds":600}`, node.ID))
+	emptyReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen), fmt.Sprintf(`{"node_id":%d,"reason":"   ","requested_ttl_seconds":600}`, node.ID))
 	if emptyReasonResp.Code != http.StatusBadRequest || !strings.Contains(emptyReasonResp.Body.String(), "授权原因不能为空") {
 		t.Fatalf("空原因应返回 400，实际: %d，响应: %s", emptyReasonResp.Code, emptyReasonResp.Body.String())
 	}
 
 	longReason := strings.Repeat("测", credentialGrantMaxReasonLen+1)
-	longReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProof(t, manager, admin), fmt.Sprintf(`{"node_id":%d,"reason":%q,"requested_ttl_seconds":600}`, node.ID, longReason))
+	longReasonResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen), fmt.Sprintf(`{"node_id":%d,"reason":%q,"requested_ttl_seconds":600}`, node.ID, longReason))
 	if longReasonResp.Code != http.StatusBadRequest || !strings.Contains(longReasonResp.Body.String(), "授权原因不能超过") {
 		t.Fatalf("超长原因应返回 400，实际: %d，响应: %s", longReasonResp.Code, longReasonResp.Body.String())
 	}
 
-	shortTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProof(t, manager, admin), fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":30}`, node.ID))
+	shortTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen), fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":30}`, node.ID))
 	if shortTTLResp.Code != http.StatusBadRequest || !strings.Contains(shortTTLResp.Body.String(), "授权时长不能少于") {
 		t.Fatalf("过短 TTL 应返回 400，实际: %d，响应: %s", shortTTLResp.Code, shortTTLResp.Body.String())
 	}
 
-	longTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProof(t, manager, admin), fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":3600}`, node.ID))
+	longTTLResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/terminal", adminToken, generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen), fmt.Sprintf(`{"node_id":%d,"reason":"维护","requested_ttl_seconds":3600}`, node.ID))
 	if longTTLResp.Code != http.StatusBadRequest || !strings.Contains(longTTLResp.Body.String(), "授权时长不能超过") {
 		t.Fatalf("过长 TTL 应返回 400，实际: %d，响应: %s", longTTLResp.Code, longTTLResp.Body.String())
 	}
@@ -870,7 +870,7 @@ func TestOperatorCanRequestOwnedManualTriggerGrant(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	operator := seedStepUpUser(t, db, "grant-manual-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, operator)
+	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
 	node := seedCredentialGrantNode(t, db)
 	taskEntity := model.Task{Name: "owned-manual", NodeID: node.ID, ExecutorType: "command", Command: "echo ok", Status: "pending"}
 	if err := db.Create(&taskEntity).Error; err != nil {
@@ -905,7 +905,7 @@ func TestOperatorCannotRequestUnownedManualTriggerGrant(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	operator := seedStepUpUser(t, db, "grant-manual-unowned-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, operator)
+	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
 	taskEntity := seedCredentialGrantTask(t, db, "command")
 	router := newCredentialGrantTestRouter(db, manager)
 
@@ -928,7 +928,8 @@ func TestBatchGrantRequestsCreateRowsPerResource(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	operator := seedStepUpUser(t, db, "grant-batch-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, operator)
+	taskProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskBatchTrigger)
+	commandProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionBatchCommandCreate)
 	nodeA := seedCredentialGrantNode(t, db)
 	nodeB := seedCredentialGrantNode(t, db)
 	for _, node := range []model.Node{nodeA, nodeB} {
@@ -946,7 +947,7 @@ func TestBatchGrantRequestsCreateRowsPerResource(t *testing.T) {
 	}
 	router := newCredentialGrantTestRouter(db, manager)
 
-	batchTaskResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-batch-trigger", token, proof, fmt.Sprintf(`{"task_ids":[%d,%d,%d],"reason":"批量触发","requested_ttl_seconds":600}`, taskA.ID, taskB.ID, taskA.ID))
+	batchTaskResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/task-batch-trigger", token, taskProof, fmt.Sprintf(`{"task_ids":[%d,%d,%d],"reason":"批量触发","requested_ttl_seconds":600}`, taskA.ID, taskB.ID, taskA.ID))
 	if batchTaskResp.Code != http.StatusCreated {
 		t.Fatalf("batch task grant 期望 201，实际: %d，响应: %s", batchTaskResp.Code, batchTaskResp.Body.String())
 	}
@@ -960,7 +961,7 @@ func TestBatchGrantRequestsCreateRowsPerResource(t *testing.T) {
 		t.Fatalf("batch task grant 应按去重任务创建 2 行，实际: %+v", taskPayload.Data)
 	}
 
-	batchCommandResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command", token, proof, fmt.Sprintf(`{"node_ids":[%d,%d,%d],"reason":"批量操作","requested_ttl_seconds":600}`, nodeA.ID, nodeB.ID, nodeA.ID))
+	batchCommandResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command", token, commandProof, fmt.Sprintf(`{"node_ids":[%d,%d,%d],"reason":"批量操作","requested_ttl_seconds":600}`, nodeA.ID, nodeB.ID, nodeA.ID))
 	if batchCommandResp.Code != http.StatusCreated {
 		t.Fatalf("batch command grant 期望 201，实际: %d，响应: %s", batchCommandResp.Code, batchCommandResp.Body.String())
 	}
@@ -1003,12 +1004,12 @@ func TestManualTriggerRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	operator := seedStepUpUser(t, db, "manual-route-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, operator)
+	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
 	taskEntity := seedCredentialGrantTask(t, db, "command")
 	calls := 0
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/trigger", RequireStepUp(db, manager, CredentialGrantActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), RequireTaskManualTriggerCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/trigger", RequireStepUp(db, manager, auth.StepUpActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), RequireTaskManualTriggerCredentialGrant(db), func(c *gin.Context) {
 		calls++
 		c.Status(http.StatusNoContent)
 	})
@@ -1034,14 +1035,14 @@ func TestBatchGrantEnforcementIsAllOrNothing(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	operator := seedStepUpUser(t, db, "batch-enforce-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
-	proof := generateStepUpProof(t, manager, operator)
+	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskBatchTrigger)
 	taskA := seedCredentialGrantTask(t, db, "rsync")
 	taskB := seedCredentialGrantTask(t, db, "rsync")
 	called := false
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
 	router.POST("/tasks/batch-trigger", func(c *gin.Context) {
-		if !EnforceStepUp(c, db, manager, CredentialGrantActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
+		if !EnforceStepUp(c, db, manager, auth.StepUpActionTaskBatchTrigger, sshutil.PurposeTaskCommand, "task_bulk_run") {
 			return
 		}
 		if !EnforceTaskBatchTriggerCredentialGrants(c, db, []uint{taskA.ID, taskB.ID}) {
@@ -1151,12 +1152,12 @@ func TestSnapshotRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "snapshot-route-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
 	taskEntity := seedCredentialGrantTask(t, db, "restic")
 	called := false
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
 		called = true
 		c.Status(http.StatusNoContent)
 	})
@@ -1191,12 +1192,12 @@ func TestTaskRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "task-restore-route-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
 	taskEntity := seedCredentialGrantTask(t, db, "rsync")
 	called := false
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionTaskRestoreTrigger, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
 		called = true
 		c.Status(http.StatusNoContent)
 	})
@@ -1231,7 +1232,7 @@ func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "snapshot-route-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
 	taskEntity := seedCredentialGrantTask(t, db, "restic")
 	called := false
 	now := time.Now().UTC()
@@ -1254,7 +1255,7 @@ func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
 		called = true
 		respondMessage(c, "恢复成功")
 	})
@@ -1288,7 +1289,7 @@ func TestTaskRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "task-restore-route-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
 	taskEntity := seedCredentialGrantTask(t, db, "rsync")
 	grant := createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, CredentialGrantStatusActive, credentialaudit.PtrUint(taskEntity.ID), nil, nil, "admin")
 
@@ -1428,7 +1429,7 @@ func TestTaskRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *tes
 			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 			admin := seedStepUpUser(t, db, "task-restore-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
-			proof := generateStepUpProof(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
 			taskEntity := seedCredentialGrantTask(t, db, "rsync")
 			tc.seedGrant(t, db, admin, taskEntity.ID)
 
@@ -1547,7 +1548,7 @@ func TestSnapshotRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t 
 			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 			admin := seedStepUpUser(t, db, "snapshot-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
-			proof := generateStepUpProof(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
 			taskEntity := seedCredentialGrantTask(t, db, "restic")
 			tc.seedGrant(t, db, admin, taskEntity.ID)
 
@@ -1601,7 +1602,7 @@ func TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation(t *test
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "config-import-route-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
 	router := newConfigImportGrantEnforcementRouter(db, manager)
 	body := configImportSSHKeyBody("step-up-entry")
 
@@ -1628,7 +1629,7 @@ func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "config-import-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
 	now := time.Now().UTC()
 	grant := model.CredentialAccessGrant{
 		RequesterUserID:     admin.ID,
@@ -1676,11 +1677,11 @@ func TestConfigExportRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "config-export-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
 	called := false
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, auth.StepUpActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), RequireConfigExportCredentialGrantIf(db, func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
@@ -1713,7 +1714,7 @@ func TestConfigExportRouteUsesActiveSystemGrantAndKeepsSafeExportUnchanged(t *te
 	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 	admin := seedStepUpUser(t, db, "config-export-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
-	proof := generateStepUpProof(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
 	now := time.Now().UTC()
 	grant := model.CredentialAccessGrant{
 		RequesterUserID:     admin.ID,
@@ -1865,7 +1866,7 @@ func TestConfigExportRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *te
 			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 			admin := seedStepUpUser(t, db, "config-export-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
-			proof := generateStepUpProof(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
 			tc.seedGrant(t, db, admin)
 
 			router := newConfigExportGrantEnforcementRouter(db, manager)
@@ -1958,7 +1959,7 @@ func TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples(t *testin
 			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
 			admin := seedStepUpUser(t, db, "config-import-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
-			proof := generateStepUpProof(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
 			tc.seedGrant(t, db, admin)
 
 			keyName := "deny-entry-" + tc.name
@@ -1984,7 +1985,7 @@ func TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples(t *testin
 func newSnapshotRestoreGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/snapshots/:sid/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionSnapshotRestore, sshutil.PurposeSnapshot, "snapshot_restore"), RequireSnapshotRestoreCredentialGrant(db), func(c *gin.Context) {
 		respondMessage(c, "恢复成功")
 	})
 	return router
@@ -1993,7 +1994,7 @@ func newSnapshotRestoreGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTMana
 func newTaskRestoreGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionTaskRestore, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
+	router.POST("/tasks/:id/restore", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionTaskRestoreTrigger, sshutil.PurposeTaskRestore, "task_restore"), RequireTaskRestoreCredentialGrant(db), func(c *gin.Context) {
 		respondMessage(c, "恢复成功")
 	})
 	return router
@@ -2003,7 +2004,7 @@ func newConfigImportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager
 	handler := NewConfigHandler(db, nil)
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.POST("/config/import", middleware.RequireRole("admin"), RequireStepUp(db, manager, CredentialGrantActionConfigImport, CredentialGrantPurposeConfigImport, "settings_import"), RequireConfigImportCredentialGrant(db), handler.Import)
+	router.POST("/config/import", middleware.RequireRole("admin"), RequireStepUp(db, manager, auth.StepUpActionConfigImport, CredentialGrantPurposeConfigImport, "settings_import"), RequireConfigImportCredentialGrant(db), handler.Import)
 	return router
 }
 
@@ -2011,7 +2012,7 @@ func newConfigExportGrantEnforcementRouter(db *gorm.DB, manager *auth.JWTManager
 	handler := NewConfigHandler(db, nil)
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
+	router.GET("/config/export", middleware.RequireRole("admin"), RequireStepUpIf(db, manager, auth.StepUpActionConfigExport, CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), RequireConfigExportCredentialGrantIf(db, func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"

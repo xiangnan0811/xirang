@@ -33,6 +33,7 @@ type Task struct {
 	LastError          string     `gorm:"type:text" json:"last_error"`
 	LastRunAt          *time.Time `json:"last_run_at"`
 	NextRunAt          *time.Time `json:"next_run_at"`
+	ArchivedAt         *time.Time `json:"archived_at,omitempty"`
 	Progress           *int       `gorm:"-" json:"progress,omitempty"`
 	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
 	CreatedAt          time.Time  `json:"created_at"`

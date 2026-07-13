@@ -214,8 +214,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	if authMsg.StepUpProof != "" {
 		proofState = "failed"
 	}
-	if _, err := validateStepUpProof(h.db, h.jwtManager, authMsg.StepUpProof, claims.UserID, claims.Role); err != nil {
-		writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{Action: "terminal.open", Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeBlocked, proofState)
+	if _, err := validateStepUpProof(h.db, h.jwtManager, authMsg.StepUpProof, claims.UserID, claims.Role, auth.StepUpActionTerminalOpen); err != nil {
+		writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{ExpectedAction: auth.StepUpActionTerminalOpen, Action: string(auth.StepUpActionTerminalOpen), Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeBlocked, proofState)
 		h.writeTerminalAuditEntry(c, claims, "step-up-required", http.StatusForbidden)
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
@@ -223,7 +223,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = conn.Close()
 		return
 	}
-	writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{Action: "terminal.open", Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeSuccess, "satisfied")
+	writeStepUpCredentialAudit(c, h.db, claims, stepUpAuditOperation{ExpectedAction: auth.StepUpActionTerminalOpen, Action: string(auth.StepUpActionTerminalOpen), Purpose: sshutil.PurposeTerminal, Operation: "terminal"}, credentialaudit.OutcomeSuccess, "satisfied")
 
 	// 解析 node_id 参数
 	rawNodeID := c.Query("node_id")

@@ -17,6 +17,7 @@ import {
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/core";
+import type { StepUpAction } from "@/lib/api/totp-api";
 import { clearStepUpProof as clearStoredStepUpProof, readStepUpProof, saveStepUpProof } from "@/lib/step-up-storage";
 
 const AUTH_TOKEN_KEY = "xirang-auth-token";
@@ -37,6 +38,7 @@ type PendingStepUpRequest = {
   resolve: (proof: string) => void;
   reject: (error: Error) => void;
   persist: boolean;
+  action: StepUpAction;
 };
 
 function getSessionStorage() {
@@ -217,21 +219,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setAuthState((prev) => ({ ...prev, totpEnabled: enabled }));
   }, []);
 
-  const clearStepUpProof = useCallback(() => {
-    clearStoredStepUpProof();
+  const clearStepUpProof = useCallback((action?: StepUpAction) => {
+    clearStoredStepUpProof(action);
   }, []);
 
-  const ensureStepUpProof = useCallback(async (options: { persist?: boolean; reuseCached?: boolean } = {}): Promise<string> => {
+  const ensureStepUpProof = useCallback(async (action: StepUpAction, options: { persist?: boolean; reuseCached?: boolean } = {}): Promise<string> => {
     const persist = options.persist ?? true;
     const reuseCached = options.reuseCached ?? persist;
     if (reuseCached) {
-      const cached = readStepUpProof();
+      const cached = readStepUpProof(action);
       if (cached) {
         return cached.proof;
       }
     }
     if (!persist) {
-      clearStoredStepUpProof();
+      clearStoredStepUpProof(action);
     }
     if (!token) {
       throw new Error(i18n.t("stepUp.loginRequired"));
@@ -247,7 +249,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setStepUpError(null);
     setStepUpDialogOpen(true);
     return new Promise<string>((resolve, reject) => {
-      pendingStepUpRef.current = { resolve, reject, persist };
+      pendingStepUpRef.current = { resolve, reject, persist, action };
     });
   }, [token, totpEnabled]);
 
@@ -275,16 +277,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setStepUpSubmitting(true);
     setStepUpError(null);
     try {
-      const response = await apiClient.requestStepUpProof(token, code);
-      const shouldPersistProof = pendingStepUpRef.current.persist;
+      const pendingRequest = pendingStepUpRef.current;
+      const response = await apiClient.requestStepUpProof(token, code, pendingRequest.action);
+      const shouldPersistProof = pendingRequest.persist;
       if (shouldPersistProof) {
         const expiresAt = Date.parse(response.expires_at);
         const ttlMillis = Number(response.proof_ttl_seconds || 0) * 1000;
         const fallbackExpiresAt = ttlMillis > 0 ? Date.now() + ttlMillis : Date.now();
         const proofExpiresAt = Number.isFinite(expiresAt) ? expiresAt : fallbackExpiresAt;
-        saveStepUpProof(response.proof, proofExpiresAt);
+        saveStepUpProof(pendingRequest.action, response.proof, proofExpiresAt);
       }
-      pendingStepUpRef.current.resolve(response.proof);
+      pendingRequest.resolve(response.proof);
       pendingStepUpRef.current = null;
       setStepUpDialogOpen(false);
       setStepUpCode("");
