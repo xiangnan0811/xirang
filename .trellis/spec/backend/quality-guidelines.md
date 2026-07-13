@@ -686,6 +686,128 @@ robust solution. Examples that have triggered scanners on this repo:
 
 ---
 
+### Scenario: Backup Repository Read Adapters
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing Repository probing, Provider listing/stat/read,
+  access bindings, safe filesystem access, Provider commands, or Repository
+  SSH credential use.
+- Applies to `backupasset/provider`, `backupasset/repository`, `fileaccess`,
+  the shared `sshutil` dial/command runner, and Repository route wiring.
+
+#### 2. Signatures
+
+- Narrow ports are `RepositoryProber`, `PointLister`, `EntryLister`,
+  `EntryStatter`, `SequentialReader`, and optional `RangeReader`; consumers
+  request only the port they need.
+- Every read receives a `provider.ReadSnapshot` binding opaque Repository ID,
+  capability revision, source revision, and private access binding.
+- Listings use `provider.PageRequest{Limit, Cursor}` and signed scoped cursors.
+  Sequential reads require `provider.ReadRequest{MaxBytes > 0}`; Range requires
+  `provider.ByteRange{Offset >= 0, Length > 0}`.
+- Dynamic settings are
+  `backup_assets.provider_operation_timeout`,
+  `backup_assets.provider_max_concurrency`, and
+  `backup_assets.provider_metadata_limit_bytes`.
+- Managed SSH purposes are `repository_probe`, `repository_list`, and
+  `repository_read`.
+
+#### 3. Contracts
+
+- Provider point/entry locators and binding material are internal `json:"-"`
+  values. HTTP accepts opaque Xirang IDs, never arbitrary paths, remotes,
+  repository strings, shell fragments, or credentials.
+- Restic uses a validated full native repository/snapshot identity. Mutable
+  Rsync/Rclone identities are task-scoped, salted, domain-separated HMACs and
+  never auto-merge across Tasks.
+- A retained active binding must still reference a non-archived Task whose
+  current Provider and Node lineage match the encrypted document. Drift is a
+  conflict before probe; a shared Restic link must not make an unusable retained
+  binding appear online. Replacement requires an exact Repository target and
+  `replace_access=true`.
+- Local strict Provider reads use handle-relative containment and never follow
+  symlinks. SFTP uses strict relative locators plus pre/open/post
+  containment/type/source checks; the verified SSH/SFTP server remains a
+  documented infrastructure trust boundary.
+- `fileaccess.Tree` owns `List`, `Lstat`, `OpenRegular`, and `OpenRange`.
+  Callers must not validate a path and later open it independently.
+- Provider commands use fixed server-owned tool/operation enums, separately
+  quoted operands, bounded stdout/stderr/records/items/time/concurrency, and
+  one-write secret stdin. Content streams hold their permit until close and
+  surface wait/cancel/limit/invariant errors from `Close`.
+- Restic/Rclone operation limits and shared concurrency are re-read at runtime.
+  `RESTIC_BINARY` and `RCLONE_BINARY` are restart-time executable selections.
+- Adapter registration is read-only. Restic mutation commands and Rclone/Rsync
+  copy/sync/delete/restore/publication paths are unreachable. A remote Rsync
+  target remains typed unsupported until a separate target-credential contract
+  exists; never reuse the source Node credential by assumption.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Absolute/NUL/dot-dot/ambiguous strict locator | Reject before filesystem or Provider I/O. |
+| Symlink escape or special-file open | Reject; symlink/special may be typed for listing only. |
+| Source/root/object changes before close | Return `mutable_source_changed`; do not report successful partial content. |
+| Cursor list fingerprint no longer matches | Return stale cursor; do not silently skip or duplicate entries. |
+| Restic snapshot ID is `latest` or a prefix | Reject before command execution. |
+| Rclone Range semantics are unproven | Keep `OpenRange=false` and return `range_unavailable` if requested. |
+| Metadata/output/item/time/concurrency cap is exceeded | Terminate/close/join and return a typed limit/timeout error. |
+| Request context is canceled | Close local/remote handle, SFTP/SSH session as owned, and join command goroutines. |
+| Retained binding Task is archived or changes Provider/Node lineage | Return conflict before Provider probe; preserve Repository/link/binding rows. |
+| Feature is disabled | No Task/DB/keyring/audit/dial/command side effect. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Restic lists only full snapshot IDs through a bounded parser and sends
+  its repository password once through `/dev/stdin` without argv/env/temp-file
+  exposure.
+- Base: a mutable Rsync Repository exposes one stable observed head and updates
+  that row in place; disconnect keeps it observed/offline and reconnect advances
+  capability revision.
+- Bad: using `validatePath(path)` followed by `os.Open(path)`, or constructing
+  `session.Run("rclone cat " + userPath)`.
+
+#### 6. Tests Required
+
+- Compile/source-boundary tests proving Provider does not import handlers or
+  `task/executor`, repository executor mapping stays in `binding.go`, and
+  `fileaccess` does not query DB or read `FILE_BROWSER_ALLOW_ALL`.
+- Local/SFTP tests for traversal, symlink/static races, pre/post source changes,
+  special files, root rename, bounded enumeration, Range, cancellation, and
+  handle-close errors.
+- Executable fake tests for strict Restic/Rclone argv, schemas, malformed and
+  oversized output, exact locators, secret stdin, cancellation, and mutation
+  command absence.
+- Repository tests for probe-first no-write failure, idempotency, shared Restic
+  lineage filtering, retained-binding drift, explicit replacement, disconnect/
+  reconnect revision, transaction rollback, and uniqueness races.
+- Race/repetition suites for cancellation, resource limits, cursor/list
+  mutation, dynamic settings, and concurrency changes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+safePath, _ := validatePath(root, input)
+file, _ := os.Open(safePath)
+```
+
+Correct:
+
+```go
+handle, stat, err := tree.OpenRegular(ctx, root, locator, fileaccess.ProviderPolicy)
+if err != nil {
+    return err
+}
+defer handle.Close()
+_ = stat // metadata belongs to the opened handle
+```
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?

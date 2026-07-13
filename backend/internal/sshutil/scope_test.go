@@ -90,3 +90,16 @@ func TestNormalizeScopeLists(t *testing.T) {
 		t.Fatalf("unexpected tags: %q", tags)
 	}
 }
+
+func TestRepositoryPurposesRemainIndependent(t *testing.T) {
+	purposes := []string{PurposeRepositoryProbe, PurposeRepositoryList, PurposeRepositoryRead}
+	for _, allowed := range purposes {
+		key := model.SSHKey{AllowedPurposes: allowed}
+		for _, requested := range purposes {
+			err := ValidateSSHKeyScope(key, model.Node{ID: 1}, requested)
+			if (allowed == requested) != (err == nil) {
+				t.Fatalf("allowed=%s requested=%s err=%v", allowed, requested, err)
+			}
+		}
+	}
+}

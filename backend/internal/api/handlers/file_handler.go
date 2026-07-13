@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/fileaccess"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -23,7 +25,11 @@ import (
 const (
 	filePreviewMaxBytes = 1 * 1024 * 1024 // 1MB
 	dirListMaxEntries   = 500
+	dirListMaxScanned   = 10000
+	dirListMaxNameBytes = 16 * 1024 * 1024
 )
+
+var errFileRootQuery = errors.New("file browser root query failed")
 
 // FileEntry 表示一个文件或目录条目。
 type FileEntry struct {
@@ -89,6 +95,11 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
+	roots, err := loadNodeFileRoots(c.Request.Context(), h.db, node)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
@@ -103,8 +114,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	defer sftpClient.Close() //nolint:errcheck
 	defer client.Close()     //nolint:errcheck
 
-	// 路径安全校验：通过 SFTP RealPath 解析后再做白名单比对，防御远程符号链接逃逸。
-	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
+	accessRoot, locator, cleanPath, err := resolveNodeFileAccess(sftpClient, rawPath, roots)
 	if err != nil {
 		logFileHandlerFailure("warn", node.ID, "path_validate", rawPath, "节点路径校验拒绝")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeBlocked, err, map[string]any{
@@ -115,7 +125,13 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		return
 	}
 
-	entries, truncated, err := listSFTPDir(sftpClient, cleanPath)
+	tree := fileaccess.NewSFTPClientTree(sftpClient, fileaccess.NewSFTPCompatibilityEnumerator(sftpClient), func() error {
+		_ = sftpClient.Close()
+		return client.Close()
+	})
+	page, err := tree.List(c.Request.Context(), accessRoot, locator, fileaccess.LegacyPolicy, fileaccess.PageRequest{
+		Limit: dirListMaxEntries, MaxItems: dirListMaxScanned, MaxBytes: dirListMaxNameBytes,
+	})
 	if err != nil {
 		logFileHandlerFailure("error", node.ID, "read_dir", cleanPath, "SFTP 读取目录失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeFailure, err, map[string]any{
@@ -125,6 +141,8 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		respondBadGateway(c, "读取目录失败")
 		return
 	}
+	entries := fileEntriesFromAccess(accessRoot, page)
+	truncated := page.HasMore
 
 	h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeSuccess, nil, map[string]any{
 		"stage":        "success",
@@ -174,6 +192,11 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
+	roots, err := loadNodeFileRoots(c.Request.Context(), h.db, node)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 
 	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
 	if err != nil {
@@ -188,7 +211,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	defer sftpClient.Close() //nolint:errcheck
 	defer client.Close()     //nolint:errcheck
 
-	cleanPath, err := validateNodePath(c.Request.Context(), sftpClient, rawPath, node, h.db)
+	accessRoot, locator, cleanPath, err := resolveNodeFileAccess(sftpClient, rawPath, roots)
 	if err != nil {
 		logFileHandlerFailure("warn", node.ID, "path_validate", rawPath, "节点路径校验拒绝")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeBlocked, err, map[string]any{
@@ -199,46 +222,42 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		return
 	}
 
-	stat, err := sftpClient.Stat(cleanPath)
+	tree := fileaccess.NewSFTPClientTree(sftpClient, fileaccess.NewSFTPCompatibilityEnumerator(sftpClient), func() error {
+		_ = sftpClient.Close()
+		return client.Close()
+	})
+	handle, stat, err := tree.OpenRegular(c.Request.Context(), accessRoot, locator, fileaccess.LegacyPolicy)
 	if err != nil {
-		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
-			"stage":     "stat",
-			"path_hash": safePathHash(cleanPath),
-		})
-		respondNotFound(c, "文件不存在")
+		outcome := credentialaudit.OutcomeFailure
+		if errors.Is(err, fileaccess.ErrNotRegular) || errors.Is(err, fileaccess.ErrSymlinkDenied) {
+			outcome = credentialaudit.OutcomeBlocked
+		}
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", outcome, err, map[string]any{"stage": "open", "path_hash": safePathHash(cleanPath)})
+		if errors.Is(err, fileaccess.ErrNotRegular) || errors.Is(err, fileaccess.ErrSymlinkDenied) {
+			respondBadRequest(c, "目标路径不是可预览的普通文件")
+		} else if errors.Is(err, os.ErrNotExist) {
+			respondNotFound(c, "文件不存在")
+		} else {
+			respondBadGateway(c, "打开文件失败")
+		}
 		return
 	}
-	if stat.IsDir() {
-		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeBlocked, fmt.Errorf("target is directory"), map[string]any{
-			"stage":     "stat",
-			"kind":      "directory",
-			"path_hash": safePathHash(cleanPath),
-		})
-		respondBadRequest(c, "目标路径是目录，无法预览")
-		return
-	}
-
-	f, err := sftpClient.Open(cleanPath)
-	if err != nil {
-		logFileHandlerFailure("error", node.ID, "open", cleanPath, "SFTP 打开文件失败")
-		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
-			"stage":     "open",
-			"path_hash": safePathHash(cleanPath),
-		})
-		respondBadGateway(c, "打开文件失败")
-		return
-	}
-	defer f.Close() //nolint:errcheck
 
 	buf := make([]byte, filePreviewMaxBytes+1)
-	n, err := io.ReadFull(f, buf)
+	n, err := io.ReadFull(handle, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		_ = handle.Close()
 		logFileHandlerFailure("error", node.ID, "read", cleanPath, "SFTP 读取文件失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, err, map[string]any{
 			"stage":     "read",
 			"path_hash": safePathHash(cleanPath),
 		})
 		respondBadGateway(c, "读取文件失败")
+		return
+	}
+	if closeErr := handle.Close(); closeErr != nil {
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, closeErr, map[string]any{"stage": "post_check", "path_hash": safePathHash(cleanPath)})
+		respondBadGateway(c, "文件在读取期间发生变化")
 		return
 	}
 
@@ -251,7 +270,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		"stage":         "success",
 		"kind":          "file",
 		"path_hash":     safePathHash(cleanPath),
-		"size":          stat.Size(),
+		"size":          stat.Size,
 		"preview_bytes": n,
 		"truncated":     truncated,
 	})
@@ -259,7 +278,7 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 	respondOK(c, FileContentResponse{
 		Path:      cleanPath,
 		Content:   string(buf[:n]),
-		Size:      stat.Size(),
+		Size:      stat.Size,
 		Truncated: truncated,
 	})
 }
@@ -301,17 +320,23 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 		return
 	}
 
-	// 将请求路径拼接到 RsyncTarget 并做安全校验
-	fullPath, err := validateLocalPath(rawPath, base)
+	locator, err := localLegacyLocator(rawPath)
 	if err != nil {
 		logLocalFileHandlerFailure("warn", taskEntity.ID, taskEntity.NodeID, "path_validate", rawPath, "本地路径校验拒绝")
 		respondForbidden(c, "路径不在允许的访问范围内")
 		return
 	}
-
-	entries, truncated, err := listLocalDir(fullPath)
+	accessRoot := fileaccess.Root{Path: filepath.Clean(base)}
+	_, fullPath, err := fileaccess.Resolve(accessRoot, locator, fileaccess.LegacyPolicy)
 	if err != nil {
-		if os.IsNotExist(err) {
+		respondForbidden(c, "路径不在允许的访问范围内")
+		return
+	}
+	page, err := fileaccess.NewLocalTree().List(c.Request.Context(), accessRoot, locator, fileaccess.LegacyPolicy, fileaccess.PageRequest{
+		Limit: dirListMaxEntries, MaxItems: dirListMaxScanned, MaxBytes: dirListMaxNameBytes,
+	})
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			respondNotFound(c, "目录不存在")
 		} else {
 			logLocalFileHandlerFailure("error", taskEntity.ID, taskEntity.NodeID, "read_dir", fullPath, "读取本地目录失败")
@@ -319,12 +344,13 @@ func (h *FileHandler) ListTaskBackupFiles(c *gin.Context) {
 		}
 		return
 	}
+	entries := fileEntriesFromAccess(accessRoot, page)
 
 	// 响应中的 path 用相对于 RsyncTarget 的视角
 	respondOK(c, FileListResponse{
 		Path:      fullPath,
 		Entries:   entries,
-		Truncated: truncated,
+		Truncated: page.HasMore,
 	})
 }
 
@@ -414,7 +440,6 @@ type realPathResolver interface {
 // 性能影响：每次请求新增 (1 + len(roots)) 次 SFTP RTT；典型 LAN 节点 ~10ms 量级，可接受。
 // 开发旁路：FILE_BROWSER_ALLOW_ALL=true 且处于开发环境时跳过解析，仅做语法 Clean。
 func validateNodePath(ctx context.Context, resolver realPathResolver, rawPath string, node model.Node, db *gorm.DB) (string, error) {
-	_ = ctx // 预留：未来若需要带 ctx 的 RealPath，签名已保留 ctx
 	if util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true" {
 		if !util.IsDevelopmentEnv() {
 			return "", fmt.Errorf("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
@@ -425,139 +450,99 @@ func validateNodePath(ctx context.Context, resolver realPathResolver, rawPath st
 	if resolver == nil {
 		return "", fmt.Errorf("路径解析失败：缺少 SFTP 会话")
 	}
-
-	clean := filepath.Clean(rawPath)
-
-	// 1) 解析用户输入路径
-	resolved, err := resolver.RealPath(clean)
+	roots, err := loadNodeFileRoots(ctx, db, node)
 	if err != nil {
-		// 区分"路径不存在/不可访问" vs "白名单越界"，避免把权限/不存在错误误报为越界
-		return "", fmt.Errorf("路径不存在或不可访问")
+		return "", err
 	}
-	resolved = filepath.Clean(resolved)
+	_, _, resolved, err := resolveNodeFileAccess(resolver, rawPath, roots)
+	return resolved, err
+}
 
-	// 2) 收集并解析白名单根（roots 自身可能是符号链接，例如 /data → /mnt/data）
-	rawRoots := []string{}
+func loadNodeFileRoots(ctx context.Context, db *gorm.DB, node model.Node) ([]fileaccess.Root, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: database unavailable", errFileRootQuery)
+	}
+	values := make([]string, 0, 4)
 	if base := strings.TrimSpace(node.BasePath); base != "" {
-		rawRoots = append(rawRoots, filepath.Clean(base))
+		values = append(values, base)
 	}
 	var tasks []model.Task
-	if err := db.Select("rsync_source").Where("node_id = ?", node.ID).Find(&tasks).Error; err == nil {
-		for _, t := range tasks {
-			if s := strings.TrimSpace(t.RsyncSource); s != "" {
-				rawRoots = append(rawRoots, filepath.Clean(s))
-			}
+	if err := db.WithContext(ctx).Select("rsync_source").Where("node_id = ?", node.ID).Find(&tasks).Error; err != nil {
+		return nil, fmt.Errorf("%w", errFileRootQuery)
+	}
+	for _, taskEntity := range tasks {
+		if source := strings.TrimSpace(taskEntity.RsyncSource); source != "" {
+			values = append(values, source)
 		}
 	}
-
-	// 3) 对每个 root 也做 RealPath；root 不存在则跳过（保持原 silent skip 行为）。
-	for _, root := range rawRoots {
-		var resolvedRoot string
-		if root == "/" {
-			resolvedRoot = "/"
-		} else {
-			rr, err := resolver.RealPath(root)
-			if err != nil {
-				// root 自身不存在或权限不足：跳过（与原始实现保持等价：缺失的 root 不应阻塞其他 roots）
-				continue
-			}
-			resolvedRoot = filepath.Clean(rr)
-		}
-		if resolvedRoot == "/" || resolved == resolvedRoot || strings.HasPrefix(resolved, resolvedRoot+"/") {
-			return resolved, nil
-		}
-	}
-
-	// 不在错误信息中泄露 resolved 真实路径，避免提供额外侦测信息
-	return "", fmt.Errorf("路径超出允许范围，请在节点 BasePath 或任务源路径下浏览")
-}
-
-// validateLocalPath 对选项 B 的路径做安全校验，确保在 base（RsyncTarget）目录下。
-func validateLocalPath(rawPath, base string) (string, error) {
-	cleanBase := filepath.Clean(base)
-
-	// rawPath 视为相对路径，拼接到 base 下
-	joined := filepath.Join(cleanBase, rawPath)
-	cleanJoined := filepath.Clean(joined)
-
-	// 必须在 base 目录内
-	if cleanJoined != cleanBase && !strings.HasPrefix(cleanJoined, cleanBase+string(filepath.Separator)) {
-		return "", fmt.Errorf("路径超出备份目录范围")
-	}
-
-	// 解析符号链接后再次校验
-	resolved, err := filepath.EvalSymlinks(cleanJoined)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cleanJoined, nil // 路径不存在时跳过符号链接解析，留给调用者处理
-		}
-		return "", fmt.Errorf("路径解析失败")
-	}
-	resolvedBase, err := filepath.EvalSymlinks(cleanBase)
-	if err != nil {
-		resolvedBase = cleanBase
-	}
-	if resolved != resolvedBase && !strings.HasPrefix(resolved, resolvedBase+string(filepath.Separator)) {
-		return "", fmt.Errorf("路径超出备份目录范围（符号链接穿越）")
-	}
-
-	return cleanJoined, nil
-}
-
-// listSFTPDir 通过 SFTP 列举目录内容。
-func listSFTPDir(client *sftp.Client, path string) ([]FileEntry, bool, error) {
-	infos, err := client.ReadDir(path)
-	if err != nil {
-		return nil, false, err
-	}
-
-	truncated := len(infos) > dirListMaxEntries
-	if truncated {
-		infos = infos[:dirListMaxEntries]
-	}
-
-	entries := make([]FileEntry, 0, len(infos))
-	for _, info := range infos {
-		entryPath := filepath.Join(path, info.Name())
-		entries = append(entries, FileEntry{
-			Name:    info.Name(),
-			Path:    entryPath,
-			IsDir:   info.IsDir(),
-			Size:    info.Size(),
-			Mode:    info.Mode().String(),
-			ModTime: info.ModTime().Format(time.RFC3339),
-		})
-	}
-	return entries, truncated, nil
-}
-
-// listLocalDir 列举本地目录内容。
-func listLocalDir(path string) ([]FileEntry, bool, error) {
-	des, err := os.ReadDir(path)
-	if err != nil {
-		return nil, false, err
-	}
-
-	truncated := len(des) > dirListMaxEntries
-	if truncated {
-		des = des[:dirListMaxEntries]
-	}
-
-	entries := make([]FileEntry, 0, len(des))
-	for _, de := range des {
-		info, err := de.Info()
-		if err != nil {
+	seen := make(map[string]struct{}, len(values))
+	roots := make([]fileaccess.Root, 0, len(values))
+	for _, value := range values {
+		clean := filepath.Clean(value)
+		if _, exists := seen[clean]; exists {
 			continue
 		}
-		entryPath := filepath.Join(path, de.Name())
+		seen[clean] = struct{}{}
+		roots = append(roots, fileaccess.Root{Path: clean})
+	}
+	return roots, nil
+}
+
+func resolveNodeFileAccess(resolver realPathResolver, rawPath string, roots []fileaccess.Root) (fileaccess.Root, fileaccess.Locator, string, error) {
+	if util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true" {
+		if !util.IsDevelopmentEnv() {
+			return fileaccess.Root{}, fileaccess.Locator{}, "", fmt.Errorf("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
+		}
+		clean := filepath.Clean(rawPath)
+		return fileaccess.Root{Path: string(filepath.Separator)}, fileaccess.Locator{Path: clean}, clean, nil
+	}
+	if resolver == nil {
+		return fileaccess.Root{}, fileaccess.Locator{}, "", fmt.Errorf("路径解析失败：缺少 SFTP 会话")
+	}
+	resolved, err := resolver.RealPath(filepath.Clean(rawPath))
+	if err != nil {
+		return fileaccess.Root{}, fileaccess.Locator{}, "", fmt.Errorf("路径不存在或不可访问")
+	}
+	resolved = filepath.Clean(resolved)
+	for _, root := range roots {
+		resolvedRoot := string(filepath.Separator)
+		if filepath.Clean(root.Path) != string(filepath.Separator) {
+			resolvedRoot, err = resolver.RealPath(filepath.Clean(root.Path))
+			if err != nil {
+				continue
+			}
+			resolvedRoot = filepath.Clean(resolvedRoot)
+		}
+		if fileaccess.Contains(resolvedRoot, resolved) {
+			return fileaccess.Root{Path: resolvedRoot}, fileaccess.Locator{Path: resolved}, resolved, nil
+		}
+	}
+	return fileaccess.Root{}, fileaccess.Locator{}, "", fmt.Errorf("路径超出允许范围，请在节点 BasePath 或任务源路径下浏览")
+}
+
+func localLegacyLocator(rawPath string) (fileaccess.Locator, error) {
+	clean := filepath.Clean(rawPath)
+	if clean == string(filepath.Separator) || clean == "." {
+		return fileaccess.RootLocator(), nil
+	}
+	if filepath.IsAbs(clean) {
+		clean = strings.TrimPrefix(clean, filepath.VolumeName(clean))
+		clean = strings.TrimLeft(clean, "/\\")
+	}
+	return fileaccess.ParseLocator(clean, fileaccess.LegacyPolicy)
+}
+
+func fileEntriesFromAccess(root fileaccess.Root, page fileaccess.EntryPage) []FileEntry {
+	entries := make([]FileEntry, 0, len(page.Items))
+	for _, entry := range page.Items {
+		entryPath := entry.Locator.Path
+		if !filepath.IsAbs(entryPath) {
+			entryPath = filepath.Join(root.Path, entryPath)
+		}
 		entries = append(entries, FileEntry{
-			Name:    de.Name(),
-			Path:    entryPath,
-			IsDir:   de.IsDir(),
-			Size:    info.Size(),
-			Mode:    info.Mode().String(),
-			ModTime: info.ModTime().Format(time.RFC3339),
+			Name: entry.Name, Path: entryPath, IsDir: entry.Type == fileaccess.EntryDirectory,
+			Size: entry.Size, Mode: entry.Mode, ModTime: entry.ModTime.Format(time.RFC3339),
 		})
 	}
-	return entries, truncated, nil
+	return entries
 }

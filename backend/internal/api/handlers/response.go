@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -94,6 +96,26 @@ func respondServiceUnavailable(c *gin.Context, msg string) {
 
 func respondNotImplemented(c *gin.Context, msg string) {
 	c.JSON(http.StatusNotImplemented, Response{Code: http.StatusNotImplemented, Message: msg, Data: nil})
+}
+
+type backupCapabilityErrorData struct {
+	Reason        backupasset.CapabilityReason `json:"reason"`
+	CorrelationID string                       `json:"correlation_id,omitempty"`
+}
+
+func respondBackupCapabilityError(c *gin.Context, status int, reason backupasset.CapabilityReason, correlationID string) {
+	if (status != http.StatusNotImplemented && status != http.StatusServiceUnavailable) || backupasset.ValidateCapabilityReason(reason) != nil {
+		respondInternalError(c, fmt.Errorf("invalid backup capability response"))
+		return
+	}
+	message := "当前备份 Provider 不支持此能力"
+	if status == http.StatusServiceUnavailable {
+		message = "备份 Provider 暂不可用"
+		if reason.Code == backupasset.CapabilityFeatureDisabled {
+			message = "备份资产功能未启用"
+		}
+	}
+	c.JSON(status, Response{Code: status, Message: message, Data: backupCapabilityErrorData{Reason: reason, CorrelationID: correlationID}})
 }
 
 func respondInternalError(c *gin.Context, err error) {

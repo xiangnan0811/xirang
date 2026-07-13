@@ -176,6 +176,9 @@ var registry = []SettingDef{
 	{Key: "backup_assets.lease_duration", EnvVar: "BACKUP_ASSETS_LEASE_DURATION", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 短租约时长", MinDuration: "30s", MaxDuration: "30m"},
 	{Key: "backup_assets.lease_heartbeat", EnvVar: "BACKUP_ASSETS_LEASE_HEARTBEAT", CodeDefault: "60s", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 租约心跳间隔", MinDuration: "10s", MaxDuration: "5m"},
 	{Key: "backup_assets.lease_absolute_deadline", EnvVar: "BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", CodeDefault: "168h", Type: TypeDuration, Category: "backup_assets", Description: "RecoveryPoint 租约绝对截止时间", MinDuration: "5m", MaxDuration: "168h"},
+	{Key: "backup_assets.provider_operation_timeout", EnvVar: "BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "Provider 只读操作超时", MinDuration: "5s", MaxDuration: "30m"},
+	{Key: "backup_assets.provider_max_concurrency", EnvVar: "BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", CodeDefault: "4", Type: TypeInt, Category: "backup_assets", Description: "Provider 只读操作最大并发数", Min: "1", Max: "32"},
+	{Key: "backup_assets.provider_metadata_limit_bytes", EnvVar: "BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", CodeDefault: "16777216", Type: TypeInt, Category: "backup_assets", Description: "Provider 元数据输出字节上限", Min: "65536", Max: "67108864"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -519,6 +522,9 @@ func ValidateBackupAssetFoundationConfig(values map[string]string) error {
 		"backup_assets.lease_duration",
 		"backup_assets.lease_heartbeat",
 		"backup_assets.lease_absolute_deadline",
+		"backup_assets.provider_operation_timeout",
+		"backup_assets.provider_max_concurrency",
+		"backup_assets.provider_metadata_limit_bytes",
 	}
 	resolved := make(map[string]string, len(keys))
 	for _, key := range keys {

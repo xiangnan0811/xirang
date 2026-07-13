@@ -2,6 +2,7 @@ package backupasset
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestSanitizedDTOExcludesSecretsAndLocators(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convert repository DTO: %v", err)
 	}
-	recoveryPointDTO, err := ToRecoveryPointDTO(recoveryPoint)
+	recoveryPointDTO, err := ToRecoveryPointDTO(recoveryPoint, VersionMutableHead)
 	if err != nil {
 		t.Fatalf("convert recovery point DTO: %v", err)
 	}
@@ -82,6 +83,29 @@ func TestSanitizedDTOExcludesSecretsAndLocators(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("sanitized DTO JSON contains forbidden value/key %q: %s", forbidden, text)
 		}
+	}
+}
+
+func TestToRecoveryPointDTOUsesOwningRepositoryVersionMode(t *testing.T) {
+	now := time.Date(2026, 7, 13, 3, 4, 5, 0, time.UTC)
+	record := model.RecoveryPoint{
+		ID:                   strings.Repeat("a", 32),
+		RepositoryID:         strings.Repeat("b", 32),
+		Semantics:            string(PointXirangManifest),
+		State:                string(RecoveryPointCommitted),
+		PhysicalAvailability: string(PhysicalOnline),
+		HoldState:            string(HoldNone),
+		ImmutabilityLevel:    string(ImmutabilityXirangManaged),
+		CapabilityRevision:   1,
+		CapabilitiesJSON:     `{}`,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if _, err := ToRecoveryPointDTO(record, VersionVersionedPrefix); err != nil {
+		t.Fatalf("versioned-prefix recovery point rejected: %v", err)
+	}
+	if _, err := ToRecoveryPointDTO(record, VersionNativeSnapshot); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("mismatched repository version got %v", err)
 	}
 }
 
@@ -162,6 +186,29 @@ func TestBackupAssetSettingsFoundationServiceIsDisabledByDefault(t *testing.T) {
 	reader["backup_assets.enabled"] = "invalid"
 	if service.Enabled() {
 		t.Fatal("malformed feature setting must fail closed")
+	}
+}
+
+func TestFoundationServiceProviderConfig(t *testing.T) {
+	service := NewFoundationService(staticSettingsReader{
+		"backup_assets.provider_operation_timeout":    "3m",
+		"backup_assets.provider_max_concurrency":      "6",
+		"backup_assets.provider_metadata_limit_bytes": "8388608",
+	})
+	config, err := service.ProviderConfig()
+	if err != nil || config.OperationTimeout != 3*time.Minute || config.MaxConcurrency != 6 || config.MetadataLimitBytes != 8<<20 {
+		t.Fatalf("ProviderConfig=%+v err=%v", config, err)
+	}
+}
+
+func TestFoundationServiceAuditConfigUsesEffectiveSettings(t *testing.T) {
+	service := NewFoundationService(staticSettingsReader{
+		"backup_assets.audit_segment_max_events": "4321",
+		"backup_assets.audit_segment_max_age":    "36h",
+	})
+	config, err := service.AuditConfig()
+	if err != nil || config.SegmentMaxEvents != 4321 || config.SegmentMaxAge != 36*time.Hour {
+		t.Fatalf("AuditConfig=%+v err=%v", config, err)
 	}
 }
 

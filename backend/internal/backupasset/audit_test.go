@@ -11,6 +11,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+var auditTestDBSequence atomic.Uint64
 
 func TestAuditFingerprintUsesIndependentKeyedDomainAndVersion(t *testing.T) {
 	writer, _, db, ring := newAuditTestHarness(t, AuditConfig{})
@@ -153,6 +156,62 @@ func TestAuditWriterMaintainsEntryChain(t *testing.T) {
 	}
 	if err := writer.Verify(ctx); err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestAuditWriterRefreshesDynamicSegmentConfig(t *testing.T) {
+	_, clock, db, ring := newAuditTestHarness(t, AuditConfig{})
+	config := AuditConfig{SegmentMaxEvents: 100, SegmentMaxAge: 24 * time.Hour}
+	writer, err := NewAuditWriterWithConfigSource(db, ring, clock.Now, func() (AuditConfig, error) {
+		return config, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(context.Background(), standardAuditEventInput(AuditActionRepositoryList, AuditFingerprintInput{})); err != nil {
+		t.Fatal(err)
+	}
+	config.SegmentMaxEvents = 2
+	if _, err := writer.Write(context.Background(), standardAuditEventInput(AuditActionRepositoryList, AuditFingerprintInput{})); err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.BackupAssetAuditCheckpoint
+	if err := db.First(&checkpoint, "segment_no = ?", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Status != string(AuditSegmentClosed) || checkpoint.EntryCount != 2 {
+		t.Fatalf("dynamic audit segment config was frozen: %+v", checkpoint)
+	}
+}
+
+func TestAuditWriterClosesOversizedOpenSegmentBeforeAppendingAfterDynamicDecrease(t *testing.T) {
+	_, clock, db, ring := newAuditTestHarness(t, AuditConfig{})
+	config := AuditConfig{SegmentMaxEvents: 100, SegmentMaxAge: 24 * time.Hour}
+	writer, err := NewAuditWriterWithConfigSource(db, ring, clock.Now, func() (AuditConfig, error) {
+		return config, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := writer.Write(context.Background(), standardAuditEventInput(AuditActionRepositoryList, AuditFingerprintInput{})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config.SegmentMaxEvents = 2
+	appended, err := writer.Write(context.Background(), standardAuditEventInput(AuditActionRepositoryList, AuditFingerprintInput{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appended.SegmentNo != 2 || appended.SegmentSequence != 1 {
+		t.Fatalf("event appended to oversized segment: %+v", appended)
+	}
+	var first model.BackupAssetAuditCheckpoint
+	if err := db.First(&first, "segment_no = ?", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != string(AuditSegmentClosed) || first.EntryCount != 3 {
+		t.Fatalf("first segment=%+v", first)
 	}
 }
 
@@ -359,7 +418,7 @@ func newAuditTestHarness(t *testing.T, config AuditConfig) (*AuditWriter, *audit
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"), auditTestDBSequence.Add(1))
 	clock := &auditTestClock{now: time.Date(2026, 7, 13, 7, 8, 9, 0, time.UTC)}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{NowFunc: clock.Now, Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

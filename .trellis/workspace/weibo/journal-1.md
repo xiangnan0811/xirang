@@ -573,3 +573,36 @@ Reviewed and fixed frontend visual polish, motion, responsive tab, and accessibi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Complete backup repository read adapters
+
+**Date**: 2026-07-14
+**Task**: Complete backup repository read adapters
+**Branch**: `codex/backup-assets-provider-readers`
+
+### Summary
+
+Implemented and verified feature-gated read-only Rsync, Restic, and Rclone Repository adapters, operation-coupled file access, purpose-scoped SSH transport, lineage-safe Repository APIs, dynamic limits, typed audit/error handling, and durable backend specs without schema, UI, or Provider mutation changes.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a6a9b2d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

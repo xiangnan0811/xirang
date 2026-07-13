@@ -11,6 +11,7 @@ func TestSelectedHandlersAvoidDirectJSONResponses(t *testing.T) {
 
 	files := []string{
 		"auth_handler.go",
+		"backup_repository_handler.go",
 		"node_handler.go",
 		"policy_handler.go",
 	}

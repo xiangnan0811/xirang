@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -24,6 +25,17 @@ func TestResolveSSHUserReturnsConfiguredUsername(t *testing.T) {
 	user := ResolveSSHUser(node)
 	if user != "deploy" {
 		t.Fatalf("期望用户名=deploy，实际=%s", user)
+	}
+}
+
+func TestDialSSHForNodePurposeDelegatesToSharedNodeDialer(t *testing.T) {
+	contents, err := os.ReadFile("ssh_connect.go")
+	if err != nil {
+		t.Fatalf("read ssh_connect.go: %v", err)
+	}
+	source := string(contents)
+	if !strings.Contains(source, "sshutil.NewNodeDialer(nil)") || !strings.Contains(source, ".DialAttempt(ctx, resolvedNode, purpose)") {
+		t.Fatal("task SSH compatibility wrapper does not delegate dialing to sshutil.NodeDialer")
 	}
 }
 

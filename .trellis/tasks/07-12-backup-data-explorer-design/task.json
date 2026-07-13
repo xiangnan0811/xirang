@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "07-13-backup-assets-domain-foundation"
+    "07-13-backup-assets-domain-foundation",
+    "07-13-backup-assets-provider-readers"
   ],
   "parent": null,
   "relatedFiles": [],

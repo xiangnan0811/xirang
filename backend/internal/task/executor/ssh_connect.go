@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -21,39 +20,31 @@ func DialSSHForNode(ctx context.Context, node model.Node) (*ssh.Client, error) {
 
 // DialSSHForNodePurpose 为节点建立 SSH 连接，并对托管 SSHKey 执行用途/节点/标签范围校验。
 func DialSSHForNodePurpose(ctx context.Context, node model.Node, purpose string) (*ssh.Client, error) {
-	port := node.Port
-	if port == 0 {
-		port = 22
-	}
+	resolvedNode := node
 	user := strings.TrimSpace(node.Username)
 	if user == "" {
 		user = "root"
 		logger.Module("executor").Warn().Str("node", node.Name).
 			Msg("节点未配置 SSH 用户名，默认使用 root")
 	}
+	resolvedNode.Username = user
 
-	authMethods, credential, err := resolveSSHAuthMethodsForPurpose(node, purpose)
+	dialer := sshutil.NewNodeDialer(nil)
+	client, attempt, err := dialer.DialAttempt(ctx, resolvedNode, purpose)
 	if err != nil {
-		writeRuntimeCredentialAudit(ctx, node, purpose, credential, credentialaudit.OutcomeBlocked, "auth_build", err, 0)
-		return nil, err
+		outcome := credentialaudit.OutcomeFailure
+		mappedErr := err
+		switch attempt.Stage {
+		case sshutil.NodeDialStageAuthBuild:
+			outcome = credentialaudit.OutcomeBlocked
+			mappedErr = translateSSHAuthError(resolvedNode.AuthType, err)
+		case sshutil.NodeDialStageHostKey:
+			mappedErr = fmt.Errorf("主机密钥配置异常: %w", err)
+		}
+		writeRuntimeCredentialAudit(ctx, node, purpose, attempt.Credential, outcome, attempt.Stage, mappedErr, attempt.LatencyMS)
+		return nil, mappedErr
 	}
-
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		wrapped := fmt.Errorf("主机密钥配置异常: %w", err)
-		writeRuntimeCredentialAudit(ctx, node, purpose, credential, credentialaudit.OutcomeFailure, "host_key", wrapped, 0)
-		return nil, wrapped
-	}
-
-	addr := fmt.Sprintf("%s:%d", node.Host, port)
-	startedAt := time.Now()
-	client, err := sshutil.DialSSH(ctx, addr, user, authMethods, hostKeyCallback)
-	latencyMs := time.Since(startedAt).Milliseconds()
-	if err != nil {
-		writeRuntimeCredentialAudit(ctx, node, purpose, credential, credentialaudit.OutcomeFailure, "dial", err, latencyMs)
-		return nil, err
-	}
-	writeRuntimeCredentialAudit(ctx, node, purpose, credential, credentialaudit.OutcomeSuccess, "dial", nil, latencyMs)
+	writeRuntimeCredentialAudit(ctx, node, purpose, attempt.Credential, credentialaudit.OutcomeSuccess, attempt.Stage, nil, attempt.LatencyMS)
 	return client, nil
 }
 
@@ -71,24 +62,27 @@ func resolveSSHAuthMethodsForPurpose(node model.Node, purpose string) ([]ssh.Aut
 	if err == nil {
 		return authMethods, credential, nil
 	}
+	return nil, credential, translateSSHAuthError(authType, err)
+}
 
+func translateSSHAuthError(authType string, err error) error {
 	switch authType {
 	case "key":
 		message := err.Error()
 		if strings.Contains(message, "密钥认证模式下") {
-			return nil, credential, fmt.Errorf("密钥认证未配置")
+			return fmt.Errorf("密钥认证未配置")
 		}
 		if strings.Contains(message, "私钥校验失败") {
-			return nil, credential, fmt.Errorf("私钥校验失败")
+			return fmt.Errorf("私钥校验失败")
 		}
-		return nil, credential, err
+		return err
 	case "password":
 		if strings.Contains(err.Error(), "密码认证模式下") {
-			return nil, credential, fmt.Errorf("密码认证未配置密码")
+			return fmt.Errorf("密码认证未配置密码")
 		}
-		return nil, credential, err
+		return err
 	default:
-		return nil, credential, fmt.Errorf("不支持的认证方式: %s", authType)
+		return fmt.Errorf("不支持的认证方式: %s", authType)
 	}
 }
 

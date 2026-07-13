@@ -118,6 +118,18 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | DELETE | /policies/:id | 🔒 删除策略 |
 | POST | /policies/:id/drill-trigger | 🔒 手动触发恢复演练 |
 
+### 备份 Repository（默认关闭）
+
+以下只读接入能力受 `backup_assets.enabled` 控制，默认关闭；接入与管理仅限 Admin，Operator 仅可读取其当前 Task/Node 谱系可见的数据，Viewer 无权限。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /backup-repositories/connect | 🔒 从现有 Task 派生并探测 Repository（`backup_repositories:manage`） |
+| GET | /backup-repositories | 🔒 列出谱系可见 Repository（`backup_assets:list`） |
+| GET | /backup-repositories/:id | 🔒 查看脱敏 Repository 详情（`backup_assets:list`） |
+| POST | /backup-repositories/:id/reconcile | 🔒 执行有界只读重新探测（`backup_repositories:manage`） |
+| POST | /backup-repositories/:id/disconnect | 🔒 撤销访问但保留 Repository、恢复点及 Provider 数据（`backup_repositories:manage`） |
+
 ### 任务与执行
 
 | 方法 | 路径 | 说明 |

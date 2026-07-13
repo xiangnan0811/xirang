@@ -327,6 +327,97 @@ Expose one bulk endpoint, validate the whole target set first, perform the unres
 
 ---
 
+## Scenario: Backup Repository Capability Errors
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing a backup Repository route, Provider adapter,
+  capability reason, cursor/read boundary, or feature-gate response.
+- Applies to `backupasset/provider`, `backupasset/repository`,
+  `backup_repository_handler.go`, and `respondBackupCapabilityError`.
+
+### 2. Signatures
+
+- Provider error: `provider.CapabilityError{Reason backupasset.CapabilityReason}`;
+  it unwraps to `backupasset.ErrCapabilityUnavailable`.
+- Repository error:
+  `repository.CapabilityError{Reason backupasset.CapabilityReason, CorrelationID string}`.
+- Handler extraction:
+  `repository.CapabilityFromError(err) (reason, correlationID, ok)`.
+- Typed response helper:
+  `respondBackupCapabilityError(c, status, reason, correlationID)` accepts only
+  HTTP 501 or 503 and returns the standard `Response` envelope.
+
+### 3. Contracts
+
+- Capability reasons must pass `backupasset.ValidateCapabilityReason` before
+  they enter a response. Unknown Provider values, paths, remotes, locators,
+  command arguments, stdout/stderr, credentials, and raw errors are never
+  copied into reason params.
+- Unsupported Provider/port and missing Task artifact contracts map to 501.
+  Feature disabled, Provider offline, timeout, disconnect, and resource-limit
+  conditions map to 503 with a safe reason and request correlation ID.
+- Invalid request/opaque locator maps to 400, an Operator-unowned or missing
+  Repository maps to the same 404, and identity/binding/state conflicts map to
+  409. Unexpected DB, crypto, SSH, or protocol failures use
+  `respondInternalError` and its generic 500 body.
+- A failed Provider observation may update only the safe offline/reason state;
+  it must preserve the last successful identity and mutable observation.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `backup_assets.enabled=false` | 503 `feature_disabled`; no service dependency is touched. |
+| Provider kind/optional port is unregistered | 501 with a validated capability reason. |
+| Probe exceeds the configured deadline | 503 `provider_operation_timeout`. |
+| Metadata/item/record budget is exceeded | 503 `provider_resource_limit`; no partial-success data. |
+| Cursor signature/scope/revision/list fingerprint is stale | Reject as invalid/stale input; never continue from a guessed item. |
+| Provider observation is malformed | Mark Repository offline with `provider_protocol_incompatible`; return a safe error. |
+| Repository identity differs | 409; do not update Repository, binding, link, or mutable point. |
+| Unknown internal failure | Generic 500; log server-side without secret/output fields. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a timed-out Restic probe returns a 503 envelope containing only
+  `provider_operation_timeout` and the request correlation ID.
+- Base: Restic has no Range port, so requesting it returns a typed
+  `range_unavailable` capability error.
+- Bad: returning `err.Error()` from Rclone/SSH, which can reveal a remote,
+  locator, command operand, or tool output.
+
+### 6. Tests Required
+
+- Provider registry tests for unknown Provider, duplicate registration, and
+  every missing narrow port.
+- Handler tests for exact 400/404/409/501/503/500 envelope mappings and
+  rejection of unsupported statuses by `respondBackupCapabilityError`.
+- Reconcile tests proving timeout/protocol failures preserve the last good
+  source fingerprint/observed time while recording only a safe reason.
+- Serialization/secret scans proving capability responses contain no binding,
+  Repository identity, raw Provider locator, credential, argv, or output.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+respondServiceUnavailable(c, err.Error())
+```
+
+Correct:
+
+```go
+reason, correlationID, ok := repository.CapabilityFromError(err)
+if ok {
+    respondBackupCapabilityError(c, http.StatusServiceUnavailable, reason, correlationID)
+    return
+}
+respondInternalError(c, err)
+```
+
+---
+
 ## Scenario: Backup Confidence Read Model
 
 ### 1. Scope / Trigger

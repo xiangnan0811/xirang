@@ -27,7 +27,11 @@ backend/
 ├── cmd/server/                 # process bootstrap and worker wiring
 ├── internal/api/               # Gin router, Swagger docs, REST handlers
 ├── internal/auth/              # JWT, password, login lock, TOTP
+├── internal/backupasset/       # backup asset domain, keyring, audit, state
+│   ├── provider/               # narrow read ports and concrete adapters
+│   └── repository/             # connection, ownership, transaction service
 ├── internal/credentialaudit/   # domain credential-use audit event writer
+├── internal/fileaccess/        # operation-coupled local/SFTP safe reads
 ├── internal/middleware/        # auth, RBAC, audit, metrics, request logging
 ├── internal/model/             # GORM models and model hooks
 ├── internal/database/          # DB open, GORM logger, migrations
@@ -65,6 +69,15 @@ backend/
 - Put SSH-specific logic in `backend/internal/sshutil/` or
   `backend/internal/task/executor/`; avoid duplicating connection/auth parsing
   in unrelated packages.
+- Keep backup Repository reads layered: the root `backupasset` package owns
+  domain types only; `backupasset/provider` may import the root domain but not
+  Gin handlers or `task/executor`; `backupasset/repository` orchestrates the
+  domain and Provider registry; `fileaccess` remains independent of Gin, GORM,
+  models, and backup/task packages. Shared SSH auth/dial/runner mechanics stay
+  below both Provider and task executor in `sshutil`.
+- Map a Task executor to a backup Provider only in
+  `backupasset/repository/binding.go`. Other repository service files consume
+  the resulting typed binding and must not branch on `Task.ExecutorType`.
 - Put domain credential-use audit writing and sanitization in
   `backend/internal/credentialaudit/`. HTTP request envelope audit remains in
   `backend/internal/middleware/audit.go`; do not overload it with

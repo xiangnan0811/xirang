@@ -12,6 +12,9 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
+	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/integration"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/node"
@@ -146,6 +149,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	storageGuideHandler := handlers.NewStorageGuideHandler()
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
+	backupRepositoryHandler := newBackupRepositoryHandler(dep)
 
 	v1 := router.Group("/api/v1")
 	// Captcha is unauthenticated; rate-limit to reduce store spam / memory pressure.
@@ -172,6 +176,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/overview/backup-health", middleware.RBAC("tasks:read"), backupHealthHandler.Get)
 	secured.GET("/overview/backup-confidence", middleware.RBAC("tasks:read"), backupConfidenceHandler.Get)
 	secured.GET("/overview/storage-usage", middleware.RBAC("tasks:read"), storageUsageHandler.Get)
+	secured.POST("/backup-repositories/connect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Connect)
+	secured.GET("/backup-repositories", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.List)
+	secured.GET("/backup-repositories/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.Detail)
+	secured.POST("/backup-repositories/:id/reconcile", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Reconcile)
+	secured.POST("/backup-repositories/:id/disconnect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Disconnect)
 	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)
 	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
 	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)
@@ -427,6 +436,147 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	}
 
 	return router
+}
+
+const (
+	defaultBackupProviderOperationTimeout = 2 * time.Minute
+	defaultBackupProviderMaxConcurrency   = 4
+	defaultBackupProviderMetadataLimit    = int64(16 << 20)
+	backupProviderMaxPageSize             = 200
+	backupProviderCursorTTL               = 15 * time.Minute
+)
+
+type backupRepositoryDefaultSettings struct{}
+
+func (backupRepositoryDefaultSettings) GetEffective(key string) string {
+	switch key {
+	case "backup_assets.enabled":
+		return "false"
+	case "backup_assets.provider_operation_timeout":
+		return defaultBackupProviderOperationTimeout.String()
+	case "backup_assets.provider_max_concurrency":
+		return strconv.Itoa(defaultBackupProviderMaxConcurrency)
+	case "backup_assets.provider_metadata_limit_bytes":
+		return strconv.FormatInt(defaultBackupProviderMetadataLimit, 10)
+	default:
+		return ""
+	}
+}
+
+func newBackupRepositoryHandler(dep Dependencies) *handlers.BackupRepositoryHandler {
+	var settingReader backupasset.SettingsReader
+	if dep.SettingsService != nil {
+		settingReader = dep.SettingsService
+	} else {
+		settingReader = backupRepositoryDefaultSettings{}
+	}
+	foundation := backupasset.NewFoundationService(settingReader)
+
+	now := func() time.Time { return time.Now().UTC() }
+	keyring := backupasset.NewKeyring(dep.DB, now)
+	cursorCodec := provider.NewCursorCodec(keyring, now, backupProviderCursorTTL)
+	limitsSource := backupRepositoryOperationLimitsSource(foundation)
+	dialer := sshutil.NewNodeDialer(dep.DB)
+	transport, err := provider.NewSSHCommandTransportWithConcurrencySource(dialer, backupRepositoryConcurrencySource(foundation), backupRepositoryToolBinaries())
+	if err != nil {
+		panic(fmt.Sprintf("construct backup repository command transport: %v", err))
+	}
+	rsyncAdapter, err := provider.NewRsyncAdapterWithLimitsSource(cursorCodec, limitsSource, backupProviderMaxPageSize, now)
+	if err != nil {
+		panic(fmt.Sprintf("construct Rsync backup repository adapter: %v", err))
+	}
+	resticAdapter, err := provider.NewResticAdapterWithLimitsSource(transport, cursorCodec, limitsSource, backupProviderMaxPageSize, now)
+	if err != nil {
+		panic(fmt.Sprintf("construct Restic backup repository adapter: %v", err))
+	}
+	rcloneAdapter, err := provider.NewRcloneAdapterWithLimitsSource(transport, cursorCodec, limitsSource, backupProviderMaxPageSize, now)
+	if err != nil {
+		panic(fmt.Sprintf("construct Rclone backup repository adapter: %v", err))
+	}
+
+	registry := provider.NewRegistry()
+	registrations := []struct {
+		kind         backupasset.ProviderKind
+		registration provider.Registration
+	}{
+		{kind: backupasset.ProviderRsync, registration: provider.Registration{
+			Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter,
+			EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter,
+		}},
+		{kind: backupasset.ProviderRestic, registration: provider.Registration{
+			Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter,
+			EntryStatter: resticAdapter, SequentialReader: resticAdapter,
+		}},
+		{kind: backupasset.ProviderRclone, registration: provider.Registration{
+			Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter,
+			EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter,
+		}},
+	}
+	for _, item := range registrations {
+		if err := registry.Register(item.kind, item.registration); err != nil {
+			panic(fmt.Sprintf("register %s backup repository adapter: %v", item.kind, err))
+		}
+	}
+
+	var auditSink backuprepository.AssetAuditSink
+	if dep.DB != nil {
+		auditWriter, err := backupasset.NewAuditWriterWithConfigSource(dep.DB, keyring, now, backupRepositoryAuditConfigSource(foundation))
+		if err != nil {
+			panic(fmt.Sprintf("construct backup repository audit writer: %v", err))
+		}
+		auditSink = backuprepository.NewAssetAuditSink(auditWriter)
+	}
+	service, err := backuprepository.NewService(backuprepository.Dependencies{
+		DB: dep.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: now, Audit: auditSink,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("construct backup repository service: %v", err))
+	}
+	return handlers.NewBackupRepositoryHandler(service)
+}
+
+func backupRepositoryOperationLimitsSource(foundation *backupasset.FoundationService) provider.OperationLimitsSource {
+	return func() (provider.OperationLimits, error) {
+		config := backupRepositoryProviderConfig(foundation)
+		return provider.NewMetadataOperationLimits(config.OperationTimeout, config.MetadataLimitBytes)
+	}
+}
+
+func backupRepositoryAuditConfigSource(foundation *backupasset.FoundationService) backupasset.AuditConfigSource {
+	return func() (backupasset.AuditConfig, error) {
+		if foundation != nil {
+			if config, err := foundation.AuditConfig(); err == nil {
+				return config, nil
+			}
+		}
+		return backupasset.AuditConfig{}, nil
+	}
+}
+
+func backupRepositoryConcurrencySource(foundation *backupasset.FoundationService) provider.ConcurrencyLimitSource {
+	return func() (int, error) {
+		return backupRepositoryProviderConfig(foundation).MaxConcurrency, nil
+	}
+}
+
+func backupRepositoryProviderConfig(foundation *backupasset.FoundationService) backupasset.ProviderConfig {
+	if foundation != nil {
+		if config, err := foundation.ProviderConfig(); err == nil {
+			return config
+		}
+	}
+	return backupasset.ProviderConfig{
+		OperationTimeout:   defaultBackupProviderOperationTimeout,
+		MaxConcurrency:     defaultBackupProviderMaxConcurrency,
+		MetadataLimitBytes: defaultBackupProviderMetadataLimit,
+	}
+}
+
+func backupRepositoryToolBinaries() provider.ToolBinaries {
+	return provider.ToolBinaries{
+		Restic: util.GetEnvOrDefault("RESTIC_BINARY", "restic"),
+		Rclone: util.GetEnvOrDefault("RCLONE_BINARY", "rclone"),
+	}
 }
 
 func swaggerUIEnabled() bool {
