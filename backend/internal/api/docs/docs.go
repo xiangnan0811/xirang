@@ -1427,7 +1427,7 @@ const docTemplate = `{
         },
         "/auth/captcha": {
             "get": {
-                "description": "生成一道加法题并返回验证码 ID 和题目，答案在登录时提交校验",
+                "description": "按 login.captcha_enabled / login.second_captcha_enabled 生成挑战。\n关闭的通道不返回 id/question，避免前端展示“必填但不校验”的假挑战。",
                 "produces": [
                     "application/json"
                 ],
@@ -1893,6 +1893,414 @@ const docTemplate = `{
                 }
             }
         },
+        "/backup-repositories": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按当前用户的实时 Task/Node 谱系过滤仓库和安全谱系摘要",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "列出可见备份仓库",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.RepositoryPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/connect": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "从现有 Task 派生只读访问并先探测后接入；不接受任意 Provider 路径或凭据",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "接入现有备份仓库",
+                "parameters": [
+                    {
+                        "description": "Task 派生接入请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRepositoryConnectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ConnectResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回经过实时谱系授权和字段净化的仓库详情",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "查看备份仓库详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.RepositoryView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/disconnect": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "仅撤销当前访问绑定并保留仓库、恢复点、目录和 Provider 数据",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "撤销备份仓库访问",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ConnectResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/reconcile": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "使用当前加密绑定执行有界只读探测并原子刷新观察结果",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "重新探测备份仓库",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ConnectResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/batch-commands": {
             "post": {
                 "security": [
@@ -2154,6 +2562,234 @@ const docTemplate = `{
                 }
             }
         },
+        "/credential-audit-events": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回分页的凭据使用审计事件，响应会重新清洗 metadata 和 legacy error_message",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credential-audit"
+                ],
+                "summary": "列出凭据使用审计事件",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码（默认 1）",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页条数（默认 50）",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按用户名过滤",
+                        "name": "username",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按角色过滤",
+                        "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "按用户 ID 过滤",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按动作过滤",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按用途过滤",
+                        "name": "purpose",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按凭据类型过滤",
+                        "name": "credential_kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按凭据来源过滤",
+                        "name": "credential_source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按结果过滤",
+                        "name": "outcome",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "开始时间（RFC3339）",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束时间（RFC3339）",
+                        "name": "to",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.PaginatedResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api_handlers.credentialAuditEventResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/credential-audit-events/export": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "使用与列表一致的过滤语义导出凭据使用审计事件，导出内容会重新清洗敏感字段",
+                "produces": [
+                    "text/csv"
+                ],
+                "tags": [
+                    "credential-audit"
+                ],
+                "summary": "导出凭据使用审计事件 CSV",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "最大条数（默认 1000，最大 5000）",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按用户名过滤",
+                        "name": "username",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按角色过滤",
+                        "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "按用户 ID 过滤",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按动作过滤",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按用途过滤",
+                        "name": "purpose",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按凭据类型过滤",
+                        "name": "credential_kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按凭据来源过滤",
+                        "name": "credential_source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "按结果过滤",
+                        "name": "outcome",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "开始时间（RFC3339）",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束时间（RFC3339）",
+                        "name": "to",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/integrations": {
             "get": {
                 "security": [
@@ -2183,7 +2819,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/xirang_backend_internal_model.Integration"
+                                                "$ref": "#/definitions/internal_api_handlers.integrationResponse"
                                             }
                                         }
                                     }
@@ -2239,7 +2875,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Integration"
+                                            "$ref": "#/definitions/internal_api_handlers.integrationResponse"
                                         }
                                     }
                                 }
@@ -2297,7 +2933,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Integration"
+                                            "$ref": "#/definitions/internal_api_handlers.integrationResponse"
                                         }
                                     }
                                 }
@@ -2365,7 +3001,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Integration"
+                                            "$ref": "#/definitions/internal_api_handlers.integrationResponse"
                                         }
                                     }
                                 }
@@ -2483,7 +3119,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Integration"
+                                            "$ref": "#/definitions/internal_api_handlers.integrationResponse"
                                         }
                                     }
                                 }
@@ -3743,7 +4379,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回过期节点、降级策略、7 天趋势及汇总统计",
+                "description": "返回过期节点、降级策略、7 天趋势及汇总统计（operator 仅统计自己拥有的节点）",
                 "produces": [
                     "application/json"
                 ],
@@ -5799,14 +6435,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回当前数据库中仍以 enc:v1: 前缀加密的字段总数。运维侧用于\n判断是否所有敏感字段都已迁移到 V2 (argon2id)，是后续退役 V1\n解密支持的前置条件。返回 0 表示可以安全裁掉 V1 兼容代码。",
+                "description": "返回 enc:v1: 残留数量与策略演练脚本明文残留数量。运维侧用于\n判断敏感字段是否均已迁移到 V2，以及历史明文 drill 脚本是否已密封。\nhealthy=true 表示两者均为 0。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "system"
                 ],
-                "summary": "查询加密 V1 残留状态",
+                "summary": "查询加密迁移健康状态",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -7892,6 +8528,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupRepositoryConnectRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "replace_access": {
+                    "type": "boolean"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.bulkResolveAlertsRequest": {
             "type": "object",
             "properties": {
@@ -7945,6 +8601,69 @@ const docTemplate = `{
                 },
                 "role": {
                     "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.credentialAuditEventResponse": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "client_ip": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "credential_kind": {
+                    "type": "string"
+                },
+                "credential_source": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "policy_id": {
+                    "type": "integer"
+                },
+                "purpose": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "ssh_key_id": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "task_run_id": {
+                    "type": "integer"
+                },
+                "user_agent": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "integer"
                 },
                 "username": {
                     "type": "string"
@@ -8141,6 +8860,44 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.integrationResponse": {
+            "type": "object",
+            "properties": {
+                "cooldown_minutes": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "endpoint": {
+                    "type": "string"
+                },
+                "fail_threshold": {
+                    "type": "integer"
+                },
+                "has_secret": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "proxy_url": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.integrationTestResponse": {
             "type": "object",
             "properties": {
@@ -8175,15 +8932,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "second_captcha": {
-                    "description": "legacy free-form field; ignored. Use second_captcha_id/answer",
+                    "description": "legacy free-form; ignored for security (use second_captcha_id/answer)",
                     "type": "string"
                 },
                 "second_captcha_answer": {
-                    "description": "answer for second math captcha when login.second_captcha_enabled",
                     "type": "string"
                 },
                 "second_captcha_id": {
-                    "description": "challenge id from GET /auth/captcha second_id when second captcha enabled",
                     "type": "string"
                 },
                 "username": {
@@ -8492,6 +9247,21 @@ const docTemplate = `{
                 "username"
             ],
             "properties": {
+                "allowed_node_ids": {
+                    "type": "string"
+                },
+                "allowed_node_tags": {
+                    "type": "string"
+                },
+                "allowed_purposes": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
                 "key_type": {
                     "type": "string"
                 },
@@ -8509,7 +9279,25 @@ const docTemplate = `{
         "internal_api_handlers.sshKeyResponseItem": {
             "type": "object",
             "properties": {
+                "allowed_node_ids": {
+                    "type": "string"
+                },
+                "allowed_node_tags": {
+                    "type": "string"
+                },
+                "allowed_purposes": {
+                    "type": "string"
+                },
+                "broad_scope": {
+                    "type": "boolean"
+                },
                 "created_at": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "expires_at": {
                     "type": "string"
                 },
                 "fingerprint": {
@@ -8545,6 +9333,21 @@ const docTemplate = `{
                 "username"
             ],
             "properties": {
+                "allowed_node_ids": {
+                    "type": "string"
+                },
+                "allowed_node_tags": {
+                    "type": "string"
+                },
+                "allowed_purposes": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
                 "key_type": {
                     "type": "string"
                 },
@@ -8664,6 +9467,465 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.CapabilityCode": {
+            "type": "string",
+            "enum": [
+                "feature_disabled",
+                "task_artifact_contract_missing",
+                "repository_offline",
+                "repository_disconnected",
+                "provider_unavailable",
+                "repository_identity_unavailable",
+                "provider_protocol_incompatible",
+                "provider_operation_timeout",
+                "provider_resource_limit",
+                "point_not_committed",
+                "mutable_source_changed",
+                "catalog_unavailable",
+                "sequential_read_unavailable",
+                "range_unavailable",
+                "download_unavailable",
+                "restore_unavailable",
+                "diff_unavailable"
+            ],
+            "x-enum-varnames": [
+                "CapabilityFeatureDisabled",
+                "CapabilityTaskArtifactContractMissing",
+                "CapabilityRepositoryOffline",
+                "CapabilityRepositoryDisconnected",
+                "CapabilityProviderUnavailable",
+                "CapabilityRepositoryIdentityUnavailable",
+                "CapabilityProviderProtocolIncompatible",
+                "CapabilityProviderOperationTimeout",
+                "CapabilityProviderResourceLimit",
+                "CapabilityPointNotCommitted",
+                "CapabilityMutableSourceChanged",
+                "CapabilityCatalogUnavailable",
+                "CapabilitySequentialReadUnavailable",
+                "CapabilityRangeUnavailable",
+                "CapabilityDownloadUnavailable",
+                "CapabilityRestoreUnavailable",
+                "CapabilityDiffUnavailable"
+            ]
+        },
+        "xirang_backend_internal_backupasset.CapabilityReason": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityCode"
+                },
+                "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.CapabilitySet": {
+            "type": "object",
+            "properties": {
+                "diff": {
+                    "type": "boolean"
+                },
+                "download": {
+                    "type": "boolean"
+                },
+                "list": {
+                    "type": "boolean"
+                },
+                "native_history": {
+                    "type": "boolean"
+                },
+                "open_range": {
+                    "type": "boolean"
+                },
+                "open_sequential": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                },
+                "restore": {
+                    "type": "boolean"
+                },
+                "search_path": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.HoldState": {
+            "type": "string",
+            "enum": [
+                "none",
+                "active",
+                "released"
+            ],
+            "x-enum-varnames": [
+                "HoldNone",
+                "HoldActive",
+                "HoldReleased"
+            ]
+        },
+        "xirang_backend_internal_backupasset.ImmutabilityLevel": {
+            "type": "string",
+            "enum": [
+                "mutable",
+                "xirang_managed",
+                "backend_versioned",
+                "storage_worm"
+            ],
+            "x-enum-varnames": [
+                "ImmutabilityMutable",
+                "ImmutabilityXirangManaged",
+                "ImmutabilityBackendVersioned",
+                "ImmutabilityStorageWORM"
+            ]
+        },
+        "xirang_backend_internal_backupasset.PhysicalAvailability": {
+            "type": "string",
+            "enum": [
+                "online",
+                "offline",
+                "missing",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "PhysicalOnline",
+                "PhysicalOffline",
+                "PhysicalMissing",
+                "PhysicalUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset.PointVersionSemantics": {
+            "type": "string",
+            "enum": [
+                "native_snapshot",
+                "xirang_manifest",
+                "imported_baseline",
+                "mutable_head"
+            ],
+            "x-enum-varnames": [
+                "PointNativeSnapshot",
+                "PointXirangManifest",
+                "PointImportedBaseline",
+                "PointMutableHead"
+            ]
+        },
+        "xirang_backend_internal_backupasset.ProviderKind": {
+            "type": "string",
+            "enum": [
+                "restic",
+                "rsync",
+                "rclone",
+                "command",
+                "verified_import"
+            ],
+            "x-enum-varnames": [
+                "ProviderRestic",
+                "ProviderRsync",
+                "ProviderRclone",
+                "ProviderCommand",
+                "ProviderVerifiedImport"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RecoveryPointDTO": {
+            "type": "object",
+            "properties": {
+                "capabilities": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilitySet"
+                },
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "captured_at": {
+                    "type": "string"
+                },
+                "committed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "entry_count": {
+                    "type": "integer"
+                },
+                "hold_state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.HoldState"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "immutability_level": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImmutabilityLevel"
+                },
+                "lineage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointLineageSummary"
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "manifest_digest": {
+                    "type": "string"
+                },
+                "observed_at": {
+                    "type": "string"
+                },
+                "physical_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PhysicalAvailability"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "semantics": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PointVersionSemantics"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointState"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RecoveryPointLineageSummary": {
+            "type": "object",
+            "properties": {
+                "producing_task_id": {
+                    "type": "integer"
+                },
+                "producing_task_run_id": {
+                    "type": "integer"
+                },
+                "source_recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RecoveryPointState": {
+            "type": "string",
+            "enum": [
+                "observed",
+                "retired",
+                "preparing",
+                "verifying",
+                "committed",
+                "degraded",
+                "expiring",
+                "expired",
+                "failed",
+                "purge_blocked"
+            ],
+            "x-enum-varnames": [
+                "RecoveryPointObserved",
+                "RecoveryPointRetired",
+                "RecoveryPointPreparing",
+                "RecoveryPointVerifying",
+                "RecoveryPointCommitted",
+                "RecoveryPointDegraded",
+                "RecoveryPointExpiring",
+                "RecoveryPointExpired",
+                "RecoveryPointFailed",
+                "RecoveryPointPurgeBlocked"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RepositoryDTO": {
+            "type": "object",
+            "properties": {
+                "capabilities": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilitySet"
+                },
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "immutability_level": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImmutabilityLevel"
+                },
+                "last_reconciled_at": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "provider_kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ProviderKind"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RepositoryStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.VersionMode"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RepositoryStatus": {
+            "type": "string",
+            "enum": [
+                "connecting",
+                "online",
+                "degraded",
+                "offline",
+                "disconnected",
+                "purging",
+                "purge_blocked"
+            ],
+            "x-enum-varnames": [
+                "RepositoryConnecting",
+                "RepositoryOnline",
+                "RepositoryDegraded",
+                "RepositoryOffline",
+                "RepositoryDisconnected",
+                "RepositoryPurging",
+                "RepositoryPurgeBlocked"
+            ]
+        },
+        "xirang_backend_internal_backupasset.VersionMode": {
+            "type": "string",
+            "enum": [
+                "native_snapshot",
+                "hardlink_tree",
+                "full_copy_tree",
+                "versioned_prefix",
+                "native_object_versions",
+                "mutable_head"
+            ],
+            "x-enum-varnames": [
+                "VersionNativeSnapshot",
+                "VersionHardlinkTree",
+                "VersionFullCopyTree",
+                "VersionVersionedPrefix",
+                "VersionNativeObjectVersions",
+                "VersionMutableHead"
+            ]
+        },
+        "xirang_backend_internal_backupasset_repository.ConnectResult": {
+            "type": "object",
+            "properties": {
+                "mutablePoint": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointDTO"
+                },
+                "repository": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RepositoryDTO"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.LineageSummary": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "point_semantics": {
+                    "type": "string"
+                },
+                "publication_mode": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "recovery_point_state": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "task_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.RepositoryPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.RepositoryView"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.RepositoryView": {
+            "type": "object",
+            "properties": {
+                "access_active": {
+                    "type": "boolean"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilitySet"
+                },
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "immutability_level": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImmutabilityLevel"
+                },
+                "last_reconciled_at": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "lineages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.LineageSummary"
+                    }
+                },
+                "provider_kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ProviderKind"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RepositoryStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.VersionMode"
                 }
             }
         },
@@ -8827,44 +10089,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "name": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "xirang_backend_internal_model.Integration": {
-            "type": "object",
-            "properties": {
-                "cooldown_minutes": {
-                    "type": "integer"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "endpoint": {
-                    "type": "string"
-                },
-                "fail_threshold": {
-                    "type": "integer"
-                },
-                "has_secret": {
-                    "type": "boolean"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "proxy_url": {
-                    "type": "string"
-                },
-                "type": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -9213,7 +10437,22 @@ const docTemplate = `{
         "xirang_backend_internal_model.SSHKey": {
             "type": "object",
             "properties": {
+                "allowed_node_ids": {
+                    "type": "string"
+                },
+                "allowed_node_tags": {
+                    "type": "string"
+                },
+                "allowed_purposes": {
+                    "type": "string"
+                },
                 "created_at": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "expires_at": {
                     "type": "string"
                 },
                 "fingerprint": {
@@ -9301,6 +10540,9 @@ const docTemplate = `{
         "xirang_backend_internal_model.Task": {
             "type": "object",
             "properties": {
+                "archived_at": {
+                    "type": "string"
+                },
                 "batch_id": {
                     "type": "string"
                 },

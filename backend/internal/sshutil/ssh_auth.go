@@ -150,13 +150,42 @@ func DialSSH(ctx context.Context, addr, user string, auth []ssh.AuthMethod, host
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
 
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	sshConn, chans, reqs, err := newClientConnWithContext(ctx, conn, addr, config)
 	if err != nil {
-		conn.Close() //nolint:errcheck
+		_ = conn.Close()
 		return nil, fmt.Errorf("SSH 握手失败: %w", err)
 	}
 
 	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+func newClientConnWithContext(ctx context.Context, conn net.Conn, addr string, config *ssh.ClientConfig) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	} else if config != nil && config.Timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(config.Timeout))
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, addr, config)
+	close(done)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, nil, ctx.Err()
+		}
+		return nil, nil, nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return sshConn, channels, requests, nil
 }
 
 func ensureKnownHostsFile(path string) error {

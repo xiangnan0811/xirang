@@ -68,6 +68,9 @@ func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
 		"backup_assets.lease_duration":                  {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
 		"backup_assets.lease_heartbeat":                 {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
 		"backup_assets.lease_absolute_deadline":         {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
+		"backup_assets.provider_operation_timeout":      {"BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", "2m", TypeDuration, "", "", "5s", "30m"},
+		"backup_assets.provider_max_concurrency":        {"BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
+		"backup_assets.provider_metadata_limit_bytes":   {"BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", "16777216", TypeInt, "65536", "67108864", "", ""},
 	}
 	defs := NewService(setupTestDB(t)).Registry()
 	got := make(map[string]SettingDef, len(want))

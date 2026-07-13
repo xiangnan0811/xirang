@@ -194,19 +194,23 @@ type MutableObservation struct {
 type CapabilityCode string
 
 const (
-	CapabilityFeatureDisabled             CapabilityCode = "feature_disabled"
-	CapabilityTaskArtifactContractMissing CapabilityCode = "task_artifact_contract_missing"
-	CapabilityRepositoryOffline           CapabilityCode = "repository_offline"
-	CapabilityRepositoryDisconnected      CapabilityCode = "repository_disconnected"
-	CapabilityProviderUnavailable         CapabilityCode = "provider_unavailable"
-	CapabilityPointNotCommitted           CapabilityCode = "point_not_committed"
-	CapabilityMutableSourceChanged        CapabilityCode = "mutable_source_changed"
-	CapabilityCatalogUnavailable          CapabilityCode = "catalog_unavailable"
-	CapabilitySequentialReadUnavailable   CapabilityCode = "sequential_read_unavailable"
-	CapabilityRangeUnavailable            CapabilityCode = "range_unavailable"
-	CapabilityDownloadUnavailable         CapabilityCode = "download_unavailable"
-	CapabilityRestoreUnavailable          CapabilityCode = "restore_unavailable"
-	CapabilityDiffUnavailable             CapabilityCode = "diff_unavailable"
+	CapabilityFeatureDisabled               CapabilityCode = "feature_disabled"
+	CapabilityTaskArtifactContractMissing   CapabilityCode = "task_artifact_contract_missing"
+	CapabilityRepositoryOffline             CapabilityCode = "repository_offline"
+	CapabilityRepositoryDisconnected        CapabilityCode = "repository_disconnected"
+	CapabilityProviderUnavailable           CapabilityCode = "provider_unavailable"
+	CapabilityRepositoryIdentityUnavailable CapabilityCode = "repository_identity_unavailable"
+	CapabilityProviderProtocolIncompatible  CapabilityCode = "provider_protocol_incompatible"
+	CapabilityProviderOperationTimeout      CapabilityCode = "provider_operation_timeout"
+	CapabilityProviderResourceLimit         CapabilityCode = "provider_resource_limit"
+	CapabilityPointNotCommitted             CapabilityCode = "point_not_committed"
+	CapabilityMutableSourceChanged          CapabilityCode = "mutable_source_changed"
+	CapabilityCatalogUnavailable            CapabilityCode = "catalog_unavailable"
+	CapabilitySequentialReadUnavailable     CapabilityCode = "sequential_read_unavailable"
+	CapabilityRangeUnavailable              CapabilityCode = "range_unavailable"
+	CapabilityDownloadUnavailable           CapabilityCode = "download_unavailable"
+	CapabilityRestoreUnavailable            CapabilityCode = "restore_unavailable"
+	CapabilityDiffUnavailable               CapabilityCode = "diff_unavailable"
 )
 
 type CapabilityReason struct {
@@ -380,13 +384,11 @@ func CapabilitiesForTask(contract TaskArtifactContract) CapabilitySet {
 	}
 	switch contract.Provider {
 	case ProviderRestic:
-		capabilities.OpenRange = true
 		capabilities.Diff = true
 		capabilities.NativeHistory = true
 	case ProviderRsync:
 		capabilities.Diff = contract.PublicationMode != PublicationLegacyMutable
 	case ProviderRclone:
-		capabilities.OpenRange = true
 		capabilities.Diff = contract.PublicationMode != PublicationLegacyMutable
 		capabilities.NativeHistory = contract.PublicationMode == PublicationNativeObjectVersions
 	case ProviderCommand:
@@ -545,7 +547,9 @@ var validImmutableModeSemantics = map[[2]string]bool{
 
 var validCapabilityCodes = setOf(
 	CapabilityFeatureDisabled, CapabilityTaskArtifactContractMissing, CapabilityRepositoryOffline,
-	CapabilityRepositoryDisconnected, CapabilityProviderUnavailable, CapabilityPointNotCommitted,
+	CapabilityRepositoryDisconnected, CapabilityProviderUnavailable, CapabilityRepositoryIdentityUnavailable,
+	CapabilityProviderProtocolIncompatible, CapabilityProviderOperationTimeout, CapabilityProviderResourceLimit,
+	CapabilityPointNotCommitted,
 	CapabilityMutableSourceChanged, CapabilityCatalogUnavailable, CapabilitySequentialReadUnavailable,
 	CapabilityRangeUnavailable, CapabilityDownloadUnavailable, CapabilityRestoreUnavailable,
 	CapabilityDiffUnavailable,

@@ -93,8 +93,11 @@
 | `BACKUP_ASSETS_LEASE_DURATION` | duration | `5m` | 否 | RecoveryPoint 短租约时长，范围 `30s..30m` |
 | `BACKUP_ASSETS_LEASE_HEARTBEAT` | duration | `60s` | 否 | 租约心跳间隔，范围 `10s..5m`，且必须小于短租约时长 |
 | `BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE` | duration | `168h` | 否 | 租约绝对截止时间，范围 `5m..168h`；takeover/renew 不得延长该截止时间 |
+| `BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT` | duration | `2m` | 否 | Provider probe/list/stat 等元数据操作超时，范围 `5s..30m` |
+| `BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY` | int | `4` | 否 | Provider 只读操作共享最大并发数，范围 `1..32` |
+| `BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES` | int | `16777216` | 否 | Provider 元数据输出/解析硬上限（字节），范围 `65536..67108864` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器与完整性检查；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry 与 `backend/internal/backupasset` foundation service（DB override > env > default，均可动态调整）。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry 与 `backend/internal/backupasset` foundation service（DB override > env > default，均可动态调整）。
 
 ## 7. 节点探测
 

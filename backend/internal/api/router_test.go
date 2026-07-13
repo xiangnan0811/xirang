@@ -61,6 +61,48 @@ func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
 	}
 }
 
+func TestBackupRepositoryRouterUsesEffectiveAuditSettings(t *testing.T) {
+	contents, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(contents)
+	if !strings.Contains(source, "backupRepositoryAuditConfigSource(foundation)") || !strings.Contains(source, "backupasset.NewAuditWriterWithConfigSource") {
+		t.Fatal("backup repository router does not keep effective asset-audit settings dynamic")
+	}
+	if strings.Contains(source, "backupasset.NewAuditWriter(dep.DB, keyring, now, backupasset.AuditConfig{})") {
+		t.Fatal("backup repository router silently hard-codes default asset-audit settings")
+	}
+}
+
+func TestBackupRepositoryToolBinariesHonorExistingRuntimeConfiguration(t *testing.T) {
+	t.Setenv("RESTIC_BINARY", "/opt/xirang/bin/restic")
+	t.Setenv("RCLONE_BINARY", "/opt/xirang/bin/rclone")
+	binaries := backupRepositoryToolBinaries()
+	if binaries.Restic != "/opt/xirang/bin/restic" || binaries.Rclone != "/opt/xirang/bin/rclone" {
+		t.Fatalf("backup repository binaries=%+v", binaries)
+	}
+}
+
+func TestBackupRepositoryRouterKeepsProviderSettingsDynamic(t *testing.T) {
+	contents, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(contents)
+	for _, required := range []string{
+		"backupRepositoryOperationLimitsSource(foundation)",
+		"NewSSHCommandTransportWithConcurrencySource",
+		"NewRsyncAdapterWithLimitsSource",
+		"NewResticAdapterWithLimitsSource",
+		"NewRcloneAdapterWithLimitsSource",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("backup repository production wiring freezes dynamic Provider setting: missing %s", required)
+		}
+	}
+}
+
 func TestResolveAllowedOrigin(t *testing.T) {
 	if got := resolveAllowedOrigin("https://xirang.example.com", "xirang.example.com:8080", []string{"https://xirang.example.com"}); got != "https://xirang.example.com" {
 		t.Fatalf("期望返回匹配域名，实际: %s", got)
@@ -185,6 +227,23 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 	if !hasRoute(routes, http.MethodGet, "/api/v1/app-credentials/profiles") {
 		t.Fatalf("未注册应用感知备份 profile 接口")
+	}
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/backup-repositories/connect"},
+		{http.MethodGet, "/api/v1/backup-repositories"},
+		{http.MethodGet, "/api/v1/backup-repositories/:id"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/reconcile"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/disconnect"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("backup repository route missing: %s %s", route.method, route.path)
+		}
+	}
+	if hasRoute(routes, http.MethodPost, "/api/v1/backup-repositories/probe") {
+		t.Fatal("standalone backup repository probe route must not be registered")
 	}
 	deprecatedHookTemplatesPath := "/api/v1/" + "hook" + "-templates"
 	if hasRoute(routes, http.MethodGet, deprecatedHookTemplatesPath) {

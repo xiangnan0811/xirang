@@ -1,8 +1,10 @@
 package sshutil
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,9 +12,32 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestDialSSHHandshakeCancellationClosesConnection(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := newClientConnWithContext(ctx, client, "example.invalid:22", &ssh.ClientConfig{
+			User: "reader", HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		})
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("handshake error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SSH handshake ignored cancellation")
+	}
+}
 
 func newTestPublicKey(t *testing.T) ssh.PublicKey {
 	t.Helper()

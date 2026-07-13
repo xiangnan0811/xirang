@@ -11,25 +11,28 @@ import (
 )
 
 const (
-	PurposeSSHKeyTest     = "ssh_key_test"
-	PurposeSSHKeyExport   = "ssh_key_export"
-	PurposeNodeTest       = "node_test"
-	PurposeTerminal       = "terminal"
-	PurposeTaskCommand    = "task_command"
-	PurposeBatchCommand   = "batch_command"
-	PurposeDrill          = "drill"
-	PurposeProbe          = "probe"
-	PurposeFileBrowser    = "file_browser"
-	PurposeDockerVolumes  = "docker_volumes"
-	PurposeNodeLogs       = "node_logs"
-	PurposeTaskBackup     = "task_backup"
-	PurposeTaskRestore    = "task_restore"
-	PurposeTaskHook       = "task_hook"
-	PurposeSnapshot       = "snapshot"
-	PurposeSnapshotDiff   = "snapshot_diff"
-	PurposeIntegrityCheck = "integrity_check"
-	PurposeRetention      = "retention"
-	PurposeNodeMigration  = "node_migration"
+	PurposeSSHKeyTest      = "ssh_key_test"
+	PurposeSSHKeyExport    = "ssh_key_export"
+	PurposeNodeTest        = "node_test"
+	PurposeTerminal        = "terminal"
+	PurposeTaskCommand     = "task_command"
+	PurposeBatchCommand    = "batch_command"
+	PurposeDrill           = "drill"
+	PurposeProbe           = "probe"
+	PurposeFileBrowser     = "file_browser"
+	PurposeDockerVolumes   = "docker_volumes"
+	PurposeNodeLogs        = "node_logs"
+	PurposeTaskBackup      = "task_backup"
+	PurposeTaskRestore     = "task_restore"
+	PurposeTaskHook        = "task_hook"
+	PurposeSnapshot        = "snapshot"
+	PurposeSnapshotDiff    = "snapshot_diff"
+	PurposeIntegrityCheck  = "integrity_check"
+	PurposeRetention       = "retention"
+	PurposeNodeMigration   = "node_migration"
+	PurposeRepositoryProbe = "repository_probe"
+	PurposeRepositoryList  = "repository_list"
+	PurposeRepositoryRead  = "repository_read"
 )
 
 var KnownPurposes = []string{
@@ -52,6 +55,9 @@ var KnownPurposes = []string{
 	PurposeIntegrityCheck,
 	PurposeRetention,
 	PurposeNodeMigration,
+	PurposeRepositoryProbe,
+	PurposeRepositoryList,
+	PurposeRepositoryRead,
 }
 
 // ResolvedCredential describes which credential source was selected without

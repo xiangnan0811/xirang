@@ -5,10 +5,37 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"xirang/backend/internal/backupasset"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestRespondBackupCapabilityErrorAcceptsOnlyValidated501And503(t *testing.T) {
+	for _, status := range []int{http.StatusNotImplemented, http.StatusServiceUnavailable} {
+		router := setupTestRouter(func(c *gin.Context) {
+			respondBackupCapabilityError(c, status, backupasset.CapabilityReason{Code: backupasset.CapabilityProviderProtocolIncompatible}, "corr-response")
+		})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test", nil))
+		if response.Code != status || !strings.Contains(response.Body.String(), "corr-response") || !strings.Contains(response.Body.String(), string(backupasset.CapabilityProviderProtocolIncompatible)) {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	for _, test := range []struct {
+		status int
+		reason backupasset.CapabilityReason
+	}{{http.StatusBadRequest, backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable}}, {http.StatusServiceUnavailable, backupasset.CapabilityReason{Code: "future_raw_code"}}} {
+		router := setupTestRouter(func(c *gin.Context) { respondBackupCapabilityError(c, test.status, test.reason, "corr-response") })
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test", nil))
+		if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "future_raw_code") {
+			t.Fatalf("invalid helper input status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+}
 
 func setupTestRouter(handler gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.TestMode)

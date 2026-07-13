@@ -40,21 +40,41 @@ type AuditConfig struct {
 	SegmentMaxAge    time.Duration
 }
 
+type AuditConfigSource func() (AuditConfig, error)
+
 type AuditWriter struct {
-	db      *gorm.DB
-	keyring *Keyring
-	now     func() time.Time
-	config  AuditConfig
+	db           *gorm.DB
+	keyring      *Keyring
+	now          func() time.Time
+	configSource AuditConfigSource
 }
 
 var auditWriterMu sync.Mutex
 
 func NewAuditWriter(db *gorm.DB, keyring *Keyring, now func() time.Time, config AuditConfig) (*AuditWriter, error) {
+	return NewAuditWriterWithConfigSource(db, keyring, now, func() (AuditConfig, error) { return config, nil })
+}
+
+func NewAuditWriterWithConfigSource(db *gorm.DB, keyring *Keyring, now func() time.Time, source AuditConfigSource) (*AuditWriter, error) {
 	if db == nil || keyring == nil || keyring.db == nil {
 		return nil, fmt.Errorf("%w: audit storage or keyring is unavailable", ErrInvalidState)
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
+	}
+	if _, err := resolveAuditConfig(source); err != nil {
+		return nil, err
+	}
+	return &AuditWriter{db: db, keyring: keyring, now: now, configSource: source}, nil
+}
+
+func resolveAuditConfig(source AuditConfigSource) (AuditConfig, error) {
+	if source == nil {
+		return AuditConfig{}, fmt.Errorf("%w: audit config source is unavailable", ErrInvalidState)
+	}
+	config, err := source()
+	if err != nil {
+		return AuditConfig{}, err
 	}
 	if config.SegmentMaxEvents == 0 {
 		config.SegmentMaxEvents = defaultAuditSegmentMaxEvents
@@ -63,17 +83,21 @@ func NewAuditWriter(db *gorm.DB, keyring *Keyring, now func() time.Time, config 
 		config.SegmentMaxAge = defaultAuditSegmentMaxAge
 	}
 	if config.SegmentMaxEvents < 1 || config.SegmentMaxEvents > 1_000_000 {
-		return nil, fmt.Errorf("%w: invalid audit segment event limit", ErrInvalidState)
+		return AuditConfig{}, fmt.Errorf("%w: invalid audit segment event limit", ErrInvalidState)
 	}
 	if config.SegmentMaxAge < time.Second || config.SegmentMaxAge > 168*time.Hour {
-		return nil, fmt.Errorf("%w: invalid audit segment age", ErrInvalidState)
+		return AuditConfig{}, fmt.Errorf("%w: invalid audit segment age", ErrInvalidState)
 	}
-	return &AuditWriter{db: db, keyring: keyring, now: now, config: config}, nil
+	return config, nil
 }
 
 func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (model.BackupAssetAuditEvent, error) {
 	if writer == nil || writer.db == nil || writer.keyring == nil {
 		return model.BackupAssetAuditEvent{}, fmt.Errorf("%w: audit writer is unavailable", ErrInvalidState)
+	}
+	config, configErr := resolveAuditConfig(writer.configSource)
+	if configErr != nil {
+		return model.BackupAssetAuditEvent{}, configErr
 	}
 	prepared, err := NewAuditEvent(input)
 	if err != nil {
@@ -135,7 +159,7 @@ func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (mo
 		candidate.PrevHash = ""
 		candidate.EntryHash = ""
 		err = writer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return writer.writeTransaction(tx, &candidate)
+			return writer.writeTransaction(tx, &candidate, config)
 		})
 		if err == nil {
 			return candidate, nil
@@ -149,9 +173,9 @@ func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (mo
 	return model.BackupAssetAuditEvent{}, fmt.Errorf("write backup asset audit event: %w", lastErr)
 }
 
-func (writer *AuditWriter) writeTransaction(tx *gorm.DB, record *model.BackupAssetAuditEvent) error {
+func (writer *AuditWriter) writeTransaction(tx *gorm.DB, record *model.BackupAssetAuditEvent, config AuditConfig) error {
 	now := record.CreatedAt.UTC()
-	checkpoint, err := writer.openCheckpoint(tx, now)
+	checkpoint, err := writer.openCheckpoint(tx, now, config)
 	if err != nil {
 		return err
 	}
@@ -186,7 +210,7 @@ func (writer *AuditWriter) writeTransaction(tx *gorm.DB, record *model.BackupAss
 	checkpoint.FirstEntryHash = firstEntryHash
 	checkpoint.LastEntryHash = record.EntryHash
 	checkpoint.EntryCount = newCount
-	if checkpoint.EntryCount >= writer.config.SegmentMaxEvents {
+	if checkpoint.EntryCount >= config.SegmentMaxEvents {
 		if err := closeAuditCheckpoint(tx, &checkpoint, now); err != nil {
 			return err
 		}
@@ -194,7 +218,7 @@ func (writer *AuditWriter) writeTransaction(tx *gorm.DB, record *model.BackupAss
 	return nil
 }
 
-func (writer *AuditWriter) openCheckpoint(tx *gorm.DB, now time.Time) (model.BackupAssetAuditCheckpoint, error) {
+func (writer *AuditWriter) openCheckpoint(tx *gorm.DB, now time.Time, config AuditConfig) (model.BackupAssetAuditCheckpoint, error) {
 	var openRows []model.BackupAssetAuditCheckpoint
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("status = ?", AuditSegmentOpen).
@@ -208,7 +232,7 @@ func (writer *AuditWriter) openCheckpoint(tx *gorm.DB, now time.Time) (model.Bac
 	}
 	if len(openRows) == 1 {
 		checkpoint := openRows[0]
-		if checkpoint.EntryCount > 0 && now.Sub(checkpoint.OpenedAt.UTC()) >= writer.config.SegmentMaxAge {
+		if checkpoint.EntryCount > 0 && (checkpoint.EntryCount >= config.SegmentMaxEvents || now.Sub(checkpoint.OpenedAt.UTC()) >= config.SegmentMaxAge) {
 			if err := closeAuditCheckpoint(tx, &checkpoint, now); err != nil {
 				return model.BackupAssetAuditCheckpoint{}, err
 			}

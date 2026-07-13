@@ -341,6 +341,33 @@ func TestUnknownProviderCapabilityDoesNotEchoRawProviderValue(t *testing.T) {
 	}
 }
 
+func TestProviderCapabilityReasonCodesAreValidated(t *testing.T) {
+	codes := []CapabilityCode{
+		CapabilityRepositoryIdentityUnavailable,
+		CapabilityProviderProtocolIncompatible,
+		CapabilityProviderOperationTimeout,
+		CapabilityProviderResourceLimit,
+	}
+	for _, code := range codes {
+		if err := ValidateCapabilityReason(CapabilityReason{Code: code}); err != nil {
+			t.Fatalf("code %q rejected: %v", code, err)
+		}
+	}
+}
+
+func TestTaskCapabilitiesDoNotClaimUnprovenRange(t *testing.T) {
+	contracts := []TaskArtifactContract{
+		{Provider: ProviderRestic},
+		{Provider: ProviderRsync, PublicationMode: PublicationLegacyMutable},
+		{Provider: ProviderRclone, PublicationMode: PublicationLegacyMutable},
+	}
+	for _, contract := range contracts {
+		if capabilities := CapabilitiesForTask(contract); capabilities.OpenRange {
+			t.Fatalf("provider %q claimed unproven range capability: %+v", contract.Provider, capabilities)
+		}
+	}
+}
+
 func TestOpaqueIDFormatAndEntropySourceFailure(t *testing.T) {
 	id, err := NewOpaqueID()
 	if err != nil {

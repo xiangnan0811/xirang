@@ -19,6 +19,12 @@ type FoundationService struct {
 	settings SettingsReader
 }
 
+type ProviderConfig struct {
+	OperationTimeout   time.Duration
+	MaxConcurrency     int
+	MetadataLimitBytes int64
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -47,6 +53,44 @@ func (service *FoundationService) LeaseConfig() (LeaseConfig, error) {
 	heartbeat, _ := time.ParseDuration(values["backup_assets.lease_heartbeat"])
 	absoluteDeadline, _ := time.ParseDuration(values["backup_assets.lease_absolute_deadline"])
 	return LeaseConfig{Duration: duration, Heartbeat: heartbeat, AbsoluteDeadline: absoluteDeadline}, nil
+}
+
+func (service *FoundationService) ProviderConfig() (ProviderConfig, error) {
+	if service == nil || service.settings == nil {
+		return ProviderConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	}
+	values := map[string]string{
+		"backup_assets.provider_operation_timeout":    service.settings.GetEffective("backup_assets.provider_operation_timeout"),
+		"backup_assets.provider_max_concurrency":      service.settings.GetEffective("backup_assets.provider_max_concurrency"),
+		"backup_assets.provider_metadata_limit_bytes": service.settings.GetEffective("backup_assets.provider_metadata_limit_bytes"),
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return ProviderConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	operationTimeout, _ := time.ParseDuration(values["backup_assets.provider_operation_timeout"])
+	maxConcurrency, _ := strconv.Atoi(values["backup_assets.provider_max_concurrency"])
+	metadataLimitBytes, _ := strconv.ParseInt(values["backup_assets.provider_metadata_limit_bytes"], 10, 64)
+	return ProviderConfig{
+		OperationTimeout:   operationTimeout,
+		MaxConcurrency:     maxConcurrency,
+		MetadataLimitBytes: metadataLimitBytes,
+	}, nil
+}
+
+func (service *FoundationService) AuditConfig() (AuditConfig, error) {
+	if service == nil || service.settings == nil {
+		return AuditConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	}
+	values := map[string]string{
+		"backup_assets.audit_segment_max_events": service.settings.GetEffective("backup_assets.audit_segment_max_events"),
+		"backup_assets.audit_segment_max_age":    service.settings.GetEffective("backup_assets.audit_segment_max_age"),
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return AuditConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	segmentMaxEvents, _ := strconv.ParseInt(values["backup_assets.audit_segment_max_events"], 10, 64)
+	segmentMaxAge, _ := time.ParseDuration(values["backup_assets.audit_segment_max_age"])
+	return AuditConfig{SegmentMaxEvents: segmentMaxEvents, SegmentMaxAge: segmentMaxAge}, nil
 }
 
 type RepositoryDTO struct {
@@ -123,7 +167,7 @@ func ToRepositoryDTO(record model.BackupRepository) (RepositoryDTO, error) {
 	}, nil
 }
 
-func ToRecoveryPointDTO(record model.RecoveryPoint) (RecoveryPointDTO, error) {
+func ToRecoveryPointDTO(record model.RecoveryPoint, repositoryVersion VersionMode) (RecoveryPointDTO, error) {
 	if ValidateOpaqueID(record.ID) != nil || ValidateOpaqueID(record.RepositoryID) != nil ||
 		record.EntryCount < 0 || record.LogicalBytes < 0 || record.CapabilityRevision <= 0 {
 		return RecoveryPointDTO{}, fmt.Errorf("%w: invalid recovery point model", ErrInvalidState)
@@ -139,7 +183,7 @@ func ToRecoveryPointDTO(record model.RecoveryPoint) (RecoveryPointDTO, error) {
 		retirementReason = RetirementReason(*record.RetirementReason)
 	}
 	profile := RecoveryPointProfile{
-		VersionMode:                 inferredVersionMode(semantics),
+		VersionMode:                 repositoryVersion,
 		Semantics:                   semantics,
 		State:                       state,
 		Immutability:                immutability,
@@ -210,19 +254,6 @@ func decodeCapabilities(raw string) (CapabilitySet, error) {
 		}
 	}
 	return capabilities, nil
-}
-
-func inferredVersionMode(semantics PointVersionSemantics) VersionMode {
-	switch semantics {
-	case PointMutableHead:
-		return VersionMutableHead
-	case PointNativeSnapshot:
-		return VersionNativeSnapshot
-	case PointXirangManifest, PointImportedBaseline:
-		return VersionHardlinkTree
-	default:
-		return ""
-	}
 }
 
 func utcTimePointer(value *time.Time) *time.Time {

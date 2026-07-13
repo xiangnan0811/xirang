@@ -322,6 +322,36 @@ func TestValidateNodePath_TaskRsyncSourceAlsoActsAsRoot(t *testing.T) {
 	}
 }
 
+func TestLoadNodeFileRootsFailsClosedOnQueryError(t *testing.T) {
+	db := newValidateTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadNodeFileRoots(context.Background(), db, model.Node{ID: 7, BasePath: "/allowed"}); !errors.Is(err, errFileRootQuery) {
+		t.Fatalf("root query error=%v", err)
+	}
+}
+
+func TestFileHandlerUsesSharedOperationCoupledFileAccess(t *testing.T) {
+	source, err := os.ReadFile("file_handler.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "internal/fileaccess") {
+		t.Fatal("file handler does not import shared fileaccess package")
+	}
+	for _, forbidden := range []string{"sftpClient.Open(", "sftpClient.Stat(", "listSFTPDir(", "os.ReadDir("} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("file handler retains check-then-use primitive %q", forbidden)
+		}
+	}
+}
+
 func TestFileHandlerFailureLogsUseSafeStructuredFields(t *testing.T) {
 	var buf bytes.Buffer
 	previous := logger.Log
