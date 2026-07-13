@@ -2,7 +2,7 @@
 
 > **For the implementing Codex session:** REQUIRED SUB-SKILLS: load trellis-before-dev, superpowers:test-driven-development, and superpowers:executing-plans. This repository is in Codex inline mode; do not dispatch implement/check sub-agents. Execute the checkboxes in order.
 
-**Status:** Focused package approved on 2026-07-13; implementation complete and PR #372 gate in progress.
+**Status:** Implementation complete; PR #372 merged and post-merge gates verified on 2026-07-13.
 
 **Goal:** Add the disabled-by-default domain, schema, key, lease, authorization, step-up, audit, and migration-parity foundation required by every later backup-asset child, without exposing an asset route or touching Provider bytes.
 
@@ -590,9 +590,9 @@ implement.jsonl and check.jsonl remain the seed example in inline mode and are n
     git commit -m "feat: add backup asset domain foundation"
 
 - [x] Push the branch and open PR #372 to main. The PostgreSQL migration job ran in required mode and passed.
-- [ ] Fix failures on this branch, push, and continue monitoring until all required checks pass.
-- [ ] After squash merge, monitor Release Please and applicable post-merge automation. This foundation is feature-disabled; record explicitly whether a formal GitHub Release/Docker publish was expected and what occurred.
-- [ ] Fast-forward local main to origin/main before creating Child 2. Child 2 must depend on the merged Child 1 commit, not this unmerged branch.
+- [x] Fix failures on this branch, push, and continue monitoring until all required checks pass.
+- [x] After squash merge, monitor Release Please and applicable post-merge automation. This foundation is feature-disabled; record explicitly whether a formal GitHub Release/Docker publish was expected and what occurred.
+- [x] Fast-forward local main to origin/main before creating Child 2. Child 2 must depend on the merged Child 1 commit, not this unmerged branch.
 
 ## 14. Rollback
 
@@ -625,4 +625,7 @@ implement.jsonl and check.jsonl remain the seed example in inline mode and are n
 - Spec-sync judgment: no `.trellis/spec/` update. Shared migration, error, logging, type-safety, branch, and cross-layer conventions were followed without changing them; the new contracts are feature-specific and are fully captured by this focused design, executable tests, and the parent program package. Adding a shared spec file would duplicate those contracts and violate the approved exact manifest.
 - Exact staging, commit, push, and PR creation completed. The first PR CI cycle passed Backend Test & Build, Frontend Test & Build, Docker Build, PostgreSQL Migration Parity, Migration UTC Safety, Doc Freshness, and PR Title.
 - GitGuardian incident 34776511 was a fake JWT-shaped test fixture in historical commit 973c706. The fixture was replaced in 93f035d and the maintainer classified the incident as a test false positive. The App-owned stale check suite could not be re-requested through the GitHub API, so this bookkeeping-only follow-up is used to trigger a fresh scan without rewriting history.
-- Remaining gates: refreshed GitGuardian and required CI green, explicit maintainer merge authorization, squash merge, post-merge automation review, and local `main` synchronization before Child 2.
+- A fresh GitGuardian scan and every PR #372 check passed. The maintainer explicitly authorized squash merge; GitHub merged the PR as `9d8215f8d18d70e522cb8965ccb584d0a0f5162a`.
+- Post-merge CI run 29231119294 passed Backend Test & Build, Frontend Test & Build, Docker Build, PostgreSQL Migration Parity, Migration UTC Safety, and Doc Freshness. Release Please run 29231119217 succeeded and opened release PR #373 for `0.45.0`.
+- No formal GitHub Release was created by this merge, so Publish Docker Images was not expected or triggered. README and its sync workflow were unchanged, so Sync Docker Hub Description was not expected or triggered.
+- Local `main` was fast-forwarded to `origin/main@9d8215f`; all Child 1 acceptance gates are complete and the task is ready for Trellis archive.
