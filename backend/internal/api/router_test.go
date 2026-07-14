@@ -61,44 +61,62 @@ func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
 	}
 }
 
-func TestBackupRepositoryRouterUsesEffectiveAuditSettings(t *testing.T) {
+func TestBackupAssetRuntimeUsesEffectiveAuditSettings(t *testing.T) {
+	contents, err := os.ReadFile("../backupasset/runtime/runtime.go")
+	if err != nil {
+		t.Fatalf("read runtime.go: %v", err)
+	}
+	source := string(contents)
+	if !strings.Contains(source, "backupasset.NewAuditWriterWithConfigSource") || !strings.Contains(source, "foundation.AuditConfig") {
+		t.Fatal("backup asset runtime does not keep effective asset-audit settings dynamic")
+	}
+	if strings.Contains(source, "backupasset.NewAuditWriter(dep.DB, keyring") {
+		t.Fatal("backup asset runtime silently hard-codes asset-audit settings")
+	}
+}
+
+func TestRouterUsesInjectedSharedBackupAssetRuntime(t *testing.T) {
 	contents, err := os.ReadFile("router.go")
 	if err != nil {
 		t.Fatalf("read router.go: %v", err)
 	}
 	source := string(contents)
-	if !strings.Contains(source, "backupRepositoryAuditConfigSource(foundation)") || !strings.Contains(source, "backupasset.NewAuditWriterWithConfigSource") {
-		t.Fatal("backup repository router does not keep effective asset-audit settings dynamic")
+	if !strings.Contains(source, "BackupAssets") || !strings.Contains(source, "dep.BackupAssets.RepositoryService()") {
+		t.Fatal("router does not consume the injected backup asset runtime")
 	}
-	if strings.Contains(source, "backupasset.NewAuditWriter(dep.DB, keyring, now, backupasset.AuditConfig{})") {
-		t.Fatal("backup repository router silently hard-codes default asset-audit settings")
+	if !strings.Contains(source, "dep.BackupAssets.FeatureTransitioner()") ||
+		!strings.Contains(source, "WithBackupAssetTransitioner") {
+		t.Fatal("router does not inject the backup asset feature transitioner into settings/config handlers")
 	}
-}
-
-func TestBackupRepositoryToolBinariesHonorExistingRuntimeConfiguration(t *testing.T) {
-	t.Setenv("RESTIC_BINARY", "/opt/xirang/bin/restic")
-	t.Setenv("RCLONE_BINARY", "/opt/xirang/bin/rclone")
-	binaries := backupRepositoryToolBinaries()
-	if binaries.Restic != "/opt/xirang/bin/restic" || binaries.Rclone != "/opt/xirang/bin/rclone" {
-		t.Fatalf("backup repository binaries=%+v", binaries)
-	}
-}
-
-func TestBackupRepositoryRouterKeepsProviderSettingsDynamic(t *testing.T) {
-	contents, err := os.ReadFile("router.go")
-	if err != nil {
-		t.Fatalf("read router.go: %v", err)
-	}
-	source := string(contents)
-	for _, required := range []string{
-		"backupRepositoryOperationLimitsSource(foundation)",
+	for _, forbidden := range []string{
 		"NewSSHCommandTransportWithConcurrencySource",
 		"NewRsyncAdapterWithLimitsSource",
 		"NewResticAdapterWithLimitsSource",
+		"NewResticAdapterWithPublication",
+		"NewRcloneAdapterWithLimitsSource",
+		"newBackupRepositoryHandler",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("router constructed a fallback provider runtime: %s", forbidden)
+		}
+	}
+}
+
+func TestBackupAssetRuntimeKeepsProviderSettingsDynamic(t *testing.T) {
+	contents, err := os.ReadFile("../backupasset/runtime/runtime.go")
+	if err != nil {
+		t.Fatalf("read runtime.go: %v", err)
+	}
+	source := string(contents)
+	for _, required := range []string{
+		"foundation.ProviderConfig()",
+		"NewSSHCommandTransportWithConcurrencySource",
+		"NewRsyncAdapterWithLimitsSource",
+		"NewResticAdapterWithPublication",
 		"NewRcloneAdapterWithLimitsSource",
 	} {
 		if !strings.Contains(source, required) {
-			t.Fatalf("backup repository production wiring freezes dynamic Provider setting: missing %s", required)
+			t.Fatalf("backup asset runtime freezes dynamic Provider setting: missing %s", required)
 		}
 	}
 }

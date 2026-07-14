@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
@@ -25,8 +27,9 @@ import (
 
 // ConfigHandler 处理配置导出/导入
 type ConfigHandler struct {
-	db          *gorm.DB
-	settingsSvc *settings.Service
+	db           *gorm.DB
+	settingsSvc  *settings.Service
+	transitioner publication.FeatureTransitioner
 }
 
 type configImportData struct {
@@ -42,8 +45,86 @@ type importTaskKey struct {
 	nodeID uint
 }
 
+type configImportSetting struct {
+	key   string
+	value string
+}
+
 func NewConfigHandler(db *gorm.DB, settingsSvc *settings.Service) *ConfigHandler {
 	return &ConfigHandler{db: db, settingsSvc: settingsSvc}
+}
+
+// WithBackupAssetTransitioner connects imports that alter backup-asset
+// foundation settings to the same admission drain used by SettingsHandler.
+func (h *ConfigHandler) WithBackupAssetTransitioner(transitioner publication.FeatureTransitioner) *ConfigHandler {
+	if h != nil {
+		h.transitioner = transitioner
+	}
+	return h
+}
+
+func (h *ConfigHandler) normalizeImportSettings(records []map[string]interface{}) ([]configImportSetting, map[string]string, error) {
+	if len(records) == 0 {
+		return nil, map[string]string{}, nil
+	}
+	if h == nil || h.settingsSvc == nil {
+		return nil, nil, fmt.Errorf("settings service is unavailable for system-setting import")
+	}
+	plan := make([]configImportSetting, 0, len(records))
+	foundation := make(map[string]string)
+	seen := make(map[string]struct{}, len(records))
+	for index, record := range records {
+		key, ok := record["key"].(string)
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, nil, fmt.Errorf("system_settings[%d].key is required", index)
+		}
+		value, ok := record["value"].(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("system_settings[%d].value must be a string", index)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, nil, fmt.Errorf("system_settings contains duplicate key: %s", key)
+		}
+		if err := h.settingsSvc.Validate(key, value); err != nil {
+			return nil, nil, err
+		}
+		seen[key] = struct{}{}
+		plan = append(plan, configImportSetting{key: key, value: value})
+		if settings.IsBackupAssetFoundationSetting(key) {
+			foundation[key] = value
+		}
+	}
+	return plan, foundation, nil
+}
+
+func (h *ConfigHandler) persistConfigImport(ctx context.Context, foundation map[string]string, persist func() error) error {
+	if persist == nil {
+		return fmt.Errorf("config import persistence callback is required")
+	}
+	if len(foundation) == 0 {
+		return persist()
+	}
+	if h == nil || h.settingsSvc == nil {
+		return fmt.Errorf("settings service is unavailable for backup asset import")
+	}
+	return h.settingsSvc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+		if err := h.settingsSvc.ValidateBackupAssetEffectiveUpdate(current, foundation); err != nil {
+			return err
+		}
+		value, changesEnabled := foundation["backup_assets.enabled"]
+		if !changesEnabled {
+			return persist()
+		}
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		if h.transitioner == nil {
+			return fmt.Errorf("backup asset feature transitioner is unavailable")
+		}
+		return h.transitioner.TransitionFeature(ctx, enabled, persist)
+	})
 }
 
 // Export godoc
@@ -294,6 +375,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		respondBadRequest(c, "无效的导入数据")
 		return
 	}
+	settingsPlan, foundationSettings, err := h.normalizeImportSettings(data.SystemSettings)
+	if err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
 	// 导入前校验节点数据：host 合法性、base_path 绝对路径
 	var importErrList []importValidationError
@@ -384,422 +470,421 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 
 	var importedNodes, importedKeys, importedPolicies, importedTasks, importedSettings int
 
-	importErr := h.db.Transaction(func(tx *gorm.DB) error {
-	// Create repos from tx for task helper functions.
-	importNodeRepo := gormrepo.NewNodeRepository(tx)
-	importPolicyRepo := gormrepo.NewPolicyRepository(tx)
-	importTaskRepo := gormrepo.NewTaskRepository(tx)
+	persistImport := func() error {
+		return h.db.Transaction(func(tx *gorm.DB) error {
+			// Create repos from tx for task helper functions.
+			importNodeRepo := gormrepo.NewNodeRepository(tx)
+			importPolicyRepo := gormrepo.NewPolicyRepository(tx)
+			importTaskRepo := gormrepo.NewTaskRepository(tx)
 
-		resolvedTaskIDs := make(map[importTaskKey]uint)
-		type taskDependencyUpdate struct {
-			taskID        uint
-			dependencyKey importTaskKey
-			hasDependency bool
-		}
-		var taskDependencyUpdates []taskDependencyUpdate
+			resolvedTaskIDs := make(map[importTaskKey]uint)
+			type taskDependencyUpdate struct {
+				taskID        uint
+				dependencyKey importTaskKey
+				hasDependency bool
+			}
+			var taskDependencyUpdates []taskDependencyUpdate
 
-		// 导入 SSH 密钥
-		for _, keyData := range data.SSHKeys {
-			name, _ := keyData["name"].(string)
-			if name == "" {
-				continue
-			}
-			var existing model.SSHKey
-			found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
-			if found {
-				if conflict != "overwrite" {
+			// 导入 SSH 密钥
+			for _, keyData := range data.SSHKeys {
+				name, _ := keyData["name"].(string)
+				if name == "" {
 					continue
 				}
-				// overwrite: 更新已有记录
-				if username, ok := keyData["username"].(string); ok {
-					existing.Username = username
-				}
-				if keyType, ok := keyData["key_type"].(string); ok {
-					existing.KeyType = keyType
-				}
-				if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
-					existing.PrivateKey = privateKey
-				}
-				applyImportedSSHKeyScope(&existing, keyData)
-				if err := tx.Save(&existing).Error; err == nil {
-					importedKeys++
-				}
-			} else {
-				newKey := model.SSHKey{Name: name}
-				if username, ok := keyData["username"].(string); ok {
-					newKey.Username = username
-				}
-				if keyType, ok := keyData["key_type"].(string); ok {
-					newKey.KeyType = keyType
-				}
-				if privateKey, ok := keyData["private_key"].(string); ok {
-					newKey.PrivateKey = privateKey
-				}
-				if fingerprint, ok := keyData["fingerprint"].(string); ok {
-					newKey.Fingerprint = fingerprint
-				}
-				applyImportedSSHKeyScope(&newKey, keyData)
-				if err := tx.Create(&newKey).Error; err == nil {
-					importedKeys++
-				}
-			}
-		}
-
-		// 导入节点
-		for _, nodeData := range data.Nodes {
-			name, _ := nodeData["name"].(string)
-			if name == "" {
-				continue
-			}
-			var existing model.Node
-			found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
-			if found {
-				if conflict != "overwrite" {
-					continue
-				}
-				if host, ok := nodeData["host"].(string); ok {
-					existing.Host = host
-				}
-				if port, ok := nodeData["port"].(float64); ok {
-					existing.Port = int(port)
-				}
-				if username, ok := nodeData["username"].(string); ok {
-					existing.Username = username
-				}
-				if authType, ok := nodeData["auth_type"].(string); ok {
-					existing.AuthType = authType
-				}
-				if tags, ok := nodeData["tags"].(string); ok {
-					existing.Tags = tags
-				}
-				if basePath, ok := nodeData["base_path"].(string); ok {
-					existing.BasePath = basePath
-				}
-				if err := node.ValidateNodeHostPort(existing.Host, existing.Port); err != nil {
-					logger.Module("config").Warn().
-						Str("node", name).
-						Str("host", existing.Host).
-						Err(err).
-						Msg("导入节点覆盖时 host 校验失败，跳过")
-					continue
-				}
-				if err := tx.Save(&existing).Error; err == nil {
-					importedNodes++
-				}
-			} else {
-				newNode := model.Node{
-					Name:   name,
-					Status: "offline",
-					Port:   22,
-				}
-				if host, ok := nodeData["host"].(string); ok {
-					newNode.Host = host
-				}
-				if port, ok := nodeData["port"].(float64); ok {
-					newNode.Port = int(port)
-				}
-				if username, ok := nodeData["username"].(string); ok {
-					newNode.Username = username
-				}
-				if authType, ok := nodeData["auth_type"].(string); ok {
-					newNode.AuthType = authType
-				}
-				if tags, ok := nodeData["tags"].(string); ok {
-					newNode.Tags = tags
-				}
-				if basePath, ok := nodeData["base_path"].(string); ok {
-					newNode.BasePath = basePath
-				}
-				if password, ok := nodeData["password"].(string); ok {
-					newNode.Password = password
-				}
-				if privateKey, ok := nodeData["private_key"].(string); ok {
-					newNode.PrivateKey = privateKey
-				}
-				if newNode.Username == "" {
-					logger.Module("config").Warn().
-						Str("node", name).
-						Msg("导入节点缺少用户名，跳过")
-					continue
-				}
-				if newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key" {
-					logger.Module("config").Warn().
-						Str("node", name).
-						Str("auth_type", newNode.AuthType).
-						Msg("导入节点认证类型无效，跳过")
-					continue
-				}
-				if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
-					logger.Module("config").Warn().
-						Str("node", name).
-						Str("host", newNode.Host).
-						Err(err).
-						Msg("导入新节点时 host 校验失败，跳过")
-					continue
-				}
-				if err := tx.Create(&newNode).Error; err == nil {
-					importedNodes++
-				}
-			}
-		}
-
-		// 导入策略
-		for _, policyData := range data.Policies {
-			name, _ := policyData["name"].(string)
-			if name == "" {
-				continue
-			}
-			var existing model.Policy
-			found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
-			if found {
-				if conflict != "overwrite" {
-					continue
-				}
-				if desc, ok := policyData["description"].(string); ok {
-					existing.Description = desc
-				}
-				if src, ok := policyData["source_path"].(string); ok {
-					existing.SourcePath = src
-				}
-				if tgt, ok := policyData["target_path"].(string); ok {
-					existing.TargetPath = tgt
-				}
-				if cron, ok := policyData["cron_spec"].(string); ok {
-					if err := validateCronSpec(cron); err != nil {
-						logger.Module("config").Warn().
-							Str("policy", name).
-							Str("cron_spec", cron).
-							Err(err).
-							Msg("导入策略覆盖时 cron spec 校验失败，跳过")
+				var existing model.SSHKey
+				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+				if found {
+					if conflict != "overwrite" {
 						continue
 					}
-					existing.CronSpec = cron
-				}
-				if excl, ok := policyData["exclude_rules"].(string); ok {
-					existing.ExcludeRules = excl
-				}
-				if ret, ok := policyData["retention_days"].(float64); ok {
-					existing.RetentionDays = int(ret)
-				}
-				if err := tx.Save(&existing).Error; err == nil {
-					importedPolicies++
-				}
-			} else {
-				newPolicy := model.Policy{
-					Name:          name,
-					MaxConcurrent: 1,
-					RetentionDays: 7,
-					Enabled:       false,
-				}
-				if desc, ok := policyData["description"].(string); ok {
-					newPolicy.Description = desc
-				}
-				if src, ok := policyData["source_path"].(string); ok {
-					newPolicy.SourcePath = src
-				}
-				if tgt, ok := policyData["target_path"].(string); ok {
-					newPolicy.TargetPath = tgt
-				}
-				if cron, ok := policyData["cron_spec"].(string); ok {
-					if err := validateCronSpec(cron); err != nil {
-						logger.Module("config").Warn().
-							Str("policy", name).
-							Str("cron_spec", cron).
-							Err(err).
-							Msg("导入新策略时 cron spec 校验失败，跳过")
-						continue
+					// overwrite: 更新已有记录
+					if username, ok := keyData["username"].(string); ok {
+						existing.Username = username
 					}
-					newPolicy.CronSpec = cron
+					if keyType, ok := keyData["key_type"].(string); ok {
+						existing.KeyType = keyType
+					}
+					if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
+						existing.PrivateKey = privateKey
+					}
+					applyImportedSSHKeyScope(&existing, keyData)
+					if err := tx.Save(&existing).Error; err == nil {
+						importedKeys++
+					}
+				} else {
+					newKey := model.SSHKey{Name: name}
+					if username, ok := keyData["username"].(string); ok {
+						newKey.Username = username
+					}
+					if keyType, ok := keyData["key_type"].(string); ok {
+						newKey.KeyType = keyType
+					}
+					if privateKey, ok := keyData["private_key"].(string); ok {
+						newKey.PrivateKey = privateKey
+					}
+					if fingerprint, ok := keyData["fingerprint"].(string); ok {
+						newKey.Fingerprint = fingerprint
+					}
+					applyImportedSSHKeyScope(&newKey, keyData)
+					if err := tx.Create(&newKey).Error; err == nil {
+						importedKeys++
+					}
 				}
-				if excl, ok := policyData["exclude_rules"].(string); ok {
-					newPolicy.ExcludeRules = excl
-				}
-				if ret, ok := policyData["retention_days"].(float64); ok {
-					newPolicy.RetentionDays = int(ret)
-				}
-				if maxC, ok := policyData["max_concurrent"].(float64); ok {
-					newPolicy.MaxConcurrent = int(maxC)
-				}
-				if enabled, ok := policyData["enabled"].(bool); ok {
-					newPolicy.Enabled = enabled
-				}
-				if isTmpl, ok := policyData["is_template"].(bool); ok {
-					newPolicy.IsTemplate = isTmpl
-				}
-				if err := tx.Create(&newPolicy).Error; err == nil {
-					importedPolicies++
-				}
-			}
-		}
-
-		// 导入任务
-		for _, taskData := range data.Tasks {
-			name, _ := taskData["name"].(string)
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-
-			nodeID, ok := resolveImportNodeID(tx, taskData)
-			if !ok {
-				continue
 			}
 
-			var policyID *uint
-			if id, ok := resolveImportPolicyID(tx, taskData); ok {
-				policyID = &id
-			}
-
-			req := taskPkg.CreateTaskInput{
-				Name:            name,
-				NodeID:          nodeID,
-				PolicyID:        policyID,
-				DependsOnTaskID: nil,
-				Command:         readStringField(taskData, "command"),
-				RsyncSource:     readStringField(taskData, "rsync_source"),
-				RsyncTarget:     readStringField(taskData, "rsync_target"),
-				ExecutorType:    readStringField(taskData, "executor_type"),
-				ExecutorConfig:  readStringField(taskData, "executor_config"),
-				CronSpec:        readStringField(taskData, "cron_spec"),
-			}
-			dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
-			explicitCronSpec := req.CronSpec
-			taskPkg.HydrateTaskDefaultsFromPolicy(c.Request.Context(), importPolicyRepo, importNodeRepo, &req)
-			taskPkg.TrimTaskInput(&req)
-			taskPkg.InferTaskExecutor(&req, "")
-			taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
-			if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
-				req.CronSpec = ""
-			}
-			taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
-			if err := taskPkg.ValidateTaskInput(req); err != nil {
-				logger.Module("config").Warn().
-					Str("task", req.Name).
-					Err(err).
-					Msg("导入任务校验失败，跳过")
-				continue
-			}
-			if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
-				logger.Module("config").Warn().
-					Str("task", req.Name).
-					Err(err).
-					Msg("导入任务引用校验失败，跳过")
-				continue
-			}
-			taskKey := buildImportTaskKey(req.Name, req.NodeID)
-
-			var existing model.Task
-			found := tx.Where("name = ? AND node_id = ?", req.Name, req.NodeID).Limit(1).Find(&existing).RowsAffected > 0
-			if found {
-				resolvedTaskIDs[taskKey] = existing.ID
-				if conflict != "overwrite" {
+			// 导入节点
+			for _, nodeData := range data.Nodes {
+				name, _ := nodeData["name"].(string)
+				if name == "" {
 					continue
 				}
-				existing.PolicyID = req.PolicyID
-				existing.DependsOnTaskID = nil
-				existing.Command = req.Command
-				existing.RsyncSource = req.RsyncSource
-				existing.RsyncTarget = req.RsyncTarget
-				existing.ExecutorType = req.ExecutorType
-				existing.ExecutorConfig = req.ExecutorConfig
-				existing.CronSpec = req.CronSpec
-				existing.Source = readStringField(taskData, "source")
-				// overwrite 仅在导入数据显式携带 enabled 字段时才覆盖，避免意外改写已有任务启停状态。
+				var existing model.Node
+				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+				if found {
+					if conflict != "overwrite" {
+						continue
+					}
+					if host, ok := nodeData["host"].(string); ok {
+						existing.Host = host
+					}
+					if port, ok := nodeData["port"].(float64); ok {
+						existing.Port = int(port)
+					}
+					if username, ok := nodeData["username"].(string); ok {
+						existing.Username = username
+					}
+					if authType, ok := nodeData["auth_type"].(string); ok {
+						existing.AuthType = authType
+					}
+					if tags, ok := nodeData["tags"].(string); ok {
+						existing.Tags = tags
+					}
+					if basePath, ok := nodeData["base_path"].(string); ok {
+						existing.BasePath = basePath
+					}
+					if err := node.ValidateNodeHostPort(existing.Host, existing.Port); err != nil {
+						logger.Module("config").Warn().
+							Str("node", name).
+							Str("host", existing.Host).
+							Err(err).
+							Msg("导入节点覆盖时 host 校验失败，跳过")
+						continue
+					}
+					if err := tx.Save(&existing).Error; err == nil {
+						importedNodes++
+					}
+				} else {
+					newNode := model.Node{
+						Name:   name,
+						Status: "offline",
+						Port:   22,
+					}
+					if host, ok := nodeData["host"].(string); ok {
+						newNode.Host = host
+					}
+					if port, ok := nodeData["port"].(float64); ok {
+						newNode.Port = int(port)
+					}
+					if username, ok := nodeData["username"].(string); ok {
+						newNode.Username = username
+					}
+					if authType, ok := nodeData["auth_type"].(string); ok {
+						newNode.AuthType = authType
+					}
+					if tags, ok := nodeData["tags"].(string); ok {
+						newNode.Tags = tags
+					}
+					if basePath, ok := nodeData["base_path"].(string); ok {
+						newNode.BasePath = basePath
+					}
+					if password, ok := nodeData["password"].(string); ok {
+						newNode.Password = password
+					}
+					if privateKey, ok := nodeData["private_key"].(string); ok {
+						newNode.PrivateKey = privateKey
+					}
+					if newNode.Username == "" {
+						logger.Module("config").Warn().
+							Str("node", name).
+							Msg("导入节点缺少用户名，跳过")
+						continue
+					}
+					if newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key" {
+						logger.Module("config").Warn().
+							Str("node", name).
+							Str("auth_type", newNode.AuthType).
+							Msg("导入节点认证类型无效，跳过")
+						continue
+					}
+					if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
+						logger.Module("config").Warn().
+							Str("node", name).
+							Str("host", newNode.Host).
+							Err(err).
+							Msg("导入新节点时 host 校验失败，跳过")
+						continue
+					}
+					if err := tx.Create(&newNode).Error; err == nil {
+						importedNodes++
+					}
+				}
+			}
+
+			// 导入策略
+			for _, policyData := range data.Policies {
+				name, _ := policyData["name"].(string)
+				if name == "" {
+					continue
+				}
+				var existing model.Policy
+				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+				if found {
+					if conflict != "overwrite" {
+						continue
+					}
+					if desc, ok := policyData["description"].(string); ok {
+						existing.Description = desc
+					}
+					if src, ok := policyData["source_path"].(string); ok {
+						existing.SourcePath = src
+					}
+					if tgt, ok := policyData["target_path"].(string); ok {
+						existing.TargetPath = tgt
+					}
+					if cron, ok := policyData["cron_spec"].(string); ok {
+						if err := validateCronSpec(cron); err != nil {
+							logger.Module("config").Warn().
+								Str("policy", name).
+								Str("cron_spec", cron).
+								Err(err).
+								Msg("导入策略覆盖时 cron spec 校验失败，跳过")
+							continue
+						}
+						existing.CronSpec = cron
+					}
+					if excl, ok := policyData["exclude_rules"].(string); ok {
+						existing.ExcludeRules = excl
+					}
+					if ret, ok := policyData["retention_days"].(float64); ok {
+						existing.RetentionDays = int(ret)
+					}
+					if err := tx.Save(&existing).Error; err == nil {
+						importedPolicies++
+					}
+				} else {
+					newPolicy := model.Policy{
+						Name:          name,
+						MaxConcurrent: 1,
+						RetentionDays: 7,
+						Enabled:       false,
+					}
+					if desc, ok := policyData["description"].(string); ok {
+						newPolicy.Description = desc
+					}
+					if src, ok := policyData["source_path"].(string); ok {
+						newPolicy.SourcePath = src
+					}
+					if tgt, ok := policyData["target_path"].(string); ok {
+						newPolicy.TargetPath = tgt
+					}
+					if cron, ok := policyData["cron_spec"].(string); ok {
+						if err := validateCronSpec(cron); err != nil {
+							logger.Module("config").Warn().
+								Str("policy", name).
+								Str("cron_spec", cron).
+								Err(err).
+								Msg("导入新策略时 cron spec 校验失败，跳过")
+							continue
+						}
+						newPolicy.CronSpec = cron
+					}
+					if excl, ok := policyData["exclude_rules"].(string); ok {
+						newPolicy.ExcludeRules = excl
+					}
+					if ret, ok := policyData["retention_days"].(float64); ok {
+						newPolicy.RetentionDays = int(ret)
+					}
+					if maxC, ok := policyData["max_concurrent"].(float64); ok {
+						newPolicy.MaxConcurrent = int(maxC)
+					}
+					if enabled, ok := policyData["enabled"].(bool); ok {
+						newPolicy.Enabled = enabled
+					}
+					if isTmpl, ok := policyData["is_template"].(bool); ok {
+						newPolicy.IsTemplate = isTmpl
+					}
+					if err := tx.Create(&newPolicy).Error; err == nil {
+						importedPolicies++
+					}
+				}
+			}
+
+			// 导入任务
+			for _, taskData := range data.Tasks {
+				name, _ := taskData["name"].(string)
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+
+				nodeID, ok := resolveImportNodeID(tx, taskData)
+				if !ok {
+					continue
+				}
+
+				var policyID *uint
+				if id, ok := resolveImportPolicyID(tx, taskData); ok {
+					policyID = &id
+				}
+
+				req := taskPkg.CreateTaskInput{
+					Name:            name,
+					NodeID:          nodeID,
+					PolicyID:        policyID,
+					DependsOnTaskID: nil,
+					Command:         readStringField(taskData, "command"),
+					RsyncSource:     readStringField(taskData, "rsync_source"),
+					RsyncTarget:     readStringField(taskData, "rsync_target"),
+					ExecutorType:    readStringField(taskData, "executor_type"),
+					ExecutorConfig:  readStringField(taskData, "executor_config"),
+					CronSpec:        readStringField(taskData, "cron_spec"),
+				}
+				dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
+				explicitCronSpec := req.CronSpec
+				taskPkg.HydrateTaskDefaultsFromPolicy(c.Request.Context(), importPolicyRepo, importNodeRepo, &req)
+				taskPkg.TrimTaskInput(&req)
+				taskPkg.InferTaskExecutor(&req, "")
+				taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
+				if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
+					req.CronSpec = ""
+				}
+				taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
+				if err := taskPkg.ValidateTaskInput(req); err != nil {
+					logger.Module("config").Warn().
+						Str("task", req.Name).
+						Err(err).
+						Msg("导入任务校验失败，跳过")
+					continue
+				}
+				if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
+					logger.Module("config").Warn().
+						Str("task", req.Name).
+						Err(err).
+						Msg("导入任务引用校验失败，跳过")
+					continue
+				}
+				taskKey := buildImportTaskKey(req.Name, req.NodeID)
+
+				var existing model.Task
+				found := tx.Where("name = ? AND node_id = ?", req.Name, req.NodeID).Limit(1).Find(&existing).RowsAffected > 0
+				if found {
+					resolvedTaskIDs[taskKey] = existing.ID
+					if conflict != "overwrite" {
+						continue
+					}
+					existing.PolicyID = req.PolicyID
+					existing.DependsOnTaskID = nil
+					existing.Command = req.Command
+					existing.RsyncSource = req.RsyncSource
+					existing.RsyncTarget = req.RsyncTarget
+					existing.ExecutorType = req.ExecutorType
+					existing.ExecutorConfig = req.ExecutorConfig
+					existing.CronSpec = req.CronSpec
+					existing.Source = readStringField(taskData, "source")
+					// overwrite 仅在导入数据显式携带 enabled 字段时才覆盖，避免意外改写已有任务启停状态。
+					if enabled, ok := taskData["enabled"].(bool); ok {
+						existing.Enabled = enabled
+					}
+					if err := tx.Save(&existing).Error; err == nil {
+						importedTasks++
+						taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: existing.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+					}
+					continue
+				}
+
+				newTask := model.Task{
+					Name:           req.Name,
+					NodeID:         req.NodeID,
+					PolicyID:       req.PolicyID,
+					Command:        req.Command,
+					RsyncSource:    req.RsyncSource,
+					RsyncTarget:    req.RsyncTarget,
+					ExecutorType:   req.ExecutorType,
+					ExecutorConfig: req.ExecutorConfig,
+					CronSpec:       req.CronSpec,
+					Status:         "pending",
+					Source:         readStringField(taskData, "source"),
+					Enabled:        true,
+				}
+				if newTask.Source == "" {
+					newTask.Source = "manual"
+				}
 				if enabled, ok := taskData["enabled"].(bool); ok {
-					existing.Enabled = enabled
+					newTask.Enabled = enabled
 				}
-				if err := tx.Save(&existing).Error; err == nil {
+				if err := tx.Create(&newTask).Error; err == nil {
 					importedTasks++
-					taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: existing.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+					resolvedTaskIDs[taskKey] = newTask.ID
+					taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
 				}
-				continue
 			}
 
-			newTask := model.Task{
-				Name:           req.Name,
-				NodeID:         req.NodeID,
-				PolicyID:       req.PolicyID,
-				Command:        req.Command,
-				RsyncSource:    req.RsyncSource,
-				RsyncTarget:    req.RsyncTarget,
-				ExecutorType:   req.ExecutorType,
-				ExecutorConfig: req.ExecutorConfig,
-				CronSpec:       req.CronSpec,
-				Status:         "pending",
-				Source:         readStringField(taskData, "source"),
-				Enabled:        true,
-			}
-			if newTask.Source == "" {
-				newTask.Source = "manual"
-			}
-			if enabled, ok := taskData["enabled"].(bool); ok {
-				newTask.Enabled = enabled
-			}
-			if err := tx.Create(&newTask).Error; err == nil {
-				importedTasks++
-				resolvedTaskIDs[taskKey] = newTask.ID
-				taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
-			}
-		}
+			for _, update := range taskDependencyUpdates {
+				var dependencyID *uint
+				if update.hasDependency {
+					resolvedID, ok := resolvedTaskIDs[update.dependencyKey]
+					if !ok || resolvedID == 0 || resolvedID == update.taskID {
+						continue
+					}
+					dependencyID = &resolvedID
+				}
 
-		for _, update := range taskDependencyUpdates {
-			var dependencyID *uint
-			if update.hasDependency {
-				resolvedID, ok := resolvedTaskIDs[update.dependencyKey]
-				if !ok || resolvedID == 0 || resolvedID == update.taskID {
+				var current model.Task
+				if err := tx.First(&current, update.taskID).Error; err != nil {
 					continue
 				}
-				dependencyID = &resolvedID
-			}
-
-			var current model.Task
-			if err := tx.First(&current, update.taskID).Error; err != nil {
-				continue
-			}
-			req := taskPkg.CreateTaskInput{
-				Name:            current.Name,
-				NodeID:          current.NodeID,
-				PolicyID:        current.PolicyID,
-				DependsOnTaskID: dependencyID,
-				Command:         current.Command,
-				RsyncSource:     current.RsyncSource,
-				RsyncTarget:     current.RsyncTarget,
-				ExecutorType:    current.ExecutorType,
-				ExecutorConfig:  current.ExecutorConfig,
-				CronSpec:        current.CronSpec,
-			}
-			if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
-				logger.Module("config").Warn().
-					Str("task", current.Name).
-					Err(err).
-					Msg("导入任务依赖更新校验失败，跳过")
-				continue
-			}
-			if err := tx.Model(&current).Update("depends_on_task_id", dependencyID).Error; err != nil {
-				logger.Module("config").Warn().
-					Str("task", current.Name).
-					Err(err).
-					Msg("导入任务依赖关系更新失败，跳过")
-				continue
-			}
-		}
-
-		// 导入系统设置（使用事务 handle 确保原子性）
-		if h.settingsSvc != nil {
-			for _, sd := range data.SystemSettings {
-				key, _ := sd["key"].(string)
-				value, _ := sd["value"].(string)
-				if key == "" {
+				req := taskPkg.CreateTaskInput{
+					Name:            current.Name,
+					NodeID:          current.NodeID,
+					PolicyID:        current.PolicyID,
+					DependsOnTaskID: dependencyID,
+					Command:         current.Command,
+					RsyncSource:     current.RsyncSource,
+					RsyncTarget:     current.RsyncTarget,
+					ExecutorType:    current.ExecutorType,
+					ExecutorConfig:  current.ExecutorConfig,
+					CronSpec:        current.CronSpec,
+				}
+				if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
+					logger.Module("config").Warn().
+						Str("task", current.Name).
+						Err(err).
+						Msg("导入任务依赖更新校验失败，跳过")
 					continue
 				}
-				if err := h.settingsSvc.UpdateWithTx(tx, key, value); err == nil {
+				if err := tx.Model(&current).Update("depends_on_task_id", dependencyID).Error; err != nil {
+					logger.Module("config").Warn().
+						Str("task", current.Name).
+						Err(err).
+						Msg("导入任务依赖关系更新失败，跳过")
+					continue
+				}
+			}
+
+			// 导入系统设置（使用事务 handle 确保原子性）
+			if h.settingsSvc != nil {
+				for _, setting := range settingsPlan {
+					if err := h.settingsSvc.UpdateWithTx(tx, setting.key, setting.value); err != nil {
+						return err
+					}
 					importedSettings++
 				}
 			}
-		}
 
-		return nil
-	})
+			return nil
+		})
+	}
+	importErr := h.persistConfigImport(c.Request.Context(), foundationSettings, persistImport)
 	if importErr != nil {
 		respondInternalError(c, importErr)
 		return

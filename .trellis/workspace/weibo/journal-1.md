@@ -606,3 +606,40 @@ Implemented and verified feature-gated read-only Rsync, Restic, and Rclone Repos
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Restic exact lineage and recovery-point publication
+
+**Date**: 2026-07-14
+**Task**: Restic exact lineage and recovery-point publication
+**Branch**: `codex/backup-assets-restic-lineage`
+
+### Summary
+
+Implemented exact Restic run evidence, fenced asynchronous RecoveryPoint publication, reconciliation, managed-history admission, and legacy lineage guards; all local gates passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `41c5f9a137389167ef2a1790f18ee5c28797bc5c` | (see git log) |
+| `357e784e50fab42fc795d259695b9a92c64a2fde` | (see git log) |
+| `bff502b220ee81c0f79460305c561672ccc1cbbe` | (see git log) |
+| `f2818a9b94aeaa203b256dedf0a7ed54206d8d3b` | (see git log) |
+| `b9f6e84605515806c13a78f3b21c9479bf1893a4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

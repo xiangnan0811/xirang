@@ -3,6 +3,7 @@ package backupasset
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,12 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 		AuditActionRecoveryPointDetail,
 		AuditActionRecoveryPointEvidence,
 		AuditActionRecoveryPointDiff,
+		AuditActionRecoveryPointPublicationPrepare,
+		AuditActionRecoveryPointPublicationVerify,
+		AuditActionRecoveryPointPublicationCommit,
+		AuditActionRecoveryPointPublicationFail,
+		AuditActionRecoveryPointPublicationReconcile,
+		AuditActionResticLegacyOperationBlocked,
 		AuditActionAssetList,
 		AuditActionAssetSearch,
 		AuditActionSavedSearchCreate,
@@ -76,6 +83,88 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 	}
 	if ValidAuditAction(AuditAction("asset.unregistered")) {
 		t.Fatal("unknown audit action was accepted")
+	}
+}
+
+func TestPublicationAuditActionsPermitOnlySafeTypedFields(t *testing.T) {
+	actions := []AuditAction{
+		AuditActionRecoveryPointPublicationPrepare,
+		AuditActionRecoveryPointPublicationVerify,
+		AuditActionRecoveryPointPublicationCommit,
+		AuditActionRecoveryPointPublicationFail,
+		AuditActionRecoveryPointPublicationReconcile,
+		AuditActionResticLegacyOperationBlocked,
+	}
+	repositoryID := strings.Repeat("a", 32)
+	pointID := strings.Repeat("b", 32)
+	taskID := uint(41)
+	runID := uint(42)
+	for _, action := range actions {
+		for _, actor := range []AuditActor{
+			{UserID: 7, Username: "operator", Role: "operator"},
+			{Username: "system", Role: "system"},
+		} {
+			fields := map[AuditField]any{
+				AuditFieldStage:         "manifest",
+				AuditFieldStatus:        "verifying",
+				AuditFieldCode:          "evidence_missing_summary",
+				AuditFieldCorrelationID: "corr.publication-42",
+			}
+			if action == AuditActionResticLegacyOperationBlocked {
+				fields[AuditFieldOperation] = "legacy_backup"
+			}
+			event, err := NewAuditEvent(AuditEventInput{
+				Actor: actor, Action: action, RepositoryID: repositoryID, RecoveryPointID: pointID,
+				TaskID: &taskID, TaskRunID: &runID, ItemCount: 7, ByteCount: 16384, Fields: fields,
+			})
+			if err != nil {
+				t.Fatalf("new publication audit event for %s/%+v: %v", action, actor, err)
+			}
+			want := map[AuditField]any{
+				AuditFieldStage:         "manifest",
+				AuditFieldStatus:        "verifying",
+				AuditFieldCode:          "evidence_missing_summary",
+				AuditFieldCorrelationID: "corr.publication-42",
+			}
+			if action == AuditActionResticLegacyOperationBlocked {
+				want[AuditFieldOperation] = "legacy_backup"
+			}
+			if !reflect.DeepEqual(event.Fields, want) {
+				t.Fatalf("publication audit fields for %s=%#v, want %#v", action, event.Fields, want)
+			}
+			if event.RepositoryID != repositoryID || event.RecoveryPointID != pointID || event.TaskID == nil || *event.TaskID != taskID || event.TaskRunID == nil || *event.TaskRunID != runID {
+				t.Fatalf("publication audit typed fields drifted: %+v", event)
+			}
+		}
+	}
+	if _, err := NewAuditEvent(AuditEventInput{
+		Action: AuditActionRecoveryPointPublicationPrepare,
+		Fields: map[AuditField]any{AuditFieldOperation: "legacy_backup"},
+	}); err == nil {
+		t.Fatal("non-legacy publication action accepted an operation field")
+	}
+	if _, err := NewAuditEvent(AuditEventInput{
+		Action: AuditActionResticLegacyOperationBlocked,
+		Fields: map[AuditField]any{AuditFieldOperation: "arbitrary_label"},
+	}); err == nil {
+		t.Fatal("legacy operation audit action accepted an arbitrary operation")
+	}
+	unsafe, err := NewAuditEvent(AuditEventInput{
+		Action: AuditActionRecoveryPointPublicationPrepare,
+		Fields: map[AuditField]any{
+			AuditFieldStage:   "manifest",
+			AuditFieldStatus:  "verifying",
+			AuditFieldCode:    "evidence_missing_summary",
+			AuditFieldSource:  "FAKE_REPOSITORY_IDENTITY_FOR_TEST_ONLY",
+			AuditFieldMode:    "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY",
+			AuditFieldProfile: "FAKE_SOURCE_AND_EXCLUDES_FOR_TEST_ONLY",
+		},
+	})
+	if err != nil {
+		t.Fatalf("sanitize unsafe publication audit input: %v", err)
+	}
+	if len(unsafe.Fields) != 3 {
+		t.Fatalf("unsafe publication evidence reached FieldsJSON input: %#v", unsafe.Fields)
 	}
 }
 

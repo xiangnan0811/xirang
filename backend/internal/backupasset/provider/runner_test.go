@@ -149,10 +149,13 @@ func TestRunnerInvocationJSONExcludesSecretsAndLocators(t *testing.T) {
 }
 
 type fakeRemoteCommandRunner struct {
-	specs        []sshutil.CommandSpec
-	openMaxBytes int64
-	result       sshutil.CommandResult
-	handle       sshutil.CommandReadHandle
+	specs             []sshutil.CommandSpec
+	openMaxBytes      int64
+	executionMaxBytes int64
+	result            sshutil.CommandResult
+	handle            sshutil.CommandReadHandle
+	execution         sshutil.CommandExecutionStream
+	executionErr      error
 }
 
 func (runner *fakeRemoteCommandRunner) Run(_ context.Context, spec sshutil.CommandSpec) (sshutil.CommandResult, error) {
@@ -164,6 +167,12 @@ func (runner *fakeRemoteCommandRunner) Open(_ context.Context, spec sshutil.Comm
 	runner.specs = append(runner.specs, spec)
 	runner.openMaxBytes = spec.MaxStdoutBytes
 	return runner.handle, nil
+}
+
+func (runner *fakeRemoteCommandRunner) OpenExecution(_ context.Context, spec sshutil.CommandSpec) (sshutil.CommandExecutionStream, error) {
+	runner.specs = append(runner.specs, spec)
+	runner.executionMaxBytes = spec.MaxStdoutBytes
+	return runner.execution, runner.executionErr
 }
 
 type trackingCloser struct{ closed bool }
@@ -326,6 +335,118 @@ func TestSSHCommandTransportPlacesRemoteFindRootBeforeFixedExpression(t *testing
 		t.Fatalf("remote find args=%q want=%q", specification.Args, want)
 	}
 }
+
+func TestRunnerPublicationResticOperationsAreStructurallyAllowlisted(t *testing.T) {
+	linkTag := "xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	pointTag := "xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	snapshotID := strings.Repeat("c", 64)
+	secret := []byte("FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY")
+	valid := []CommandInvocation{
+		{
+			Tool: ToolRestic, Operation: OperationResticBackup, Purpose: CommandPurposePublish, SecretStdin: secret,
+			Args: []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", linkTag, "--tag", pointTag, "--exclude", "/var/cache", "--", "/private/source"},
+		},
+		{
+			Tool: ToolRestic, Operation: OperationResticSnapshotsByTags, Purpose: CommandPurposeManifest, SecretStdin: secret,
+			Args: []string{"--password-file", "/dev/stdin", "snapshots", "--json", "--tag", linkTag + "," + pointTag},
+		},
+		{
+			Tool: ToolRestic, Operation: OperationResticManifest, Purpose: CommandPurposeManifest, SecretStdin: secret,
+			Args: []string{"--password-file", "/dev/stdin", "ls", "--json", "--recursive", "--", snapshotID, "/"},
+		},
+	}
+	for _, invocation := range valid {
+		if err := invocation.Validate(); err != nil {
+			t.Fatalf("valid publication invocation %s rejected: %v", invocation.Operation, err)
+		}
+	}
+	for _, invocation := range []CommandInvocation{
+		{Tool: ToolRestic, Operation: OperationResticBackup, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", pointTag, "--tag", linkTag, "--", "/private/source"}},
+		{Tool: ToolRestic, Operation: OperationResticBackup, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", linkTag + ",x", "--tag", pointTag, "--", "/private/source"}},
+		{Tool: ToolRestic, Operation: OperationResticBackup, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", linkTag, "--tag", pointTag, "--", "relative/source"}},
+		{Tool: ToolRestic, Operation: OperationResticBackup, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", linkTag, "--tag", pointTag, "--", "/private/source", "--dry-run"}},
+		{Tool: ToolRestic, Operation: OperationResticSnapshotsByTags, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "snapshots", "--json", "--tag", linkTag, "--tag", pointTag}},
+		{Tool: ToolRestic, Operation: OperationResticManifest, SecretStdin: secret, Args: []string{"--password-file", "/dev/stdin", "ls", "--json", "--recursive", "--", snapshotID[:8], "/"}},
+		{Tool: ToolRestic, Operation: CommandOperation("restic_forget"), SecretStdin: secret, Args: []string{"forget", "--prune"}},
+		{Tool: ToolRestic, Operation: CommandOperation("restic_restore"), SecretStdin: secret, Args: []string{"restore", "latest"}},
+		{Tool: ToolRestic, Operation: CommandOperation("restic_init"), SecretStdin: secret, Args: []string{"init"}},
+	} {
+		if err := invocation.Validate(); !errors.Is(err, ErrUnsafeInvocation) {
+			t.Fatalf("unsafe publication invocation %s accepted: %v", invocation.Operation, err)
+		}
+	}
+}
+
+func TestRunnerPublicationPurposeMapsToSSHScopes(t *testing.T) {
+	for purpose, want := range map[CommandPurpose]string{
+		CommandPurposePublish:  sshutil.PurposeTaskBackup,
+		CommandPurposeManifest: sshutil.PurposeRepositoryList,
+	} {
+		got, ok := sshPurpose(purpose)
+		if !ok || got != want {
+			t.Fatalf("purpose %q mapped to %q ok=%v, want %q", purpose, got, ok, want)
+		}
+	}
+}
+
+func TestSSHCommandTransportOpenExecutionCopiesCompletionAndRetainsConnection(t *testing.T) {
+	taskID := uint(41)
+	taskRunID := uint(42)
+	underlying := &fakeSSHExecution{
+		Reader:     strings.NewReader("provider stdout"),
+		completion: sshutil.CommandCompletion{ExitCode: 17, ExitCodeKnown: true, Stderr: []byte("provider stderr"), StderrTruncated: true},
+	}
+	runner := &fakeRemoteCommandRunner{execution: underlying}
+	closer := &trackingCloser{}
+	var observedAudit sshutil.DialAuditContext
+	var observedPurpose string
+	transport, err := newSSHCommandTransport(func(_ context.Context, access RemoteCommandAccess, purpose string) (remoteCommandRunner, io.Closer, error) {
+		observedAudit = access.Audit
+		observedPurpose = purpose
+		return runner, closer, nil
+	}, 1, ToolBinaries{Restic: "restic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkTag := "xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	pointTag := "xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	invocation := CommandInvocation{
+		Tool: ToolRestic, Operation: OperationResticBackup, Purpose: CommandPurposePublish,
+		Args:        []string{"--password-file", "/dev/stdin", "backup", "--json", "--tag", linkTag, "--tag", pointTag, "--", "/private/source"},
+		SecretStdin: []byte("FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"), PrivateLocator: "FAKE_REPOSITORY_LOCATOR_FOR_TEST_ONLY",
+		Runtime: &RemoteCommandAccess{Node: model.Node{ID: 9}, Audit: sshutil.DialAuditContext{
+			UserID: 7, Username: "operator", Role: "operator", CorrelationID: "corr.publication-42", TaskID: &taskID, TaskRunID: &taskRunID,
+		}},
+	}
+	execution, err := transport.OpenExecution(context.Background(), invocation, testOperationLimits(), 8192)
+	if err != nil {
+		t.Fatalf("open execution: %v", err)
+	}
+	if observedPurpose != sshutil.PurposeTaskBackup || observedAudit.TaskID != &taskID || observedAudit.TaskRunID != &taskRunID || closer.closed {
+		t.Fatalf("purpose=%q audit=%+v close=%v", observedPurpose, observedAudit, closer.closed)
+	}
+	stdout, readErr := io.ReadAll(execution)
+	if readErr != nil || string(stdout) != "provider stdout" || closer.closed {
+		t.Fatalf("stdout=%q read=%v close=%v", stdout, readErr, closer.closed)
+	}
+	completion, joinErr := execution.Join()
+	if joinErr != nil || completion.ExitCode != 17 || !completion.ExitCodeKnown || string(completion.Stderr) != "provider stderr" || !completion.StderrTruncated || !closer.closed || runner.executionMaxBytes != 8192 {
+		t.Fatalf("completion=%+v join=%v close=%v max=%d", completion, joinErr, closer.closed, runner.executionMaxBytes)
+	}
+}
+
+type fakeSSHExecution struct {
+	io.Reader
+	completion sshutil.CommandCompletion
+	joinErr    error
+	cancelErr  error
+}
+
+func (execution *fakeSSHExecution) Join() (sshutil.CommandCompletion, error) {
+	return execution.completion, execution.joinErr
+}
+
+func (execution *fakeSSHExecution) Cancel() error { return execution.cancelErr }
 
 type trackingProviderReadHandle struct {
 	io.Reader

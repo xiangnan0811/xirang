@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
@@ -21,8 +23,9 @@ import (
 
 // SettingsHandler 系统设置接口
 type SettingsHandler struct {
-	db  *gorm.DB
-	svc *settings.Service
+	db           *gorm.DB
+	svc          *settings.Service
+	transitioner publication.FeatureTransitioner
 }
 
 type securityRiskSummaryResponse struct {
@@ -55,6 +58,16 @@ const (
 // NewSettingsHandler 创建设置处理器
 func NewSettingsHandler(db *gorm.DB, svc *settings.Service) *SettingsHandler {
 	return &SettingsHandler{db: db, svc: svc}
+}
+
+// WithBackupAssetTransitioner installs the process-wide admission controller
+// for the small set of foundation settings that can change Restic command
+// eligibility. It remains optional for focused legacy handler tests.
+func (h *SettingsHandler) WithBackupAssetTransitioner(transitioner publication.FeatureTransitioner) *SettingsHandler {
+	if h != nil {
+		h.transitioner = transitioner
+	}
+	return h
 }
 
 // GetAll godoc
@@ -144,15 +157,7 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 		oldValues[key] = h.svc.GetEffective(key)
 	}
 
-	// 原子写入：在事务中更新全部设置
-	if err := h.db.Transaction(func(tx *gorm.DB) error {
-		for key, value := range req {
-			if err := h.svc.UpdateWithTx(tx, key, value); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := h.persistSettingsMutation(c.Request.Context(), req); err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -185,7 +190,7 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 func (h *SettingsHandler) Delete(c *gin.Context) {
 	key := c.Param("key")
 	oldVal := h.svc.GetEffective(key)
-	if err := h.svc.Delete(key); err != nil {
+	if err := h.deleteSettingOverride(c.Request.Context(), key); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	}
@@ -198,6 +203,84 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 		Uint("user_id", userID).
 		Msg("系统设置重置为默认值")
 	respondMessage(c, "设置已重置")
+}
+
+func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values map[string]string) error {
+	if h == nil || h.db == nil || h.svc == nil {
+		return fmt.Errorf("settings handler is unavailable")
+	}
+	containsFoundation := false
+	foundationOverlay := make(map[string]string)
+	for key, value := range values {
+		if settings.IsBackupAssetFoundationSetting(key) {
+			containsFoundation = true
+			foundationOverlay[key] = value
+		}
+	}
+	persist := func() error {
+		return h.db.Transaction(func(tx *gorm.DB) error {
+			for key, value := range values {
+				if err := h.svc.UpdateWithTx(tx, key, value); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if !containsFoundation {
+		return persist()
+	}
+	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+		if err := h.svc.ValidateBackupAssetEffectiveUpdate(current, foundationOverlay); err != nil {
+			return err
+		}
+		if value, ok := foundationOverlay["backup_assets.enabled"]; ok {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return err
+			}
+			if h.transitioner == nil {
+				return fmt.Errorf("backup asset feature transitioner is unavailable")
+			}
+			return h.transitioner.TransitionFeature(ctx, parsed, persist)
+		}
+		return persist()
+	})
+}
+
+func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string) error {
+	if h == nil || h.db == nil || h.svc == nil {
+		return fmt.Errorf("settings handler is unavailable")
+	}
+	if !settings.IsBackupAssetFoundationSetting(key) {
+		return h.svc.Delete(key)
+	}
+	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+		fallback, err := h.svc.GetFallback(key)
+		if err != nil {
+			return err
+		}
+		override := map[string]string{key: fallback}
+		if err := h.svc.ValidateBackupAssetEffectiveUpdate(current, override); err != nil {
+			return err
+		}
+		persist := func() error {
+			return h.db.Transaction(func(tx *gorm.DB) error {
+				return h.svc.DeleteWithTx(tx, key)
+			})
+		}
+		if key != "backup_assets.enabled" {
+			return persist()
+		}
+		targetEnabled, err := strconv.ParseBool(fallback)
+		if err != nil {
+			return err
+		}
+		if h.transitioner == nil {
+			return fmt.Errorf("backup asset feature transitioner is unavailable")
+		}
+		return h.transitioner.TransitionFeature(ctx, targetEnabled, persist)
+	})
 }
 
 func (h *SettingsHandler) securityRiskItems(c *gin.Context) ([]securityRiskItem, error) {

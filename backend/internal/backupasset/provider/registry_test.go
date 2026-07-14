@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -66,4 +67,47 @@ func TestRegistryReturnsOnlyRequestedNarrowPort(t *testing.T) {
 	if _, err := registry.Prober(backupasset.ProviderCommand); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
 		t.Fatalf("Command prober error=%v", err)
 	}
+}
+
+func TestRegistryReturnsTypedPublicationPortsOnlyWhenRegistered(t *testing.T) {
+	missing := NewRegistry()
+	if err := missing.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, lookup := range []func(backupasset.ProviderKind) error{
+		func(kind backupasset.ProviderKind) error { _, err := missing.ResticPublisher(kind); return err },
+		func(kind backupasset.ProviderKind) error { _, err := missing.ManifestBuilder(kind); return err },
+	} {
+		if err := lookup(backupasset.ProviderRestic); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("missing optional publication port error=%v", err)
+		}
+	}
+	publisher := &fakeResticPublisher{}
+	builder := &fakeManifestBuilder{}
+	registered := NewRegistry()
+	if err := registered.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}, ResticPublisher: publisher, ManifestBuilder: builder}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := registered.ResticPublisher(backupasset.ProviderRestic); err != nil || got != publisher {
+		t.Fatalf("ResticPublisher=%T err=%v", got, err)
+	}
+	if got, err := registered.ManifestBuilder(backupasset.ProviderRestic); err != nil || got != builder {
+		t.Fatalf("ManifestBuilder=%T err=%v", got, err)
+	}
+}
+
+type fakeResticPublisher struct{}
+
+func (*fakeResticPublisher) Backup(context.Context, PublicationAttempt, ResticBackupInput, func(ResticBackupProgress)) (ResticBackupResult, error) {
+	return ResticBackupResult{}, nil
+}
+
+func (*fakeResticPublisher) LookupAttempt(context.Context, PublicationAttempt) ([]ResticSnapshotObservation, error) {
+	return nil, nil
+}
+
+type fakeManifestBuilder struct{}
+
+func (*fakeManifestBuilder) BuildManifest(context.Context, PublicationAttempt, ProviderCommitEvidence, ManifestLimits) (ManifestEvidence, error) {
+	return ManifestEvidence{}, nil
 }

@@ -1,0 +1,2 @@
+{"message_type":"status","percent_done":
+{"message_type":"summary","files_new":2,"files_changed":1,"files_unmodified":4,"dirs_new":1,"dirs_changed":0,"dirs_unmodified":2,"data_blobs":4,"tree_blobs":3,"data_added":8192,"data_added_packed":4096,"total_files_processed":7,"total_bytes_processed":16384,"total_duration":1.25,"snapshot_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","backup_start":"2026-07-14T11:00:00+08:00","backup_end":"2026-07-14T11:00:02.123456789+08:00","dry_run":false}

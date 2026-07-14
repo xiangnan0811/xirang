@@ -74,6 +74,7 @@
 - 增强处理调度必须保证交互请求与最新恢复点优先，近期历史随后，较老历史使用可暂停、可限速的低优先级回填资源池；备份提交、验证、恢复和用户主动预览必须拥有独立保留槽，后台回填不能造成饥饿或改变备份健康。管理员可以按 Provider、任务和 capability 查看覆盖率、积压、失败原因、预计完成时间并调整配额。
 - 只有强内容摘要与相同 pipeline fingerprint、输出 profile 和安全策略均一致时，派生计算结果才能跨恢复点去重复用；绑定、授权、敏感级别和到期仍逐恢复点维护。无强摘要时不得仅凭路径、大小或 mtime 复用。UI 必须区分已完成、部分覆盖、排队、失败、超限、加密、不支持和 Worker 未部署，任何不完整覆盖都不能被表述为“无匹配内容”或“文件安全”。
 - 用户于 2026-07-13 审阅并明确认可 `design.md` 技术设计，授权继续编写未来实施分解与验证计划；该认可不等于批准启动实现，`task.py start` 仍需等待 `implement.md` 完成并经用户最终审阅。
+- 用户于 2026-07-14 审阅 Child 3 的 current-main schema 证据并批准方案 A：由 `backup-assets-restic-lineage` 增加 paired `000063_backup_asset_publication_contract`，诚实修正 Restic `native_snapshot` publication mode、增加 `point_publication` lease holder 与双唯一防线，父计划原 `000063…000069` 顺延为 `000064…000070`。
 
 ## Requirements
 

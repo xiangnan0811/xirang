@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -39,11 +42,26 @@ func validateRestoreTargetPath(targetPath string) bool {
 
 // SnapshotHandler 处理 restic 快照浏览和恢复
 type SnapshotHandler struct {
-	db *gorm.DB
+	db     *gorm.DB
+	guard  publication.LineageGuard
+	restic LegacyResticSnapshots
 }
 
-func NewSnapshotHandler(db *gorm.DB) *SnapshotHandler {
-	return &SnapshotHandler{db: db}
+// LegacyResticSnapshots is the narrow legacy command surface retained for
+// pristine compatibility. Exact lineage checks remain in the handler/session
+// and no caller may supply a raw snapshot ID to a Provider command in exact
+// mode.
+type LegacyResticSnapshots interface {
+	ListSnapshots(context.Context, model.Task) ([]executor.ResticSnapshot, error)
+	ListSnapshotsByLinkTag(context.Context, model.Task, string) ([]executor.ResticSnapshot, error)
+	ListFiles(context.Context, model.Task, string, string) ([]executor.ResticEntry, error)
+	RestoreFiles(context.Context, model.Task, string, []string, string) error
+}
+
+// NewSnapshotHandler receives the explicit runtime ports. Nil ports are
+// accepted only for isolated route tests and fail closed before Provider I/O.
+func NewSnapshotHandler(db *gorm.DB, guard publication.LineageGuard, restic LegacyResticSnapshots) *SnapshotHandler {
+	return &SnapshotHandler{db: db, guard: guard, restic: restic}
 }
 
 // ListSnapshots godoc
@@ -73,8 +91,21 @@ func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 		return
 	}
 
-	exec := &executor.ResticExecutor{}
-	snapshots, err := exec.ListSnapshots(c.Request.Context(), task)
+	session, ok := h.beginSnapshotLineage(c, task.ID, publication.OperationLegacySnapshotList)
+	if !ok {
+		return
+	}
+	defer func() { _ = session.Close() }()
+	var snapshots []executor.ResticSnapshot
+	var err error
+	if session.Mode() == publication.LineageExact {
+		snapshots, err = h.restic.ListSnapshotsByLinkTag(c.Request.Context(), task, session.LinkTag())
+		if err == nil {
+			snapshots = filterCommittedResticSnapshots(snapshots, session.CommittedPoints())
+		}
+	} else {
+		snapshots, err = h.restic.ListSnapshots(c.Request.Context(), task)
+	}
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -122,8 +153,17 @@ func (h *SnapshotHandler) ListFiles(c *gin.Context) {
 		return
 	}
 
-	exec := &executor.ResticExecutor{}
-	entries, err := exec.ListFiles(c.Request.Context(), task, snapshotID, path)
+	session, ok := h.beginSnapshotLineage(c, task.ID, publication.OperationLegacySnapshotFiles)
+	if !ok {
+		return
+	}
+	defer func() { _ = session.Close() }()
+	resolvedID, err := resolveLineageSnapshotID(session, snapshotID)
+	if err != nil {
+		respondBadRequest(c, "快照 ID 不属于当前任务")
+		return
+	}
+	entries, err := h.restic.ListFiles(c.Request.Context(), task, resolvedID, path)
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -216,12 +256,66 @@ func (h *SnapshotHandler) Restore(c *gin.Context) {
 		return
 	}
 
-	exec := &executor.ResticExecutor{}
-	if err := exec.RestoreFiles(c.Request.Context(), task, snapshotID, req.Includes, req.TargetPath); err != nil {
+	session, ok := h.beginSnapshotLineage(c, task.ID, publication.OperationLegacySnapshotRestore)
+	if !ok {
+		return
+	}
+	defer func() { _ = session.Close() }()
+	resolvedID, err := resolveLineageSnapshotID(session, snapshotID)
+	if err != nil {
+		h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeBlocked, "lineage", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", err)
+		respondBadRequest(c, "快照 ID 不属于当前任务")
+		return
+	}
+	if err := h.restic.RestoreFiles(c.Request.Context(), task, resolvedID, req.Includes, req.TargetPath); err != nil {
 		h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeFailure, "restore", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", err)
 		respondInternalError(c, err)
 		return
 	}
 	h.writeSnapshotRestoreAudit(c, taskID, nodeID, credentialaudit.OutcomeSuccess, "restore", snapshotID, len(req.Includes), strings.TrimSpace(req.TargetPath) != "", nil)
 	respondMessage(c, "恢复成功")
+}
+
+func (h *SnapshotHandler) beginSnapshotLineage(c *gin.Context, taskID uint, operation publication.ResticOperation) (publication.LineageSession, bool) {
+	if h == nil || h.guard == nil || h.restic == nil {
+		respondServiceUnavailable(c, "备份资产运行时不可用")
+		return nil, false
+	}
+	session, err := h.guard.Begin(c.Request.Context(), taskID, operation)
+	if err != nil {
+		respondForbidden(c, "快照操作当前不可用")
+		return nil, false
+	}
+	return session, true
+}
+
+func resolveLineageSnapshotID(session publication.LineageSession, snapshotID string) (string, error) {
+	if session == nil {
+		return "", fmt.Errorf("lineage session unavailable")
+	}
+	if session.Mode() == publication.LineageCompatibility {
+		return snapshotID, nil
+	}
+	return session.ResolveNativeID(strings.ToLower(snapshotID))
+}
+
+func filterCommittedResticSnapshots(snapshots []executor.ResticSnapshot, points []publication.CommittedPoint) []executor.ResticSnapshot {
+	allowed := make(map[string]struct{}, len(points))
+	for _, point := range points {
+		allowed[strings.ToLower(point.FullNativeID)] = struct{}{}
+	}
+	filtered := make([]executor.ResticSnapshot, 0, len(snapshots))
+	seen := make(map[string]struct{}, len(snapshots))
+	for _, snapshot := range snapshots {
+		fullID := strings.ToLower(strings.TrimSpace(snapshot.ID))
+		if _, ok := allowed[fullID]; !ok {
+			continue
+		}
+		if _, duplicate := seen[fullID]; duplicate {
+			continue
+		}
+		seen[fullID] = struct{}{}
+		filtered = append(filtered, snapshot)
+	}
+	return filtered
 }

@@ -13,6 +13,8 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/automation"
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
@@ -111,15 +113,26 @@ type Manager struct {
 
 	alertDispatcher *alerting.Dispatcher
 
-	anomalySink anomaly.AlertSink // optional; set via SetAnomalySink
+	anomalySink          anomaly.AlertSink // optional; set via SetAnomalySink
+	exactAnomalyAnalyzer ExactAnomalyFunc
 
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
+
+	publicationCoordinator publication.Coordinator
+	lineageGuard           publication.LineageGuard
+	legacyBlockRecorder    publication.LegacyBlockRecorder
+	resticRetentionFunc    func(context.Context, model.Policy, model.Task)
 
 	rootCtx    context.Context    // worker goroutines 的父级 context
 	rootCancel context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
 
 	shuttingDown atomic.Bool
 }
+
+// ExactAnomalyFunc is the managed publication callback. The identifiers are
+// full native IDs held only in memory; implementations must revalidate them
+// through the shared lineage guard before opening a Provider command.
+type ExactAnomalyFunc func(context.Context, model.Task, uint, string, string) ([]anomaly.Finding, error)
 
 func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, alertDispatcher *alerting.Dispatcher, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
 	if alertDispatcher == nil {
@@ -160,10 +173,69 @@ func (m *Manager) SetAnomalySink(sink anomaly.AlertSink) {
 	m.anomalySink = sink
 }
 
+// SetExactAnomalyAnalyzer installs the committed-point anomaly path. Legacy
+// repository-wide anomaly detection remains available only to pristine runs.
+func (m *Manager) SetExactAnomalyAnalyzer(analyzer ExactAnomalyFunc) {
+	m.exactAnomalyAnalyzer = analyzer
+}
+
+// ObserveCommitted is invoked best-effort by the publication worker after a
+// durable commit. It never mutates publication or TaskRun state and skips the
+// first committed point because no same-Task predecessor exists.
+func (m *Manager) ObserveCommitted(ctx context.Context, outcome publication.Outcome) {
+	if m == nil || m.db == nil || m.exactAnomalyAnalyzer == nil || m.anomalySink == nil ||
+		outcome.State != backupasset.RecoveryPointCommitted || outcome.TaskID == 0 || outcome.TaskRunID == 0 ||
+		outcome.NativePointID == "" || outcome.PreviousNativePointID == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	analyzeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var taskEntity model.Task
+	if err := m.db.WithContext(analyzeCtx).First(&taskEntity, outcome.TaskID).Error; err != nil {
+		logger.Module("task").Warn().Uint("task_id", outcome.TaskID).Msg("加载已提交恢复点的任务失败")
+		return
+	}
+	findings, err := m.exactAnomalyAnalyzer(analyzeCtx, taskEntity, outcome.TaskRunID, outcome.NativePointID, outcome.PreviousNativePointID)
+	if err != nil {
+		logger.Module("task").Warn().Uint("task_id", outcome.TaskID).Msg("精确快照异常检测失败")
+		return
+	}
+	for _, finding := range findings {
+		if err := m.anomalySink.Raise(analyzeCtx, finding); err != nil {
+			logger.Module("task").Warn().Uint("task_id", outcome.TaskID).Str("detector", finding.Detector).Str("metric", finding.Metric).Msg("提升精确快照异常告警失败")
+		}
+	}
+}
+
+var _ publication.CommitObserver = (*Manager)(nil)
+
 // SetAutomationDispatcher 注入 automation.Dispatcher，用于在任务完成/失败时
 // 触发自动化规则。若未调用，事件将不被派发。
 func (m *Manager) SetAutomationDispatcher(dispatcher *automation.Dispatcher) {
 	m.autoDispatcher = dispatcher
+}
+
+// SetPublicationCoordinator enables the Restic evidence lane. It is optional
+// so existing deployments retain the legacy executor path until the shared
+// backup-asset runtime is wired at startup.
+func (m *Manager) SetPublicationCoordinator(coordinator publication.Coordinator) {
+	m.publicationCoordinator = coordinator
+}
+
+// SetLineageGuard installs the shared Restic command-admission and lineage
+// boundary. It is optional until the backup-asset runtime is composed, so
+// installations without that runtime retain the existing compatibility path.
+func (m *Manager) SetLineageGuard(guard publication.LineageGuard) {
+	m.lineageGuard = guard
+}
+
+// SetLegacyBlockRecorder installs the typed audit/metric sink used after the
+// lineage boundary blocks a legacy Restic operation.
+func (m *Manager) SetLegacyBlockRecorder(recorder publication.LegacyBlockRecorder) {
+	m.legacyBlockRecorder = recorder
 }
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {

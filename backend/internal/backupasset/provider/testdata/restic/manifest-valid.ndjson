@@ -1,0 +1,9 @@
+{"struct_type":"snapshot","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2026-07-14T03:00:00Z","tags":["xirang.link.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","xirang.point.v1.cccccccccccccccccccccccccccccccc"]}
+{"struct_type":"node","name":"char","path":"/char","type":"chardev","mode":384,"uid":1,"gid":2,"inode":3,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"dev","path":"/dev","type":"dev","mode":384,"uid":1,"gid":2,"inode":4,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"empty","path":"/empty","type":"dir","mode":493,"uid":1,"gid":2,"inode":5,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"fifo","path":"/fifo","type":"fifo","mode":384,"uid":1,"gid":2,"inode":6,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"file","path":"/file","type":"file","size":5,"mode":420,"uid":1,"gid":2,"inode":7,"mtime":"2026-07-14T03:00:00Z","atime":"2026-07-14T03:00:01Z","ctime":"2026-07-14T03:00:02Z"}
+{"struct_type":"node","name":"irregular","path":"/irregular","type":"irregular","mode":384,"uid":1,"gid":2,"inode":8,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"link","path":"/link","type":"symlink","mode":511,"uid":1,"gid":2,"inode":9,"mtime":"2026-07-14T03:00:00Z"}
+{"struct_type":"node","name":"socket","path":"/socket","type":"socket","mode":384,"uid":1,"gid":2,"inode":10,"mtime":"2026-07-14T03:00:00Z"}

@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"xirang/backend/internal/model"
@@ -16,7 +18,10 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+var nodeDialerTestDBSequence atomic.Uint64
 
 func TestNodeDialerLoadsManagedKeyFromDBAndAuditsRepositoryPurpose(t *testing.T) {
 	db := setupNodeDialerDB(t)
@@ -108,6 +113,39 @@ func TestNodeDialerAttemptSupportsTaskPurposeForCompatibilityCallers(t *testing.
 	}
 }
 
+func TestNodeDialerAuditsTaskBackupWithTaskRunID(t *testing.T) {
+	db := setupNodeDialerDB(t)
+	key := model.SSHKey{
+		Name:            "task-backup-key",
+		PrivateKey:      nodeDialerTestPrivateKey(t),
+		AllowedPurposes: PurposeTaskBackup,
+		AllowedNodeIDs:  "11",
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskID := uint(51)
+	taskRunID := uint(52)
+	dialer := NewNodeDialer(db)
+	dialer.hostKeyResolver = func() (ssh.HostKeyCallback, error) { return ssh.InsecureIgnoreHostKey(), nil }
+	dialer.dial = func(context.Context, string, string, []ssh.AuthMethod, ssh.HostKeyCallback) (*ssh.Client, error) {
+		return nil, nil
+	}
+	_, err := dialer.Dial(context.Background(), model.Node{ID: 11, Host: "example.invalid", AuthType: "key", SSHKeyID: &key.ID}, PurposeTaskBackup, DialAuditContext{
+		Action: "task.credential.use", CorrelationID: "corr.publication-52", UserID: 7, Username: "operator", Role: "operator", TaskID: &taskID, TaskRunID: &taskRunID,
+	})
+	if err != nil {
+		t.Fatalf("dial task backup: %v", err)
+	}
+	var event model.CredentialAuditEvent
+	if err := db.Where("action = ?", "task.credential.use").First(&event).Error; err != nil {
+		t.Fatal(err)
+	}
+	if event.Purpose != PurposeTaskBackup || event.TaskID == nil || *event.TaskID != taskID || event.TaskRunID == nil || *event.TaskRunID != taskRunID || !strings.Contains(event.Metadata, "corr.publication-52") {
+		t.Fatalf("task backup credential audit=%+v", event)
+	}
+}
+
 func TestNilNodeDialerFailsClosedWithoutPanic(t *testing.T) {
 	var dialer *NodeDialer
 	_, err := dialer.Dial(context.Background(), model.Node{ID: 1}, PurposeRepositoryProbe, DialAuditContext{Action: "repository.probe"})
@@ -122,7 +160,8 @@ func setupNodeDialerDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "-" + strconv.FormatUint(nodeDialerTestDBSequence.Add(1), 10) + "?mode=memory&cache=shared&_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
 	}

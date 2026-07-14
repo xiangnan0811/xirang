@@ -1,0 +1,5 @@
+{"struct_type":"snapshot","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2026-07-14T03:00:00Z","tags":["xirang.link.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","xirang.point.v1.cccccccccccccccccccccccccccccccc"]}
+{"struct_type":"node","name":"a","path":"/a","type":"dir"}
+{"struct_type":"node","name":"child","path":"/a/child","type":"dir"}
+{"struct_type":"node","name":"file","path":"/a/child/file","type":"file","size":1}
+{"struct_type":"node","name":"a-","path":"/a-","type":"file","size":2}

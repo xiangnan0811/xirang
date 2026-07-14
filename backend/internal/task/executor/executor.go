@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/bandwidth"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -91,6 +92,17 @@ func NewFactory(rsyncBinary string) Factory {
 		rsync:   &RsyncExecutor{binary: rsyncBinary},
 		command: &CommandExecutor{},
 		restic:  &ResticExecutor{},
+		rclone:  &RcloneExecutor{},
+	}
+}
+
+// NewFactoryWithResticPublisher creates the usual compatibility factory while
+// exposing evidence execution only through its Restic instance.
+func NewFactoryWithResticPublisher(rsyncBinary string, publisher provider.ResticPublisher) Factory {
+	return &factory{
+		rsync:   &RsyncExecutor{binary: rsyncBinary},
+		command: &CommandExecutor{},
+		restic:  &ResticExecutor{publisher: publisher},
 		rclone:  &RcloneExecutor{},
 	}
 }

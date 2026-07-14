@@ -27,11 +27,13 @@ type ResticRuntimeAccess struct {
 }
 
 type ResticAdapter struct {
-	transport    CommandTransport
-	cursors      *CursorCodec
-	limitsSource OperationLimitsSource
-	maxPageSize  int
-	now          func() time.Time
+	transport               CommandTransport
+	streamTransport         CommandStreamTransport
+	cursors                 *CursorCodec
+	limitsSource            OperationLimitsSource
+	publicationConfigSource PublicationConfigSource
+	maxPageSize             int
+	now                     func() time.Time
 }
 
 func NewResticAdapter(transport CommandTransport, cursors *CursorCodec, limits OperationLimits, maxPageSize int, now func() time.Time) (*ResticAdapter, error) {
@@ -49,6 +51,32 @@ func NewResticAdapterWithLimitsSource(transport CommandTransport, cursors *Curso
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &ResticAdapter{transport: transport, cursors: cursors, limitsSource: limitsSource, maxPageSize: maxPageSize, now: now}, nil
+}
+
+// NewResticAdapterWithPublication installs the optional exact-evidence ports
+// while preserving the read-only constructors for existing explorer callers.
+func NewResticAdapterWithPublication(
+	transport CommandTransport,
+	streamTransport CommandStreamTransport,
+	cursors *CursorCodec,
+	limitsSource OperationLimitsSource,
+	publicationConfigSource PublicationConfigSource,
+	maxPageSize int,
+	now func() time.Time,
+) (*ResticAdapter, error) {
+	if streamTransport == nil || publicationConfigSource == nil {
+		return nil, fmt.Errorf("%w: invalid Restic publication dependencies", backupasset.ErrInvalidState)
+	}
+	if sshTransport, ok := transport.(*SSHCommandTransport); ok && streamTransport != sshTransport {
+		return nil, fmt.Errorf("%w: Restic publication transport must share SSH transport", backupasset.ErrInvalidState)
+	}
+	adapter, err := NewResticAdapterWithLimitsSource(transport, cursors, limitsSource, maxPageSize, now)
+	if err != nil {
+		return nil, err
+	}
+	adapter.streamTransport = streamTransport
+	adapter.publicationConfigSource = publicationConfigSource
+	return adapter, nil
 }
 
 func (adapter *ResticAdapter) Probe(ctx context.Context, binding AccessBinding, limits OperationLimits) (RepositoryObservation, error) {

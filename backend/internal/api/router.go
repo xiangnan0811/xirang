@@ -13,14 +13,16 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
-	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 	backuprepository "xirang/backend/internal/backupasset/repository"
+	backupruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/integration"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/policy"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/snapshot"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/util"
@@ -36,24 +38,61 @@ import (
 )
 
 type Dependencies struct {
-	AppContext        context.Context
-	DB                *gorm.DB
-	AuthService       *auth.Service
-	JWTManager        *auth.JWTManager
-	TaskManager       *task.Manager
-	Hub               *ws.Hub
-	AllowedOrigins    []string
-	LoginRateLimit    int
-	LoginRateWindow   time.Duration
-	SettingsService   *settings.Service
-	RetryWorker       *alerting.RetryWorker
-	AlertDispatcher   *alerting.Dispatcher
-	MetricsToken      string
-	MetricsRateLimit  int
-	MetricsRateWindow time.Duration
+	AppContext            context.Context
+	DB                    *gorm.DB
+	AuthService           *auth.Service
+	JWTManager            *auth.JWTManager
+	TaskManager           *task.Manager
+	Hub                   *ws.Hub
+	AllowedOrigins        []string
+	LoginRateLimit        int
+	LoginRateWindow       time.Duration
+	SettingsService       *settings.Service
+	RetryWorker           *alerting.RetryWorker
+	AlertDispatcher       *alerting.Dispatcher
+	MetricsToken          string
+	MetricsRateLimit      int
+	MetricsRateWindow     time.Duration
+	BackupAssets          *backupruntime.Runtime
+	LegacyResticSnapshots handlers.LegacyResticSnapshots
+	SnapshotDiffRunner    handlers.SnapshotDiffRunner
+	SnapshotIndexer       *snapshot.Indexer
 	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
 	// Empty = trust none (ClientIP uses RemoteAddr only).
 	TrustedProxies []string
+}
+
+// featureDisabledBackupRepositoryService preserves the public feature gate
+// when a lightweight Router construction intentionally omits the shared
+// runtime. Production startup constructs and injects Runtime before Router.
+// It owns no provider command or credential capability.
+type featureDisabledBackupRepositoryService struct{}
+
+func (featureDisabledBackupRepositoryService) Connect(_ context.Context, _ backuprepository.ConnectRequest, requestContext backuprepository.RequestContext) (backuprepository.ConnectResult, error) {
+	return backuprepository.ConnectResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) List(_ context.Context, _ backuprepository.RepositoryListRequest, _ backuprepository.VisibilityScope, requestContext backuprepository.RequestContext) (backuprepository.RepositoryPage, error) {
+	return backuprepository.RepositoryPage{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) Detail(_ context.Context, _ string, _ backuprepository.VisibilityScope, requestContext backuprepository.RequestContext) (backuprepository.RepositoryView, error) {
+	return backuprepository.RepositoryView{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) Reconcile(_ context.Context, _ string, requestContext backuprepository.RequestContext) (backuprepository.ConnectResult, error) {
+	return backuprepository.ConnectResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) Disconnect(_ context.Context, _ string, requestContext backuprepository.RequestContext) (backuprepository.ConnectResult, error) {
+	return backuprepository.ConnectResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func featureDisabledBackupRepositoryError(requestContext backuprepository.RequestContext) error {
+	return &backuprepository.CapabilityError{
+		Reason:        backupasset.CapabilityReason{Code: backupasset.CapabilityFeatureDisabled},
+		CorrelationID: requestContext.CorrelationID,
+	}
 }
 
 func NewRouter(dep Dependencies) *gin.Engine {
@@ -138,18 +177,26 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	fileHandler := handlers.NewFileHandler(dep.DB)
 	dockerHandler := handlers.NewDockerHandler(dep.DB)
 	reportHandler := handlers.NewReportHandler(dep.DB)
-	snapshotHandler := handlers.NewSnapshotHandler(dep.DB)
-	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB)
-	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB)
-	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService)
+	var backupRepositoryService handlers.BackupRepositoryService = featureDisabledBackupRepositoryService{}
+	var lineageGuard publication.LineageGuard
+	var featureTransitioner publication.FeatureTransitioner
+	if dep.BackupAssets != nil {
+		backupRepositoryService = dep.BackupAssets.RepositoryService()
+		lineageGuard = dep.BackupAssets.LineageGuard()
+		featureTransitioner = dep.BackupAssets.FeatureTransitioner()
+	}
+	snapshotHandler := handlers.NewSnapshotHandler(dep.DB, lineageGuard, dep.LegacyResticSnapshots)
+	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB, lineageGuard, dep.SnapshotDiffRunner)
+	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB, lineageGuard, dep.SnapshotIndexer)
+	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)
 	appCredentialHandler := handlers.NewAppCredentialHandler(dep.DB)
-	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService)
+	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
 	storageGuideHandler := handlers.NewStorageGuideHandler()
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
-	backupRepositoryHandler := newBackupRepositoryHandler(dep)
+	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
 
 	v1 := router.Group("/api/v1")
 	// Captcha is unauthenticated; rate-limit to reduce store spam / memory pressure.
@@ -436,147 +483,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	}
 
 	return router
-}
-
-const (
-	defaultBackupProviderOperationTimeout = 2 * time.Minute
-	defaultBackupProviderMaxConcurrency   = 4
-	defaultBackupProviderMetadataLimit    = int64(16 << 20)
-	backupProviderMaxPageSize             = 200
-	backupProviderCursorTTL               = 15 * time.Minute
-)
-
-type backupRepositoryDefaultSettings struct{}
-
-func (backupRepositoryDefaultSettings) GetEffective(key string) string {
-	switch key {
-	case "backup_assets.enabled":
-		return "false"
-	case "backup_assets.provider_operation_timeout":
-		return defaultBackupProviderOperationTimeout.String()
-	case "backup_assets.provider_max_concurrency":
-		return strconv.Itoa(defaultBackupProviderMaxConcurrency)
-	case "backup_assets.provider_metadata_limit_bytes":
-		return strconv.FormatInt(defaultBackupProviderMetadataLimit, 10)
-	default:
-		return ""
-	}
-}
-
-func newBackupRepositoryHandler(dep Dependencies) *handlers.BackupRepositoryHandler {
-	var settingReader backupasset.SettingsReader
-	if dep.SettingsService != nil {
-		settingReader = dep.SettingsService
-	} else {
-		settingReader = backupRepositoryDefaultSettings{}
-	}
-	foundation := backupasset.NewFoundationService(settingReader)
-
-	now := func() time.Time { return time.Now().UTC() }
-	keyring := backupasset.NewKeyring(dep.DB, now)
-	cursorCodec := provider.NewCursorCodec(keyring, now, backupProviderCursorTTL)
-	limitsSource := backupRepositoryOperationLimitsSource(foundation)
-	dialer := sshutil.NewNodeDialer(dep.DB)
-	transport, err := provider.NewSSHCommandTransportWithConcurrencySource(dialer, backupRepositoryConcurrencySource(foundation), backupRepositoryToolBinaries())
-	if err != nil {
-		panic(fmt.Sprintf("construct backup repository command transport: %v", err))
-	}
-	rsyncAdapter, err := provider.NewRsyncAdapterWithLimitsSource(cursorCodec, limitsSource, backupProviderMaxPageSize, now)
-	if err != nil {
-		panic(fmt.Sprintf("construct Rsync backup repository adapter: %v", err))
-	}
-	resticAdapter, err := provider.NewResticAdapterWithLimitsSource(transport, cursorCodec, limitsSource, backupProviderMaxPageSize, now)
-	if err != nil {
-		panic(fmt.Sprintf("construct Restic backup repository adapter: %v", err))
-	}
-	rcloneAdapter, err := provider.NewRcloneAdapterWithLimitsSource(transport, cursorCodec, limitsSource, backupProviderMaxPageSize, now)
-	if err != nil {
-		panic(fmt.Sprintf("construct Rclone backup repository adapter: %v", err))
-	}
-
-	registry := provider.NewRegistry()
-	registrations := []struct {
-		kind         backupasset.ProviderKind
-		registration provider.Registration
-	}{
-		{kind: backupasset.ProviderRsync, registration: provider.Registration{
-			Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter,
-			EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter,
-		}},
-		{kind: backupasset.ProviderRestic, registration: provider.Registration{
-			Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter,
-			EntryStatter: resticAdapter, SequentialReader: resticAdapter,
-		}},
-		{kind: backupasset.ProviderRclone, registration: provider.Registration{
-			Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter,
-			EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter,
-		}},
-	}
-	for _, item := range registrations {
-		if err := registry.Register(item.kind, item.registration); err != nil {
-			panic(fmt.Sprintf("register %s backup repository adapter: %v", item.kind, err))
-		}
-	}
-
-	var auditSink backuprepository.AssetAuditSink
-	if dep.DB != nil {
-		auditWriter, err := backupasset.NewAuditWriterWithConfigSource(dep.DB, keyring, now, backupRepositoryAuditConfigSource(foundation))
-		if err != nil {
-			panic(fmt.Sprintf("construct backup repository audit writer: %v", err))
-		}
-		auditSink = backuprepository.NewAssetAuditSink(auditWriter)
-	}
-	service, err := backuprepository.NewService(backuprepository.Dependencies{
-		DB: dep.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: now, Audit: auditSink,
-	})
-	if err != nil {
-		panic(fmt.Sprintf("construct backup repository service: %v", err))
-	}
-	return handlers.NewBackupRepositoryHandler(service)
-}
-
-func backupRepositoryOperationLimitsSource(foundation *backupasset.FoundationService) provider.OperationLimitsSource {
-	return func() (provider.OperationLimits, error) {
-		config := backupRepositoryProviderConfig(foundation)
-		return provider.NewMetadataOperationLimits(config.OperationTimeout, config.MetadataLimitBytes)
-	}
-}
-
-func backupRepositoryAuditConfigSource(foundation *backupasset.FoundationService) backupasset.AuditConfigSource {
-	return func() (backupasset.AuditConfig, error) {
-		if foundation != nil {
-			if config, err := foundation.AuditConfig(); err == nil {
-				return config, nil
-			}
-		}
-		return backupasset.AuditConfig{}, nil
-	}
-}
-
-func backupRepositoryConcurrencySource(foundation *backupasset.FoundationService) provider.ConcurrencyLimitSource {
-	return func() (int, error) {
-		return backupRepositoryProviderConfig(foundation).MaxConcurrency, nil
-	}
-}
-
-func backupRepositoryProviderConfig(foundation *backupasset.FoundationService) backupasset.ProviderConfig {
-	if foundation != nil {
-		if config, err := foundation.ProviderConfig(); err == nil {
-			return config
-		}
-	}
-	return backupasset.ProviderConfig{
-		OperationTimeout:   defaultBackupProviderOperationTimeout,
-		MaxConcurrency:     defaultBackupProviderMaxConcurrency,
-		MetadataLimitBytes: defaultBackupProviderMetadataLimit,
-	}
-}
-
-func backupRepositoryToolBinaries() provider.ToolBinaries {
-	return provider.ToolBinaries{
-		Restic: util.GetEnvOrDefault("RESTIC_BINARY", "restic"),
-		Rclone: util.GetEnvOrDefault("RCLONE_BINARY", "rclone"),
-	}
 }
 
 func swaggerUIEnabled() bool {

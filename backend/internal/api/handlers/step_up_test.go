@@ -613,7 +613,7 @@ func TestSnapshotRestoreWritesSafeCredentialAuditEvidence(t *testing.T) {
 		t.Fatalf("创建任务失败: %v", err)
 	}
 
-	handler := NewSnapshotHandler(db)
+	handler := NewSnapshotHandler(db, nil, nil)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set(middleware.CtxUserID, uint(10))

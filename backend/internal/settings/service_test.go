@@ -1,12 +1,15 @@
 package settings
 
 import (
+	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/sshutil"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -57,20 +60,30 @@ func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
 		maxDuration  string
 	}
 	want := map[string]expectedDefinition{
-		"backup_assets.enabled":                         {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
-		"backup_assets.catalog_batch_size":              {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
-		"backup_assets.catalog_build_timeout":           {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.repository_reconcile_interval":   {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.audit_segment_max_events":        {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", "10000", TypeInt, "100", "1000000", "", ""},
-		"backup_assets.audit_segment_max_age":           {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
-		"backup_assets.audit_detail_retention_days":     {"BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", "180", TypeInt, "1", "3650", "", ""},
-		"backup_assets.audit_checkpoint_retention_days": {"BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", "2555", TypeInt, "180", "36500", "", ""},
-		"backup_assets.lease_duration":                  {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
-		"backup_assets.lease_heartbeat":                 {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
-		"backup_assets.lease_absolute_deadline":         {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
-		"backup_assets.provider_operation_timeout":      {"BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", "2m", TypeDuration, "", "", "5s", "30m"},
-		"backup_assets.provider_max_concurrency":        {"BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
-		"backup_assets.provider_metadata_limit_bytes":   {"BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", "16777216", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.enabled":                          {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
+		"backup_assets.catalog_batch_size":               {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.catalog_build_timeout":            {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.repository_reconcile_interval":    {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.audit_segment_max_events":         {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", "10000", TypeInt, "100", "1000000", "", ""},
+		"backup_assets.audit_segment_max_age":            {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.audit_detail_retention_days":      {"BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", "180", TypeInt, "1", "3650", "", ""},
+		"backup_assets.audit_checkpoint_retention_days":  {"BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", "2555", TypeInt, "180", "36500", "", ""},
+		"backup_assets.lease_duration":                   {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
+		"backup_assets.lease_heartbeat":                  {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
+		"backup_assets.lease_absolute_deadline":          {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
+		"backup_assets.provider_operation_timeout":       {"BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", "2m", TypeDuration, "", "", "5s", "30m"},
+		"backup_assets.provider_max_concurrency":         {"BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
+		"backup_assets.provider_metadata_limit_bytes":    {"BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", "16777216", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.publication_reconcile_interval":   {"BACKUP_ASSETS_PUBLICATION_RECONCILE_INTERVAL", "5m", TypeDuration, "", "", "30s", "24h"},
+		"backup_assets.publication_reconcile_batch_size": {"BACKUP_ASSETS_PUBLICATION_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.publication_worker_concurrency":   {"BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY", "2", TypeInt, "1", "32", "", ""},
+		"backup_assets.publication_missing_grace":        {"BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.publication_stream_max_bytes":     {"BACKUP_ASSETS_PUBLICATION_STREAM_MAX_BYTES", "268435456", TypeInt, "1048576", "1073741824", "", ""},
+		"backup_assets.manifest_timeout":                 {"BACKUP_ASSETS_MANIFEST_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.manifest_max_bytes":               {"BACKUP_ASSETS_MANIFEST_MAX_BYTES", "4294967296", TypeInt, "1048576", "17179869184", "", ""},
+		"backup_assets.manifest_max_entries":             {"BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", "10000000", TypeInt, "1", "100000000", "", ""},
+		"backup_assets.manifest_max_record_bytes":        {"BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", "1048576", TypeInt, "4096", "4194304", "", ""},
+		"backup_assets.manifest_max_depth":               {"BACKUP_ASSETS_MANIFEST_MAX_DEPTH", "4096", TypeInt, "1", "65536", "", ""},
 	}
 	defs := NewService(setupTestDB(t)).Registry()
 	got := make(map[string]SettingDef, len(want))
@@ -135,6 +148,147 @@ func TestBackupAssetSettingsLeaseHeartbeatMustBeLowerThanDuration(t *testing.T) 
 	if err := ValidateBackupAssetFoundationConfig(invalid); err == nil {
 		t.Fatal("heartbeat equal to lease duration unexpectedly accepted")
 	}
+}
+
+func TestBackupAssetFoundationCrossSettingPublicationBoundaries(t *testing.T) {
+	values := backupAssetFoundationValuesForTest()
+	values["backup_assets.lease_duration"] = "71s"
+	values["backup_assets.lease_heartbeat"] = "60s"
+	values["backup_assets.lease_absolute_deadline"] = "2h"
+	values["backup_assets.publication_missing_grace"] = "71s"
+	values["backup_assets.manifest_timeout"] = "1h"
+	values["backup_assets.manifest_max_bytes"] = "1048576"
+	values["backup_assets.manifest_max_record_bytes"] = "1048576"
+	if err := ValidateBackupAssetFoundationConfig(values); err != nil {
+		t.Fatalf("valid publication foundation config rejected: %v", err)
+	}
+	if sshutil.CommandExecutionJoinTimeout != 10*time.Second {
+		t.Fatalf("command execution join timeout=%s, want 10s", sshutil.CommandExecutionJoinTimeout)
+	}
+
+	invalidJoinMargin := cloneSettingsValues(values)
+	invalidJoinMargin["backup_assets.lease_duration"] = "70s"
+	if err := ValidateBackupAssetFoundationConfig(invalidJoinMargin); err == nil {
+		t.Fatal("lease duration with no command-join margin unexpectedly accepted")
+	}
+	invalidMissingGrace := cloneSettingsValues(values)
+	invalidMissingGrace["backup_assets.publication_missing_grace"] = "60s"
+	if err := ValidateBackupAssetFoundationConfig(invalidMissingGrace); err == nil {
+		t.Fatal("publication missing grace below lease duration unexpectedly accepted")
+	}
+	invalidManifestTimeout := cloneSettingsValues(values)
+	invalidManifestTimeout["backup_assets.manifest_timeout"] = "2h"
+	if err := ValidateBackupAssetFoundationConfig(invalidManifestTimeout); err == nil {
+		t.Fatal("manifest timeout equal to absolute deadline unexpectedly accepted")
+	}
+	invalidRecordLimit := cloneSettingsValues(values)
+	invalidRecordLimit["backup_assets.manifest_max_record_bytes"] = "1048577"
+	if err := ValidateBackupAssetFoundationConfig(invalidRecordLimit); err == nil {
+		t.Fatal("manifest record limit above total bytes unexpectedly accepted")
+	}
+}
+
+func TestValidateBackupAssetEffectiveUpdateCombinesExplicitCurrentAndRequestOverrides(t *testing.T) {
+	service := NewService(setupTestDB(t))
+	current := backupAssetFoundationValuesForTest()
+	current["backup_assets.lease_duration"] = "71s"
+	current["backup_assets.lease_heartbeat"] = "60s"
+	if err := service.ValidateBackupAssetEffectiveUpdate(current, map[string]string{"backup_assets.publication_missing_grace": "71s"}); err != nil {
+		t.Fatalf("valid explicit current/override combination rejected: %v", err)
+	}
+	if err := service.ValidateBackupAssetEffectiveUpdate(current, map[string]string{"backup_assets.lease_duration": "70s"}); err == nil {
+		t.Fatal("invalid explicit current/override combination unexpectedly accepted")
+	}
+	if err := service.ValidateBackupAssetEffectiveUpdate(current, map[string]string{"login.rate_limit": "100"}); err == nil {
+		t.Fatal("non-foundation override unexpectedly accepted")
+	}
+}
+
+func TestValidateBackupAssetEffectiveUpdateDoesNotMutateInputsOrReadAgain(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewService(db)
+	current := backupAssetFoundationValuesForTest()
+	current["backup_assets.lease_duration"] = "71s"
+	current["backup_assets.lease_heartbeat"] = "60s"
+	overrides := map[string]string{"backup_assets.publication_missing_grace": "71s"}
+	wantCurrent := cloneSettingsValues(current)
+	wantOverrides := cloneSettingsValues(overrides)
+	if err := service.Update("backup_assets.lease_duration", "70s"); err != nil {
+		t.Fatalf("seed divergent DB value: %v", err)
+	}
+	t.Setenv("BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", "60s")
+	if err := service.ValidateBackupAssetEffectiveUpdate(current, overrides); err != nil {
+		t.Fatalf("pure explicit validation read DB/env instead of supplied maps: %v", err)
+	}
+	if !reflect.DeepEqual(current, wantCurrent) || !reflect.DeepEqual(overrides, wantOverrides) {
+		t.Fatalf("explicit validation mutated inputs: current=%#v overrides=%#v", current, overrides)
+	}
+}
+
+func TestWithBackupAssetMutationSerializesCallbacksOverFreshSnapshots(t *testing.T) {
+	service := NewService(setupTestDB(t))
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	secondObserved := make(chan string, 1)
+	secondDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- service.WithBackupAssetMutation(context.Background(), func(current map[string]string) error {
+			close(firstEntered)
+			<-releaseFirst
+			return service.Update("backup_assets.lease_duration", "10m")
+		})
+	}()
+	<-firstEntered
+	go func() {
+		secondDone <- service.WithBackupAssetMutation(context.Background(), func(current map[string]string) error {
+			secondObserved <- current["backup_assets.lease_duration"]
+			current["backup_assets.lease_duration"] = "mutated-callback-copy"
+			return nil
+		})
+	}()
+	select {
+	case observed := <-secondObserved:
+		t.Fatalf("second callback entered before first persistence finished: %q", observed)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first mutation: %v", err)
+	}
+	if observed := <-secondObserved; observed != "10m" {
+		t.Fatalf("second mutation did not receive a fresh snapshot: %q", observed)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second mutation: %v", err)
+	}
+	if err := service.WithBackupAssetMutation(context.Background(), func(current map[string]string) error {
+		if current["backup_assets.lease_duration"] != "10m" {
+			t.Fatalf("callback mutation corrupted service-owned snapshot: %q", current["backup_assets.lease_duration"])
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("third mutation: %v", err)
+	}
+}
+
+func backupAssetFoundationValuesForTest() map[string]string {
+	values := make(map[string]string)
+	for _, def := range registry {
+		if strings.HasPrefix(def.Key, "backup_assets.") {
+			values[def.Key] = def.CodeDefault
+		}
+	}
+	return values
+}
+
+func cloneSettingsValues(values map[string]string) map[string]string {
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
 }
 
 func TestAnomalyDefaults_AreConservativeAndAlertsOff(t *testing.T) {

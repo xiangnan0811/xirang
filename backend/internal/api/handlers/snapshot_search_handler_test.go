@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/snapshot"
 
@@ -39,7 +43,7 @@ func setupSearchTestRouter(t *testing.T) *gin.Engine {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
-	handler := NewSnapshotSearchHandler(db)
+	handler := NewSnapshotSearchHandler(db, nil, nil)
 
 	router.GET("/tasks/:id/snapshots/search", func(c *gin.Context) {
 		handler.Search(c)
@@ -149,7 +153,7 @@ func TestSearchSnapshotFiles_NonResticTask(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := NewSnapshotSearchHandler(db)
+	handler := NewSnapshotSearchHandler(db, nil, nil)
 	router.GET("/tasks/:id/snapshots/search", func(c *gin.Context) {
 		handler.Search(c)
 	})
@@ -160,5 +164,90 @@ func TestSearchSnapshotFiles_NonResticTask(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("期望 400 (非 restic 任务)，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+type searchLineageSession struct {
+	publication.LineageSession
+	mode   publication.LineageMode
+	points []publication.CommittedPoint
+	closed int32
+}
+
+func (session *searchLineageSession) Mode() publication.LineageMode { return session.mode }
+func (session *searchLineageSession) CommittedPoints() []publication.CommittedPoint {
+	return append([]publication.CommittedPoint(nil), session.points...)
+}
+func (session *searchLineageSession) Close() error {
+	atomic.AddInt32(&session.closed, 1)
+	return nil
+}
+
+type searchLineageGuard struct {
+	session   publication.LineageSession
+	operation publication.ResticOperation
+	calls     int
+}
+
+func (guard *searchLineageGuard) Begin(_ context.Context, _ uint, operation publication.ResticOperation) (publication.LineageSession, error) {
+	guard.calls++
+	guard.operation = operation
+	return guard.session, nil
+}
+
+var _ publication.LineageGuard = (*searchLineageGuard)(nil)
+
+func TestSnapshotSearchFiltersHistoricalContaminationAndHoldsSearchAdmission(t *testing.T) {
+	db := openSearchTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}, &model.SnapshotFileIndex{}); err != nil {
+		t.Fatalf("initialize tables: %v", err)
+	}
+	taskEntity := model.Task{Name: "exact-search", ExecutorType: "restic", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
+	}
+	allowed := strings.Repeat("a", 64)
+	foreign := strings.Repeat("b", 64)
+	partial := strings.Repeat("c", 64)
+	marker := func(snapshotID string, count int64) model.SnapshotFileIndex {
+		return model.SnapshotFileIndex{TaskID: taskEntity.ID, SnapshotID: snapshotID, Path: "", Size: count, Mtime: "xirang-index-complete-v1"}
+	}
+	rows := []model.SnapshotFileIndex{
+		marker(allowed, 1),
+		{TaskID: taskEntity.ID, SnapshotID: allowed, Path: "/allowed-secret.txt", Size: 1, Mtime: "2026-07-14T12:00:00Z"},
+		marker(foreign, 1),
+		{TaskID: taskEntity.ID, SnapshotID: foreign, Path: "/foreign-secret.txt", Size: 1, Mtime: "2026-07-14T12:00:00Z"},
+		{TaskID: taskEntity.ID, SnapshotID: partial, Path: "/partial-secret.txt", Size: 1, Mtime: "2026-07-14T12:00:00Z"},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	session := &searchLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{{
+		RecoveryPointID: strings.Repeat("1", 32), FullNativeID: allowed, CapturedAt: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC),
+	}}}
+	guard := &searchLineageGuard{session: session}
+	indexer := snapshot.NewIndexer(db, nil, nil)
+	handler := NewSnapshotSearchHandler(db, guard, indexer)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/tasks/:id/snapshots/search", handler.Search)
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/search?q=secret", taskEntity.ID), nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "/allowed-secret.txt") || strings.Contains(body, "/foreign-secret.txt") || strings.Contains(body, "/partial-secret.txt") {
+		t.Fatalf("exact search leaked contaminated rows: %s", body)
+	}
+	if guard.calls != 1 || guard.operation != publication.OperationLegacySearch {
+		t.Fatalf("search admissions calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("search admission close count=%d, want 1", got)
 	}
 }

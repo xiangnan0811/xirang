@@ -15,6 +15,8 @@ type Registration struct {
 	EntryStatter     EntryStatter
 	SequentialReader SequentialReader
 	RangeReader      RangeReader
+	ResticPublisher  ResticPublisher
+	ManifestBuilder  ManifestBuilder
 }
 
 type Registry struct {
@@ -103,6 +105,28 @@ func (registry *Registry) RangeReader(kind backupasset.ProviderKind) (RangeReade
 		return nil, newCapabilityError(backupasset.CapabilityRangeUnavailable)
 	}
 	return registration.RangeReader, nil
+}
+
+func (registry *Registry) ResticPublisher(kind backupasset.ProviderKind) (ResticPublisher, error) {
+	registration, err := registry.registration(kind)
+	if err != nil || interfaceNil(registration.ResticPublisher) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	return registration.ResticPublisher, nil
+}
+
+func (registry *Registry) ManifestBuilder(kind backupasset.ProviderKind) (ManifestBuilder, error) {
+	registration, err := registry.registration(kind)
+	if err != nil || interfaceNil(registration.ManifestBuilder) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	return registration.ManifestBuilder, nil
 }
 
 func (registry *Registry) registration(kind backupasset.ProviderKind) (Registration, error) {

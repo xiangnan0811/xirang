@@ -19,10 +19,16 @@ const (
 	AuditActionRepositoryPurgePlan  AuditAction = "repository_purge_plan"
 	AuditActionRepositoryPurge      AuditAction = "repository_purge"
 
-	AuditActionRecoveryPointList     AuditAction = "recovery_point_list"
-	AuditActionRecoveryPointDetail   AuditAction = "recovery_point_detail"
-	AuditActionRecoveryPointEvidence AuditAction = "recovery_point_evidence"
-	AuditActionRecoveryPointDiff     AuditAction = "recovery_point_diff"
+	AuditActionRecoveryPointList                 AuditAction = "recovery_point_list"
+	AuditActionRecoveryPointDetail               AuditAction = "recovery_point_detail"
+	AuditActionRecoveryPointEvidence             AuditAction = "recovery_point_evidence"
+	AuditActionRecoveryPointDiff                 AuditAction = "recovery_point_diff"
+	AuditActionRecoveryPointPublicationPrepare   AuditAction = "recovery_point_publication_prepare"
+	AuditActionRecoveryPointPublicationVerify    AuditAction = "recovery_point_publication_verify"
+	AuditActionRecoveryPointPublicationCommit    AuditAction = "recovery_point_publication_commit"
+	AuditActionRecoveryPointPublicationFail      AuditAction = "recovery_point_publication_fail"
+	AuditActionRecoveryPointPublicationReconcile AuditAction = "recovery_point_publication_reconcile"
+	AuditActionResticLegacyOperationBlocked      AuditAction = "restic_legacy_operation_blocked"
 
 	AuditActionAssetList   AuditAction = "asset_list"
 	AuditActionAssetSearch AuditAction = "asset_search"
@@ -85,6 +91,12 @@ var AuditActions = []AuditAction{
 	AuditActionRecoveryPointDetail,
 	AuditActionRecoveryPointEvidence,
 	AuditActionRecoveryPointDiff,
+	AuditActionRecoveryPointPublicationPrepare,
+	AuditActionRecoveryPointPublicationVerify,
+	AuditActionRecoveryPointPublicationCommit,
+	AuditActionRecoveryPointPublicationFail,
+	AuditActionRecoveryPointPublicationReconcile,
+	AuditActionResticLegacyOperationBlocked,
 	AuditActionAssetList,
 	AuditActionAssetSearch,
 	AuditActionSavedSearchCreate,
@@ -160,6 +172,7 @@ const (
 	AuditFieldFormat          AuditField = "format"
 	AuditFieldMode            AuditField = "mode"
 	AuditFieldSource          AuditField = "source"
+	AuditFieldOperation       AuditField = "operation"
 )
 
 var AuditFields = []AuditField{
@@ -187,6 +200,7 @@ var AuditFields = []AuditField{
 	AuditFieldFormat,
 	AuditFieldMode,
 	AuditFieldSource,
+	AuditFieldOperation,
 }
 
 var validAuditFields = setOf(AuditFields...)
@@ -296,12 +310,18 @@ func NewAuditEvent(input AuditEventInput) (AuditEvent, error) {
 			return AuditEvent{}, fmt.Errorf("%w: unknown audit field %q", ErrInvalidState, field)
 		}
 	}
+	if err := validatePublicationAuditOperationField(input.Action, input.Fields); err != nil {
+		return AuditEvent{}, err
+	}
 
 	rawFields := make(map[string]any, len(input.Fields))
 	for field, value := range input.Fields {
 		rawFields[string(field)] = value
 	}
 	input.Fields = SanitizeAuditFields(rawFields)
+	if isPublicationAuditAction(input.Action) {
+		input.Fields = sanitizePublicationAuditFields(input.Action, input.Fields)
+	}
 	input.Actor.Username = boundAuditString(input.Actor.Username, 64)
 	input.Actor.Role = boundAuditString(input.Actor.Role, 32)
 	input.RepositoryID = boundAuditString(input.RepositoryID, 32)
@@ -318,6 +338,80 @@ func NewAuditEvent(input AuditEventInput) (AuditEvent, error) {
 	fingerprints := input.Fingerprints
 	input.Fingerprints = AuditFingerprintInput{}
 	return AuditEvent{AuditEventInput: input, fingerprints: fingerprints}, nil
+}
+
+func isPublicationAuditAction(action AuditAction) bool {
+	switch action {
+	case AuditActionRecoveryPointPublicationPrepare,
+		AuditActionRecoveryPointPublicationVerify,
+		AuditActionRecoveryPointPublicationCommit,
+		AuditActionRecoveryPointPublicationFail,
+		AuditActionRecoveryPointPublicationReconcile,
+		AuditActionResticLegacyOperationBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func validatePublicationAuditOperationField(action AuditAction, fields map[AuditField]any) error {
+	value, present := fields[AuditFieldOperation]
+	if !present {
+		return nil
+	}
+	if action != AuditActionResticLegacyOperationBlocked {
+		return fmt.Errorf("%w: operation field is only valid for legacy Restic block audits", ErrInvalidState)
+	}
+	operation, ok := value.(string)
+	if !ok || !validLegacyResticAuditOperation(operation) {
+		return fmt.Errorf("%w: invalid legacy Restic operation", ErrInvalidState)
+	}
+	return nil
+}
+
+func sanitizePublicationAuditFields(action AuditAction, fields map[AuditField]any) map[AuditField]any {
+	result := make(map[AuditField]any, 5)
+	for _, field := range []AuditField{AuditFieldStage, AuditFieldStatus, AuditFieldCode, AuditFieldCorrelationID} {
+		value, ok := fields[field]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		switch field {
+		case AuditFieldCode:
+			if ValidatePublicationFailureCode(PublicationFailureCode(text)) != nil && ValidatePublicationOutcomeCode(PublicationOutcomeCode(text)) != nil {
+				continue
+			}
+		case AuditFieldCorrelationID:
+			if !validPublicationCorrelationID(text) {
+				continue
+			}
+		default:
+			if safeAuditLabel(text, 32) != text {
+				continue
+			}
+		}
+		result[field] = text
+	}
+	if action == AuditActionResticLegacyOperationBlocked {
+		if operation, ok := fields[AuditFieldOperation].(string); ok && validLegacyResticAuditOperation(operation) {
+			result[AuditFieldOperation] = operation
+		}
+	}
+	return result
+}
+
+func validLegacyResticAuditOperation(operation string) bool {
+	switch operation {
+	case "legacy_backup", "legacy_snapshot_list", "legacy_snapshot_files", "legacy_index", "legacy_search",
+		"legacy_diff", "legacy_snapshot_restore", "legacy_restore_latest", "legacy_anomaly", "legacy_retention":
+		return true
+	default:
+		return false
+	}
 }
 
 func SanitizeAuditFields(input map[string]any) map[AuditField]any {

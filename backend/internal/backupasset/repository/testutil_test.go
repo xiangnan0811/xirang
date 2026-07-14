@@ -23,7 +23,12 @@ type repositorySettings map[string]string
 var repositorySeedSequence atomic.Uint64
 var repositoryDBSequence atomic.Uint64
 
-func (settings repositorySettings) GetEffective(key string) string { return settings[key] }
+func (settings repositorySettings) GetEffective(key string) string {
+	if value, ok := settings[key]; ok {
+		return value
+	}
+	return repositoryFoundationDefaults[key]
+}
 
 type scriptedProber struct {
 	observation provider.RepositoryObservation
@@ -68,7 +73,7 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
@@ -76,6 +81,8 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_repository_access_bindings_active ON repository_access_bindings(repository_id) WHERE status = 'active'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_repository_links_active_task ON task_repository_links(task_id) WHERE task_id IS NOT NULL AND unlinked_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_points_mutable_head ON recovery_points(repository_id) WHERE semantics = 'mutable_head'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_points_producing_task_run_unique ON recovery_points(producing_task_run_id) WHERE producing_task_run_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_points_native_source_unique ON recovery_points(repository_id, source_fingerprint) WHERE semantics = 'native_snapshot' AND source_fingerprint <> ''`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -86,12 +93,43 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 }
 
 func enabledFoundation() *backupasset.FoundationService {
-	return backupasset.NewFoundationService(repositorySettings{
-		"backup_assets.enabled":                       "true",
-		"backup_assets.provider_operation_timeout":    "2m",
-		"backup_assets.provider_max_concurrency":      "4",
-		"backup_assets.provider_metadata_limit_bytes": "16777216",
-	})
+	return backupasset.NewFoundationService(completeRepositoryFoundationSettings(true))
+}
+
+func completeRepositoryFoundationSettings(enabled bool) repositorySettings {
+	values := make(repositorySettings, len(repositoryFoundationDefaults))
+	for key, value := range repositoryFoundationDefaults {
+		values[key] = value
+	}
+	values["backup_assets.enabled"] = fmt.Sprintf("%t", enabled)
+	return values
+}
+
+var repositoryFoundationDefaults = repositorySettings{
+	"backup_assets.enabled":                          "false",
+	"backup_assets.catalog_batch_size":               "2000",
+	"backup_assets.catalog_build_timeout":            "30m",
+	"backup_assets.repository_reconcile_interval":    "15m",
+	"backup_assets.audit_segment_max_events":         "10000",
+	"backup_assets.audit_segment_max_age":            "24h",
+	"backup_assets.audit_detail_retention_days":      "180",
+	"backup_assets.audit_checkpoint_retention_days":  "2555",
+	"backup_assets.lease_duration":                   "5m",
+	"backup_assets.lease_heartbeat":                  "60s",
+	"backup_assets.lease_absolute_deadline":          "168h",
+	"backup_assets.provider_operation_timeout":       "2m",
+	"backup_assets.provider_max_concurrency":         "4",
+	"backup_assets.provider_metadata_limit_bytes":    "16777216",
+	"backup_assets.publication_reconcile_interval":   "5m",
+	"backup_assets.publication_reconcile_batch_size": "100",
+	"backup_assets.publication_worker_concurrency":   "2",
+	"backup_assets.publication_missing_grace":        "30m",
+	"backup_assets.publication_stream_max_bytes":     "268435456",
+	"backup_assets.manifest_timeout":                 "2h",
+	"backup_assets.manifest_max_bytes":               "4294967296",
+	"backup_assets.manifest_max_entries":             "10000000",
+	"backup_assets.manifest_max_record_bytes":        "1048576",
+	"backup_assets.manifest_max_depth":               "4096",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

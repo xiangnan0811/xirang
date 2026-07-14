@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -26,6 +28,64 @@ func openConfigHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+
+func TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsTransitionSpy{}
+	spy.beforePersist = func() error {
+		if got := svc.GetEffective("backup_assets.enabled"); got != "false" {
+			t.Fatalf("import persisted enabled before transition drain: %q", got)
+		}
+		return nil
+	}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.enabled","value":"true"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(spy.targets) != 1 || !spy.targets[0] || svc.GetEffective("backup_assets.enabled") != "true" {
+		t.Fatalf("transition targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsTransitionSpy{err: errors.New("FAKE_IMPORT_TRANSITION_FAILURE_FOR_TEST_ONLY")}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.enabled","value":"true"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var count int64
+	if err := db.Model(&model.SystemSetting{}).Where("key = ?", "backup_assets.enabled").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || svc.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("failed import persisted enabled override count=%d effective=%q", count, svc.GetEffective("backup_assets.enabled"))
+	}
 }
 
 func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {

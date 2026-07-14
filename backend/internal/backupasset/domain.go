@@ -46,6 +46,7 @@ const (
 	PublicationVersionedFullCopy    TaskPublicationMode = "versioned_full_copy"
 	PublicationVersionedPrefix      TaskPublicationMode = "versioned_prefix"
 	PublicationNativeObjectVersions TaskPublicationMode = "native_object_versions"
+	PublicationNativeSnapshot       TaskPublicationMode = "native_snapshot"
 )
 
 type VersionMode string
@@ -148,12 +149,13 @@ const (
 type LeaseHolderType string
 
 const (
-	LeaseHolderRsyncParent    LeaseHolderType = "rsync_parent"
-	LeaseHolderCatalogBuild   LeaseHolderType = "catalog_build"
-	LeaseHolderContentSession LeaseHolderType = "content_session"
-	LeaseHolderProcessingJob  LeaseHolderType = "processing_job"
-	LeaseHolderExportJob      LeaseHolderType = "export_job"
-	LeaseHolderRecoveryJob    LeaseHolderType = "recovery_job"
+	LeaseHolderRsyncParent      LeaseHolderType = "rsync_parent"
+	LeaseHolderCatalogBuild     LeaseHolderType = "catalog_build"
+	LeaseHolderContentSession   LeaseHolderType = "content_session"
+	LeaseHolderProcessingJob    LeaseHolderType = "processing_job"
+	LeaseHolderExportJob        LeaseHolderType = "export_job"
+	LeaseHolderRecoveryJob      LeaseHolderType = "recovery_job"
+	LeaseHolderPointPublication LeaseHolderType = "point_publication"
 )
 
 type AssetRef struct {
@@ -342,6 +344,9 @@ func MapPublicationMode(provider ProviderKind, mode TaskPublicationMode) (Versio
 		return "", "", "", fmt.Errorf("%w: command task has no artifact contract", ErrCapabilityUnavailable)
 	}
 	if provider == ProviderRestic {
+		if mode != PublicationNativeSnapshot {
+			return "", "", "", fmt.Errorf("%w: Restic requires native_snapshot publication", ErrInvalidState)
+		}
 		return VersionNativeSnapshot, PointNativeSnapshot, RecoveryPointPreparing, nil
 	}
 

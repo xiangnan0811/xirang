@@ -29,7 +29,9 @@ backend/
 ├── internal/auth/              # JWT, password, login lock, TOTP
 ├── internal/backupasset/       # backup asset domain, keyring, audit, state
 │   ├── provider/               # narrow read ports and concrete adapters
-│   └── repository/             # connection, ownership, transaction service
+│   ├── publication/            # provider-neutral publication/admission ports
+│   ├── repository/             # connection, ownership, transaction service
+│   └── runtime/                # single process composition root and worker
 ├── internal/credentialaudit/   # domain credential-use audit event writer
 ├── internal/fileaccess/        # operation-coupled local/SFTP safe reads
 ├── internal/middleware/        # auth, RBAC, audit, metrics, request logging
@@ -72,7 +74,10 @@ backend/
 - Keep backup Repository reads layered: the root `backupasset` package owns
   domain types only; `backupasset/provider` may import the root domain but not
   Gin handlers or `task/executor`; `backupasset/repository` orchestrates the
-  domain and Provider registry; `fileaccess` remains independent of Gin, GORM,
+  domain and Provider registry; `backupasset/publication` holds provider-neutral
+  ports; `backupasset/runtime` is the only composition root below `cmd/server`;
+  Provider must not import runtime, Repository, Task, or API packages;
+  `fileaccess` remains independent of Gin, GORM,
   models, and backup/task packages. Shared SSH auth/dial/runner mechanics stay
   below both Provider and task executor in `sshutil`.
 - Map a Task executor to a backup Provider only in

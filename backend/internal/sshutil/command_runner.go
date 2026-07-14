@@ -51,9 +51,29 @@ type CommandResult struct {
 	Stderr []byte
 }
 
+// CommandCompletion records the joined remote-command outcome. Stderr is
+// intentionally excluded from JSON because callers must keep provider output
+// out of normal logs and serialized state.
+type CommandCompletion struct {
+	ExitCode        int
+	ExitCodeKnown   bool
+	Stderr          []byte `json:"-"`
+	StderrTruncated bool
+}
+
 type CommandReadHandle interface {
 	io.Reader
 	Close() error
+}
+
+// CommandExecutionStream exposes the raw stdout stream until natural EOF, then
+// joins the full SSH lifecycle to report a trustworthy exit status. It is for
+// protocol parsers that must distinguish a valid non-zero exit from an
+// indeterminate transport lifecycle.
+type CommandExecutionStream interface {
+	io.Reader
+	Join() (CommandCompletion, error)
+	Cancel() error
 }
 
 type CommandSession interface {
@@ -341,6 +361,511 @@ func (runner *CommandRunner) Open(ctx context.Context, specification CommandSpec
 		}
 	}()
 	return handle, nil
+}
+
+// OpenExecution opens a command stream whose exit status is available only
+// after stdout reaches natural EOF and the complete SSH lifecycle is joined.
+// Existing Run and Open callers retain their established contracts.
+func (runner *CommandRunner) OpenExecution(ctx context.Context, specification CommandSpec) (CommandExecutionStream, error) {
+	specification, command, err := normalizeCommandSpec(specification)
+	if err != nil {
+		return nil, err
+	}
+	if runner == nil || runner.factory == nil || runner.semaphore == nil {
+		return nil, fmt.Errorf("%w: runner unavailable", ErrCommandFailed)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case runner.semaphore <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("command canceled: %w", ctx.Err())
+	}
+	release := func() { <-runner.semaphore }
+	runContext, cancel := context.WithTimeout(ctx, specification.Timeout)
+	session, err := runner.factory(runContext)
+	if err != nil {
+		cancel()
+		release()
+		return nil, fmt.Errorf("%w: create session", ErrCommandFailed)
+	}
+	if session == nil {
+		cancel()
+		release()
+		return nil, fmt.Errorf("%w: nil session", ErrCommandFailed)
+	}
+	fail := func(cause error) (CommandExecutionStream, error) {
+		cancel()
+		_ = session.Close()
+		release()
+		return nil, cause
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil || stdout == nil {
+		return fail(fmt.Errorf("%w: stdout pipe", ErrCommandFailed))
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil || stderr == nil {
+		return fail(fmt.Errorf("%w: stderr pipe", ErrCommandFailed))
+	}
+	var stdin io.WriteCloser
+	if specification.SecretStdin != nil {
+		stdin, err = session.StdinPipe()
+		if err != nil || stdin == nil {
+			return fail(fmt.Errorf("%w: secret stdin unavailable", ErrCommandFailed))
+		}
+	}
+	if err := session.Start(command); err != nil {
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		return fail(fmt.Errorf("%w: start", ErrCommandFailed))
+	}
+
+	stream := &commandExecution{
+		session:          session,
+		stdout:           stdout,
+		stderr:           stderr,
+		stdin:            stdin,
+		secretStdin:      specification.SecretStdin,
+		parentContext:    ctx,
+		runContext:       runContext,
+		cancel:           cancel,
+		remaining:        specification.MaxStdoutBytes,
+		maxRecordBytes:   specification.MaxRecordBytes,
+		maxStderrBytes:   specification.MaxStderrBytes,
+		release:          release,
+		terminationGrace: runner.terminationGrace,
+		stdinDone:        make(chan struct{}),
+		stderrDone:       make(chan struct{}),
+		waitDone:         make(chan struct{}),
+		allDone:          make(chan struct{}),
+		finished:         make(chan struct{}),
+	}
+	if closer, ok := stdout.(io.Closer); ok {
+		stream.stdoutCloser = closer
+	}
+	if closer, ok := stderr.(io.Closer); ok {
+		stream.stderrCloser = closer
+	}
+	stream.start()
+	return stream, nil
+}
+
+type commandExecution struct {
+	session       CommandSession
+	stdout        io.Reader
+	stderr        io.Reader
+	stdin         io.WriteCloser
+	secretStdin   *SecretStdin
+	stdoutCloser  io.Closer
+	stderrCloser  io.Closer
+	parentContext context.Context
+	runContext    context.Context
+	cancel        context.CancelFunc
+	release       func()
+
+	remaining        int64
+	maxRecordBytes   int
+	maxStderrBytes   int64
+	terminationGrace time.Duration
+
+	stdinDone  chan struct{}
+	stderrDone chan struct{}
+	waitDone   chan struct{}
+	allDone    chan struct{}
+	finished   chan struct{}
+
+	terminateOnce       sync.Once
+	connectionCloseOnce sync.Once
+	finalizeOnce        sync.Once
+	releaseOnce         sync.Once
+
+	mu sync.Mutex
+
+	stdoutLineBytes int
+	stdoutEOF       bool
+	abandoned       bool
+	remainingLimit  error
+	stdoutReadErr   error
+	stderrReadErr   error
+	stdinWriteErr   error
+	stdinCloseErr   error
+	stdoutCloseErr  error
+	stderrCloseErr  error
+	connectionErr   error
+	signalErr       error
+	cleanupErr      error
+	waitErr         error
+	stderrBytes     []byte
+	stderrTruncated bool
+
+	completion CommandCompletion
+	resultErr  error
+}
+
+func (stream *commandExecution) start() {
+	go func() {
+		stream.drainStderr()
+		close(stream.stderrDone)
+	}()
+	go func() {
+		stream.writeStdin()
+		close(stream.stdinDone)
+	}()
+	go func() {
+		stream.setWaitError(stream.session.Wait())
+		close(stream.waitDone)
+	}()
+	go func() {
+		<-stream.stdinDone
+		<-stream.stderrDone
+		<-stream.waitDone
+		close(stream.allDone)
+	}()
+	go func() {
+		select {
+		case <-stream.runContext.Done():
+			stream.terminate()
+		case <-stream.finished:
+		}
+	}()
+}
+
+func (stream *commandExecution) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	stream.mu.Lock()
+	if stream.remainingLimit != nil {
+		err := stream.remainingLimit
+		stream.mu.Unlock()
+		return 0, err
+	}
+	if stream.stdoutReadErr != nil {
+		stream.mu.Unlock()
+		return 0, ErrCommandFailed
+	}
+	remaining := stream.remaining
+	stream.mu.Unlock()
+	if stream.parentContext.Err() != nil {
+		stream.requestTermination()
+		return 0, fmt.Errorf("command canceled: %w", stream.parentContext.Err())
+	}
+	if remaining == 0 {
+		var probe [1]byte
+		count, err := stream.stdout.Read(probe[:])
+		if count > 0 {
+			stream.setOutputLimit()
+			return 0, ErrCommandOutputLimit
+		}
+		if errors.Is(err, io.EOF) {
+			stream.setStdoutEOF()
+			return 0, io.EOF
+		}
+		if err != nil {
+			stream.setStdoutReadError(err)
+			return 0, ErrCommandFailed
+		}
+		return 0, nil
+	}
+	if int64(len(buffer)) > remaining {
+		buffer = buffer[:remaining]
+	}
+	count, err := stream.stdout.Read(buffer)
+	if count > 0 {
+		if stream.advanceStdout(count, buffer[:count]) {
+			stream.setOutputLimit()
+			return count, ErrCommandOutputLimit
+		}
+	}
+	if errors.Is(err, io.EOF) {
+		stream.setStdoutEOF()
+		return count, io.EOF
+	}
+	if err != nil {
+		stream.setStdoutReadError(err)
+		return count, ErrCommandFailed
+	}
+	return count, nil
+}
+
+func (stream *commandExecution) Join() (CommandCompletion, error) {
+	stream.finalize(false)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return copyCommandCompletion(stream.completion), stream.resultErr
+}
+
+func (stream *commandExecution) Cancel() error {
+	stream.finalize(true)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.resultErr
+}
+
+func (stream *commandExecution) finalize(cancelRequested bool) {
+	stream.finalizeOnce.Do(func() {
+		stream.mu.Lock()
+		naturalEOF := stream.stdoutEOF
+		if cancelRequested || !naturalEOF {
+			stream.abandoned = true
+		}
+		abandoned := stream.abandoned
+		stream.mu.Unlock()
+
+		if abandoned {
+			stream.terminate()
+			stream.waitAfterTermination()
+		} else {
+			stream.waitForNaturalCompletion()
+		}
+		stream.closeStreams()
+		stream.closeConnection()
+		close(stream.finished)
+		stream.cancel()
+		stream.releaseOnce.Do(stream.release)
+		stream.mu.Lock()
+		stream.completion, stream.resultErr = stream.classifyLocked()
+		stream.mu.Unlock()
+	})
+}
+
+func (stream *commandExecution) waitForNaturalCompletion() {
+	select {
+	case <-stream.allDone:
+		return
+	case <-stream.runContext.Done():
+		stream.terminate()
+		stream.waitAfterTermination()
+	}
+}
+
+func (stream *commandExecution) waitAfterTermination() {
+	timer := time.NewTimer(CommandExecutionJoinTimeout)
+	defer timer.Stop()
+	select {
+	case <-stream.allDone:
+	case <-timer.C:
+		stream.mu.Lock()
+		if stream.cleanupErr == nil {
+			stream.cleanupErr = ErrCommandFailed
+		}
+		stream.mu.Unlock()
+	}
+}
+
+func (stream *commandExecution) terminate() {
+	stream.terminateOnce.Do(func() {
+		stream.cancel()
+		if err := stream.session.Signal(ssh.SIGTERM); err != nil {
+			stream.mu.Lock()
+			stream.signalErr = err
+			stream.mu.Unlock()
+		}
+		grace := stream.terminationGrace
+		if grace <= 0 {
+			grace = defaultTerminationGrace
+		}
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-stream.allDone:
+		case <-timer.C:
+			stream.closeConnection()
+		}
+	})
+}
+
+func (stream *commandExecution) requestTermination() {
+	go stream.terminate()
+}
+
+func (stream *commandExecution) drainStderr() {
+	buffer := make([]byte, 32<<10)
+	for {
+		count, err := stream.stderr.Read(buffer)
+		if count > 0 {
+			stream.appendStderr(buffer[:count])
+		}
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			stream.mu.Lock()
+			if stream.stderrReadErr == nil {
+				stream.stderrReadErr = err
+			}
+			stream.mu.Unlock()
+			stream.requestTermination()
+			return
+		}
+		if count == 0 {
+			stream.mu.Lock()
+			if stream.stderrReadErr == nil {
+				stream.stderrReadErr = io.ErrNoProgress
+			}
+			stream.mu.Unlock()
+			stream.requestTermination()
+			return
+		}
+	}
+}
+
+func (stream *commandExecution) appendStderr(value []byte) {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	remaining := stream.maxStderrBytes - int64(len(stream.stderrBytes))
+	if remaining <= 0 {
+		stream.stderrTruncated = true
+		return
+	}
+	if int64(len(value)) > remaining {
+		stream.stderrBytes = append(stream.stderrBytes, value[:remaining]...)
+		stream.stderrTruncated = true
+		return
+	}
+	stream.stderrBytes = append(stream.stderrBytes, value...)
+}
+
+func (stream *commandExecution) writeStdin() {
+	if stream.stdin == nil {
+		return
+	}
+	writeErr, closeErr := writeExecutionSecretStdin(stream.stdin, stream.secretStdin)
+	stream.mu.Lock()
+	stream.stdinWriteErr = writeErr
+	stream.stdinCloseErr = closeErr
+	stream.mu.Unlock()
+	if writeErr != nil || closeErr != nil {
+		stream.requestTermination()
+	}
+}
+
+func (stream *commandExecution) closeStreams() {
+	if stream.stdoutCloser != nil {
+		if err := stream.stdoutCloser.Close(); err != nil {
+			stream.mu.Lock()
+			stream.stdoutCloseErr = err
+			stream.mu.Unlock()
+		}
+	}
+	if stream.stderrCloser != nil {
+		if err := stream.stderrCloser.Close(); err != nil {
+			stream.mu.Lock()
+			stream.stderrCloseErr = err
+			stream.mu.Unlock()
+		}
+	}
+}
+
+func (stream *commandExecution) closeConnection() {
+	stream.connectionCloseOnce.Do(func() {
+		if err := stream.session.Close(); err != nil {
+			stream.mu.Lock()
+			stream.connectionErr = err
+			stream.mu.Unlock()
+		}
+	})
+}
+
+func (stream *commandExecution) setWaitError(err error) {
+	stream.mu.Lock()
+	stream.waitErr = err
+	stream.mu.Unlock()
+}
+
+func (stream *commandExecution) setOutputLimit() {
+	stream.mu.Lock()
+	if stream.remainingLimit == nil {
+		stream.remainingLimit = ErrCommandOutputLimit
+	}
+	stream.mu.Unlock()
+	stream.requestTermination()
+}
+
+func (stream *commandExecution) setStdoutReadError(err error) {
+	stream.mu.Lock()
+	if stream.stdoutReadErr == nil {
+		stream.stdoutReadErr = err
+	}
+	stream.mu.Unlock()
+	stream.requestTermination()
+}
+
+func (stream *commandExecution) setStdoutEOF() {
+	stream.mu.Lock()
+	stream.stdoutEOF = true
+	stream.mu.Unlock()
+}
+
+func (stream *commandExecution) advanceStdout(count int, value []byte) bool {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	stream.remaining -= int64(count)
+	if stream.maxRecordBytes <= 0 {
+		return false
+	}
+	for _, current := range value {
+		if current == '\n' {
+			stream.stdoutLineBytes = 0
+			continue
+		}
+		stream.stdoutLineBytes++
+		if stream.stdoutLineBytes > stream.maxRecordBytes {
+			return true
+		}
+	}
+	return false
+}
+
+func (stream *commandExecution) classifyLocked() (CommandCompletion, error) {
+	switch {
+	case stream.parentContext.Err() != nil:
+		return CommandCompletion{}, fmt.Errorf("command canceled: %w", stream.parentContext.Err())
+	case stream.runContext.Err() == context.DeadlineExceeded:
+		return CommandCompletion{}, ErrCommandTimeout
+	case stream.remainingLimit != nil:
+		return CommandCompletion{}, ErrCommandOutputLimit
+	case stream.abandoned || stream.cleanupErr != nil || stream.stdoutReadErr != nil || stream.stderrReadErr != nil ||
+		stream.stdinWriteErr != nil || stream.stdinCloseErr != nil || stream.stdoutCloseErr != nil ||
+		stream.stderrCloseErr != nil || stream.connectionErr != nil || stream.signalErr != nil:
+		return CommandCompletion{}, ErrCommandFailed
+	}
+	completion := CommandCompletion{Stderr: append([]byte(nil), stream.stderrBytes...), StderrTruncated: stream.stderrTruncated}
+	if stream.waitErr == nil {
+		completion.ExitCodeKnown = true
+		return completion, nil
+	}
+	var exitStatusError interface{ ExitStatus() int }
+	if errors.As(stream.waitErr, &exitStatusError) {
+		completion.ExitCode = exitStatusError.ExitStatus()
+		completion.ExitCodeKnown = true
+		return completion, nil
+	}
+	return CommandCompletion{}, ErrCommandFailed
+}
+
+func copyCommandCompletion(value CommandCompletion) CommandCompletion {
+	value.Stderr = append([]byte(nil), value.Stderr...)
+	return value
+}
+
+func writeExecutionSecretStdin(writer io.WriteCloser, secret *SecretStdin) (error, error) {
+	value := append([]byte(nil), secret.Value...)
+	if secret.AppendNewline {
+		value = append(value, '\n')
+	}
+	written, writeErr := writer.Write(value)
+	if writeErr == nil && written != len(value) {
+		writeErr = io.ErrShortWrite
+	}
+	closeErr := writer.Close()
+	for index := range value {
+		value[index] = 0
+	}
+	return writeErr, closeErr
 }
 
 type commandStream struct {

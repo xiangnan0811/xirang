@@ -269,7 +269,7 @@ func TestPublicationModeMapping(t *testing.T) {
 		wantState RecoveryPointState
 		wantErr   error
 	}{
-		{"restic snapshot", ProviderRestic, PublicationLegacyMutable, VersionNativeSnapshot, PointNativeSnapshot, RecoveryPointPreparing, nil},
+		{"restic snapshot", ProviderRestic, PublicationNativeSnapshot, VersionNativeSnapshot, PointNativeSnapshot, RecoveryPointPreparing, nil},
 		{"rsync mutable", ProviderRsync, PublicationLegacyMutable, VersionMutableHead, PointMutableHead, RecoveryPointObserved, nil},
 		{"rclone mutable", ProviderRclone, PublicationLegacyMutable, VersionMutableHead, PointMutableHead, RecoveryPointObserved, nil},
 		{"rsync hardlink", ProviderRsync, PublicationVersionedHardlink, VersionHardlinkTree, PointXirangManifest, RecoveryPointPreparing, nil},
@@ -289,6 +289,25 @@ func TestPublicationModeMapping(t *testing.T) {
 				t.Fatalf("mapping got (%q,%q,%q), want (%q,%q,%q)", gotMode, gotPoint, gotState, tt.wantMode, tt.wantPoint, tt.wantState)
 			}
 		})
+	}
+}
+
+func TestPublicationModeMappingRequiresNativeSnapshotForRestic(t *testing.T) {
+	mode, semantics, state, err := MapPublicationMode(ProviderRestic, PublicationNativeSnapshot)
+	if err != nil {
+		t.Fatalf("map native Restic publication: %v", err)
+	}
+	if mode != VersionNativeSnapshot || semantics != PointNativeSnapshot || state != RecoveryPointPreparing {
+		t.Fatalf("unexpected Restic mapping: %s %s %s", mode, semantics, state)
+	}
+	if _, _, _, err := MapPublicationMode(ProviderRestic, PublicationNativeObjectVersions); err == nil {
+		t.Fatal("Restic accepted the Rclone native-object-version mode")
+	}
+}
+
+func TestPublicationLeaseHolderIsValid(t *testing.T) {
+	if !validLeaseHolderTypes[LeaseHolderPointPublication] {
+		t.Fatal("point_publication lease holder is not valid")
 	}
 }
 
