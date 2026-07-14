@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-07-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~608 | Active |
+| `journal-1.md` | ~645 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-07-14 | Restic exact lineage and recovery-point publication | `41c5f9a137389167ef2a1790f18ee5c28797bc5c`, `357e784e50fab42fc795d259695b9a92c64a2fde`, `bff502b220ee81c0f79460305c561672ccc1cbbe`, `f2818a9b94aeaa203b256dedf0a7ed54206d8d3b`, `b9f6e84605515806c13a78f3b21c9479bf1893a4` | `codex/backup-assets-restic-lineage` |
 | 17 | 2026-07-14 | Complete backup repository read adapters | `a6a9b2d` | `codex/backup-assets-provider-readers` |
 | 16 | 2026-07-13 | Child 1 备份资产领域基础交付与归档 | `9d8215f8d18d70e522cb8965ccb584d0a0f5162a` | `codex/archive-backup-assets-domain-foundation` |
 | 15 | 2026-07-12 | 完成全仓审计整改已落地批次 | `927e541`, `5e40b00`, `89f85cf`, `47aeac7` | `fix/07-11-audit-p1-security` |
