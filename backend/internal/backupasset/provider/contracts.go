@@ -219,24 +219,139 @@ type RangeReader interface {
 	OpenRange(context.Context, ReadSnapshot, PointLocator, EntryLocator, ByteRange) (ReadHandle, ContentStat, error)
 }
 
-type PublicationAttempt struct{}
-type ProviderCommitEvidence struct{}
-type RepositoryRef struct{}
-type ManifestStream interface{ io.ReadCloser }
-type FencingToken string
+type PublicationAttempt struct {
+	Provider             backupasset.ProviderKind
+	RepositoryID         string
+	RepositoryIdentity   string `json:"-"`
+	TaskRepositoryLinkID string
+	RecoveryPointID      string
+	TaskID               uint
+	TaskRunID            uint
+	RequiredTags         [2]string `json:"-"`
+	PointDeadlineAt      time.Time
+	CapabilityRevision   int
+	AdapterRevision      string
+	Audit                backupasset.PublicationAuditContext `json:"-"`
+	Access               AccessBinding                       `json:"-"`
+	Fence                backupasset.LeaseFence              `json:"-"`
+}
 
-type PointPublisher interface {
-	Publish(context.Context, PublicationAttempt) (ProviderCommitEvidence, error)
+type ProviderCommitEvidence struct {
+	Provider           backupasset.ProviderKind
+	RepositoryIdentity string `json:"-"`
+	NativePointID      string `json:"-"`
+	CaptureStartedAt   time.Time
+	CaptureFinishedAt  time.Time
+	FilesProcessed     uint64
+	LogicalBytes       uint64
+}
+
+type ResticBackupInput struct {
+	Source   string   `json:"-"`
+	Excludes []string `json:"-"`
+}
+
+type ResticBackupProgress struct {
+	ObservedAt     time.Time
+	Percent        int
+	ThroughputMbps float64
+	FilesDone      uint64
+}
+
+type ResticBackupResult struct {
+	ExitCode       int
+	Completion     backupasset.ProviderCompletionClass
+	ProviderCommit *ProviderCommitEvidence
+	EvidenceCode   backupasset.PublicationFailureCode
+}
+
+const UnknownProviderExitCode = -1
+
+type ResticStoredSummary struct {
+	BackupStartedAt  time.Time
+	BackupFinishedAt time.Time
+	FilesProcessed   uint64
+	LogicalBytes     uint64
+}
+
+type ResticSnapshotObservation struct {
+	RepositoryIdentity string `json:"-"`
+	NativePointID      string `json:"-"`
+	SnapshotTime       time.Time
+	Tags               []string `json:"-"`
+	OriginalPresent    bool
+	Original           *string `json:"-"`
+	Summary            *ResticStoredSummary
+}
+
+type ManifestLimits struct {
+	Timeout        time.Duration
+	MaxBytes       int64
+	MaxEntries     int64
+	MaxRecordBytes int
+	MaxDepth       int
+}
+
+type ResticManifestFidelity struct {
+	Version     int       `json:"version"`
+	Profile     string    `json:"profile"`
+	Included    [7]string `json:"included"`
+	CommitBound [3]string `json:"commit_bound"`
+	NotExposed  [7]string `json:"not_exposed"`
+}
+
+func ResticManifestFidelityV1() ResticManifestFidelity {
+	return ResticManifestFidelity{
+		Version: 1,
+		Profile: "restic_ls_json_v1",
+		Included: [7]string{
+			"path_name", "native_type", "regular_file_size", "mode", "uid_gid", "mtime_atime_ctime", "inode",
+		},
+		CommitBound: [3]string{"repository_identity", "full_snapshot_id", "required_tags"},
+		NotExposed: [7]string{
+			"link_target", "xattrs", "generic_attributes", "device_link_counts", "content_blob_ids", "subtree_ids", "acl_security_descriptors",
+		},
+	}
+}
+
+type ManifestEvidence struct {
+	DigestAlgorithm   string
+	Digest            string
+	Generator         string
+	GeneratorVersion  string
+	Completeness      backupasset.ManifestCompleteness
+	EntryCount        int64
+	LogicalBytes      int64
+	Fidelity          ResticManifestFidelity
+	HeaderCapturedAt  time.Time
+	ObservedTagDigest string
+	FailureCode       backupasset.PublicationFailureCode
+}
+
+type ResticPublisher interface {
+	Backup(context.Context, PublicationAttempt, ResticBackupInput, func(ResticBackupProgress)) (ResticBackupResult, error)
+	LookupAttempt(context.Context, PublicationAttempt) ([]ResticSnapshotObservation, error)
 }
 
 type ManifestBuilder interface {
-	BuildManifest(context.Context, RepositoryRef, PointLocator) (ManifestStream, error)
+	BuildManifest(context.Context, PublicationAttempt, ProviderCommitEvidence, ManifestLimits) (ManifestEvidence, error)
 }
 
-type RepositoryReconciler interface {
-	Reconcile(context.Context, RepositoryRef) (RepositoryObservation, error)
+type CommandCompletion struct {
+	ExitCode        int
+	ExitCodeKnown   bool
+	Stderr          []byte `json:"-"`
+	StderrTruncated bool
 }
 
-type PointDeleter interface {
-	DeletePoint(context.Context, RepositoryRef, PointLocator, FencingToken) error
+type CommandExecution interface {
+	io.Reader
+	Join() (CommandCompletion, error)
+	Cancel() error
 }
+
+type CommandStreamTransport interface {
+	OpenExecution(context.Context, CommandInvocation, OperationLimits, int64) (CommandExecution, error)
+}
+
+type PublicationConfigSource func() (backupasset.PublicationConfig, error)

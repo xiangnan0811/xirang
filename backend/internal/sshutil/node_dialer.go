@@ -21,6 +21,7 @@ type DialAuditContext struct {
 	Username      string
 	Role          string
 	TaskID        *uint
+	TaskRunID     *uint
 }
 
 const (
@@ -154,6 +155,7 @@ func (dialer *NodeDialer) writeAudit(auditContext DialAuditContext, nodeID uint,
 		SSHKeyID:         credential.KeyID,
 		NodeID:           credentialaudit.PtrUint(nodeID),
 		TaskID:           auditContext.TaskID,
+		TaskRunID:        auditContext.TaskRunID,
 		Outcome:          outcome,
 		Metadata:         metadata,
 	}
@@ -179,6 +181,8 @@ func repositoryCredentialAction(purpose string) (string, bool) {
 		return "repository.list", true
 	case PurposeRepositoryRead:
 		return "repository.read", true
+	case PurposeTaskBackup:
+		return "task.credential.use", true
 	default:
 		return "", false
 	}

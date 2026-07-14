@@ -23,9 +23,11 @@ type CommandOperation string
 type CommandPurpose string
 
 const (
-	CommandPurposeProbe CommandPurpose = "probe"
-	CommandPurposeList  CommandPurpose = "list"
-	CommandPurposeRead  CommandPurpose = "read"
+	CommandPurposeProbe    CommandPurpose = "probe"
+	CommandPurposeList     CommandPurpose = "list"
+	CommandPurposeRead     CommandPurpose = "read"
+	CommandPurposePublish  CommandPurpose = "publish"
+	CommandPurposeManifest CommandPurpose = "manifest"
 )
 
 const (
@@ -33,17 +35,20 @@ const (
 	ToolRclone     CommandTool = "rclone"
 	ToolRemoteFind CommandTool = "remote_find"
 
-	OperationResticVersion   CommandOperation = "restic_version"
-	OperationResticConfig    CommandOperation = "restic_config"
-	OperationResticSnapshots CommandOperation = "restic_snapshots"
-	OperationResticList      CommandOperation = "restic_list"
-	OperationResticDump      CommandOperation = "restic_dump"
-	OperationRcloneVersion   CommandOperation = "rclone_version"
-	OperationRcloneFeatures  CommandOperation = "rclone_features"
-	OperationRcloneList      CommandOperation = "rclone_list"
-	OperationRcloneStat      CommandOperation = "rclone_stat"
-	OperationRcloneCat       CommandOperation = "rclone_cat"
-	OperationRemoteEnumerate CommandOperation = "remote_enumerate"
+	OperationResticVersion         CommandOperation = "restic_version"
+	OperationResticConfig          CommandOperation = "restic_config"
+	OperationResticSnapshots       CommandOperation = "restic_snapshots"
+	OperationResticList            CommandOperation = "restic_list"
+	OperationResticDump            CommandOperation = "restic_dump"
+	OperationResticBackup          CommandOperation = "restic_backup"
+	OperationResticSnapshotsByTags CommandOperation = "restic_snapshots_by_tags"
+	OperationResticManifest        CommandOperation = "restic_manifest"
+	OperationRcloneVersion         CommandOperation = "rclone_version"
+	OperationRcloneFeatures        CommandOperation = "rclone_features"
+	OperationRcloneList            CommandOperation = "rclone_list"
+	OperationRcloneStat            CommandOperation = "rclone_stat"
+	OperationRcloneCat             CommandOperation = "rclone_cat"
+	OperationRemoteEnumerate       CommandOperation = "remote_enumerate"
 )
 
 type CommandInvocation struct {
@@ -65,7 +70,8 @@ func (invocation CommandInvocation) Validate() error {
 	allowed := map[CommandTool]map[CommandOperation]bool{
 		ToolRestic: {
 			OperationResticVersion: true, OperationResticConfig: true, OperationResticSnapshots: true,
-			OperationResticList: true, OperationResticDump: true,
+			OperationResticList: true, OperationResticDump: true, OperationResticBackup: true,
+			OperationResticSnapshotsByTags: true, OperationResticManifest: true,
 		},
 		ToolRclone: {
 			OperationRcloneVersion: true, OperationRcloneFeatures: true, OperationRcloneList: true,
@@ -85,13 +91,13 @@ func (invocation CommandInvocation) Validate() error {
 			return fmt.Errorf("%w: invalid command operand", ErrUnsafeInvocation)
 		}
 	}
-	if !validReadOnlyInvocation(invocation) {
-		return fmt.Errorf("%w: command operands do not match the registered read-only operation", ErrUnsafeInvocation)
+	if !validCommandInvocation(invocation) {
+		return fmt.Errorf("%w: command operands do not match the registered operation", ErrUnsafeInvocation)
 	}
 	return nil
 }
 
-func validReadOnlyInvocation(invocation CommandInvocation) bool {
+func validCommandInvocation(invocation CommandInvocation) bool {
 	arguments := invocation.Args
 	switch invocation.Tool {
 	case ToolRestic:
@@ -108,6 +114,12 @@ func validReadOnlyInvocation(invocation CommandInvocation) bool {
 		case OperationResticDump:
 			return len(invocation.SecretStdin) > 0 && len(arguments) == 6 && equalArguments(arguments[:4], "--password-file", "/dev/stdin", "dump", "--") &&
 				lowerHex(arguments[4], 64) && arguments[5] != ""
+		case OperationResticBackup:
+			return invocation.Purpose == CommandPurposePublish && len(invocation.SecretStdin) > 0 && validResticBackupArguments(arguments)
+		case OperationResticSnapshotsByTags:
+			return invocation.Purpose == CommandPurposeManifest && len(invocation.SecretStdin) > 0 && validResticSnapshotsByTagsArguments(arguments)
+		case OperationResticManifest:
+			return invocation.Purpose == CommandPurposeManifest && len(invocation.SecretStdin) > 0 && validResticManifestArguments(arguments)
 		}
 	case ToolRclone:
 		if invocation.Operation == OperationRcloneVersion {
@@ -150,6 +162,56 @@ func validRcloneCatArguments(arguments []string) bool {
 		canonicalInteger(arguments[4], false) && arguments[5] == "--"
 }
 
+func validResticBackupArguments(arguments []string) bool {
+	if len(arguments) < 10 || !equalArguments(arguments[:4], "--password-file", "/dev/stdin", "backup", "--json") {
+		return false
+	}
+	index := 4
+	for tag := 0; tag < 2; tag++ {
+		if index+1 >= len(arguments) || arguments[index] != "--tag" || !validGeneratedResticTag(arguments[index+1], tag) {
+			return false
+		}
+		index += 2
+	}
+	for index+2 < len(arguments) && arguments[index] == "--exclude" {
+		if !validResticExclude(arguments[index+1]) {
+			return false
+		}
+		index += 2
+	}
+	return index+2 == len(arguments) && arguments[index] == "--" && validResticAbsoluteSource(arguments[index+1])
+}
+
+func validResticSnapshotsByTagsArguments(arguments []string) bool {
+	if len(arguments) != 6 || !equalArguments(arguments[:5], "--password-file", "/dev/stdin", "snapshots", "--json", "--tag") {
+		return false
+	}
+	tags := strings.Split(arguments[5], ",")
+	return len(tags) == 2 && validGeneratedResticTag(tags[0], 0) && validGeneratedResticTag(tags[1], 1)
+}
+
+func validResticManifestArguments(arguments []string) bool {
+	return len(arguments) == 8 && equalArguments(arguments[:6], "--password-file", "/dev/stdin", "ls", "--json", "--recursive", "--") &&
+		lowerHex(arguments[6], 64) && arguments[7] == "/"
+}
+
+func validGeneratedResticTag(value string, index int) bool {
+	prefix := "xirang.link.v1."
+	if index == 1 {
+		prefix = "xirang.point.v1."
+	}
+	return !strings.ContainsRune(value, ',') && len(value) == len(prefix)+32 && strings.HasPrefix(value, prefix) &&
+		lowerHex(strings.TrimPrefix(value, prefix), 32)
+}
+
+func validResticExclude(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value && len(value) <= 4096 && !strings.ContainsRune(value, '\x00')
+}
+
+func validResticAbsoluteSource(value string) bool {
+	return value != "" && path.IsAbs(value) && path.Clean(value) == value && !strings.ContainsRune(value, '\x00')
+}
+
 func canonicalInteger(value string, allowZero bool) bool {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < 0 || (!allowZero && parsed == 0) {
@@ -189,6 +251,10 @@ type ToolBinaries struct {
 type remoteCommandRunner interface {
 	Run(context.Context, sshutil.CommandSpec) (sshutil.CommandResult, error)
 	Open(context.Context, sshutil.CommandSpec) (sshutil.CommandReadHandle, error)
+}
+
+type remoteCommandExecutionRunner interface {
+	OpenExecution(context.Context, sshutil.CommandSpec) (sshutil.CommandExecutionStream, error)
 }
 
 type remoteCommandRunnerFactory func(context.Context, RemoteCommandAccess, string) (remoteCommandRunner, io.Closer, error)
@@ -392,6 +458,49 @@ func (transport *SSHCommandTransport) Open(ctx context.Context, invocation Comma
 	return &transportReadHandle{underlying: handle, closer: closer, release: transport.release}, nil
 }
 
+func (transport *SSHCommandTransport) OpenExecution(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (CommandExecution, error) {
+	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := transport.acquire(ctx); err != nil {
+		return nil, err
+	}
+	runner, closer, err := transport.factory(ctx, access, purpose)
+	if err != nil {
+		transport.release()
+		return nil, err
+	}
+	if runner == nil || closer == nil {
+		if closer != nil {
+			_ = closer.Close()
+		}
+		transport.release()
+		return nil, fmt.Errorf("%w: remote command runner unavailable", backupasset.ErrProviderUnavailable)
+	}
+	executionRunner, ok := runner.(remoteCommandExecutionRunner)
+	if !ok {
+		_ = closer.Close()
+		transport.release()
+		return nil, fmt.Errorf("%w: remote command execution runner unavailable", backupasset.ErrProviderUnavailable)
+	}
+	execution, err := executionRunner.OpenExecution(ctx, specification)
+	if err != nil {
+		_ = closer.Close()
+		transport.release()
+		return nil, err
+	}
+	if execution == nil {
+		_ = closer.Close()
+		transport.release()
+		return nil, fmt.Errorf("%w: nil remote command execution", backupasset.ErrProviderUnavailable)
+	}
+	return &transportExecution{underlying: execution, closer: closer, release: transport.release}, nil
+}
+
 func (transport *SSHCommandTransport) commandSpec(invocation CommandInvocation, limits OperationLimits, maxStdoutBytes int64) (sshutil.CommandSpec, RemoteCommandAccess, string, error) {
 	if transport == nil || transport.factory == nil || transport.gate == nil || invocation.Validate() != nil || limits.Validate() != nil || maxStdoutBytes <= 0 || invocation.Runtime == nil || invocation.Runtime.Node.ID == 0 {
 		return sshutil.CommandSpec{}, RemoteCommandAccess{}, "", fmt.Errorf("%w: incomplete remote invocation", ErrUnsafeInvocation)
@@ -459,6 +568,10 @@ func sshPurpose(purpose CommandPurpose) (string, bool) {
 		return sshutil.PurposeRepositoryList, true
 	case CommandPurposeRead:
 		return sshutil.PurposeRepositoryRead, true
+	case CommandPurposePublish:
+		return sshutil.PurposeTaskBackup, true
+	case CommandPurposeManifest:
+		return sshutil.PurposeRepositoryList, true
 	default:
 		return "", false
 	}
@@ -496,7 +609,58 @@ func (handle *transportReadHandle) Close() error {
 	return handle.err
 }
 
+type transportExecution struct {
+	underlying sshutil.CommandExecutionStream
+	closer     io.Closer
+	release    func()
+
+	once       sync.Once
+	completion CommandCompletion
+	err        error
+}
+
+func (execution *transportExecution) Read(buffer []byte) (int, error) {
+	return execution.underlying.Read(buffer)
+}
+
+func (execution *transportExecution) Join() (CommandCompletion, error) {
+	execution.finish(false)
+	return copyProviderCommandCompletion(execution.completion), execution.err
+}
+
+func (execution *transportExecution) Cancel() error {
+	execution.finish(true)
+	return execution.err
+}
+
+func (execution *transportExecution) finish(cancel bool) {
+	execution.once.Do(func() {
+		var completion sshutil.CommandCompletion
+		if cancel {
+			execution.err = execution.underlying.Cancel()
+		} else {
+			completion, execution.err = execution.underlying.Join()
+			execution.completion = CommandCompletion{
+				ExitCode:        completion.ExitCode,
+				ExitCodeKnown:   completion.ExitCodeKnown,
+				Stderr:          append([]byte(nil), completion.Stderr...),
+				StderrTruncated: completion.StderrTruncated,
+			}
+		}
+		if closeErr := execution.closer.Close(); execution.err == nil && closeErr != nil {
+			execution.err = fmt.Errorf("%w: close remote command connection", backupasset.ErrProviderUnavailable)
+		}
+		execution.release()
+	})
+}
+
+func copyProviderCommandCompletion(value CommandCompletion) CommandCompletion {
+	value.Stderr = append([]byte(nil), value.Stderr...)
+	return value
+}
+
 var _ CommandTransport = (*SSHCommandTransport)(nil)
+var _ CommandStreamTransport = (*SSHCommandTransport)(nil)
 
 func mapCommandTransportError(ctx context.Context, err error) error {
 	if ctx != nil && ctx.Err() != nil {

@@ -1,0 +1,13 @@
+[
+  {
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-07-14T11:00:00+08:00",
+    "tags": ["xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    "summary": {
+      "backup_start": "2026-07-14T11:00:00+08:00",
+      "backup_end": "2026-07-14T11:00:02.123456789+08:00",
+      "total_files_processed": 7,
+      "total_bytes_processed": 16384
+    }
+  }
+]
