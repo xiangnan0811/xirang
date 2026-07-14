@@ -308,3 +308,15 @@ func TestResticBinaryCustom(t *testing.T) {
 		t.Fatalf("期望 restic 二进制 = /usr/local/bin/restic，实际 = %s", bin)
 	}
 }
+
+func TestResticLinkTagValidationAcceptsOnlyCanonicalTaskLinkTags(t *testing.T) {
+	valid := "xirang.link.v1.0123456789abcdef0123456789abcdef"
+	if !validResticLinkTag(valid) {
+		t.Fatalf("canonical link tag %q was rejected", valid)
+	}
+	for _, tag := range []string{"", "xirang.point.v1.0123456789abcdef0123456789abcdef", valid + ",other", "xirang.link.v1.UPPERCASE0123456789abcdef"} {
+		if validResticLinkTag(tag) {
+			t.Fatalf("noncanonical link tag %q was accepted", tag)
+		}
+	}
+}

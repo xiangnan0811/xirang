@@ -7,6 +7,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 
 	"gorm.io/gorm"
 )
@@ -22,6 +23,9 @@ type Dependencies struct {
 	Keyring    *backupasset.Keyring
 	Now        func() time.Time
 	Audit      AssetAuditSink
+	Admission  publication.Admission
+	History    *ManagedHistoryResolver
+	Metrics    publication.Metrics
 }
 
 type Service struct {
@@ -31,6 +35,9 @@ type Service struct {
 	keyring    *backupasset.Keyring
 	now        func() time.Time
 	audit      AssetAuditSink
+	admission  publication.Admission
+	history    *ManagedHistoryResolver
+	metrics    publication.Metrics
 }
 
 func NewService(dependencies Dependencies) (*Service, error) {
@@ -40,7 +47,10 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring, now: dependencies.Now, audit: dependencies.Audit}, nil
+	return &Service{
+		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring,
+		now: dependencies.Now, audit: dependencies.Audit, admission: dependencies.Admission, history: dependencies.History, metrics: dependencies.Metrics,
+	}, nil
 }
 
 func (service *Service) ensureEnabled(correlationID string) error {

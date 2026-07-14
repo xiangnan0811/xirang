@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/anomaly"
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -636,6 +639,201 @@ func (e *failingExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFun
 type failingRestoreExecutor struct {
 	err   error
 	calls int32
+}
+
+type legacyLineageSessionFake struct {
+	publication.LineageSession
+	mode   publication.LineageMode
+	closed int32
+}
+
+func (session *legacyLineageSessionFake) Mode() publication.LineageMode {
+	return session.mode
+}
+
+func (session *legacyLineageSessionFake) Close() error {
+	atomic.AddInt32(&session.closed, 1)
+	return nil
+}
+
+type legacyLineageGuardFake struct {
+	session   publication.LineageSession
+	err       error
+	calls     int
+	operation publication.ResticOperation
+}
+
+func (guard *legacyLineageGuardFake) Begin(_ context.Context, _ uint, operation publication.ResticOperation) (publication.LineageSession, error) {
+	guard.calls++
+	guard.operation = operation
+	return guard.session, guard.err
+}
+
+type legacyBlockRecorderFake struct {
+	blocks []publication.LegacyBlock
+	err    error
+}
+
+func (recorder *legacyBlockRecorderFake) RecordLegacyBlock(_ context.Context, block publication.LegacyBlock) error {
+	recorder.blocks = append(recorder.blocks, block)
+	return recorder.err
+}
+
+type trackingRestoreExecutor struct {
+	calls int32
+	err   error
+}
+
+func (executor *trackingRestoreExecutor) Run(context.Context, model.Task, taskexec.LogFunc, taskexec.ProgressFunc) (int, error) {
+	return 0, nil
+}
+
+func (executor *trackingRestoreExecutor) RunRestore(context.Context, model.Task, taskexec.LogFunc, taskexec.ProgressFunc) (int, error) {
+	atomic.AddInt32(&executor.calls, 1)
+	return 1, executor.err
+}
+
+var _ publication.LineageGuard = (*legacyLineageGuardFake)(nil)
+var _ publication.LegacyBlockRecorder = (*legacyBlockRecorderFake)(nil)
+var _ taskexec.RestoreExecutor = (*trackingRestoreExecutor)(nil)
+
+func TestManagedResticRestoreLatestBlockedBeforeCredentialAndSSH(t *testing.T) {
+	db := openManagerTestDB(t)
+	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
+	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+
+	session := &legacyLineageSessionFake{mode: publication.LineageExact}
+	guard := &legacyLineageGuardFake{session: session}
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLineageGuard(guard)
+	manager.SetLegacyBlockRecorder(recorder)
+	var precheckCalls int32
+	manager.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		atomic.AddInt32(&precheckCalls, 1)
+		return nil
+	}
+
+	manager.runRestoreTask(taskEntity.ID, runID, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRestoreLatest {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&precheckCalls); got != 0 {
+		t.Fatalf("managed restore reached remote precheck %d time(s)", got)
+	}
+	if got := atomic.LoadInt32(&restoreExecutor.calls); got != 0 {
+		t.Fatalf("managed restore reached executor %d time(s)", got)
+	}
+	if len(recorder.blocks) != 1 {
+		t.Fatalf("legacy blocks=%d, want 1", len(recorder.blocks))
+	}
+	block := recorder.blocks[0]
+	if block.TaskID != taskEntity.ID || block.TaskRunID == nil || *block.TaskRunID != runID || block.Operation != publication.OperationLegacyRestoreLatest {
+		t.Fatalf("unexpected legacy block: %+v", block)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("session close count=%d, want 1", got)
+	}
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatalf("load restore run: %v", err)
+	}
+	if run.Status != "failed" || run.LastError != string("legacy_operation_blocked") {
+		t.Fatalf("managed restore run status=%q last_error=%q", run.Status, run.LastError)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+func TestPristineResticRestoreLatestRetainsCompatibility(t *testing.T) {
+	db := openManagerTestDB(t)
+	restoreExecutor := &trackingRestoreExecutor{err: errors.New("expected compatibility restore failure")}
+	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+
+	session := &legacyLineageSessionFake{mode: publication.LineageCompatibility}
+	guard := &legacyLineageGuardFake{session: session}
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLineageGuard(guard)
+	manager.SetLegacyBlockRecorder(recorder)
+	var precheckCalls int32
+	manager.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		atomic.AddInt32(&precheckCalls, 1)
+		return nil
+	}
+
+	manager.runRestoreTask(taskEntity.ID, runID, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRestoreLatest {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&precheckCalls); got != 1 {
+		t.Fatalf("pristine restore precheck calls=%d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&restoreExecutor.calls); got != 1 {
+		t.Fatalf("pristine restore executor calls=%d, want 1", got)
+	}
+	if len(recorder.blocks) != 0 {
+		t.Fatalf("pristine restore recorded %d legacy blocks", len(recorder.blocks))
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("session close count=%d, want 1", got)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+type exactAnomalySinkFake struct {
+	findings []anomaly.Finding
+}
+
+func (sink *exactAnomalySinkFake) Raise(_ context.Context, finding anomaly.Finding) error {
+	sink.findings = append(sink.findings, finding)
+	return nil
+}
+
+func TestManagerObserveCommittedDispatchesExactAnomalyBestEffort(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
+		t.Fatal(err)
+	}
+	currentID := strings.Repeat("a", 64)
+	previousID := strings.Repeat("b", 64)
+	var calls int
+	manager.SetExactAnomalyAnalyzer(func(_ context.Context, task model.Task, runID uint, current, previous string) ([]anomaly.Finding, error) {
+		calls++
+		if task.ID != taskEntity.ID || runID != 17 || current != currentID || previous != previousID {
+			t.Fatalf("exact anomaly request task=%d run=%d current=%q previous=%q", task.ID, runID, current, previous)
+		}
+		return []anomaly.Finding{{NodeID: task.NodeID, Detector: "snapshot_diff", Metric: "snapshot_churn"}}, nil
+	})
+	sink := &exactAnomalySinkFake{}
+	manager.SetAnomalySink(sink)
+
+	manager.ObserveCommitted(context.Background(), publication.Outcome{
+		TaskID: taskEntity.ID, TaskRunID: 17, State: backupasset.RecoveryPointCommitted,
+		NativePointID: currentID, PreviousNativePointID: previousID,
+	})
+
+	if calls != 1 || len(sink.findings) != 1 {
+		t.Fatalf("exact analyzer calls=%d findings=%+v", calls, sink.findings)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
 }
 
 func (e *failingRestoreExecutor) Run(_ context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {

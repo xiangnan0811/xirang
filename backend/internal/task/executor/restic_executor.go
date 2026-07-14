@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -29,7 +33,75 @@ type ResticConfig struct {
 //   - task.RsyncTarget = restic 仓库路径（如 /backup/repo 或 sftp:user@host:/backup）
 //   - task.ExecutorConfig = JSON，含 repository_password 和 exclude_patterns
 type ResticExecutor struct {
-	binary string // restic 二进制名称，默认 "restic"
+	binary    string // restic 二进制名称，默认 "restic"
+	publisher provider.ResticPublisher
+}
+
+type resticEvidenceConfig struct {
+	ExcludePatterns []string `json:"exclude_patterns"`
+}
+
+// RunWithEvidence uses the Provider-owned Restic command lane. It must never
+// initialize repositories, construct password files, or read legacy access
+// secrets from a Task configuration.
+func (e *ResticExecutor) RunWithEvidence(ctx context.Context, request EvidenceExecutionRequest, logf LogFunc, progressf ProgressFunc) (EvidenceExecutionResult, error) {
+	if e == nil || e.publisher == nil || request.TaskRunID == 0 || request.Task.ID == 0 ||
+		request.Task.ID != request.Attempt.TaskID || request.TaskRunID != request.Attempt.TaskRunID ||
+		request.Attempt.Provider != backupasset.ProviderRestic || strings.ToLower(strings.TrimSpace(request.Task.ExecutorType)) != "restic" {
+		return EvidenceExecutionResult{}, fmt.Errorf("%w: Restic evidence executor unavailable", backupasset.ErrInvalidState)
+	}
+	config, err := parseResticEvidenceConfig(request.Task.ExecutorConfig)
+	if err != nil {
+		return EvidenceExecutionResult{}, fmt.Errorf("parse Restic evidence config: %w", err)
+	}
+	if logf != nil {
+		logf("info", "开始受管 restic 证据备份")
+	}
+	result, runErr := e.publisher.Backup(ctx, request.Attempt, provider.ResticBackupInput{
+		Source:   strings.TrimSpace(request.Task.RsyncSource),
+		Excludes: append([]string(nil), config.ExcludePatterns...),
+	}, func(progress provider.ResticBackupProgress) {
+		if progressf != nil {
+			progressf(ProgressSample{ObservedAt: progress.ObservedAt, Percent: progress.Percent, ThroughputMbps: progress.ThroughputMbps})
+		}
+	})
+	if logf != nil {
+		if runErr == nil {
+			logf("info", "受管 restic 证据备份已结束")
+		} else {
+			logf("warn", "受管 restic 证据备份未确认")
+		}
+	}
+	return EvidenceExecutionResult{
+		ExitCode: result.ExitCode, Completion: result.Completion, ProviderCommit: result.ProviderCommit, EvidenceCode: result.EvidenceCode,
+	}, runErr
+}
+
+func parseResticEvidenceConfig(raw string) (resticEvidenceConfig, error) {
+	if len(raw) > maxResticEvidenceConfigBytes {
+		return resticEvidenceConfig{}, fmt.Errorf("%w: Restic evidence config exceeds byte limit", backupasset.ErrInvalidState)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return resticEvidenceConfig{}, nil
+	}
+	decoder := json.NewDecoder(io.LimitReader(strings.NewReader(raw), maxResticEvidenceConfigBytes+1))
+	var config resticEvidenceConfig
+	if err := decoder.Decode(&config); err != nil {
+		return resticEvidenceConfig{}, fmt.Errorf("%w: invalid Restic evidence config", backupasset.ErrInvalidState)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return resticEvidenceConfig{}, fmt.Errorf("%w: Restic evidence config has trailing data", backupasset.ErrInvalidState)
+	}
+	if len(config.ExcludePatterns) > maxResticEvidenceExcludes {
+		return resticEvidenceConfig{}, fmt.Errorf("%w: too many Restic evidence excludes", backupasset.ErrInvalidState)
+	}
+	for _, pattern := range config.ExcludePatterns {
+		if !utf8.ValidString(pattern) || len(pattern) > maxResticEvidenceExcludeBytes || strings.ContainsRune(pattern, '\x00') {
+			return resticEvidenceConfig{}, fmt.Errorf("%w: invalid Restic evidence exclude", backupasset.ErrInvalidState)
+		}
+	}
+	return config, nil
 }
 
 func (e *ResticExecutor) resticBinary() string {
@@ -308,6 +380,19 @@ type ResticEntry struct {
 
 // ListSnapshots 列出 restic 仓库中的所有快照。
 func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]ResticSnapshot, error) {
+	return e.listSnapshots(ctx, task, "")
+}
+
+// ListSnapshotsByLinkTag lists only snapshots carrying the canonical immutable
+// task-link marker. The tag is internal lineage data, never client input.
+func (e *ResticExecutor) ListSnapshotsByLinkTag(ctx context.Context, task model.Task, linkTag string) ([]ResticSnapshot, error) {
+	if !validResticLinkTag(linkTag) {
+		return nil, fmt.Errorf("invalid Restic task-link tag")
+	}
+	return e.listSnapshots(ctx, task, linkTag)
+}
+
+func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, linkTag string) ([]ResticSnapshot, error) {
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" {
 		return nil, fmt.Errorf("restic 仓库路径为空")
@@ -338,6 +423,9 @@ func (e *ResticExecutor) ListSnapshots(ctx context.Context, task model.Task) ([]
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
+	if linkTag != "" {
+		cmd += " --tag " + ShellEscape(linkTag)
+	}
 	output, err := RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("获取快照列表失败: %w, 输出: %s", err, sanitizeExecutorRuntimeOutput(output))
@@ -446,6 +534,42 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 	return nil
 }
 
+// RunSnapshotDiff executes the legacy Restic diff command behind a narrow
+// port. Callers in managed mode must pass full IDs resolved by LineageSession.
+func (e *ResticExecutor) RunSnapshotDiff(ctx context.Context, task model.Task, leftSnapshotID, rightSnapshotID string) (string, error) {
+	if !validResticSnapshotReference(leftSnapshotID) || !validResticSnapshotReference(rightSnapshotID) {
+		return "", fmt.Errorf("invalid Restic snapshot reference")
+	}
+	repo := strings.TrimSpace(task.RsyncTarget)
+	if repo == "" {
+		return "", fmt.Errorf("restic 仓库路径为空")
+	}
+	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
+	if err != nil {
+		return "", fmt.Errorf("解析 restic 配置失败: %w", err)
+	}
+	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeSnapshotDiff)
+	if err != nil {
+		return "", fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort remote close
+	pwFilePath := BuildResticPasswordFilePath()
+	if _, err := RunSSHCommandOutput(ctx, client, BuildCreateResticPasswordFileCmd(pwFilePath, access)); err != nil {
+		return "", fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = RunSSHCommandOutput(cleanupCtx, client, BuildCleanupResticPasswordFileCmd(pwFilePath))
+	}()
+	command := fmt.Sprintf("%s diff %s %s -r %s 2>&1", e.buildCommandPrefix(task.Node, pwFilePath), ShellEscape(leftSnapshotID), ShellEscape(rightSnapshotID), ShellEscape(repo))
+	output, err := RunSSHCommandOutput(ctx, client, command)
+	if err != nil {
+		return "", fmt.Errorf("执行 restic diff 失败: %w", err)
+	}
+	return output, nil
+}
+
 func parseResticConfig(raw string) (ResticConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return ResticConfig{}, nil
@@ -481,3 +605,30 @@ func buildResticExcludeArgs(patterns []string) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+func validResticLinkTag(value string) bool {
+	const prefix = "xirang.link.v1."
+	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+32 {
+		return false
+	}
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validResticSnapshotReference(value string) bool {
+	if len(value) < 4 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') && (character < 'A' || character > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+var _ EvidenceExecutor = (*ResticExecutor)(nil)

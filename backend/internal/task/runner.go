@@ -12,6 +12,8 @@ import (
 
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/automation"
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -392,9 +394,8 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
 	}
 
-	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
 	runStartedAt := now
-	exitCode, err := exec.Run(execCtx, taskEntity, func(level, message string) {
+	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
@@ -402,8 +403,10 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 			m.sampleWriter.WriteProgress(taskID, runID, sample.Percent)
 		}
 	})
+	exitCode, err := providerResult.ExitCode, providerResult.Err
+	suppressRetry := providerResult.SuppressRetry
 
-	wasTimeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded)
+	wasTimeout := !suppressRetry && (errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded))
 	if wasTimeout {
 		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
@@ -424,7 +427,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
-	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID)
+	wasCanceled := !suppressRetry && (errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID))
 	if wasCanceled {
 		if ParseStatus(taskEntity.Status) != StatusCanceled {
 			if statusErr := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
@@ -562,7 +565,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		}
 
 		// 快照差异异常检测（异步，best-effort）
-		if m.anomalySink != nil && taskEntity.ExecutorType == "restic" && taskEntity.PolicyID != nil {
+		if !providerResult.Managed && m.anomalySink != nil && taskEntity.ExecutorType == "restic" && taskEntity.PolicyID != nil {
 			sink := m.anomalySink
 			taskCopy := taskEntity
 			go func() {
@@ -613,6 +616,9 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		)
 	} else {
 		nextStatus, retryCount, nextRun, shouldRetry = m.stateMachine.NextAfterFailure(StatusRunning, taskEntity.RetryCount, time.Now())
+	}
+	if suppressRetry {
+		shouldRetry = false
 	}
 
 	// 当前 TaskRun 始终标记为 failed（即使 Task 进入 retrying）
@@ -693,6 +699,19 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	m.chainRunner.Store(taskID, cancel)
 	defer m.chainRunner.Delete(taskID)
 	defer cancel()
+
+	if strings.EqualFold(strings.TrimSpace(restoreTask.ExecutorType), "restic") && m.lineageGuard != nil {
+		session, err := m.lineageGuard.Begin(execCtx, taskID, publication.OperationLegacyRestoreLatest)
+		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
+			if session != nil {
+				defer func() { _ = session.Close() }()
+			}
+			m.recordLegacyResticBlock(execCtx, taskID, &runID, publication.OperationLegacyRestoreLatest)
+			m.failLegacyRestore(taskID, runID)
+			return
+		}
+		defer func() { _ = session.Close() }()
+	}
 
 	// restoreNodes 已在 TriggerRestore 同步路径中注册，此处仅负责清理
 	defer m.restoreNodes.Delete(restoreTask.NodeID)
@@ -911,6 +930,32 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
 	if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "恢复任务成功"); resolveErr != nil {
 		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
+	}
+}
+
+func (m *Manager) failLegacyRestore(taskID uint, runID uint) {
+	finishedAt := time.Now()
+	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		"status":      "failed",
+		"finished_at": &finishedAt,
+		"last_error":  string(backupasset.FailureLegacyOperationBlocked),
+	})
+	m.logDispatcher.Dispatch(taskID, &runID, "warn", "受管 Restic 恢复操作已被安全边界阻止", "failed")
+}
+
+func (m *Manager) recordLegacyResticBlock(ctx context.Context, taskID uint, taskRunID *uint, operation publication.ResticOperation) {
+	if m == nil || m.legacyBlockRecorder == nil {
+		return
+	}
+	audit, err := publication.NewSystemLegacyBlockAuditContext(taskID, taskRunID, operation)
+	if err != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Str("operation", string(operation)).Msg("无法构造 Restic 旧路径阻止审计上下文")
+		return
+	}
+	if err := m.legacyBlockRecorder.RecordLegacyBlock(ctx, publication.LegacyBlock{
+		TaskID: taskID, TaskRunID: taskRunID, Operation: operation, Audit: audit,
+	}); err != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Str("operation", string(operation)).Msg("Restic 旧路径阻止审计未写入")
 	}
 }
 

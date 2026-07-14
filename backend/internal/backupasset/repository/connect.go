@@ -353,7 +353,7 @@ func ensureTaskLink(tx *gorm.DB, repository model.BackupRepository, taskEntity m
 	taskID := taskEntity.ID
 	publicationMode := backupasset.PublicationLegacyMutable
 	if document.Provider == backupasset.ProviderRestic {
-		publicationMode = backupasset.PublicationNativeObjectVersions
+		publicationMode = backupasset.PublicationNativeSnapshot
 	}
 	link = model.TaskRepositoryLink{
 		ID: id, TaskID: &taskID, RepositoryID: repository.ID, TaskNameSnapshot: taskEntity.Name,

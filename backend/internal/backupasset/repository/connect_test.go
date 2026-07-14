@@ -95,6 +95,23 @@ func TestConnectRsyncIsProbeFirstIdempotentAndEncryptedAtRest(t *testing.T) {
 	}
 }
 
+func TestConnectPersistsNativeSnapshotModeForRestic(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "restic", "/backup/repository", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, provider.NativeResticIdentityPrefix+strings.Repeat("a", 64))}
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
+	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
+		t.Fatalf("connect Restic repository: %v", err)
+	}
+	var link model.TaskRepositoryLink
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	if link.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
+		t.Fatalf("publication mode = %q", link.PublicationMode)
+	}
+}
+
 func TestConnectWithoutReplacementProbesAndRefreshesRetainedBinding(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	oldSecret := "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"

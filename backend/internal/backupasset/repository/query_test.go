@@ -171,7 +171,7 @@ func seedVisibilityLink(t *testing.T, db *gorm.DB, id, repositoryID string, task
 	t.Helper()
 	link := model.TaskRepositoryLink{
 		ID: id, TaskID: taskID, RepositoryID: repositoryID, TaskNameSnapshot: name, NodeIDSnapshot: nodeSnapshot,
-		NodeNameSnapshot: "snapshot-node", PublicationMode: string(backupasset.PublicationNativeObjectVersions),
+		NodeNameSnapshot: "snapshot-node", PublicationMode: string(backupasset.PublicationNativeSnapshot),
 		EncryptedLegacyLocator: "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY", LinkedAt: now, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&link).Error; err != nil {
