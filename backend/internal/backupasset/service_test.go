@@ -9,6 +9,10 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/settings"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestSanitizedDTOExcludesSecretsAndLocators(t *testing.T) {
@@ -212,8 +216,84 @@ func TestFoundationServiceAuditConfigUsesEffectiveSettings(t *testing.T) {
 	}
 }
 
+func TestFoundationConfigGettersUseFullEffectiveLeaseAndPublicationValues(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:foundation-publication-config?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	reader := settings.NewService(db)
+	if err := reader.Update("backup_assets.lease_duration", "71s"); err != nil {
+		t.Fatalf("seed lease duration DB value: %v", err)
+	}
+	if err := reader.Update("backup_assets.lease_heartbeat", "60s"); err != nil {
+		t.Fatalf("seed lease heartbeat DB value: %v", err)
+	}
+	if err := reader.Update("backup_assets.lease_absolute_deadline", "2h"); err != nil {
+		t.Fatalf("seed absolute deadline DB value: %v", err)
+	}
+	t.Setenv("BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", "71s")
+	t.Setenv("BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY", "3")
+	t.Setenv("BACKUP_ASSETS_MANIFEST_TIMEOUT", "1h")
+	service := NewFoundationService(reader)
+
+	leaseConfig, err := service.LeaseConfig()
+	if err != nil || leaseConfig.Duration != 71*time.Second || leaseConfig.Heartbeat != 60*time.Second || leaseConfig.AbsoluteDeadline != 2*time.Hour {
+		t.Fatalf("LeaseConfig=%+v err=%v", leaseConfig, err)
+	}
+	providerConfig, err := service.ProviderConfig()
+	if err != nil || providerConfig.OperationTimeout != 2*time.Minute || providerConfig.MaxConcurrency != 4 || providerConfig.MetadataLimitBytes != 16777216 {
+		t.Fatalf("ProviderConfig=%+v err=%v", providerConfig, err)
+	}
+	auditConfig, err := service.AuditConfig()
+	if err != nil || auditConfig.SegmentMaxEvents != 10000 || auditConfig.SegmentMaxAge != 24*time.Hour {
+		t.Fatalf("AuditConfig=%+v err=%v", auditConfig, err)
+	}
+	publicationConfig, err := service.PublicationConfig()
+	if err != nil {
+		t.Fatalf("PublicationConfig: %v", err)
+	}
+	if publicationConfig.ReconcileInterval != 5*time.Minute || publicationConfig.WorkerConcurrency != 3 || publicationConfig.MissingGrace != 71*time.Second ||
+		publicationConfig.BackupStreamMaxBytes != 268435456 || publicationConfig.ManifestTimeout != time.Hour || publicationConfig.ManifestMaxBytes != 4294967296 ||
+		publicationConfig.ManifestMaxEntries != 10000000 || publicationConfig.ManifestMaxRecordBytes != 1048576 || publicationConfig.ManifestMaxDepth != 4096 {
+		t.Fatalf("PublicationConfig=%+v", publicationConfig)
+	}
+}
+
 type staticSettingsReader map[string]string
 
 func (reader staticSettingsReader) GetEffective(key string) string {
-	return reader[key]
+	if value, ok := reader[key]; ok {
+		return value
+	}
+	return staticFoundationDefaults[key]
+}
+
+var staticFoundationDefaults = map[string]string{
+	"backup_assets.enabled":                          "false",
+	"backup_assets.catalog_batch_size":               "2000",
+	"backup_assets.catalog_build_timeout":            "30m",
+	"backup_assets.repository_reconcile_interval":    "15m",
+	"backup_assets.audit_segment_max_events":         "10000",
+	"backup_assets.audit_segment_max_age":            "24h",
+	"backup_assets.audit_detail_retention_days":      "180",
+	"backup_assets.audit_checkpoint_retention_days":  "2555",
+	"backup_assets.lease_duration":                   "5m",
+	"backup_assets.lease_heartbeat":                  "60s",
+	"backup_assets.lease_absolute_deadline":          "168h",
+	"backup_assets.provider_operation_timeout":       "2m",
+	"backup_assets.provider_max_concurrency":         "4",
+	"backup_assets.provider_metadata_limit_bytes":    "16777216",
+	"backup_assets.publication_reconcile_interval":   "5m",
+	"backup_assets.publication_reconcile_batch_size": "100",
+	"backup_assets.publication_worker_concurrency":   "2",
+	"backup_assets.publication_missing_grace":        "30m",
+	"backup_assets.publication_stream_max_bytes":     "268435456",
+	"backup_assets.manifest_timeout":                 "2h",
+	"backup_assets.manifest_max_bytes":               "4294967296",
+	"backup_assets.manifest_max_entries":             "10000000",
+	"backup_assets.manifest_max_record_bytes":        "1048576",
+	"backup_assets.manifest_max_depth":               "4096",
 }

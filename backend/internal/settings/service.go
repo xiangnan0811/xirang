@@ -22,6 +22,7 @@
 package settings
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/sshutil"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -79,9 +81,10 @@ type cachedValue struct {
 
 // Service 系统设置服务
 type Service struct {
-	db    *gorm.DB
-	mu    sync.RWMutex
-	cache map[string]cachedValue
+	db                    *gorm.DB
+	mu                    sync.RWMutex
+	backupAssetMutationMu sync.Mutex
+	cache                 map[string]cachedValue
 }
 
 // NewService 创建设置服务
@@ -179,6 +182,16 @@ var registry = []SettingDef{
 	{Key: "backup_assets.provider_operation_timeout", EnvVar: "BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "Provider 只读操作超时", MinDuration: "5s", MaxDuration: "30m"},
 	{Key: "backup_assets.provider_max_concurrency", EnvVar: "BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", CodeDefault: "4", Type: TypeInt, Category: "backup_assets", Description: "Provider 只读操作最大并发数", Min: "1", Max: "32"},
 	{Key: "backup_assets.provider_metadata_limit_bytes", EnvVar: "BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", CodeDefault: "16777216", Type: TypeInt, Category: "backup_assets", Description: "Provider 元数据输出字节上限", Min: "65536", Max: "67108864"},
+	{Key: "backup_assets.publication_reconcile_interval", EnvVar: "BACKUP_ASSETS_PUBLICATION_RECONCILE_INTERVAL", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "恢复点发布对账间隔", MinDuration: "30s", MaxDuration: "24h"},
+	{Key: "backup_assets.publication_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_PUBLICATION_RECONCILE_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "恢复点发布对账批次大小", Min: "1", Max: "1000"},
+	{Key: "backup_assets.publication_worker_concurrency", EnvVar: "BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "恢复点发布工作并发数", Min: "1", Max: "32"},
+	{Key: "backup_assets.publication_missing_grace", EnvVar: "BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "发布快照缺失宽限期", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.publication_stream_max_bytes", EnvVar: "BACKUP_ASSETS_PUBLICATION_STREAM_MAX_BYTES", CodeDefault: "268435456", Type: TypeInt, Category: "backup_assets", Description: "发布备份 JSON 流总字节上限", Min: "1048576", Max: "1073741824"},
+	{Key: "backup_assets.manifest_timeout", EnvVar: "BACKUP_ASSETS_MANIFEST_TIMEOUT", CodeDefault: "2h", Type: TypeDuration, Category: "backup_assets", Description: "恢复点清单构建超时", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.manifest_max_bytes", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_BYTES", CodeDefault: "4294967296", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单总字节上限", Min: "1048576", Max: "17179869184"},
+	{Key: "backup_assets.manifest_max_entries", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", CodeDefault: "10000000", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单条目上限", Min: "1", Max: "100000000"},
+	{Key: "backup_assets.manifest_max_record_bytes", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单单记录字节上限", Min: "4096", Max: "4194304"},
+	{Key: "backup_assets.manifest_max_depth", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_DEPTH", CodeDefault: "4096", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单目录深度上限", Min: "1", Max: "65536"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -217,16 +230,16 @@ func validateRegistryDefinitions(definitions []SettingDef) error {
 			if def.MinDuration != "" || def.MaxDuration != "" {
 				return fmt.Errorf("settings: duration bounds on int setting %s", def.Key)
 			}
-			var min, max int
+			var min, max int64
 			var err error
 			if def.Min != "" {
-				min, err = strconv.Atoi(def.Min)
+				min, err = strconv.ParseInt(def.Min, 10, 64)
 				if err != nil {
 					return fmt.Errorf("settings: invalid Min for %s: %s", def.Key, def.Min)
 				}
 			}
 			if def.Max != "" {
-				max, err = strconv.Atoi(def.Max)
+				max, err = strconv.ParseInt(def.Max, 10, 64)
 				if err != nil {
 					return fmt.Errorf("settings: invalid Max for %s: %s", def.Key, def.Max)
 				}
@@ -360,6 +373,98 @@ func (s *Service) resolveValue(key string) (string, error) {
 	return "", nil
 }
 
+// GetFallback resolves a known setting from environment or its code default,
+// intentionally excluding any database override.
+func (s *Service) GetFallback(key string) (string, error) {
+	def := findDef(key)
+	if def == nil {
+		return "", fmt.Errorf("未知的设置项: %s", key)
+	}
+	if envValue := strings.TrimSpace(os.Getenv(def.EnvVar)); envValue != "" {
+		return envValue, nil
+	}
+	return def.CodeDefault, nil
+}
+
+// ValidateBackupAssetEffectiveUpdate validates an explicitly supplied current
+// foundation snapshot plus a requested foundation-only overlay without reading
+// database, environment, cache, or mutating either input map.
+func (s *Service) ValidateBackupAssetEffectiveUpdate(current, overrides map[string]string) error {
+	resolved := make(map[string]string, len(backupAssetFoundationSettingKeys))
+	for _, key := range backupAssetFoundationSettingKeys {
+		value, ok := current[key]
+		if !ok {
+			return fmt.Errorf("缺少备份资产当前设置: %s", key)
+		}
+		def := findDef(key)
+		if def == nil {
+			return fmt.Errorf("缺少备份资产设置定义: %s", key)
+		}
+		if err := validateValue(def, value); err != nil {
+			return err
+		}
+		resolved[key] = value
+	}
+	for key, value := range overrides {
+		if !IsBackupAssetFoundationSetting(key) {
+			return fmt.Errorf("不是备份资产基础设置: %s", key)
+		}
+		def := findDef(key)
+		if err := validateValue(def, value); err != nil {
+			return err
+		}
+		resolved[key] = value
+	}
+	return validateBackupAssetFoundationConfig(resolved, true)
+}
+
+// WithBackupAssetMutation serializes callbacks that coordinate a foundation
+// settings persistence transaction with external admission transitions.
+func (s *Service) WithBackupAssetMutation(ctx context.Context, callback func(current map[string]string) error) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("settings service is unavailable")
+	}
+	if callback == nil {
+		return fmt.Errorf("backup asset mutation callback is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.backupAssetMutationMu.Lock()
+	defer s.backupAssetMutationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, err := s.backupAssetFoundationSnapshot()
+	if err != nil {
+		return err
+	}
+	return callback(copyStringMap(current))
+}
+
+func (s *Service) backupAssetFoundationSnapshot() (map[string]string, error) {
+	values := make(map[string]string, len(backupAssetFoundationSettingKeys))
+	for _, key := range backupAssetFoundationSettingKeys {
+		value, err := s.resolveValue(key)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", key, err)
+		}
+		values[key] = value
+	}
+	if err := validateBackupAssetFoundationConfig(values, true); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
+}
+
 // Validate 校验设置值（不写入），用于批量更新前的预检
 func (s *Service) Validate(key, value string) error {
 	def := findDef(key)
@@ -438,7 +543,24 @@ func (s *Service) Delete(key string) error {
 	if def == nil {
 		return fmt.Errorf("未知的设置项: %s", key)
 	}
-	if err := s.db.Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
+	if err := s.DeleteWithTx(s.db, key); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteWithTx removes one database override through the caller's existing
+// transaction. Foundation-setting callers use it only after the admission
+// transition has drained, so a rollback leaves the prior persisted value.
+func (s *Service) DeleteWithTx(tx *gorm.DB, key string) error {
+	def := findDef(key)
+	if def == nil {
+		return fmt.Errorf("未知的设置项: %s", key)
+	}
+	if tx == nil {
+		return fmt.Errorf("settings transaction is unavailable")
+	}
+	if err := tx.Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
 		return err
 	}
 	s.invalidateCache(key)
@@ -461,18 +583,18 @@ func findDef(key string) *SettingDef {
 func validateValue(def *SettingDef, value string) error {
 	switch def.Type {
 	case TypeInt:
-		v, err := strconv.Atoi(value)
+		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return fmt.Errorf("设置项 %s 值必须为整数", def.Key)
 		}
 		if def.Min != "" {
-			min, _ := strconv.Atoi(def.Min)
+			min, _ := strconv.ParseInt(def.Min, 10, 64)
 			if v < min {
 				return fmt.Errorf("设置项 %s 值不能小于 %s", def.Key, def.Min)
 			}
 		}
 		if def.Max != "" {
-			max, _ := strconv.Atoi(def.Max)
+			max, _ := strconv.ParseInt(def.Max, 10, 64)
 			if v > max {
 				return fmt.Errorf("设置项 %s 值不能大于 %s", def.Key, def.Max)
 			}
@@ -507,34 +629,73 @@ func validateValue(def *SettingDef, value string) error {
 	return nil
 }
 
-// ValidateBackupAssetFoundationConfig validates the cross-setting constraints
-// that cannot be enforced by validating one registry value at a time.
-func ValidateBackupAssetFoundationConfig(values map[string]string) error {
-	keys := []string{
-		"backup_assets.enabled",
-		"backup_assets.catalog_batch_size",
-		"backup_assets.catalog_build_timeout",
-		"backup_assets.repository_reconcile_interval",
-		"backup_assets.audit_segment_max_events",
-		"backup_assets.audit_segment_max_age",
-		"backup_assets.audit_detail_retention_days",
-		"backup_assets.audit_checkpoint_retention_days",
-		"backup_assets.lease_duration",
-		"backup_assets.lease_heartbeat",
-		"backup_assets.lease_absolute_deadline",
-		"backup_assets.provider_operation_timeout",
-		"backup_assets.provider_max_concurrency",
-		"backup_assets.provider_metadata_limit_bytes",
+var backupAssetFoundationSettingKeys = []string{
+	"backup_assets.enabled",
+	"backup_assets.catalog_batch_size",
+	"backup_assets.catalog_build_timeout",
+	"backup_assets.repository_reconcile_interval",
+	"backup_assets.audit_segment_max_events",
+	"backup_assets.audit_segment_max_age",
+	"backup_assets.audit_detail_retention_days",
+	"backup_assets.audit_checkpoint_retention_days",
+	"backup_assets.lease_duration",
+	"backup_assets.lease_heartbeat",
+	"backup_assets.lease_absolute_deadline",
+	"backup_assets.provider_operation_timeout",
+	"backup_assets.provider_max_concurrency",
+	"backup_assets.provider_metadata_limit_bytes",
+	"backup_assets.publication_reconcile_interval",
+	"backup_assets.publication_reconcile_batch_size",
+	"backup_assets.publication_worker_concurrency",
+	"backup_assets.publication_missing_grace",
+	"backup_assets.publication_stream_max_bytes",
+	"backup_assets.manifest_timeout",
+	"backup_assets.manifest_max_bytes",
+	"backup_assets.manifest_max_entries",
+	"backup_assets.manifest_max_record_bytes",
+	"backup_assets.manifest_max_depth",
+}
+
+var backupAssetFoundationSettingSet = func() map[string]bool {
+	values := make(map[string]bool, len(backupAssetFoundationSettingKeys))
+	for _, key := range backupAssetFoundationSettingKeys {
+		values[key] = true
 	}
-	resolved := make(map[string]string, len(keys))
-	for _, key := range keys {
+	return values
+}()
+
+// BackupAssetFoundationSettingKeys returns an immutable-by-convention copy of
+// the exact setting set shared by foundation readers and validators.
+func BackupAssetFoundationSettingKeys() []string {
+	keys := make([]string, len(backupAssetFoundationSettingKeys))
+	copy(keys, backupAssetFoundationSettingKeys)
+	return keys
+}
+
+func IsBackupAssetFoundationSetting(key string) bool {
+	return backupAssetFoundationSettingSet[key]
+}
+
+// ValidateBackupAssetFoundationConfig validates cross-setting constraints and
+// accepts partial maps only for legacy callers by filling omitted values from
+// registry defaults. New mutation paths use explicit full snapshots.
+func ValidateBackupAssetFoundationConfig(values map[string]string) error {
+	return validateBackupAssetFoundationConfig(values, false)
+}
+
+func validateBackupAssetFoundationConfig(values map[string]string, requireComplete bool) error {
+	resolved := make(map[string]string, len(backupAssetFoundationSettingKeys))
+	for _, key := range backupAssetFoundationSettingKeys {
 		def := findDef(key)
 		if def == nil {
 			return fmt.Errorf("缺少备份资产设置定义: %s", key)
 		}
-		value := def.CodeDefault
-		if override, ok := values[key]; ok {
-			value = override
+		value, exists := values[key]
+		if !exists {
+			if requireComplete {
+				return fmt.Errorf("缺少备份资产设置值: %s", key)
+			}
+			value = def.CodeDefault
 		}
 		if err := validateValue(def, value); err != nil {
 			return err
@@ -545,11 +706,27 @@ func ValidateBackupAssetFoundationConfig(values map[string]string) error {
 	leaseDuration, _ := time.ParseDuration(resolved["backup_assets.lease_duration"])
 	heartbeat, _ := time.ParseDuration(resolved["backup_assets.lease_heartbeat"])
 	absoluteDeadline, _ := time.ParseDuration(resolved["backup_assets.lease_absolute_deadline"])
+	missingGrace, _ := time.ParseDuration(resolved["backup_assets.publication_missing_grace"])
+	manifestTimeout, _ := time.ParseDuration(resolved["backup_assets.manifest_timeout"])
+	manifestMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.manifest_max_bytes"], 10, 64)
+	manifestMaxRecordBytes, _ := strconv.ParseInt(resolved["backup_assets.manifest_max_record_bytes"], 10, 64)
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
+	if leaseDuration-heartbeat <= sshutil.CommandExecutionJoinTimeout {
+		return fmt.Errorf("backup_assets.lease_duration 与 backup_assets.lease_heartbeat 之间必须大于命令收尾时限")
+	}
 	if absoluteDeadline < leaseDuration {
 		return fmt.Errorf("backup_assets.lease_absolute_deadline 不能小于 backup_assets.lease_duration")
+	}
+	if missingGrace < leaseDuration || missingGrace >= absoluteDeadline {
+		return fmt.Errorf("backup_assets.publication_missing_grace 必须不小于租约时长且小于绝对截止时间")
+	}
+	if manifestTimeout >= absoluteDeadline {
+		return fmt.Errorf("backup_assets.manifest_timeout 必须小于绝对截止时间")
+	}
+	if manifestMaxRecordBytes > manifestMaxBytes {
+		return fmt.Errorf("backup_assets.manifest_max_record_bytes 不能大于 manifest_max_bytes")
 	}
 	return nil
 }

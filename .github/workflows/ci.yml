@@ -118,7 +118,7 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run 'TestBackupAssetMigration062Postgres' -count=1
+        run: go test ./internal/database -run 'TestBackupAssetMigration0(62|63)Postgres' -count=1
 
   frontend:
     name: Frontend Test & Build

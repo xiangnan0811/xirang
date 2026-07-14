@@ -17,6 +17,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+var leaseTestDBSequence atomic.Uint64
+
 func TestLeaseAcquireRenewRelease(t *testing.T) {
 	service, clock, _ := newLeaseTestHarness(t, LeaseConfig{
 		Duration:         5 * time.Minute,
@@ -263,6 +265,120 @@ func TestLeaseConstraintClassificationOnlyTreatsUniqueOwnerSlotAsHeld(t *testing
 	}
 }
 
+func TestLeaseAcquireTxUsesSuppliedPointDeadline(t *testing.T) {
+	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
+	deadline := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	request := standardAcquireLeaseRequest()
+	request.AbsoluteDeadline = deadline
+	first, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("acquire first stage: %v", err)
+	}
+	if !first.AbsoluteDeadline.Equal(deadline) {
+		t.Fatalf("first stage deadline=%s, want %s", first.AbsoluteDeadline, deadline)
+	}
+	if err := service.Release(context.Background(), first.Fence); err != nil {
+		t.Fatalf("release first stage: %v", err)
+	}
+	clock.Advance(time.Minute)
+	second, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("acquire fresh stage: %v", err)
+	}
+	if !second.AbsoluteDeadline.Equal(deadline) {
+		t.Fatalf("fresh stage deadline=%s, want %s", second.AbsoluteDeadline, deadline)
+	}
+}
+
+func TestLeaseValidateAndReleaseTxShareCallerTransaction(t *testing.T) {
+	service, _, db := newLeaseTestHarness(t, standardLeaseConfig())
+	lease, err := service.Acquire(context.Background(), standardAcquireLeaseRequest())
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	rolledBack := db.Begin()
+	if rolledBack.Error != nil {
+		t.Fatalf("begin rollback transaction: %v", rolledBack.Error)
+	}
+	if err := service.ValidateFenceTx(context.Background(), rolledBack, lease.Fence); err != nil {
+		t.Fatalf("validate fence in transaction: %v", err)
+	}
+	if err := service.ReleaseTx(context.Background(), rolledBack, lease.Fence); err != nil {
+		t.Fatalf("release fence in transaction: %v", err)
+	}
+	if err := rolledBack.Rollback().Error; err != nil {
+		t.Fatalf("rollback release transaction: %v", err)
+	}
+	if err := service.ValidateFence(context.Background(), lease.Fence); err != nil {
+		t.Fatalf("rolled-back release changed persisted lease: %v", err)
+	}
+
+	committed := db.Begin()
+	if committed.Error != nil {
+		t.Fatalf("begin commit transaction: %v", committed.Error)
+	}
+	if err := service.ValidateFenceTx(context.Background(), committed, lease.Fence); err != nil {
+		t.Fatalf("validate committed fence in transaction: %v", err)
+	}
+	if err := service.ReleaseTx(context.Background(), committed, lease.Fence); err != nil {
+		t.Fatalf("release committed fence in transaction: %v", err)
+	}
+	if err := committed.Commit().Error; err != nil {
+		t.Fatalf("commit release transaction: %v", err)
+	}
+	if err := service.ValidateFence(context.Background(), lease.Fence); !errors.Is(err, ErrLeaseFenceLost) {
+		t.Fatalf("committed release fence error=%v, want ErrLeaseFenceLost", err)
+	}
+}
+
+func TestLeaseFreshStageCannotMovePointDeadline(t *testing.T) {
+	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
+	request := standardAcquireLeaseRequest()
+	request.AbsoluteDeadline = time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	first, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("acquire first stage: %v", err)
+	}
+	if err := service.Release(context.Background(), first.Fence); err != nil {
+		t.Fatalf("release first stage: %v", err)
+	}
+	clock.Advance(time.Minute)
+	request.AbsoluteDeadline = request.AbsoluteDeadline.Add(time.Hour)
+	if _, err := service.Acquire(context.Background(), request); err == nil {
+		t.Fatal("fresh stage moved the point-wide deadline")
+	}
+}
+
+func TestLeaseTakeoverTxRotatesFenceAndPreservesDeadline(t *testing.T) {
+	service, clock, db := newLeaseTestHarness(t, standardLeaseConfig())
+	deadline := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	request := standardAcquireLeaseRequest()
+	request.AbsoluteDeadline = deadline
+	before, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	clock.Advance(6 * time.Minute)
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatalf("begin takeover transaction: %v", tx.Error)
+	}
+	after, err := service.TakeoverTx(context.Background(), tx, TakeoverLeaseRequest{LeaseID: before.ID, OwnerID: before.OwnerID})
+	if err != nil {
+		_ = tx.Rollback().Error
+		t.Fatalf("take over lease in transaction: %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("commit takeover transaction: %v", err)
+	}
+	if after.Fence.AttemptID == before.Fence.AttemptID || after.Fence.FenceToken == before.Fence.FenceToken {
+		t.Fatalf("takeover did not rotate fence: before=%+v after=%+v", before.Fence, after.Fence)
+	}
+	if !after.AbsoluteDeadline.Equal(deadline) {
+		t.Fatalf("takeover deadline=%s, want %s", after.AbsoluteDeadline, deadline)
+	}
+}
+
 type leaseTestClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -282,7 +398,7 @@ func (clock *leaseTestClock) Advance(duration time.Duration) {
 
 func newLeaseTestHarness(t *testing.T, config LeaseConfig) (*LeaseService, *leaseTestClock, *gorm.DB) {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"), leaseTestDBSequence.Add(1))
 	clock := &leaseTestClock{now: time.Date(2026, 7, 13, 5, 6, 7, 0, time.UTC)}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		NowFunc: clock.Now,

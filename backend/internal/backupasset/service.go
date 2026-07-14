@@ -30,46 +30,62 @@ func NewFoundationService(reader SettingsReader) *FoundationService {
 }
 
 func (service *FoundationService) Enabled() bool {
-	if service == nil || service.settings == nil {
-		return false
-	}
-	enabled, err := strconv.ParseBool(strings.TrimSpace(service.settings.GetEffective("backup_assets.enabled")))
+	enabled, err := service.FeatureEnabled()
 	return err == nil && enabled
 }
 
+// FeatureEnabled returns the effective dynamic feature value together with a
+// validation error. Callers that enforce admission transitions must not treat a
+// settings-resolution failure as a harmless disabled value.
+func (service *FoundationService) FeatureEnabled() (bool, error) {
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return false, err
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(values["backup_assets.enabled"]))
+	if err != nil {
+		return false, fmt.Errorf("%w: parse backup_assets.enabled: %v", ErrInvalidState, err)
+	}
+	return enabled, nil
+}
+
 func (service *FoundationService) LeaseConfig() (LeaseConfig, error) {
-	if service == nil || service.settings == nil {
-		return LeaseConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return LeaseConfig{}, err
 	}
-	values := map[string]string{
-		"backup_assets.lease_duration":          service.settings.GetEffective("backup_assets.lease_duration"),
-		"backup_assets.lease_heartbeat":         service.settings.GetEffective("backup_assets.lease_heartbeat"),
-		"backup_assets.lease_absolute_deadline": service.settings.GetEffective("backup_assets.lease_absolute_deadline"),
+	duration, err := parseFoundationDuration(values, "backup_assets.lease_duration")
+	if err != nil {
+		return LeaseConfig{}, err
 	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return LeaseConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	heartbeat, err := parseFoundationDuration(values, "backup_assets.lease_heartbeat")
+	if err != nil {
+		return LeaseConfig{}, err
 	}
-	duration, _ := time.ParseDuration(values["backup_assets.lease_duration"])
-	heartbeat, _ := time.ParseDuration(values["backup_assets.lease_heartbeat"])
-	absoluteDeadline, _ := time.ParseDuration(values["backup_assets.lease_absolute_deadline"])
+	absoluteDeadline, err := parseFoundationDuration(values, "backup_assets.lease_absolute_deadline")
+	if err != nil {
+		return LeaseConfig{}, err
+	}
 	return LeaseConfig{Duration: duration, Heartbeat: heartbeat, AbsoluteDeadline: absoluteDeadline}, nil
 }
 
 func (service *FoundationService) ProviderConfig() (ProviderConfig, error) {
-	if service == nil || service.settings == nil {
-		return ProviderConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return ProviderConfig{}, err
 	}
-	values := map[string]string{
-		"backup_assets.provider_operation_timeout":    service.settings.GetEffective("backup_assets.provider_operation_timeout"),
-		"backup_assets.provider_max_concurrency":      service.settings.GetEffective("backup_assets.provider_max_concurrency"),
-		"backup_assets.provider_metadata_limit_bytes": service.settings.GetEffective("backup_assets.provider_metadata_limit_bytes"),
+	operationTimeout, err := parseFoundationDuration(values, "backup_assets.provider_operation_timeout")
+	if err != nil {
+		return ProviderConfig{}, err
 	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return ProviderConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	maxConcurrency, err := parseFoundationInt(values, "backup_assets.provider_max_concurrency")
+	if err != nil {
+		return ProviderConfig{}, err
 	}
-	operationTimeout, _ := time.ParseDuration(values["backup_assets.provider_operation_timeout"])
-	maxConcurrency, _ := strconv.Atoi(values["backup_assets.provider_max_concurrency"])
-	metadataLimitBytes, _ := strconv.ParseInt(values["backup_assets.provider_metadata_limit_bytes"], 10, 64)
+	metadataLimitBytes, err := parseFoundationInt64(values, "backup_assets.provider_metadata_limit_bytes")
+	if err != nil {
+		return ProviderConfig{}, err
+	}
 	return ProviderConfig{
 		OperationTimeout:   operationTimeout,
 		MaxConcurrency:     maxConcurrency,
@@ -78,19 +94,119 @@ func (service *FoundationService) ProviderConfig() (ProviderConfig, error) {
 }
 
 func (service *FoundationService) AuditConfig() (AuditConfig, error) {
-	if service == nil || service.settings == nil {
-		return AuditConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return AuditConfig{}, err
 	}
-	values := map[string]string{
-		"backup_assets.audit_segment_max_events": service.settings.GetEffective("backup_assets.audit_segment_max_events"),
-		"backup_assets.audit_segment_max_age":    service.settings.GetEffective("backup_assets.audit_segment_max_age"),
+	segmentMaxEvents, err := parseFoundationInt64(values, "backup_assets.audit_segment_max_events")
+	if err != nil {
+		return AuditConfig{}, err
+	}
+	segmentMaxAge, err := parseFoundationDuration(values, "backup_assets.audit_segment_max_age")
+	if err != nil {
+		return AuditConfig{}, err
+	}
+	return AuditConfig{SegmentMaxEvents: segmentMaxEvents, SegmentMaxAge: segmentMaxAge}, nil
+}
+
+func (service *FoundationService) PublicationConfig() (PublicationConfig, error) {
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	reconcileInterval, err := parseFoundationDuration(values, "backup_assets.publication_reconcile_interval")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	reconcileBatchSize, err := parseFoundationInt(values, "backup_assets.publication_reconcile_batch_size")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	workerConcurrency, err := parseFoundationInt(values, "backup_assets.publication_worker_concurrency")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	missingGrace, err := parseFoundationDuration(values, "backup_assets.publication_missing_grace")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	backupStreamMaxBytes, err := parseFoundationInt64(values, "backup_assets.publication_stream_max_bytes")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	manifestTimeout, err := parseFoundationDuration(values, "backup_assets.manifest_timeout")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	manifestMaxBytes, err := parseFoundationInt64(values, "backup_assets.manifest_max_bytes")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	manifestMaxEntries, err := parseFoundationInt64(values, "backup_assets.manifest_max_entries")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	manifestMaxRecordBytes, err := parseFoundationInt(values, "backup_assets.manifest_max_record_bytes")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	manifestMaxDepth, err := parseFoundationInt(values, "backup_assets.manifest_max_depth")
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	return PublicationConfig{
+		ReconcileInterval:      reconcileInterval,
+		ReconcileBatchSize:     reconcileBatchSize,
+		WorkerConcurrency:      workerConcurrency,
+		MissingGrace:           missingGrace,
+		BackupStreamMaxBytes:   backupStreamMaxBytes,
+		ManifestTimeout:        manifestTimeout,
+		ManifestMaxBytes:       manifestMaxBytes,
+		ManifestMaxEntries:     manifestMaxEntries,
+		ManifestMaxRecordBytes: manifestMaxRecordBytes,
+		ManifestMaxDepth:       manifestMaxDepth,
+	}, nil
+}
+
+func (service *FoundationService) effectiveFoundationValues() (map[string]string, error) {
+	if service == nil || service.settings == nil {
+		return nil, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	}
+	values := make(map[string]string, len(settings.BackupAssetFoundationSettingKeys()))
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		values[key] = service.settings.GetEffective(key)
 	}
 	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return AuditConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
-	segmentMaxEvents, _ := strconv.ParseInt(values["backup_assets.audit_segment_max_events"], 10, 64)
-	segmentMaxAge, _ := time.ParseDuration(values["backup_assets.audit_segment_max_age"])
-	return AuditConfig{SegmentMaxEvents: segmentMaxEvents, SegmentMaxAge: segmentMaxAge}, nil
+	return values, nil
+}
+
+func parseFoundationDuration(values map[string]string, key string) (time.Duration, error) {
+	value, err := time.ParseDuration(values[key])
+	if err != nil {
+		return 0, fmt.Errorf("%w: parse %s: %v", ErrInvalidState, key, err)
+	}
+	return value, nil
+}
+
+func parseFoundationInt64(values map[string]string, key string) (int64, error) {
+	value, err := strconv.ParseInt(values[key], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: parse %s: %v", ErrInvalidState, key, err)
+	}
+	return value, nil
+}
+
+func parseFoundationInt(values map[string]string, key string) (int, error) {
+	value, err := parseFoundationInt64(values, key)
+	if err != nil {
+		return 0, err
+	}
+	if value > int64(^uint(0)>>1) {
+		return 0, fmt.Errorf("%w: %s exceeds int range", ErrInvalidState, key)
+	}
+	return int(value), nil
 }
 
 type RepositoryDTO struct {
