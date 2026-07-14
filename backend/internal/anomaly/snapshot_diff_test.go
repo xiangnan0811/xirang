@@ -3,16 +3,147 @@ package anomaly
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 
 	"github.com/rs/zerolog"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
+
+type exactAnomalySession struct {
+	publication.LineageSession
+	current  publication.CommittedPoint
+	previous *publication.CommittedPoint
+	closed   int
+}
+
+func (*exactAnomalySession) Mode() publication.LineageMode { return publication.LineageExact }
+func (session *exactAnomalySession) CurrentAndPrevious(current string) (publication.CommittedPoint, *publication.CommittedPoint, error) {
+	if current != session.current.FullNativeID {
+		return publication.CommittedPoint{}, nil, fmt.Errorf("unexpected current point %q", current)
+	}
+	return session.current, session.previous, nil
+}
+func (session *exactAnomalySession) ResolveNativeID(value string) (string, error) {
+	if value == session.current.FullNativeID {
+		return value, nil
+	}
+	if session.previous != nil && value == session.previous.FullNativeID {
+		return value, nil
+	}
+	return "", fmt.Errorf("uncommitted snapshot %q", value)
+}
+func (session *exactAnomalySession) Close() error {
+	session.closed++
+	return nil
+}
+
+type exactAnomalyGuard struct {
+	session   publication.LineageSession
+	operation publication.ResticOperation
+	calls     int
+}
+
+func (guard *exactAnomalyGuard) Begin(_ context.Context, _ uint, operation publication.ResticOperation) (publication.LineageSession, error) {
+	guard.calls++
+	guard.operation = operation
+	return guard.session, nil
+}
+
+type exactAnomalyRunner struct {
+	calls  int
+	left   string
+	right  string
+	output string
+}
+
+func (runner *exactAnomalyRunner) RunSnapshotDiff(_ context.Context, _ model.Task, left, right string) (string, error) {
+	runner.calls++
+	runner.left = left
+	runner.right = right
+	return runner.output, nil
+}
+
+var _ publication.LineageGuard = (*exactAnomalyGuard)(nil)
+var _ SnapshotDiffCommandRunner = (*exactAnomalyRunner)(nil)
+
+func openExactAnomalyDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", t.Name())), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.SnapshotDiffHistory{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestManagedAnomalyUsesExactCurrentAndPreviousCommittedTaskPoints(t *testing.T) {
+	db := openExactAnomalyDB(t)
+	node := model.Node{Name: "exact-anomaly-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskEntity := model.Task{Name: "exact-anomaly-task", NodeID: node.ID, ExecutorType: "restic", RsyncTarget: "/repository", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
+	}
+	currentID := strings.Repeat("a", 64)
+	previousID := strings.Repeat("b", 64)
+	previous := publication.CommittedPoint{RecoveryPointID: strings.Repeat("1", 32), FullNativeID: previousID}
+	session := &exactAnomalySession{current: publication.CommittedPoint{RecoveryPointID: strings.Repeat("2", 32), FullNativeID: currentID}, previous: &previous}
+	guard := &exactAnomalyGuard{session: session}
+	runner := &exactAnomalyRunner{output: "+ /new-file.txt\n"}
+
+	if _, err := AnalyzeSnapshotDiffExact(context.Background(), db, taskEntity, 9, currentID, previousID, guard, runner); err != nil {
+		t.Fatalf("analyze exact snapshots: %v", err)
+	}
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyAnomaly {
+		t.Fatalf("anomaly admission calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if runner.calls != 1 || runner.left != previousID || runner.right != currentID {
+		t.Fatalf("exact diff calls=%d left=%q right=%q", runner.calls, runner.left, runner.right)
+	}
+	if session.closed != 1 {
+		t.Fatalf("anomaly admission close count=%d", session.closed)
+	}
+	var history model.SnapshotDiffHistory
+	if err := db.First(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if history.TaskID != taskEntity.ID || history.TaskRunID != 9 || history.AddedCount != 1 {
+		t.Fatalf("exact anomaly history=%+v", history)
+	}
+}
+
+func TestManagedAnomalySkipsWhenNoPreviousCommittedPoint(t *testing.T) {
+	db := openExactAnomalyDB(t)
+	node := model.Node{Name: "first-anomaly-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskEntity := model.Task{Name: "first-anomaly-task", NodeID: node.ID, ExecutorType: "restic", RsyncTarget: "/repository", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
+	}
+	currentID := strings.Repeat("a", 64)
+	session := &exactAnomalySession{current: publication.CommittedPoint{RecoveryPointID: strings.Repeat("3", 32), FullNativeID: currentID}}
+	runner := &exactAnomalyRunner{output: "+ /must-not-run.txt\n"}
+
+	findings, err := AnalyzeSnapshotDiffExact(context.Background(), db, taskEntity, 10, currentID, "", &exactAnomalyGuard{session: session}, runner)
+	if err != nil || len(findings) != 0 || runner.calls != 0 || session.closed != 1 {
+		t.Fatalf("first point findings=%v err=%v runner=%d closes=%d", findings, err, runner.calls, session.closed)
+	}
+}
 
 func TestCountRansomSuffixHits(t *testing.T) {
 	tests := []struct {

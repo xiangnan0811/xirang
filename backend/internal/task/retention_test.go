@@ -1,15 +1,192 @@
 package task
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 )
+
+func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	policy := model.Policy{ID: 17, RetentionDays: 7}
+	session := &legacyLineageSessionFake{mode: publication.LineageExact}
+	guard := &legacyLineageGuardFake{session: session}
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLineageGuard(guard)
+	manager.SetLegacyBlockRecorder(recorder)
+	var legacyCalls int32
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		atomic.AddInt32(&legacyCalls, 1)
+	}
+
+	manager.enforceResticRetention(policy, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&legacyCalls); got != 0 {
+		t.Fatalf("managed retention reached legacy credential/SSH path %d time(s)", got)
+	}
+	if len(recorder.blocks) != 1 || recorder.blocks[0].Operation != publication.OperationLegacyRetention || recorder.blocks[0].TaskID != taskEntity.ID || recorder.blocks[0].TaskRunID != nil {
+		t.Fatalf("unexpected retention blocks: %+v", recorder.blocks)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("session close count=%d, want 1", got)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	policy := model.Policy{ID: 18, RetentionDays: 7}
+	session := &legacyLineageSessionFake{mode: publication.LineageExact}
+	guard := &legacyLineageGuardFake{session: session}
+	manager.SetLineageGuard(guard)
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		t.Fatal("rollback-safe retention must not reach legacy path")
+	}
+
+	manager.enforceResticRetention(policy, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("session close count=%d, want 1", got)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+func TestPristineResticRetentionRetainsCompatibility(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	policy := model.Policy{ID: 19, RetentionDays: 7}
+	session := &legacyLineageSessionFake{mode: publication.LineageCompatibility}
+	guard := &legacyLineageGuardFake{session: session}
+	manager.SetLineageGuard(guard)
+	var legacyCalls int32
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		atomic.AddInt32(&legacyCalls, 1)
+	}
+
+	manager.enforceResticRetention(policy, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&legacyCalls); got != 1 {
+		t.Fatalf("pristine retention legacy calls=%d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("session close count=%d, want 1", got)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+func TestResticRetentionAdmissionDrainsThroughCommandAndConnectionClose(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	policy := model.Policy{ID: 20, RetentionDays: 7}
+	session := &legacyLineageSessionFake{mode: publication.LineageCompatibility}
+	manager.SetLineageGuard(&legacyLineageGuardFake{session: session})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		close(started)
+		<-release
+	}
+	finished := make(chan struct{})
+	go func() {
+		manager.enforceResticRetention(policy, taskEntity)
+		close(finished)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("legacy retention path did not begin")
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 0 {
+		t.Fatalf("admission closed before command/connection returned: %d", got)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("legacy retention path did not finish")
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("admission close count=%d, want 1", got)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
+func TestManagedRestoreAndRetentionRecordTypedLegacyBlockAuditAndMetric(t *testing.T) {
+	db := openManagerTestDB(t)
+	restoreExecutor := &trackingRestoreExecutor{err: errors.New("must remain unreachable")}
+	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
+	restoreRunID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLegacyBlockRecorder(recorder)
+	manager.SetLineageGuard(&legacyLineageGuardFake{session: &legacyLineageSessionFake{mode: publication.LineageExact}})
+	manager.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		t.Fatal("managed restore must not precheck")
+		return nil
+	}
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		t.Fatal("managed retention must not touch its legacy path")
+	}
+
+	manager.runRestoreTask(taskEntity.ID, restoreRunID, taskEntity)
+	manager.enforceResticRetention(model.Policy{ID: 21, RetentionDays: 7}, taskEntity)
+
+	if len(recorder.blocks) != 2 {
+		t.Fatalf("legacy block count=%d, want 2", len(recorder.blocks))
+	}
+	if restore := recorder.blocks[0]; restore.Operation != publication.OperationLegacyRestoreLatest || restore.TaskRunID == nil || *restore.TaskRunID != restoreRunID {
+		t.Fatalf("restore block=%+v", restore)
+	}
+	if retention := recorder.blocks[1]; retention.Operation != publication.OperationLegacyRetention || retention.TaskRunID != nil {
+		t.Fatalf("retention block=%+v", retention)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
 
 func TestShellEscape(t *testing.T) {
 	cases := []struct {

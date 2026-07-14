@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/sshutil"
-	"xirang/backend/internal/task/executor"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -41,11 +38,17 @@ type DiffResult struct {
 
 // SnapshotDiffHandler 处理 restic 快照差异比较。
 type SnapshotDiffHandler struct {
-	db *gorm.DB
+	db     *gorm.DB
+	guard  publication.LineageGuard
+	runner SnapshotDiffRunner
 }
 
-func NewSnapshotDiffHandler(db *gorm.DB) *SnapshotDiffHandler {
-	return &SnapshotDiffHandler{db: db}
+type SnapshotDiffRunner interface {
+	RunSnapshotDiff(context.Context, model.Task, string, string) (string, error)
+}
+
+func NewSnapshotDiffHandler(db *gorm.DB, guard publication.LineageGuard, runner SnapshotDiffRunner) *SnapshotDiffHandler {
+	return &SnapshotDiffHandler{db: db, guard: guard, runner: runner}
 }
 
 // snapshotIDPattern 校验快照 ID 格式（十六进制字符串，4-64 位）。
@@ -92,54 +95,33 @@ func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
 		return
 	}
 
-	repo := strings.TrimSpace(task.RsyncTarget)
-	if repo == "" {
-		respondBadRequest(c, "restic 仓库路径为空")
+	if h.guard == nil || h.runner == nil {
+		respondServiceUnavailable(c, "备份资产运行时不可用")
 		return
 	}
-
-	access, err := executor.ResolveResticRepositoryAccess(task.ExecutorConfig)
+	session, err := h.guard.Begin(c.Request.Context(), task.ID, publication.OperationLegacyDiff)
 	if err != nil {
-		respondInternalError(c, fmt.Errorf("解析 restic 配置失败: %w", err))
+		respondForbidden(c, "快照比较当前不可用")
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeSnapshotDiff)
+	defer func() { _ = session.Close() }()
+	left, err := resolveLineageSnapshotID(session, snap1)
 	if err != nil {
-		respondInternalError(c, fmt.Errorf("SSH 连接失败: %w", err))
+		respondBadRequest(c, "snap1 不属于当前任务")
 		return
 	}
-	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	// 生成唯一的密码临时文件路径，并在远程节点上创建
-	pwFilePath := executor.BuildResticPasswordFilePath()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
-		respondInternalError(c, fmt.Errorf("创建 restic 密码临时文件失败: %w", err))
-		return
-	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
-	}()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
-
-	resticBin := "restic"
-	repoArg := "'" + strings.ReplaceAll(repo, "'", "'\\''") + "'"
-	snap1Arg := "'" + strings.ReplaceAll(snap1, "'", "'\\''") + "'"
-	snap2Arg := "'" + strings.ReplaceAll(snap2, "'", "'\\''") + "'"
-
-	cmd := fmt.Sprintf("%s %s diff %s %s -r %s 2>&1", pwFileArg, resticBin, snap1Arg, snap2Arg, repoArg)
-	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
+	right, err := resolveLineageSnapshotID(session, snap2)
 	if err != nil {
-		respondInternalError(c, fmt.Errorf("执行 restic diff 失败: %w", err))
+		respondBadRequest(c, "snap2 不属于当前任务")
+		return
+	}
+	output, err := h.runner.RunSnapshotDiff(c.Request.Context(), task, left, right)
+	if err != nil {
+		respondInternalError(c, err)
 		return
 	}
 
-	result := parseDiffOutput(output, snap1, snap2)
+	result := parseDiffOutput(output, left, right)
 	respondOK(c, result)
 }
 

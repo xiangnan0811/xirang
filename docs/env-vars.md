@@ -96,8 +96,18 @@
 | `BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT` | duration | `2m` | 否 | Provider probe/list/stat 等元数据操作超时，范围 `5s..30m` |
 | `BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY` | int | `4` | 否 | Provider 只读操作共享最大并发数，范围 `1..32` |
 | `BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES` | int | `16777216` | 否 | Provider 元数据输出/解析硬上限（字节），范围 `65536..67108864` |
+| `BACKUP_ASSETS_PUBLICATION_RECONCILE_INTERVAL` | duration | `5m` | 否 | Restic 恢复点持久队列的周期对账间隔，范围 `30s..24h` |
+| `BACKUP_ASSETS_PUBLICATION_RECONCILE_BATCH_SIZE` | int | `100` | 否 | 单次恢复点对账最大候选数，范围 `1..1000` |
+| `BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY` | int | `2` | 否 | Manifest/对账 worker 共享并发上限，范围 `1..32` |
+| `BACKUP_ASSETS_PUBLICATION_MISSING_GRACE` | duration | `30m` | 否 | 带精确标记但暂未发现 snapshot 时的宽限期，范围 `1m..24h`；必须不小于短租约且小于绝对截止时间 |
+| `BACKUP_ASSETS_PUBLICATION_STREAM_MAX_BYTES` | int | `268435456` | 否 | Restic backup JSON/NDJSON 证据流总字节上限，范围 `1048576..1073741824` |
+| `BACKUP_ASSETS_MANIFEST_TIMEOUT` | duration | `2h` | 否 | 单个精确 snapshot Manifest 枚举超时，范围 `1m..24h`；必须小于绝对截止时间 |
+| `BACKUP_ASSETS_MANIFEST_MAX_BYTES` | int | `4294967296` | 否 | 单个 Manifest 的累计逻辑字节上限，范围 `1048576..17179869184` |
+| `BACKUP_ASSETS_MANIFEST_MAX_ENTRIES` | int | `10000000` | 否 | 单个 Manifest 的目录/文件条目上限，范围 `1..100000000` |
+| `BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES` | int | `1048576` | 否 | 单条 Restic Manifest 记录上限，范围 `4096..4194304`；不得大于 Manifest 总字节上限 |
+| `BACKUP_ASSETS_MANIFEST_MAX_DEPTH` | int | `4096` | 否 | Manifest 遍历的最大目录深度，范围 `1..65536` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry 与 `backend/internal/backupasset` foundation service（DB override > env > default，均可动态调整）。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default，均可动态调整）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先排空已获准的 Restic 命令，再提交新值。
 
 ## 7. 节点探测
 

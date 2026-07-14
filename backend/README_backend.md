@@ -12,6 +12,12 @@
 - RBAC 权限控制 + TOTP 两步验证 + 审计日志
 - SLA 报告、配置导入导出、系统自助备份
 
+## 备份资产运行时
+
+`backend/internal/backupasset/runtime` 是备份资产的唯一组合根：它创建一套 Provider transport、admission barrier、Repository service、Restic publication/manifest worker 和 lineage guard。`cmd/server` 在 Task Manager 与 executor factory 之前创建该运行时；同一个 Restic adapter 同时服务 evidence backup 和受 guard 保护的 legacy snapshot list/files/diff/search 路径。Router 只接收已注入的 runtime/窄端口，不会自行创建第二个 Provider 图。
+
+`backup_assets.enabled` 默认仍为 `false`。本层不新增公开的资产导航或恢复点 API；feature 开启后的 Restic 恢复点仅作为内部精确 lineage/发布事实，并保持现有 route 的认证、RBAC 与 ownership 边界。
+
 ## 快速运行
 
 ```bash

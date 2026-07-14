@@ -14,6 +14,16 @@ Xirang 支持三类备份执行器：
 
 备份策略可配置 cron 调度、源/目标路径、排除规则、带宽限制、前后置 hook、重试策略和保留策略。
 
+## Restic 精确血缘与安全回退
+
+`backup_assets.enabled` 默认是 `false`。在从未产生过 managed 恢复点的安装上，关闭该开关保持既有 Restic 兼容行为。启用或关闭开关、以及通过设置导入/删除覆盖值时，服务会先停止新的 Restic admission，并排空已经开始的 backup、list、files、search、diff、snapshot restore、anomaly、retention、publication 与 reconciliation 命令；数据库设置只会在该排空完成后写入。
+
+启用后，一次 Restic backup 只有在 exit-zero summary、完整原生 snapshot ID、精确 Task/TaskRun 标记、Manifest 和最低验证全部一致时，才会异步发布为可信恢复点。传输成功与发布成功是独立事实：Manifest 或血缘失败不会改写已经发生的 TaskRun 传输结果。
+
+一旦安装产生 native managed 恢复点或保留 tombstone，持久的 managed-history latch 会生效。此后即使关闭 feature，也进入 rollback-safe 模式：继续执行精确 Task lineage guard，禁止无 tag 的 legacy backup fallback、`restore latest`、仓库级最新快照异常比较和无 tag 的 Restic retention。该保护不会执行 `forget`、`prune`、`delete`，也不会删除原生 snapshot。
+
+已经使用 managed publication 的安装必须保留 migration `000063_backup_asset_publication_contract`，并在 feature 关闭时继续使用兼容 Child 3 的二进制。回退到不理解该合同的应用版本或执行 schema down 前，必须走独占 preflight；只要存在 active publication lease、managed history 或 tombstone，preflight 会拒绝继续。
+
 ## 应用感知备份
 
 应用感知备份会根据业务应用类型，在备份前自动执行数据库 dump，降低直接备份数据目录造成不一致的风险。
@@ -66,13 +76,13 @@ GFS（Grandfather-Father-Son）按日/周/月/年多级保留快照。
 | `keep_monthly` | 保留最近 N 个月快照 | 0 | 0-120 |
 | `keep_yearly` | 保留最近 N 个年快照 | 0 | 0-30 |
 
-Restic 执行命令形态：
+对 pristine legacy Restic 任务，保留策略的命令形态为：
 
 ```bash
 restic forget --keep-daily <N> --keep-weekly <N> --keep-monthly <N> --keep-yearly <N> --prune
 ```
 
-GFS 模式仅适用于 Restic 执行器。Rsync 和 Rclone 任务按 Simple 模式处理。
+GFS 模式仅适用于 Restic 执行器。Rsync 和 Rclone 任务按 Simple 模式处理。出现 managed-history latch 后，上述无 tag `forget --prune` 路径会被安全阻止，直到受控生命周期功能接管；不会以删除 snapshot 作为回退或对账手段。
 
 ### RPO/RTO 目标
 

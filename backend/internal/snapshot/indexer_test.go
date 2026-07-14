@@ -1,189 +1,296 @@
 package snapshot
 
 import (
+	"context"
 	"errors"
-	"strings"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
-	"xirang/backend/internal/task/executor"
+	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/model"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
-func TestEscapeLikePattern_Normal(t *testing.T) {
-	result := EscapeLikePattern("nginx.conf")
-	if result != "nginx.conf" {
-		t.Fatalf("期望 nginx.conf 不变，实际: %s", result)
+const (
+	indexerPointOne = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	indexerPointTwo = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func openIndexerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open indexer database: %v", err)
 	}
+	if err := db.AutoMigrate(&model.Task{}, &model.SnapshotFileIndex{}); err != nil {
+		t.Fatalf("migrate indexer database: %v", err)
+	}
+	return db
 }
 
-func TestEscapeLikePattern_Percent(t *testing.T) {
-	result := EscapeLikePattern("100%")
-	if result != `100\%` {
-		t.Fatalf("期望 %% 被转义为 \\%%，实际: %s", result)
-	}
+type indexerSettings map[string]string
+
+func (settings indexerSettings) GetEffective(key string) string { return settings[key] }
+
+func indexerFoundation() *backupasset.FoundationService {
+	return backupasset.NewFoundationService(indexerSettings{
+		"backup_assets.enabled":                          "true",
+		"backup_assets.catalog_batch_size":               "2000",
+		"backup_assets.catalog_build_timeout":            "30m",
+		"backup_assets.repository_reconcile_interval":    "15m",
+		"backup_assets.audit_segment_max_events":         "10000",
+		"backup_assets.audit_segment_max_age":            "24h",
+		"backup_assets.audit_detail_retention_days":      "180",
+		"backup_assets.audit_checkpoint_retention_days":  "2555",
+		"backup_assets.lease_duration":                   "5m",
+		"backup_assets.lease_heartbeat":                  "60s",
+		"backup_assets.lease_absolute_deadline":          "168h",
+		"backup_assets.provider_operation_timeout":       "2m",
+		"backup_assets.provider_max_concurrency":         "4",
+		"backup_assets.provider_metadata_limit_bytes":    "16777216",
+		"backup_assets.publication_reconcile_interval":   "5m",
+		"backup_assets.publication_reconcile_batch_size": "100",
+		"backup_assets.publication_worker_concurrency":   "2",
+		"backup_assets.publication_missing_grace":        "30m",
+		"backup_assets.publication_stream_max_bytes":     "268435456",
+		"backup_assets.manifest_timeout":                 "2h",
+		"backup_assets.manifest_max_bytes":               "4294967296",
+		"backup_assets.manifest_max_entries":             "10000000",
+		"backup_assets.manifest_max_record_bytes":        "1048576",
+		"backup_assets.manifest_max_depth":               "4096",
+	})
 }
 
-func TestEscapeLikePattern_Underscore(t *testing.T) {
-	result := EscapeLikePattern("file_name")
-	if result != `file\_name` {
-		t.Fatalf("期望 _ 被转义为 \\_，实际: %s", result)
-	}
+type indexerLineageSession struct {
+	publication.LineageSession
+	mode      publication.LineageMode
+	points    []publication.CommittedPoint
+	list      func(context.Context, string, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error)
+	mu        sync.Mutex
+	listCalls []indexerListCall
+	closed    int
 }
 
-func TestEscapeLikePattern_Both(t *testing.T) {
-	result := EscapeLikePattern("100%_file")
-	if result != `100\%\_file` {
-		t.Fatalf("期望 %% 和 _ 同时转义，实际: %s", result)
-	}
+type indexerListCall struct {
+	point  string
+	parent string
+	page   provider.PageRequest
 }
 
-func TestEscapeLikePattern_Empty(t *testing.T) {
-	result := EscapeLikePattern("")
-	if result != "" {
-		t.Fatalf("期望空字符串不变，实际: %s", result)
-	}
+func (session *indexerLineageSession) Mode() publication.LineageMode { return session.mode }
+
+func (session *indexerLineageSession) CommittedPoints() []publication.CommittedPoint {
+	return append([]publication.CommittedPoint(nil), session.points...)
 }
 
-func TestEscapeLikePattern_Backslash(t *testing.T) {
-	result := EscapeLikePattern(`path\to\file`)
-	if result != `path\\to\\file` {
-		t.Fatalf("期望 \\ 被转义为 \\\\，实际: %s", result)
+func (session *indexerLineageSession) ListEntries(ctx context.Context, pointID string, parent provider.EntryLocator, page provider.PageRequest) (provider.EntryPage, error) {
+	session.mu.Lock()
+	session.listCalls = append(session.listCalls, indexerListCall{point: pointID, parent: parent.Native, page: page})
+	session.mu.Unlock()
+	if session.list == nil {
+		return provider.EntryPage{}, errors.New("unexpected provider list")
 	}
+	return session.list(ctx, pointID, parent, page)
 }
 
-func TestResticFindFailureErrorHidesNonEmptyOutput(t *testing.T) {
-	rawOutput := strings.Join([]string{
-		"repository password rejected for token=FAKE_TOKEN_FOR_TEST_ONLY",
-		"host backup.internal.example.com endpoint https://backup.internal.example.com/repo",
-		"stdout: /srv/backup/private/path FAKE_COMMAND_OUTPUT_FOR_TEST_ONLY",
-	}, "\n")
+func (session *indexerLineageSession) Close() error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.closed++
+	return nil
+}
 
-	err := newResticFindFailureError(errors.New("exit status 1"), rawOutput)
-	errText := err.Error()
-	if !strings.Contains(errText, "[输出已隐藏]") {
-		t.Fatalf("期望非空输出使用隐藏占位符，实际: %s", errText)
+type indexerLineageGuard struct {
+	mu       sync.Mutex
+	sessions []publication.LineageSession
+	calls    []publication.ResticOperation
+}
+
+func (guard *indexerLineageGuard) Begin(_ context.Context, _ uint, operation publication.ResticOperation) (publication.LineageSession, error) {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	guard.calls = append(guard.calls, operation)
+	if len(guard.sessions) == 0 {
+		return nil, errors.New("unexpected lineage admission")
 	}
-	for _, forbidden := range []string{
-		"FAKE_TOKEN_FOR_TEST_ONLY",
-		"backup.internal.example.com",
-		"https://backup.internal.example.com/repo",
-		"/srv/backup/private/path",
-		"FAKE_COMMAND_OUTPUT_FOR_TEST_ONLY",
-	} {
-		if strings.Contains(errText, forbidden) {
-			t.Fatalf("错误字符串泄露原始输出片段 %q: %s", forbidden, errText)
+	session := guard.sessions[0]
+	guard.sessions = guard.sessions[1:]
+	return session, nil
+}
+
+var _ publication.LineageSession = (*indexerLineageSession)(nil)
+var _ publication.LineageGuard = (*indexerLineageGuard)(nil)
+
+func TestIndexerExactModeEnumeratesOnlyCommittedTaskPoints(t *testing.T) {
+	db := openIndexerTestDB(t)
+	taskEntity := model.Task{Name: "exact-index", ExecutorType: "restic", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.SnapshotFileIndex{TaskID: taskEntity.ID, SnapshotID: indexerPointTwo, Path: "/foreign.txt", Size: 99, Mtime: "old"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	point := publication.CommittedPoint{RecoveryPointID: "11111111111111111111111111111111", FullNativeID: indexerPointOne, CapturedAt: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	session := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	session.list = func(_ context.Context, pointID string, parent provider.EntryLocator, page provider.PageRequest) (provider.EntryPage, error) {
+		if pointID != indexerPointOne {
+			t.Fatalf("listed uncommitted/foreign point %q", pointID)
+		}
+		if page.Limit != exactIndexPageSize {
+			t.Fatalf("page limit=%d, want %d", page.Limit, exactIndexPageSize)
+		}
+		switch parent.Native {
+		case "/":
+			return provider.EntryPage{Items: []provider.Entry{
+				{Name: "top.txt", Type: backupasset.CatalogEntryFile, Size: 7, ModTime: point.CapturedAt, Locator: provider.EntryLocator{Native: "/top.txt"}},
+				{Name: "nested", Type: backupasset.CatalogEntryDirectory, ModTime: point.CapturedAt, Locator: provider.EntryLocator{Native: "/nested"}},
+			}}, nil
+		case "/nested":
+			return provider.EntryPage{Items: []provider.Entry{{Name: "deep.txt", Type: backupasset.CatalogEntryFile, Size: 11, ModTime: point.CapturedAt, Locator: provider.EntryLocator{Native: "/nested/deep.txt"}}}}, nil
+		default:
+			return provider.EntryPage{}, fmt.Errorf("unexpected parent %q", parent.Native)
 		}
 	}
-}
+	guard := &indexerLineageGuard{sessions: []publication.LineageSession{session}}
+	indexer := NewIndexer(db, guard, indexerFoundation())
 
-func TestResticFindFailureErrorOmitsOutputForEmptyOutput(t *testing.T) {
-	err := newResticFindFailureError(errors.New("exit status 1"), " \n\t ")
-	errText := err.Error()
-	if strings.Contains(errText, "输出:") || strings.Contains(errText, "[输出已隐藏]") {
-		t.Fatalf("空输出不应附加输出字段或占位符，实际: %s", errText)
+	if err := indexer.Build(context.Background(), taskEntity); err != nil {
+		t.Fatalf("build exact index: %v", err)
 	}
-}
 
-func TestParseResticFindOutput_Empty(t *testing.T) {
-	entries := parseResticFindOutput("")
-	if len(entries) != 0 {
-		t.Fatalf("期望空输出返回 0 条目，实际: %d", len(entries))
+	var rows []model.SnapshotFileIndex
+	if err := db.Where("task_id = ?", taskEntity.ID).Order("snapshot_id, path").Find(&rows).Error; err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestParseResticFindOutput_SingleMatch(t *testing.T) {
-	output := `{"matches":[{"path":"/etc/nginx/nginx.conf","type":"file","size":1234,"mtime":"2024-01-01T00:00:00Z"}],"hits":1}`
-	entries := parseResticFindOutput(output)
-	if len(entries) != 1 {
-		t.Fatalf("期望 1 条目，实际: %d", len(entries))
+	if len(rows) != 4 {
+		t.Fatalf("indexed rows=%+v, want 3 entries plus completion marker", rows)
 	}
-	if entries[0].Path != "/etc/nginx/nginx.conf" {
-		t.Fatalf("期望路径 /etc/nginx/nginx.conf，实际: %s", entries[0].Path)
+	for _, row := range rows {
+		if row.SnapshotID != indexerPointOne {
+			t.Fatalf("foreign or stale row survived exact build: %+v", row)
+		}
 	}
-	if entries[0].Size != 1234 {
-		t.Fatalf("期望大小 1234，实际: %d", entries[0].Size)
+	if rows[0].Path != "" || rows[0].Mtime != exactIndexCompleteMarkerMtime || rows[0].Size != 3 {
+		t.Fatalf("completion marker=%+v", rows[0])
 	}
-	if entries[0].Mtime != "2024-01-01T00:00:00Z" {
-		t.Fatalf("期望 mtime 2024-01-01T00:00:00Z，实际: %s", entries[0].Mtime)
+	if session.closed != 1 {
+		t.Fatalf("admission close count=%d, want 1", session.closed)
+	}
+	if len(guard.calls) != 1 || guard.calls[0] != publication.OperationLegacyIndex {
+		t.Fatalf("index admissions=%v", guard.calls)
 	}
 }
 
-func TestParseResticFindOutput_MultipleMatches(t *testing.T) {
-	output := `{"matches":[{"path":"/etc/nginx/nginx.conf","type":"file","size":1234,"mtime":"2024-01-01T00:00:00Z"},{"path":"/etc/nginx/sites/default","type":"file","size":5678,"mtime":"2024-01-02T00:00:00Z"}],"hits":2}`
-	entries := parseResticFindOutput(output)
-	if len(entries) != 2 {
-		t.Fatalf("期望 2 条目，实际: %d", len(entries))
+func TestEnsureIndexedRejectsPartialRowsWithoutCompletionMarker(t *testing.T) {
+	db := openIndexerTestDB(t)
+	taskEntity := model.Task{Name: "partial-index", ExecutorType: "restic", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestParseResticFindOutput_MultipleLines(t *testing.T) {
-	output := `{"matches":[{"path":"/file1.txt","type":"file","size":100,"mtime":"2024-01-01T00:00:00Z"}],"hits":1}
-{"matches":[{"path":"/file2.txt","type":"file","size":200,"mtime":"2024-01-02T00:00:00Z"}],"hits":1}`
-	entries := parseResticFindOutput(output)
-	if len(entries) != 2 {
-		t.Fatalf("期望 2 条目，实际: %d", len(entries))
+	if err := db.Create(&model.SnapshotFileIndex{TaskID: taskEntity.ID, SnapshotID: indexerPointOne, Path: "/partial.txt", Size: 1, Mtime: "old"}).Error; err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestParseResticFindOutput_IgnoresNonJSON(t *testing.T) {
-	output := `some error message
-{"matches":[{"path":"/file.txt","type":"file","size":100,"mtime":"2024-01-01T00:00:00Z"}],"hits":1}
-another non-json line`
-	entries := parseResticFindOutput(output)
-	if len(entries) != 1 {
-		t.Fatalf("期望跳过非 JSON 行后得到 1 条目，实际: %d", len(entries))
+	point := publication.CommittedPoint{RecoveryPointID: "22222222222222222222222222222222", FullNativeID: indexerPointOne, CapturedAt: time.Now().UTC()}
+	handlerSession := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	buildSession := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	buildSession.list = func(context.Context, string, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error) {
+		return provider.EntryPage{}, errors.New("provider temporarily unavailable")
 	}
-}
+	guard := &indexerLineageGuard{sessions: []publication.LineageSession{buildSession}}
+	indexer := NewIndexer(db, guard, indexerFoundation())
 
-func TestParseResticFindOutput_EmptyMatches(t *testing.T) {
-	output := `{"matches":[],"hits":0}`
-	entries := parseResticFindOutput(output)
-	if len(entries) != 0 {
-		t.Fatalf("期望 0 条目，实际: %d", len(entries))
-	}
-}
-
-func TestResolveResticRepositoryAccessForIndex_Empty(t *testing.T) {
-	access, err := executor.ResolveResticRepositoryAccess("")
+	ready, err := indexer.EnsureIndexed(context.Background(), taskEntity.ID, handlerSession)
 	if err != nil {
-		t.Fatalf("ResolveResticRepositoryAccess 不应失败: %v", err)
+		t.Fatalf("ensure exact index: %v", err)
 	}
-	if access.Password() != "" {
-		t.Fatalf("期望空访问口令，实际: %s", access.Password())
+	if ready {
+		t.Fatal("partial rows without a completion marker reported ready")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for IsIndexing(taskEntity.ID) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	var markers int64
+	if err := db.Model(&model.SnapshotFileIndex{}).Where("task_id = ? AND snapshot_id = ? AND path = ? AND mtime = ?", taskEntity.ID, indexerPointOne, exactIndexCompleteMarkerPath, exactIndexCompleteMarkerMtime).Count(&markers).Error; err != nil {
+		t.Fatal(err)
+	}
+	if markers != 0 {
+		t.Fatalf("failed exact index wrote %d completion markers", markers)
 	}
 }
 
-func TestResolveResticRepositoryAccessForIndex_WithPassword(t *testing.T) {
-	access, err := executor.ResolveResticRepositoryAccess(`{"repository_password":"FAKE_PASSWORD_FOR_TEST_ONLY"}`)
-	if err != nil {
-		t.Fatalf("ResolveResticRepositoryAccess 不应失败: %v", err)
+func TestEnsureIndexedRepresentsEmptySnapshotWithCompletionMarker(t *testing.T) {
+	db := openIndexerTestDB(t)
+	taskEntity := model.Task{Name: "empty-index", ExecutorType: "restic", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
 	}
-	if access.Password() != "FAKE_PASSWORD_FOR_TEST_ONLY" {
-		t.Fatalf("期望访问口令匹配，实际: %s", access.Password())
+	point := publication.CommittedPoint{RecoveryPointID: "33333333333333333333333333333333", FullNativeID: indexerPointOne, CapturedAt: time.Now().UTC()}
+	session := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	session.list = func(_ context.Context, pointID string, parent provider.EntryLocator, _ provider.PageRequest) (provider.EntryPage, error) {
+		if pointID != indexerPointOne || parent.Native != "/" {
+			t.Fatalf("empty snapshot lookup point=%q parent=%q", pointID, parent.Native)
+		}
+		return provider.EntryPage{}, nil
+	}
+	guard := &indexerLineageGuard{sessions: []publication.LineageSession{session}}
+	indexer := NewIndexer(db, guard, indexerFoundation())
+
+	if err := indexer.Build(context.Background(), taskEntity); err != nil {
+		t.Fatalf("build empty exact index: %v", err)
+	}
+	ready, err := indexer.EnsureIndexed(context.Background(), taskEntity.ID, &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}})
+	if err != nil || !ready {
+		t.Fatalf("empty snapshot ready=%v err=%v", ready, err)
+	}
+	var rows []model.SnapshotFileIndex
+	if err := db.Where("task_id = ?", taskEntity.ID).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Path != exactIndexCompleteMarkerPath || rows[0].Mtime != exactIndexCompleteMarkerMtime || rows[0].Size != 0 {
+		t.Fatalf("empty snapshot rows=%+v", rows)
 	}
 }
 
-func TestBuildResticPasswordFileArgForIndex_EmptyPassword(t *testing.T) {
-	pwFilePath := executor.BuildResticPasswordFilePath()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
-	if !strings.HasPrefix(pwFileArg, "--password-file ") {
-		t.Fatalf("期望 --password-file 前缀，实际: %s", pwFileArg)
+func TestIndexerExactModeRetainsPreviousCompletePointAfterReplacementFailure(t *testing.T) {
+	db := openIndexerTestDB(t)
+	taskEntity := model.Task{Name: "replace-exact-index", ExecutorType: "restic", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatal(err)
 	}
-	// 密码为空时创建命令仍然生成
-	createCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, executor.NewResticRepositoryAccess(""))
-	if !strings.Contains(createCmd, "chmod 600") {
-		t.Fatalf("期望创建命令包含 chmod 600，实际: %s", createCmd)
+	previousRows := []model.SnapshotFileIndex{
+		{TaskID: taskEntity.ID, SnapshotID: indexerPointOne, Path: "/trusted.txt", Size: 7, Mtime: "old"},
+		{TaskID: taskEntity.ID, SnapshotID: indexerPointOne, Path: exactIndexCompleteMarkerPath, Size: 1, Mtime: exactIndexCompleteMarkerMtime},
 	}
-}
+	if err := db.Create(&previousRows).Error; err != nil {
+		t.Fatal(err)
+	}
 
-func TestBuildResticPasswordFileArgForIndex_WithPassword(t *testing.T) {
-	pwFilePath := executor.BuildResticPasswordFilePath()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
-	if !strings.HasPrefix(pwFileArg, "--password-file ") {
-		t.Fatalf("期望 --password-file 前缀，实际: %s", pwFileArg)
+	point := publication.CommittedPoint{RecoveryPointID: "44444444444444444444444444444444", FullNativeID: indexerPointOne, CapturedAt: time.Now().UTC()}
+	session := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	session.list = func(context.Context, string, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error) {
+		return provider.EntryPage{}, errors.New("provider replacement failure")
 	}
-	// 密码非空时创建命令包含密码
-	createCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, executor.NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY"))
-	if !strings.Contains(createCmd, "chmod 600") {
-		t.Fatalf("期望创建命令包含 chmod 600，实际: %s", createCmd)
+	guard := &indexerLineageGuard{sessions: []publication.LineageSession{session}}
+	indexer := NewIndexer(db, guard, indexerFoundation())
+
+	if err := indexer.Build(context.Background(), taskEntity); err == nil {
+		t.Fatal("exact replacement unexpectedly succeeded")
+	}
+	var rows []model.SnapshotFileIndex
+	if err := db.Where("task_id = ? AND snapshot_id = ?", taskEntity.ID, indexerPointOne).Order("path").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != len(previousRows) || rows[0].Path != exactIndexCompleteMarkerPath || rows[1].Path != "/trusted.txt" {
+		t.Fatalf("failed replacement removed prior complete index: %+v", rows)
 	}
 }

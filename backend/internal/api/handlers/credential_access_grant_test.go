@@ -1579,7 +1579,7 @@ func TestSnapshotBrowseRoutesDoNotRequireSnapshotRestoreGrant(t *testing.T) {
 	taskEntity := seedCredentialGrantTask(t, db, "rsync")
 	router := gin.New()
 	router.Use(middleware.AuthMiddleware(manager, db))
-	handler := NewSnapshotHandler(db)
+	handler := NewSnapshotHandler(db, nil, nil)
 	router.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), handler.ListSnapshots)
 
 	resp := performStepUpRequest(t, router, http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), token, "", "")

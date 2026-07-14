@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -249,6 +250,73 @@ type resticSnapshot struct {
 
 var snapshotIDPat = regexp.MustCompile(`^[a-fA-F0-9]{4,64}$`)
 
+// SnapshotDiffCommandRunner is the narrow command port shared by the exact
+// anomaly path and legacy handler. Callers must resolve full committed IDs
+// before invoking it.
+type SnapshotDiffCommandRunner interface {
+	RunSnapshotDiff(context.Context, model.Task, string, string) (string, error)
+}
+
+// AnalyzeSnapshotDiffExact compares a newly committed point only with the
+// immediate previous committed point for the same Task/link. It never queries
+// repository-wide `latest` and obtains its generation admission before either
+// lineage resolution or the Provider command.
+func AnalyzeSnapshotDiffExact(ctx context.Context, db *gorm.DB, task model.Task, taskRunID uint, currentFullID, previousFullID string, guard publication.LineageGuard, runner SnapshotDiffCommandRunner) ([]Finding, error) {
+	if db == nil || task.ID == 0 || taskRunID == 0 || guard == nil || runner == nil {
+		return nil, fmt.Errorf("exact snapshot anomaly dependencies are unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var fullTask model.Task
+	if err := db.WithContext(ctx).Preload("Node").Preload("Node.SSHKey").First(&fullTask, task.ID).Error; err != nil {
+		return nil, fmt.Errorf("加载任务失败: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(fullTask.ExecutorType), "restic") {
+		return nil, nil
+	}
+	session, err := guard.Begin(ctx, fullTask.ID, publication.OperationLegacyAnomaly)
+	if err != nil || session == nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("exact snapshot anomaly lineage unavailable")
+	}
+	defer func() { _ = session.Close() }()
+	if session.Mode() != publication.LineageExact {
+		return nil, fmt.Errorf("exact snapshot anomaly requires managed lineage")
+	}
+	current, previous, err := session.CurrentAndPrevious(strings.ToLower(strings.TrimSpace(currentFullID)))
+	if err != nil {
+		return nil, err
+	}
+	if previous == nil {
+		return nil, nil
+	}
+	if previous.FullNativeID != strings.ToLower(strings.TrimSpace(previousFullID)) || current.FullNativeID != strings.ToLower(strings.TrimSpace(currentFullID)) {
+		return nil, fmt.Errorf("exact snapshot anomaly lineage changed")
+	}
+	currentID, err := session.ResolveNativeID(current.FullNativeID)
+	if err != nil || currentID != current.FullNativeID {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("exact snapshot anomaly current ID changed")
+	}
+	previousID, err := session.ResolveNativeID(previous.FullNativeID)
+	if err != nil || previousID != previous.FullNativeID {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("exact snapshot anomaly previous ID changed")
+	}
+	output, err := runner.RunSnapshotDiff(ctx, fullTask, previousID, currentID)
+	if err != nil {
+		return nil, err
+	}
+	return recordExactSnapshotDiff(ctx, db, fullTask, taskRunID, parseResticDiff(output, previousID, currentID))
+}
+
 // parseResticSnapshotsJSON 解析 restic snapshots --json 输出，返回快照 ID 列表。
 func parseResticSnapshotsJSON(output string) ([]string, error) {
 	var snapshots []resticSnapshot
@@ -487,5 +555,82 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 		})
 	}
 
+	return findings, nil
+}
+
+// recordExactSnapshotDiff shares the durable, Provider-independent anomaly
+// projection with the exact command path. Snapshot IDs remain only in the
+// in-memory parsed result and are never logged by this helper.
+func recordExactSnapshotDiff(ctx context.Context, db *gorm.DB, fullTask model.Task, taskRunID uint, result resticDiffResult) ([]Finding, error) {
+	policyID := uint(0)
+	if fullTask.PolicyID != nil {
+		policyID = *fullTask.PolicyID
+	}
+	var changedPaths []string
+	var totalSize int64
+	for _, change := range result.Changes {
+		changedPaths = append(changedPaths, change.Path)
+		if change.SizeAfter != nil {
+			totalSize += *change.SizeAfter
+		}
+	}
+	ransomHits := CountRansomSuffixHits(changedPaths)
+	diffRecord := DiffRecord{
+		AddedCount: result.Stats.Added, RemovedCount: result.Stats.Removed, ChangedCount: result.Stats.Changed,
+		TotalSizeBytes: totalSize, RansomSuffixHits: ransomHits,
+	}
+	history := model.SnapshotDiffHistory{
+		PolicyID: policyID, TaskID: fullTask.ID, TaskRunID: taskRunID,
+		AddedCount: diffRecord.AddedCount, RemovedCount: diffRecord.RemovedCount, ChangedCount: diffRecord.ChangedCount,
+		TotalSizeBytes: diffRecord.TotalSizeBytes, RansomSuffixHits: diffRecord.RansomSuffixHits,
+	}
+	if err := db.WithContext(ctx).Create(&history).Error; err != nil {
+		return nil, fmt.Errorf("写入 diff history 失败: %w", err)
+	}
+	var histories []model.SnapshotDiffHistory
+	if err := db.WithContext(ctx).Where("policy_id = ? AND id != ?", policyID, history.ID).Order("created_at desc").Limit(10).Find(&histories).Error; err != nil {
+		return nil, fmt.Errorf("查询历史基线失败: %w", err)
+	}
+	records := make([]DiffRecord, 0, len(histories))
+	for index := len(histories) - 1; index >= 0; index-- {
+		history := histories[index]
+		records = append(records, DiffRecord{
+			AddedCount: history.AddedCount, RemovedCount: history.RemovedCount, ChangedCount: history.ChangedCount,
+			TotalSizeBytes: history.TotalSizeBytes, RansomSuffixHits: history.RansomSuffixHits,
+		})
+	}
+	baseline := CalculateBaseline(records, 3)
+	var findings []Finding
+	if IsAnomalous(diffRecord, baseline, 3.0) {
+		var sigma, meanValue float64
+		var samples int
+		if baseline != nil {
+			sigma, meanValue, samples = baseline.StdDev, baseline.Mean, baseline.N
+		}
+		sigmaValue := sigma
+		findings = append(findings, Finding{
+			NodeID: fullTask.NodeID, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
+			ObservedValue: float64(diffRecord.TotalChanges()), BaselineValue: meanValue, Sigma: &sigmaValue,
+			ErrorCode: fmt.Sprintf("XR-SNAPSHOT-CHURN-%d", policyID),
+			Message:   fmt.Sprintf("策略 %d 的快照变更量异常（本次变更 %d 个文件，基线 μ=%.1f σ=%.1f，样本数=%d）", policyID, diffRecord.TotalChanges(), meanValue, sigma, samples),
+			Details: map[string]any{
+				"added_count": diffRecord.AddedCount, "removed_count": diffRecord.RemovedCount, "changed_count": diffRecord.ChangedCount,
+				"total_changes": diffRecord.TotalChanges(), "total_size_bytes": diffRecord.TotalSizeBytes, "ransom_suffix_hits": diffRecord.RansomSuffixHits,
+				"baseline_mean": meanValue, "baseline_stddev": sigma, "baseline_samples": samples,
+			},
+		})
+	}
+	if diffRecord.RansomSuffixHits > 0 {
+		findings = append(findings, Finding{
+			NodeID: fullTask.NodeID, Detector: "snapshot_diff", Metric: "ransomware_pattern", Severity: "critical",
+			ObservedValue: float64(diffRecord.RansomSuffixHits), BaselineValue: 0,
+			ErrorCode: fmt.Sprintf("XR-SNAPSHOT-RANSOM-%d", policyID),
+			Message:   fmt.Sprintf("策略 %d 的快照中发现 %d 个匹配已知勒索后缀的文件", policyID, diffRecord.RansomSuffixHits),
+			Details: map[string]any{
+				"ransom_suffix_hits": diffRecord.RansomSuffixHits, "added_count": diffRecord.AddedCount, "removed_count": diffRecord.RemovedCount,
+				"changed_count": diffRecord.ChangedCount, "total_changes": diffRecord.TotalChanges(),
+			},
+		})
+	}
 	return findings, nil
 }

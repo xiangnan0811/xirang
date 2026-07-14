@@ -110,6 +110,11 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `idx_task_runs_started_at` and `idx_task_runs_status_finished_at`. Preserve
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
+- Backup-asset schema changes are paired across SQLite and PostgreSQL. The
+  current baseline includes `000062` and `000063_backup_asset_publication_contract`;
+  later versions must remain paired. After a native managed RecoveryPoint or
+  tombstone exists, schema down must fail closed rather than deleting
+  publication history or Provider facts.
 
 ## Scenario: Policy Hooks And Sensitive Settings At Rest
 

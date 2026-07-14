@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -121,6 +122,28 @@ func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	if m.lineageGuard != nil {
+		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
+		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
+			if session != nil {
+				defer func() { _ = session.Close() }()
+			}
+			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyRetention)
+			log.Warn().Uint("task_id", task.ID).Msg("受管 Restic 保留清理已被安全边界阻止")
+			return
+		}
+		defer func() { _ = session.Close() }()
+	}
+
+	legacyRetention := m.resticRetentionFunc
+	if legacyRetention == nil {
+		legacyRetention = m.enforceLegacyResticRetention
+	}
+	legacyRetention(ctx, policy, task)
+}
+
+func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model.Policy, task model.Task) {
+	log := logger.Module("task")
 
 	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeRetention)
 	if err != nil {

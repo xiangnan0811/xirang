@@ -18,6 +18,8 @@ import (
 	"xirang/backend/internal/api"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/automation"
+	"xirang/backend/internal/backupasset/provider"
+	backupruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/dashboards"
@@ -33,10 +35,12 @@ import (
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/slo"
+	"xirang/backend/internal/snapshot"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
 	"xirang/backend/internal/uptime"
+	"xirang/backend/internal/util"
 	"xirang/backend/internal/version"
 	"xirang/backend/internal/ws"
 )
@@ -110,6 +114,16 @@ func main() {
 	defer cronScheduler.Stop()
 
 	settingsSvc := settings.NewService(db)
+	assetRuntime, err := backupruntime.New(backupruntime.Dependencies{
+		DB: db, Settings: settingsSvc,
+		ToolBinaries: provider.ToolBinaries{
+			Restic: util.GetEnvOrDefault("RESTIC_BINARY", "restic"),
+			Rclone: util.GetEnvOrDefault("RCLONE_BINARY", "rclone"),
+		},
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("构建备份资产运行时失败")
+	}
 	raiser := alerting.DefaultRaiser{DB: db}
 
 	// 自动化规则引擎 —— 在任务/异常事件发生时匹配规则并执行动作
@@ -170,11 +184,33 @@ func main() {
 
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
 
-	executorFactory := executor.NewFactory(cfg.RsyncBinary)
+	executorFactory := executor.NewFactoryWithResticPublisher(cfg.RsyncBinary, assetRuntime.ResticPublisher())
+	legacyRestic, ok := executorFactory.Resolve("restic").(*executor.ResticExecutor)
+	if !ok {
+		log.Fatal().Msg("Restic legacy adapter type mismatch")
+	}
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
+	taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())
+	taskManager.SetLineageGuard(assetRuntime.LineageGuard())
+	taskManager.SetLegacyBlockRecorder(assetRuntime.LegacyBlockRecorder())
 	taskManager.SetAnomalySink(anomalySink)
+	taskManager.SetExactAnomalyAnalyzer(func(ctx context.Context, taskEntity model.Task, runID uint, currentID, previousID string) ([]anomaly.Finding, error) {
+		return anomaly.AnalyzeSnapshotDiffExact(ctx, db, taskEntity, runID, currentID, previousID, assetRuntime.LineageGuard(), legacyRestic)
+	})
 	taskManager.SetAutomationDispatcher(autoDispatcher)
 	autoDispatcher.SetTaskTriggerer(taskManager)
+	if err := assetRuntime.SetCommitObserver(taskManager); err != nil {
+		log.Fatal().Err(err).Msg("配置备份资产提交观察器失败")
+	}
+	if err := assetRuntime.SetInterruptedRunReporter(taskManager); err != nil {
+		log.Fatal().Err(err).Msg("配置备份资产中断对账失败")
+	}
+	if err := assetRuntime.SetInterruptedRunReadiness(taskManager); err != nil {
+		log.Fatal().Err(err).Msg("配置备份资产中断就绪检查失败")
+	}
+	if err := assetRuntime.StartupPass(context.Background()); err != nil {
+		log.Fatal().Err(err).Msg("备份资产启动对账失败")
+	}
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
@@ -234,6 +270,7 @@ func main() {
 		prober,
 		uptimeProber,
 		aggregator,
+		assetRuntime,
 		taskManager,
 		taskRetention,
 		reportScheduler,
@@ -261,24 +298,29 @@ func main() {
 		GlobalFailLockThreshold: cfg.LoginGlobalFailLockThreshold,
 		GlobalFailLockDuration:  cfg.LoginGlobalFailLockDuration,
 	})
+	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:        hubCtx,
-		DB:                db,
-		AuthService:       authService,
-		JWTManager:        jwtManager,
-		TaskManager:       taskManager,
-		Hub:               hub,
-		SettingsService:   settingsSvc,
-		AllowedOrigins:    cfg.AllowedOrigins,
-		LoginRateLimit:    cfg.LoginRateLimit,
-		LoginRateWindow:   cfg.LoginRateWindow,
-		RetryWorker:       retryWorker,
-		AlertDispatcher:   alertDispatcher,
-		MetricsToken:      cfg.MetricsToken,
-		MetricsRateLimit:  cfg.MetricsRateLimit,
-		TrustedProxies:    cfg.TrustedProxies,
-		MetricsRateWindow: cfg.MetricsRateWindow,
+		AppContext:            hubCtx,
+		DB:                    db,
+		AuthService:           authService,
+		JWTManager:            jwtManager,
+		TaskManager:           taskManager,
+		Hub:                   hub,
+		SettingsService:       settingsSvc,
+		AllowedOrigins:        cfg.AllowedOrigins,
+		LoginRateLimit:        cfg.LoginRateLimit,
+		LoginRateWindow:       cfg.LoginRateWindow,
+		RetryWorker:           retryWorker,
+		AlertDispatcher:       alertDispatcher,
+		MetricsToken:          cfg.MetricsToken,
+		MetricsRateLimit:      cfg.MetricsRateLimit,
+		TrustedProxies:        cfg.TrustedProxies,
+		MetricsRateWindow:     cfg.MetricsRateWindow,
+		BackupAssets:          assetRuntime,
+		LegacyResticSnapshots: legacyRestic,
+		SnapshotDiffRunner:    legacyRestic,
+		SnapshotIndexer:       snapshotIndexer,
 	})
 
 	server := &http.Server{
@@ -302,16 +344,15 @@ func main() {
 	<-quit
 	log.Info().Msg("收到退出信号，开始优雅关闭")
 
+	cronScheduler.Stop()
 	taskManager.StopAccepting()
+	assetRuntime.StopAccepting()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
 	}
-
-	// 清理 SSH 密钥临时目录，避免 crash 后残留的密钥文件泄漏
-	executor.CleanupTempKeyDir()
 
 	// LIFO drain: workers started last finish first to invert the dependency
 	// stack. Errors are logged but never abort -- we want every worker to
@@ -321,6 +362,9 @@ func main() {
 			log.Warn().Err(err).Int("index", i).Str("worker", fmt.Sprintf("%T", workers[i])).Msg("shutdown worker failed")
 		}
 	}
+	// All task/provider workers have joined, so no command can still need a
+	// temporary SSH key file. Cleanup remains after the bounded runtime drain.
+	executor.CleanupTempKeyDir()
 	hubCancel()
 }
 

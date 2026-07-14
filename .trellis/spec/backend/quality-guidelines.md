@@ -808,6 +808,122 @@ _ = stat // metadata belongs to the opened handle
 
 ---
 
+## Scenario: Restic Exact Recovery-Point Publication
+
+### Scope / Trigger
+
+- Trigger: changing Restic backup execution, publication/reconciliation,
+  managed-history admission, legacy snapshot access, or backup-asset runtime
+  wiring.
+- Applies to `backupasset/provider`, `backupasset/repository`,
+  `backupasset/runtime`, Task Manager/executors, legacy snapshot handlers, and
+  paired migration `000063`.
+
+### Signatures
+
+- Publication entry point: `publication.Coordinator.Prepare(context.Context,
+  publication.Run) (publication.Execution, error)`.
+- Evidence terminal operations: `Execution.RecordProviderCommit`, `Defer`,
+  `Reject`, and `Fail`; only `RecordProviderCommit` can move a point from
+  `preparing` to `verifying`.
+- Reconciliation entry point: `publication.Reconciler.ProcessPoint(ctx,
+  pointID)` and bounded `ListCandidates`; the worker never invents a point ID
+  or calls a Provider command without an admitted operation.
+- Schema contract: paired SQLite/PostgreSQL
+  `000063_backup_asset_publication_contract` migrations own
+  `native_snapshot`, `point_publication`, and the producing-run/native-source
+  unique defenses.
+
+### Contracts
+
+- Attribute an automatic Restic point only from the final successful summary's
+  full native snapshot ID plus the exact generated Task/TaskRun tag set. Never
+  infer it from `latest`, a prefix, a time window, a repository diff, or a
+  legacy index.
+- TaskRun transfer success and RecoveryPoint publication success are separate
+  facts. A durable commit moves a point only to `verifying`; a bounded async
+  worker performs manifest and minimum verification before `committed`.
+- Manifest publication and reconciliation validate the current lease fence in
+  the same state-changing transaction, retain the immutable point deadline,
+  and activate only complete manifests. Partial or unavailable diagnostics are
+  inactive and never become browseable truth.
+- All Restic command paths acquire a generation admission token before
+  credentials, SSH, command streams, or provider handles, and hold it through
+  join/close and response or state projection. Feature transitions drain those
+  paths before persisting the effective enabled value.
+- A Restic access binding is Repository-scoped. For a shared native Repository,
+  validate the retained binding origin and derive execution access from the
+  current linked Task's Node/config; never run one Task's source command with
+  another Task's Node, locator, secret, Task ID, or audit context.
+- Managed history is a permanent safety latch. When it exists, disabled mode
+  is rollback-safe: legacy unscoped backup fallback, `restore latest`,
+  repository-wide anomaly selection, and untagged `forget --prune` stay
+  blocked. Rollback/reconciliation never delete Provider snapshots.
+- Before a disabled `PublicationService.Prepare` returns a compatibility
+  backup session, it must query both installation-level history and every
+  active Repository link of the current Task. A Repository tombstone is an
+  independent permanent latch: it blocks `legacy_backup` even when the
+  installation-level tombstone source reports no history.
+
+### Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Missing, malformed, duplicate, or non-final backup summary after known exit zero | Preserve TaskRun transfer success, defer publication with a stable evidence code, and recover only from one valid stored summary. |
+| Full ID, exact two tags, `original`, identity, time, or capability drift | Fail closed as a stable publication/rewrite or identity error; never replace the recorded native locator. |
+| Stale lease fence or elapsed immutable point deadline | Join/cancel work and reject the state mutation; a later owner may retry only with a fresh fence and the original deadline. |
+| Partial/unavailable manifest | Store only an inactive diagnostic; do not project counts/digest or mark the RecoveryPoint committed. |
+| Feature transition or managed-history latch blocks an operation | Stop before credential, SSH, or Provider access, record only typed bounded audit/metric facts, and keep the previous admission generation on failed drain/persistence. |
+| Disabled Task has a linked Repository with managed-history tombstone | Return `legacy_fallback_blocked`, close the admission token, and make no Provider, credential, lease, or RecoveryPoint mutation. |
+
+### Good / Base / Bad Cases
+
+- Good: a Restic backup emits one final valid summary; the exact two opaque tags
+  and absent `original` match, the commit reaches `verifying`, and an async
+  worker activates a complete manifest before `committed`.
+- Base: a pristine installation with the feature disabled retains legacy backup
+  behavior while every command still acquires and closes an admission token.
+- Good: a Repository-only history tombstone blocks a disabled Task's legacy
+  backup even when the global history source is empty.
+- Bad: a caller selects `latest`, accepts a short ID outside the committed
+  same-Task set, or runs untagged `forget --prune` after managed history exists.
+
+### Wrong vs Correct
+
+Wrong:
+
+```go
+snapshotID := latestSnapshotID(ctx, task) // repository-wide inference
+```
+
+Correct:
+
+```go
+result, err := evidenceExecutor.RunWithEvidence(session.Context(), request, logf, progressf)
+if err == nil && result.Completion == backupasset.CompletionKnownExitZero {
+    _, err = session.RecordProviderCommit(ctx, result.ProviderCommit)
+}
+```
+
+The correct path carries the exact attempted tags, full ID, Repository identity,
+and current fence through the publication transaction; it never falls back to a
+repository-wide selector.
+
+### Tests Required
+
+- Exercise final-summary parsing, exact tag/original rewrite rejection,
+  stored-summary reconstruction, fencing, deadlines, backoff, worker shutdown,
+  and shared-Repository cross-Task isolation.
+- Verify feature transition drain, pristine disabled compatibility, managed
+  rollback-safe guards, including a Repository-only tombstone that blocks
+  disabled `Prepare` before Provider access, and every legacy
+  list/files/search/diff/restore/anomaly/retention call site.
+- Run paired SQLite/PostgreSQL migration apply/down safety checks, source
+  dependency checks, redaction scans, race/repetition suites, and full backend
+  gates before committing.
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?
