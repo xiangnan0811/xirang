@@ -154,7 +154,7 @@ TaskRun evidence
 
 公开状态均为 typed code：`immutability_level = mutable | xirang_managed | backend_versioned | storage_worm`，`physical_availability = online | offline | missing | unknown`，`hold_state = none | active | released`。Capability 不可用原因返回稳定 `code + localized params`，禁止使用 `map[string]string` 容纳 Provider 原文；未知 code 映射为通用安全文案并保留 correlation ID。
 
-Task 执行模式（`legacy_mutable | versioned_hardlink | versioned_full_copy | versioned_prefix | native_object_versions`）、Repository `version_mode` 与 RecoveryPoint `version_semantics`（`native_snapshot | xirang_manifest | imported_baseline | mutable_head`）是三个不同枚举。适配器显式映射它们；`imported_baseline` 表示证据较弱但经用户确认的单个基线点，不能变成仓库版本模式或伪造的历史序列。
+Task publication mode（`legacy_mutable | native_snapshot | versioned_hardlink | versioned_full_copy | versioned_prefix | native_object_versions`）、Repository `version_mode` 与 RecoveryPoint `version_semantics`（`native_snapshot | xirang_manifest | imported_baseline | mutable_head`）是三个不同枚举。适配器显式映射它们；`native_snapshot` 只用于 Restic Task link，`native_object_versions` 只用于通过能力证明的 Rclone 对象版本；`imported_baseline` 表示证据较弱但经用户确认的单个基线点，不能变成仓库版本模式或伪造的历史序列。
 
 为统一寻址，`mutable_head` 在 `recovery_points` 表中使用每仓库一个稳定 ID 的非历史单例记录，`state=observed`、`version_semantics=mutable_head`，每次成功观测只推进 `observed_at`、source fingerprint 和 Catalog generation，不创建历史序列，也不得显示为 committed/immutable。它因此可以安全使用统一 AssetRef；所有内容/导出/处理在读取与发布前后仍必须重验源指纹。
 
@@ -208,8 +208,8 @@ Restore、diff、native search 和 native version attestation 使用独立可选
 ```mermaid
 stateDiagram-v2
   [*] --> preparing
-  preparing --> verifying: transfer complete
-  verifying --> committed: manifest + minimum verification + provider commit
+  preparing --> verifying: exact Provider commit recorded
+  verifying --> committed: complete manifest + minimum verification
   preparing --> failed
   verifying --> failed
   committed --> degraded: provider/manifest availability problem
@@ -235,10 +235,13 @@ Provider 发布与数据库提交是双写窗口。每次 attempt 使用稳定 p
 
 ### 4.4 Restic
 
-- 每次 backup 注入唯一 Xirang task/run tag，并解析该命令最终 JSON summary 的 full snapshot ID。
+- 每次 backup 在 Provider mutation 前创建稳定 `preparing` point 与 `point_publication` fence，注入由 TaskRepositoryLink/RecoveryPoint opaque ID 编码的两个且仅两个固定 ASCII tags，并解析该命令成功且最终 JSON summary 的 full snapshot ID。自动归属必须要求 raw tag multiset 精确等于二者、`Snapshot.Original` 为空且 snapshot time/summary 一致；任何 `restic tag`/copy-style metadata rewrite 都 fail closed，不能认领改写后的 ID。
 - Provider locator = repository identity + full snapshot ID。查询 `latest` 不是正常发布或恢复路径。
-- 解析 full snapshot ID 后，发布器必须流式枚举该精确快照，生成规范 `RecoveryPointManifest` 的算法/生成器版本/count/logical bytes/digest/completeness/fidelity，并完成最低验证；在此之前恢复点保持 `verifying`，不能把后续 Catalog 构建当作缺失 manifest 的替代品。
-- 共享仓库中的 snapshot 必须按 tag/host/path 和 run evidence 归属；当前 `ListSnapshots` 全仓结果不能直接盖上调用 Task ID。
+- Restic executor 只返回 transfer result 与精确 Provider commit evidence；RecoveryPoint/manifest/lease/audit 事务全部由 provider-neutral publication coordinator 持有，不能散入 executor 或 Manager。
+- 短事务记录 full snapshot ID/Provider commit 并推进至 `verifying` 后立即返回；异步 publication worker 以 `verifying` 为持久队列，通过受限 Child 2 command runner 流式枚举该精确快照，生成规范 `RecoveryPointManifest` 的算法/生成器版本/count/logical bytes/digest/`complete|partial|unavailable`/fidelity，并完成最低验证。TaskRun 不等待可能持续数小时的 manifest；Catalog 不能替代它。
+- 共享仓库中的 snapshot 必须同时匹配 Repository identity、完整 ID、expected tags 与 producing run evidence；当前 `ListSnapshots` 全仓结果、时间窗口、prefix、仓库差分或 `latest` 不能成为发布事实。
+- 预写 tags 只证明 attempt 归属，不能证明 exit 0（Restic exit 3 也可能保存 snapshot）；只有 durable `known_exit_zero` 允许 preparing-point 自动续接，而且 commit evidence 只能来自原 valid summary 或唯一 exact-tag snapshot 自身持久化的有效 Restic `Snapshot.Summary`。tag-only/outcome-unknown snapshot 必须 quarantine；stored summary 缺失/无效必须失败关闭，等待显式 reviewed import。
+- `backup_assets.enabled=true` 时，旧 list/files/search/diff/snapshot restore 只消费该 Task 已 committed 的精确 lineage；异常检测比较当前/前一同 Task committed point，task-level `restore latest` 与无 tag 的 `forget --prune` fail closed。从未产生 managed point 的 feature-disabled 仓库保持原 legacy 行为且不创建资产副作用；一旦存在 publication point，关闭 feature 仍保留持久安全锁存并禁止无 tag backup/读取/恢复、仓库级 anomaly 和无 tag retention 回退。任何 lifecycle state、保留 tombstone 或已 SET NULL 的 Task/TaskRun FK 都不得清除该 latch；安装已有 managed history 时，无 link/绑定漂移而无法证明属于另一 Repository 的 Restic Task 同样失败关闭。所有 Restic backup/read/restore/anomaly/retention/publication 命令在安全判断前取得同一 generation token 并持有至 close/join；enable/disable/first-point/downgrade/down 必须 exclusive drain 全部命令，而非只等待 backup。
 - `append_only` 现有配置只说明 repository format 选择，不能声明 append-only credential 或 WORM。
 - 旧索引先隔离为 legacy，只有重建并通过完整度提交的 Catalog 才可搜索。
 
@@ -705,7 +708,7 @@ Plan 状态固定为 `draft | preflight_ready | authorized | superseded | expire
 
 ## 16. 保留、租约、GC 与安全清除
 
-`RecoveryPointLease` 是基础领域实体而不是 retention 私有实现。持有者类型至少包括 `rsync_parent | catalog_build | content_session | processing_job | export_job | recovery_job`，并绑定恢复点、owner job/session、attempt/fencing token、可续租的短 lease 和绝对 deadline。各生产者负责 acquire/renew/release；retention 只消费统一租约决定等待、拒绝新租约或由安全 purge 覆盖。进程崩溃后的 lease 只能由新 fencing owner 接管，旧 owner 的迟到发布无效。
+`RecoveryPointLease` 是基础领域实体而不是 retention 私有实现。持有者类型至少包括 `point_publication | rsync_parent | catalog_build | content_session | processing_job | export_job | recovery_job`，并绑定恢复点、owner job/session、attempt/fencing token、可续租的短 lease 和绝对 deadline。多阶段 publication 的每个新 fence 必须继承同一逐点 deadline，不能因 release/reacquire 延长。各生产者负责 acquire/renew/release；retention 只消费统一租约决定等待、拒绝新租约或由安全 purge 覆盖。进程崩溃后的 lease 只能由新 fencing owner 接管，旧 owner 的迟到发布无效。状态提交必须在同一事务内锁定/验证 fence，不能把独立 `ValidateFence` 与后续更新拆开形成 TOCTOU。
 
 ### 16.1 RecoveryPoint 保留
 
@@ -835,6 +838,7 @@ Preview cache、Worker tmpfs、derived blobs、exports、staging points 和 Cata
 - 每次 schema 变化提供成对 SQLite/PostgreSQL migration 和 down strategy；时间全部 UTC。
 - 新表先旁路建立，不直接改写旧 snapshot/task 数据。
 - Task/TaskRun FK 允许历史归档：RecoveryPoint 复制必要 immutable run summary，原 FK 可空/SET NULL。
+- Child 3 的 `000063_backup_asset_publication_contract` 修正 Restic Task link 的 `native_snapshot` 语义，增加 `point_publication` holder，以及 producing TaskRun/native snapshot 的 partial unique constraints；后续原 reservation 顺延为 `000064…000070`。
 - 旧 `SnapshotFileIndex` 标为 legacy generation；新索引完成前可保留旧 UI，但不得进入全局资产结果或信任状态。
 
 ### 19.2 现有任务引导
