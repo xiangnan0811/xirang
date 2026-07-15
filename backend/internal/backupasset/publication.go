@@ -300,9 +300,22 @@ func decodeStrictPublicationJSON(raw string, destination any) error {
 
 func validatePublicationLineage(value PublicationLineageV1) error {
 	if value.Version != 1 || ValidateOpaqueID(value.TaskRepositoryLinkID) != nil || value.TaskID == 0 || value.TaskRunID == 0 ||
-		value.PublicationMode != string(PublicationNativeSnapshot) || value.PointCodecVersion != 1 || value.TagCodecVersion != 1 ||
-		safeAuditLabel(value.Trigger, 64) != value.Trigger {
+		value.PointCodecVersion != 1 || safeAuditLabel(value.Trigger, 64) != value.Trigger {
 		return fmt.Errorf("%w: invalid publication lineage", ErrInvalidState)
+	}
+	switch TaskPublicationMode(value.PublicationMode) {
+	case PublicationNativeSnapshot:
+		if value.TagCodecVersion != 1 {
+			return fmt.Errorf("%w: invalid native publication tag codec", ErrInvalidState)
+		}
+	case PublicationVersionedHardlink, PublicationVersionedFullCopy:
+		// Managed trees do not use provider tags. Keeping this zero makes the
+		// persisted lineage explicit instead of implying Restic tag semantics.
+		if value.TagCodecVersion != 0 {
+			return fmt.Errorf("%w: invalid managed-tree publication tag codec", ErrInvalidState)
+		}
+	default:
+		return fmt.Errorf("%w: invalid publication lineage mode", ErrInvalidState)
 	}
 	if value.ChainRunIDPresent {
 		if !isLowerHex(value.ChainRunIDDigest, 64) {

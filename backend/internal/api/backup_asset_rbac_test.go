@@ -120,3 +120,41 @@ func TestBackupAssetRBACUsesAuthAndExactRepositoryPermissionsBeforeFeatureGate(t
 		}
 	}
 }
+
+func TestRsyncVersioningMigrationRoutesRequireAdminBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	routes := []struct {
+		name string
+		path string
+		body string
+	}{
+		{"preflight", "/api/v1/tasks/7/rsync-versioning/preflights", `{"expected_task_revision":1,"requested_mode":"versioned_full_copy"}`},
+		{"activate", "/api/v1/tasks/7/rsync-versioning/activate", `{"expected_task_revision":1,"preflight_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","migration_choice":"first_new_point"}`},
+		{"rollback", "/api/v1/tasks/7/rsync-versioning/rollback-preparations", `{"expected_task_revision":1}`},
+	}
+	for _, route := range routes {
+		route := route
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, route.path, route.body, fixture.tokens[role])
+				expected := http.StatusForbidden
+				if role == "admin" {
+					expected = http.StatusServiceUnavailable
+				}
+				if response.Code != expected {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, expected, response.Body.String())
+				}
+				if expected == http.StatusServiceUnavailable && !strings.Contains(response.Body.String(), "feature_disabled") {
+					t.Fatalf("admin request did not reach feature gate: %s", response.Body.String())
+				}
+			})
+		}
+	}
+}

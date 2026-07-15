@@ -96,13 +96,27 @@ func NewFactory(rsyncBinary string) Factory {
 	}
 }
 
-// NewFactoryWithResticPublisher creates the usual compatibility factory while
-// exposing evidence execution only through its Restic instance.
-func NewFactoryWithResticPublisher(rsyncBinary string, publisher provider.ResticPublisher) Factory {
+// NewFactoryWithResticPublicationStrategy creates the usual compatibility
+// factory while exposing managed publication only through its Restic instance.
+// The strategy is the sole route from task execution into Provider commands.
+func NewFactoryWithResticPublicationStrategy(rsyncBinary string, strategy provider.PublicationStrategy) Factory {
+	return NewFactoryWithPublicationStrategies(rsyncBinary, strategy, nil)
+}
+
+// NewFactoryWithPublicationStrategies adds provider-owned managed publication
+// lanes without changing the compatibility executors selected by NewFactory.
+// The Rsync wrapper retains the legacy Run and RunRestore implementations;
+// only an exact tagged Rsync attempt can enter RunWithPublication.
+func NewFactoryWithPublicationStrategies(rsyncBinary string, resticStrategy, rsyncStrategy provider.PublicationStrategy) Factory {
+	legacyRsync := &RsyncExecutor{binary: rsyncBinary}
+	var rsync Executor = legacyRsync
+	if rsyncStrategy != nil {
+		rsync = &RsyncPublicationExecutor{legacy: legacyRsync, strategy: rsyncStrategy}
+	}
 	return &factory{
-		rsync:   &RsyncExecutor{binary: rsyncBinary},
+		rsync:   rsync,
 		command: &CommandExecutor{},
-		restic:  &ResticExecutor{publisher: publisher},
+		restic:  &ResticExecutor{strategy: resticStrategy},
 		rclone:  &RcloneExecutor{},
 	}
 }

@@ -751,6 +751,45 @@ func TestManagedResticRestoreLatestBlockedBeforeCredentialAndSSH(t *testing.T) {
 	_ = manager.Shutdown(shutdownCtx)
 }
 
+func TestManagedRsyncRestoreLatestBlockedBeforePrecheckAndExecutor(t *testing.T) {
+	db := openManagerTestDB(t)
+	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
+	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "rsync"
+	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
+
+	session := &legacyLineageSessionFake{mode: publication.LineageExact}
+	guard := &legacyLineageGuardFake{session: session}
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLineageGuard(guard)
+	manager.SetLegacyBlockRecorder(recorder)
+	var precheckCalls int32
+	manager.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
+		atomic.AddInt32(&precheckCalls, 1)
+		return nil
+	}
+
+	manager.runRestoreTask(taskEntity.ID, runID, taskEntity)
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRestoreLatest {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if got := atomic.LoadInt32(&precheckCalls); got != 0 {
+		t.Fatalf("managed Rsync restore reached remote precheck %d time(s)", got)
+	}
+	if got := atomic.LoadInt32(&restoreExecutor.calls); got != 0 {
+		t.Fatalf("managed Rsync restore reached executor %d time(s)", got)
+	}
+	if len(recorder.blocks) != 1 || recorder.blocks[0].Operation != publication.OperationLegacyRestoreLatest {
+		t.Fatalf("managed Rsync restore blocks=%+v", recorder.blocks)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
 func TestPristineResticRestoreLatestRetainsCompatibility(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("expected compatibility restore failure")}

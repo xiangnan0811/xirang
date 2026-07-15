@@ -182,4 +182,31 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("Rsync 源路径（可选）")).toHaveValue("");
     // rsync 模式下目标路径不再是输入框，而是自动生成的只读显示
   });
+
+  it("编辑 Rsync 任务时仅显示安全的恢复点状态摘要", () => {
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        editingTask={{
+          ...createTask(),
+          rsyncPublication: {
+            mode: "versioned_full_copy",
+            state: "committed",
+            reasonCode: "ready",
+            capabilityRevision: 8,
+            taskRevision: "9007199254740993",
+            seedFullCopyRequired: false,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("当前恢复点模式")).toBeInTheDocument();
+    expect(screen.getByText("版本化完整副本树")).toBeInTheDocument();
+    expect(screen.getByText("已提交")).toBeInTheDocument();
+  });
 });

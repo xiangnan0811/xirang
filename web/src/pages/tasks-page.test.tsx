@@ -8,7 +8,7 @@ import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
 const navigateMock = vi.fn();
-const { apiClientMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
+const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
   const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => {
     stepUpHookMock.lastAction = stepUpAction;
@@ -20,6 +20,14 @@ const { apiClientMock, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions
     apiClientMock: {
       requestTaskBatchTriggerCredentialGrant: vi.fn(),
       batchTriggerTasks: vi.fn(),
+    },
+    authRef: {
+      current: {
+        token: "test-token",
+        username: "admin",
+        role: "admin" as "admin" | "operator" | "viewer",
+        logout: vi.fn(),
+      },
     },
     withStepUpMock,
     useStepUpActionMock: stepUpHookMock,
@@ -111,6 +119,12 @@ vi.mock("@/components/task-create-dialog", () => ({
   },
 }));
 
+vi.mock("@/components/task-rsync-versioning-dialog", () => ({
+  TaskRsyncVersioningDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
+    open ? <div data-testid="rsync-versioning-dialog">{task?.id}</div> : null
+  ),
+}));
+
 vi.mock("@/components/task-run-history", () => ({
   TaskRunHistory: () => <div data-testid="task-run-history">历史记录</div>,
 }));
@@ -150,12 +164,7 @@ vi.mock("@/hooks/use-step-up-action", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({
-    token: "test-token",
-    username: "admin",
-    role: "admin",
-    logout: vi.fn(),
-  }),
+  useAuth: () => authRef.current,
 }));
 
 function createContext(overrides?: Record<string, unknown>) {
@@ -269,6 +278,12 @@ describe("TasksPage", () => {
     useStepUpActionMock.mockClear();
     useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
+    authRef.current = {
+      token: "test-token",
+      username: "admin",
+      role: "admin",
+      logout: vi.fn(),
+    };
     createContext();
   });
 
@@ -595,6 +610,14 @@ describe("TasksPage", () => {
           executorType: "rsync",
           rsyncSource: "/data",
           rsyncTarget: "/backup/data",
+          rsyncPublication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reasonCode: "legacy",
+            capabilityRevision: 1,
+            taskRevision: "9007199254740993",
+            seedFullCopyRequired: false,
+          },
           speedMbps: 0,
         },
       ] as unknown as Record<string, unknown>[],
@@ -622,6 +645,113 @@ describe("TasksPage", () => {
 
     // 4. 断言 refreshTasks 被立即调用（而非等待 5 秒轮询）
     expect(refreshTasksMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("管理员可从 Rsync 任务操作区打开版本化迁移", async () => {
+    const user = userEvent.setup();
+    createContext({
+      tasks: [
+        {
+          id: 601,
+          name: "Rsync 迁移任务",
+          policyName: "Rsync 迁移任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          executorType: "rsync",
+          rsyncPublication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reasonCode: "legacy",
+            capabilityRevision: 1,
+            taskRevision: "9007199254740993",
+            seedFullCopyRequired: false,
+          },
+          speedMbps: 0,
+        },
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "管理任务 Rsync 迁移任务 的 Rsync 版本化恢复点" }));
+    expect(screen.getByTestId("rsync-versioning-dialog")).toHaveTextContent("601");
+  });
+
+  it("非管理员不会看到 Rsync 版本化迁移操作", () => {
+    authRef.current = {
+      token: "test-token",
+      username: "operator",
+      role: "operator",
+      logout: vi.fn(),
+    };
+    createContext({
+      tasks: [
+        {
+          id: 602,
+          name: "受限 Rsync 任务",
+          policyName: "受限 Rsync 任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          executorType: "rsync",
+          rsyncPublication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reasonCode: "legacy",
+            capabilityRevision: 1,
+            taskRevision: "9007199254740993",
+            seedFullCopyRequired: false,
+          },
+          speedMbps: 0,
+        },
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole("button", { name: "管理任务 受限 Rsync 任务 的 Rsync 版本化恢复点" })).not.toBeInTheDocument();
+  });
+
+  it("缺少安全 publication 摘要时隐藏旧 Rsync 恢复入口", async () => {
+    const user = userEvent.setup();
+    createContext({
+      tasks: [
+        {
+          id: 603,
+          name: "未分类 Rsync 任务",
+          policyName: "未分类 Rsync 任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          executorType: "rsync",
+          speedMbps: 0,
+        },
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "查看任务 #603 执行历史" }));
+    expect(screen.queryByRole("button", { name: "从此备份恢复" })).not.toBeInTheDocument();
   });
 
   it("updateTask 失败时不关闭弹窗且显示错误 toast", async () => {

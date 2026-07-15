@@ -21,9 +21,22 @@ func openStrictRoot(path string) (*strictRootHandle, error) {
 	if !filepath.IsAbs(clean) {
 		return nil, fmt.Errorf("%w: strict root must be absolute", ErrOutsideRoot)
 	}
-	fd, err := unix.Open(clean, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(clean, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
+		return nil, classifyOpenError(err)
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = unix.Close(fd)
 		return nil, err
+	}
+	if stat.Mode&unix.S_IFMT == unix.S_IFLNK {
+		_ = unix.Close(fd)
+		return nil, ErrSymlinkDenied
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		_ = unix.Close(fd)
+		return nil, ErrNotDirectory
 	}
 	return &strictRootHandle{fd: fd}, nil
 }

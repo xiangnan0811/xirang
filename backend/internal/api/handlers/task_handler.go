@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	gormrepo "xirang/backend/internal/repository/gorm"
@@ -28,10 +30,11 @@ type TaskRunner interface {
 }
 
 type TaskHandler struct {
-	db         *gorm.DB
-	runner     TaskRunner
-	svc        *task.TaskApiService
-	jwtManager *auth.JWTManager
+	db              *gorm.DB
+	runner          TaskRunner
+	svc             *task.TaskApiService
+	jwtManager      *auth.JWTManager
+	rsyncVersioning TaskRsyncVersioningService
 }
 
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
@@ -61,6 +64,14 @@ func (h *TaskHandler) WithJWTManager(jwtManager *auth.JWTManager) *TaskHandler {
 	return h
 }
 
+// WithRsyncVersioningService installs the narrow, safe publication summary
+// projection used by Task responses. Task CRUD remains independent from the
+// managed-root and Provider mutation boundary.
+func (h *TaskHandler) WithRsyncVersioningService(service TaskRsyncVersioningService) *TaskHandler {
+	h.rsyncVersioning = service
+	return h
+}
+
 type taskRequest struct {
 	Name            string `json:"name" binding:"required"`
 	NodeID          uint   `json:"node_id" binding:"required"`
@@ -85,15 +96,39 @@ func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 	return taskEntity
 }
 
-func sanitizeTasksForResponse(tasks []model.Task) []model.Task {
+// taskResponse embeds the stable Task JSON shape and adds only the explicit
+// safe Rsync publication projection. It must never contain binding, root,
+// marker, manifest, fence, command, or credential data.
+type taskResponse struct {
+	model.Task
+	RsyncPublication *backupasset.RsyncVersioningSummary `json:"rsync_publication,omitempty"`
+}
+
+func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
+	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity)}
+	if h == nil || h.rsyncVersioning == nil || !strings.EqualFold(strings.TrimSpace(taskEntity.ExecutorType), "rsync") {
+		return response
+	}
+	summary, err := h.rsyncVersioning.RsyncVersioningSummary(ctx, taskEntity.ID)
+	if err != nil || summary.Validate() != nil {
+		summary = backupasset.RsyncVersioningSummary{
+			Mode: backupasset.PublicationLegacyMutable, State: backupasset.RsyncVersioningBlocked,
+			ReasonCode: backupasset.RsyncVersioningReasonUnsupported, CapabilityRevision: 1,
+		}
+	}
+	response.RsyncPublication = &summary
+	return response
+}
+
+func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task) []taskResponse {
 	if len(tasks) == 0 {
-		return tasks
+		return []taskResponse{}
 	}
-	sanitized := make([]model.Task, len(tasks))
-	for i, taskEntity := range tasks {
-		sanitized[i] = sanitizeTaskForResponse(taskEntity)
+	responses := make([]taskResponse, 0, len(tasks))
+	for _, taskEntity := range tasks {
+		responses = append(responses, h.taskResponse(ctx, taskEntity))
 	}
-	return sanitized
+	return responses
 }
 
 // List godoc
@@ -196,7 +231,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 			}
 		}
 	}
-	respondPaginated(c, sanitizeTasksForResponse(tasks), total, pg.Page, pg.PageSize)
+	respondPaginated(c, h.taskResponses(c.Request.Context(), tasks), total, pg.Page, pg.PageSize)
 }
 
 // Get godoc
@@ -229,7 +264,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
 		taskEntity.Progress = &runProgress[0]
 	}
-	respondOK(c, sanitizeTaskForResponse(taskEntity))
+	respondOK(c, h.taskResponse(c.Request.Context(), taskEntity))
 }
 
 // Create godoc
@@ -280,7 +315,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		}
 		return
 	}
-	respondCreated(c, taskEntity)
+	respondCreated(c, h.taskResponse(c.Request.Context(), taskEntity))
 }
 
 // Update godoc
@@ -336,7 +371,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		return
 	}
-	respondOK(c, taskEntity)
+	respondOK(c, h.taskResponse(c.Request.Context(), taskEntity))
 }
 
 // Delete godoc

@@ -94,7 +94,7 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const { token: authToken } = useAuth();
+  const { token: authToken, role } = useAuth();
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskBatchTrigger,
     { persist: false, reuseCached: false },
@@ -112,6 +112,7 @@ export function TasksPage() {
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [rsyncVersioningTask, setRsyncVersioningTask] = useState<TaskRecord | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [pauseConfirmTask, setPauseConfirmTask] = useState<TaskRecord | null>(null);
   // Chain folding state: set of parent task ids whose children are expanded
@@ -233,6 +234,15 @@ export function TasksPage() {
   const handleViewHistory = (task: TaskRecord) => {
     setSelectedRun(null);
     setHistoryTask(task);
+  };
+
+  const canManageRsyncVersioning = role === "admin";
+
+  const handleManageRsyncVersioning = (task: TaskRecord) => {
+    if (!canManageRsyncVersioning || task.executorType !== "rsync" || !task.rsyncPublication) {
+      return;
+    }
+    setRsyncVersioningTask(task);
   };
 
   const handleUpdateTask = async (input: NewTaskInput) => {
@@ -498,6 +508,8 @@ export function TasksPage() {
               handleResume={handleResume}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              canManageRsyncVersioning={canManageRsyncVersioning}
+              onManageRsyncVersioning={handleManageRsyncVersioning}
               selectedTaskSet={selectedTaskSet}
               allVisibleSelected={allVisibleSelected}
               toggleTaskSelection={toggleTaskSelection}
@@ -518,6 +530,8 @@ export function TasksPage() {
               handleResume={handleResume}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              canManageRsyncVersioning={canManageRsyncVersioning}
+              onManageRsyncVersioning={handleManageRsyncVersioning}
               selectedTaskSet={selectedTaskSet}
               allVisibleSelected={allVisibleSelected}
               toggleTaskSelection={toggleTaskSelection}
@@ -564,6 +578,10 @@ export function TasksPage() {
         setBatchRetain={setBatchRetain}
         restoreDialogOpen={restoreDialogOpen}
         setRestoreDialogOpen={setRestoreDialogOpen}
+        rsyncVersioningTask={rsyncVersioningTask}
+        setRsyncVersioningTask={setRsyncVersioningTask}
+        canManageRsyncVersioning={canManageRsyncVersioning}
+        onRsyncVersioningUpdated={refreshTasks}
         onRestoreTriggered={() => void refreshTasks()}
         nodes={nodes}
         policies={policies}

@@ -82,6 +82,9 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] For sequential CAS mutations, verified the newest response replaces the
+      opaque version token used by the next request (including a value above
+      JavaScript's safe-integer range).
 
 ---
 

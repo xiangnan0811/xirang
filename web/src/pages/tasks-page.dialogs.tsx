@@ -4,6 +4,7 @@ import { RotateCcw, FolderSearch, GitCompareArrows, SearchCode } from "lucide-re
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
+import { TaskRsyncVersioningDialog } from "@/components/task-rsync-versioning-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
 import { SnapshotSearch } from "@/components/snapshot-search";
@@ -60,6 +61,10 @@ export interface TasksPageDialogsProps {
   setBatchRetain: (retain: boolean) => void;
   restoreDialogOpen: boolean;
   setRestoreDialogOpen: (open: boolean) => void;
+  rsyncVersioningTask: TaskRecord | null;
+  setRsyncVersioningTask: (task: TaskRecord | null) => void;
+  canManageRsyncVersioning: boolean;
+  onRsyncVersioningUpdated: () => void | Promise<void>;
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   tasks: TaskRecord[];
@@ -100,6 +105,10 @@ export function TasksPageDialogs({
   setBatchRetain,
   restoreDialogOpen,
   setRestoreDialogOpen,
+  rsyncVersioningTask,
+  setRsyncVersioningTask,
+  canManageRsyncVersioning,
+  onRsyncVersioningUpdated,
   onRestoreTriggered,
   nodes,
   policies,
@@ -135,6 +144,20 @@ export function TasksPageDialogs({
           onSave={handleCreateTask}
         />
       </Suspense>
+
+      {canManageRsyncVersioning ? (
+        <TaskRsyncVersioningDialog
+          open={rsyncVersioningTask !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRsyncVersioningTask(null);
+            }
+          }}
+          task={rsyncVersioningTask}
+          token={authToken}
+          onUpdated={onRsyncVersioningUpdated}
+        />
+      ) : null}
 
       <Suspense fallback={null}>
         <TaskEditorDialog
@@ -201,7 +224,7 @@ export function TasksPageDialogs({
                   </Button>
                 </>
               )}
-              {historyTask?.executorType === "rsync" && (
+              {historyTask?.executorType === "rsync" && historyTask.rsyncPublication?.mode === "legacy_mutable" && (
                 <Button
                   size="sm"
                   variant="outline"

@@ -440,6 +440,102 @@ return (Array.isArray(rows) ? rows : []).map(mapSilence);
 
 ---
 
+## Scenario: Rsync Versioning CAS Summary Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing versioned-Rsync migration, preflight, activation,
+  rollback-preparation, or the task-list/detail publication summary.
+- Applies to `backupasset.RsyncVersioningSummary`, the three
+  `/tasks/:id/rsync-versioning/*` endpoints, `tasks-api.ts`,
+  `RsyncPublicationSummary`, and `TaskRsyncVersioningDialog`.
+
+### 2. Signatures
+
+- Safe summary field: `task_revision: string`, an exact unsigned decimal CAS
+  token derived from the persisted Task revision.
+- Mutating requests send the same field as
+  `expected_task_revision: string`:
+  `POST /tasks/:id/rsync-versioning/preflights`, `/activate`, and
+  `/rollback-preparations`.
+- Frontend domain field: `RsyncPublicationSummary.taskRevision: string`.
+- Backend success results:
+  `RsyncVersioningActivationResult.summary` and
+  `RsyncVersioningRollbackPreparationResult.summary` both carry a fresh safe
+  summary.
+
+### 3. Contracts
+
+- Treat a task revision as an opaque decimal string, never a JavaScript
+  `number`; nanosecond tokens can exceed `Number.MAX_SAFE_INTEGER`.
+- Raw `task_revision` stays in the private `tasks-api.ts` response type and is
+  mapped to camelCase before components render it. Reject an empty, zero,
+  malformed, or non-canonical value rather than coercing it.
+- After activation or rollback preparation commits, the service must reload the
+  persisted `RsyncVersioningSummary` and return that summary. The task-list
+  projection and both mutation responses therefore share one safe DTO contract.
+- A dialog keeps `summaryOverride` only for the latest mutation response. Its
+  next request uses `summaryOverride?.taskRevision` when present; reset effects
+  depend on the original Task publication revision, not the override, so a
+  successful activation does not erase the new token before rollback.
+- If the summary has no valid token, disable versioning mutations. Do not fall
+  back to a stale Task prop, parse `executorConfig`, or reconstruct a revision
+  from a date in the browser.
+- The summary continues to omit managed roots, locators, marker/manifest/fence
+  digests, command text, output, and credentials.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `task_revision` is missing, zero, malformed, or non-canonical | Mapper yields an unusable token; the dialog shows safe state but disables preflight/activate/rollback mutation. |
+| Backend detects a stale `expected_task_revision` | Return the existing stable conflict/revision-changed result; do not apply a partial migration. |
+| Activation succeeds and changes the Task row | Returned summary contains the new persisted decimal revision. |
+| User prepares rollback in the same open dialog | Request uses the activation response revision, not the original task-list revision. |
+| Mode/state/reason is unknown | Map the whole publication summary to blocked/unsupported and expose no mutation control. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: activation returns `"9007199254740994"`; rollback preparation sends
+  exactly that string without numeric conversion.
+- Base: an initial legacy Task uses its task-list summary revision for matching
+  preflight and activation requests.
+- Bad: deriving all dialog requests from `task.rsyncPublication` after an
+  activation, or doing `Number(raw.task_revision)`, causes a stale or rounded
+  CAS token.
+
+### 6. Tests Required
+
+- Backend service tests must compare activation and rollback response
+  `task_revision` values to the persisted Task revision after the transaction.
+- Handler/API tests must assert mutation and task summary responses include only
+  the safe decimal token and no provider/path/secret fields.
+- `tasks-api.ts` tests must map safe strings and serialize request tokens as
+  strings, including a value above JavaScript's safe-integer limit.
+- Dialog tests must activate then prepare rollback without closing the dialog
+  and assert the second request uses the activation response token.
+- `npm run check`, focused Go tests, and `git diff --check` must pass.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const taskRevision = task?.rsyncPublication?.taskRevision ?? "";
+const summary = summaryOverride ?? task?.rsyncPublication;
+// Rollback still sends the pre-activation token.
+```
+
+Correct:
+
+```ts
+const initialTaskRevision = task?.rsyncPublication?.taskRevision ?? "";
+const summary = summaryOverride ?? task?.rsyncPublication;
+const taskRevision = summary?.taskRevision ?? "";
+
+useEffect(resetDialog, [open, task?.id, task?.rsyncPublication?.mode, initialTaskRevision]);
+```
+
 ## Scenario: SSH Key Scope Mapping
 
 ### 1. Scope / Trigger

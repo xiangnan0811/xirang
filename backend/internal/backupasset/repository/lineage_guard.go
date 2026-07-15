@@ -51,6 +51,14 @@ func (service *Service) Begin(ctx context.Context, taskID uint, operation public
 		}
 		return nil, fmt.Errorf("load lineage Task: %w", err)
 	}
+	if bindingProviderForTask(taskEntity) == backupasset.ProviderRsync {
+		session, err := service.beginRsyncLegacySession(ctx, taskEntity, operation, token)
+		if err != nil {
+			return nil, err
+		}
+		keepToken = true
+		return session, nil
+	}
 	if bindingProviderForTask(taskEntity) != backupasset.ProviderRestic {
 		return nil, fmt.Errorf("%w: lineage guard requires a Restic Task", backupasset.ErrInvalidState)
 	}
@@ -105,6 +113,24 @@ func (service *Service) Begin(ctx context.Context, taskID uint, operation public
 	session.points = points
 	keepToken = true
 	return session, nil
+}
+
+// beginRsyncLegacySession permits only an independently proven mutable v1
+// binding. A versioned link, durable managed-history fact, active publication
+// lease, or binding ambiguity is a hard stop before any legacy path can touch
+// its target.
+func (service *Service) beginRsyncLegacySession(ctx context.Context, taskEntity model.Task, operation publication.ResticOperation, token publication.AdmissionToken) (publication.LineageSession, error) {
+	if token == nil || publication.ValidateAdmissionMode(token.Mode()) != nil {
+		return nil, fmt.Errorf("%w: managed Rsync legacy admission is invalid", backupasset.ErrInvalidState)
+	}
+	allowed, err := service.history.legacyFallbackAllowed(ctx, taskEntity)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, service.blockLegacy(operation)
+	}
+	return &lineageSession{service: service, token: token, mode: publication.LineageCompatibility}, nil
 }
 
 func (service *Service) chooseLineageMode(enabled bool, tokenMode publication.AdmissionMode, hasBinding, repositoryHistory, installationHistory, activePublicationLease bool, operation publication.ResticOperation) (bool, error) {

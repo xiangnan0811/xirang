@@ -27,6 +27,7 @@ type PublicationDependencies struct {
 	DB         *gorm.DB
 	Foundation *backupasset.FoundationService
 	Registry   *provider.Registry
+	Keyring    *backupasset.Keyring
 	Lease      *backupasset.LeaseService
 	Admission  publication.Admission
 	Metrics    publication.Metrics
@@ -43,6 +44,7 @@ type PublicationService struct {
 	db         *gorm.DB
 	foundation *backupasset.FoundationService
 	registry   *provider.Registry
+	keyring    *backupasset.Keyring
 	lease      *backupasset.LeaseService
 	admission  publication.Admission
 	metrics    publication.Metrics
@@ -64,7 +66,7 @@ func NewPublicationService(dependencies PublicationDependencies) (*PublicationSe
 		dependencies.TryWake = func(string) bool { return false }
 	}
 	return &PublicationService{
-		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, lease: dependencies.Lease,
+		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring, lease: dependencies.Lease,
 		admission: dependencies.Admission, metrics: dependencies.Metrics, audit: dependencies.Audit, history: dependencies.History,
 		now: dependencies.Now, tryWake: dependencies.TryWake,
 	}, nil
@@ -112,22 +114,16 @@ func (service *PublicationService) Prepare(ctx context.Context, run publication.
 }
 
 func (service *PublicationService) prepareDisabled(ctx context.Context, run publication.Run, token publication.AdmissionToken) (publication.Execution, error) {
-	installationHistory, err := service.history.HasInstallationManagedHistory(ctx)
+	legacyAllowed, err := service.history.legacyFallbackAllowed(ctx, run.Task)
 	if err != nil {
 		_ = token.Close()
 		return nil, err
 	}
-	activeLease, err := service.history.HasActivePublicationLease(ctx)
-	if err != nil {
+	if err := publication.ValidateAdmissionMode(token.Mode()); err != nil {
 		_ = token.Close()
 		return nil, err
 	}
-	repositoryHistory, err := service.hasTaskManagedRepositoryHistory(ctx, run.Task.ID)
-	if err != nil {
-		_ = token.Close()
-		return nil, err
-	}
-	if token.Mode() != publication.AdmissionPristineLegacy || installationHistory || repositoryHistory || activeLease {
+	if token.Mode() == publication.AdmissionManaged || !legacyAllowed {
 		service.metrics.ObserveLegacyBlocked(publication.OperationLegacyBackup)
 		_ = token.Close()
 		return nil, fmt.Errorf("%w: %s", backupasset.ErrForbidden, backupasset.FailureLegacyFallbackBlocked)
@@ -135,31 +131,35 @@ func (service *PublicationService) prepareDisabled(ctx context.Context, run publ
 	return newPublicationExecution(service, publication.ModeCompatibility, token, nil, nil, ctx), nil
 }
 
-func (service *PublicationService) hasTaskManagedRepositoryHistory(ctx context.Context, taskID uint) (bool, error) {
-	var links []model.TaskRepositoryLink
-	if err := service.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskID).Find(&links).Error; err != nil {
-		return false, fmt.Errorf("load disabled publication Task links: %w", err)
-	}
-	for _, link := range links {
-		if backupasset.ValidateOpaqueID(link.RepositoryID) != nil {
-			return false, fmt.Errorf("%w: invalid active publication Repository link", backupasset.ErrConflict)
-		}
-		managed, err := service.history.HasRepositoryManagedHistory(ctx, link.RepositoryID)
-		if err != nil {
-			return false, err
-		}
-		if managed {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (service *PublicationService) prepareEvidence(ctx context.Context, run publication.Run, token publication.AdmissionToken) (publication.Execution, error) {
 	if token.Mode() != publication.AdmissionManaged {
 		_ = token.Close()
 		service.metrics.ObserveLegacyBlocked(publication.OperationEvidenceBackup)
 		return nil, fmt.Errorf("%w: %s", backupasset.ErrForbidden, backupasset.FailureLegacyFallbackBlocked)
+	}
+	var taskEntity model.Task
+	if err := service.db.WithContext(ctx).Where("archived_at IS NULL").First(&taskEntity, run.Task.ID).Error; err != nil {
+		_ = token.Close()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: publication Task", backupasset.ErrNotFound)
+		}
+		return nil, fmt.Errorf("load publication Task provider: %w", err)
+	}
+	switch bindingProviderForTask(taskEntity) {
+	case backupasset.ProviderRestic:
+		return service.prepareResticEvidence(ctx, run, token)
+	case backupasset.ProviderRsync:
+		return service.prepareRsyncPublication(ctx, run, token)
+	default:
+		_ = token.Close()
+		return nil, fmt.Errorf("%w: managed publication provider is unsupported", backupasset.ErrCapabilityUnavailable)
+	}
+}
+
+func (service *PublicationService) prepareResticEvidence(ctx context.Context, run publication.Run, token publication.AdmissionToken) (publication.Execution, error) {
+	if _, err := service.registry.PublicationStrategy(backupasset.ProviderRestic); err != nil {
+		_ = token.Close()
+		return nil, err
 	}
 	runtime, link, err := service.loadExactPublicationRuntime(ctx, run.Task.ID, run.Audit)
 	if err != nil {
@@ -210,8 +210,8 @@ func (service *PublicationService) prepareEvidence(ctx context.Context, run publ
 	return execution, nil
 }
 
-func (service *PublicationService) preparePoint(ctx context.Context, run publication.Run, runtime publicationRepositoryRuntime, link model.TaskRepositoryLink, observation provider.RepositoryObservation, leaseConfig backupasset.LeaseConfig, preparedAt time.Time) (provider.PublicationAttempt, error) {
-	var attempt provider.PublicationAttempt
+func (service *PublicationService) preparePoint(ctx context.Context, run publication.Run, runtime publicationRepositoryRuntime, link model.TaskRepositoryLink, observation provider.RepositoryObservation, leaseConfig backupasset.LeaseConfig, preparedAt time.Time) (provider.ResticAttemptV1, error) {
+	var attempt provider.ResticAttemptV1
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskRun model.TaskRun
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&taskRun, run.TaskRunID).Error; err != nil {
@@ -288,7 +288,7 @@ func (service *PublicationService) preparePoint(ctx context.Context, run publica
 			}
 			return err
 		}
-		attempt = provider.PublicationAttempt{
+		attempt = provider.ResticAttemptV1{
 			Provider: backupasset.ProviderRestic, RepositoryID: runtime.repository.ID, RepositoryIdentity: observation.RepositoryIdentity, TaskRepositoryLinkID: link.ID,
 			RecoveryPointID: point.ID, TaskID: run.Task.ID, TaskRunID: taskRun.ID, RequiredTags: tags, PointDeadlineAt: lineage.PointDeadlineAt,
 			CapabilityRevision: runtime.repository.CapabilityRevision, AdapterRevision: observation.AdapterRevision, Audit: run.Audit, Access: runtime.access, Fence: lease.Fence,
@@ -296,7 +296,7 @@ func (service *PublicationService) preparePoint(ctx context.Context, run publica
 		return nil
 	})
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
 	return attempt, nil
 }
@@ -442,7 +442,7 @@ func uintPointerEqual(left, right *uint) bool {
 	return *left == *right
 }
 
-func (service *PublicationService) writePublicationAudit(ctx context.Context, audit backupasset.PublicationAuditContext, action backupasset.AuditAction, outcome backupasset.AuditOutcome, attempt *provider.PublicationAttempt, stage publication.PublicationStage, status backupasset.RecoveryPointState, code string, failure backupasset.PublicationFailureCode) error {
+func (service *PublicationService) writePublicationAudit(ctx context.Context, audit backupasset.PublicationAuditContext, action backupasset.AuditAction, outcome backupasset.AuditOutcome, attempt *provider.ResticAttemptV1, stage publication.PublicationStage, status backupasset.RecoveryPointState, code string, failure backupasset.PublicationFailureCode) error {
 	if service.audit == nil {
 		return nil
 	}
@@ -468,7 +468,7 @@ func (service *PublicationService) writePublicationAudit(ctx context.Context, au
 	return service.audit.Write(ctx, input)
 }
 
-func (service *PublicationService) recordProviderCommit(ctx context.Context, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence) (publication.Outcome, bool, error) {
+func (service *PublicationService) recordProviderCommit(ctx context.Context, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1) (publication.Outcome, bool, error) {
 	if err := validateCommitEvidence(attempt, evidence); err != nil {
 		return publication.Outcome{}, false, err
 	}
@@ -563,7 +563,7 @@ func (service *PublicationService) recordProviderCommit(ctx context.Context, att
 	return outcome, transitioned, nil
 }
 
-func validateCommitEvidence(attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence) error {
+func validateCommitEvidence(attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1) error {
 	if attempt.Provider != backupasset.ProviderRestic || evidence.Provider != backupasset.ProviderRestic || evidence.RepositoryIdentity != attempt.RepositoryIdentity ||
 		!validFullNativeID(evidence.NativePointID) || evidence.CaptureStartedAt.IsZero() || evidence.CaptureFinishedAt.IsZero() || evidence.CaptureFinishedAt.Before(evidence.CaptureStartedAt) {
 		return fmt.Errorf("%w: provider commit evidence mismatch", backupasset.ErrConflict)
@@ -613,7 +613,7 @@ func isPublicationProducingRunConflict(err error) bool {
 		strings.Contains(message, "recovery_points.producing_task_run_id")
 }
 
-func canonicalProviderCommitDigest(attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence, requestedTagDigest string) (string, error) {
+func canonicalProviderCommitDigest(attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, requestedTagDigest string) (string, error) {
 	writer := backupasset.NewCanonicalSHA256()
 	writer.String("xirang.restic.provider-commit.v1")
 	writer.String(string(evidence.Provider))
@@ -636,7 +636,7 @@ func canonicalProviderCommitDigest(attempt provider.PublicationAttempt, evidence
 	return digest, nil
 }
 
-func providerCommitReplayMatches(point model.RecoveryPoint, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence) (bool, publication.Outcome, error) {
+func providerCommitReplayMatches(point model.RecoveryPoint, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1) (bool, publication.Outcome, error) {
 	locator, err := decodeResticPointLocator(point.EncryptedProviderLocator)
 	if err != nil {
 		return false, publication.Outcome{}, err
@@ -669,7 +669,7 @@ type publicationExecution struct {
 	service    *PublicationService
 	mode       publication.ExecutionMode
 	token      publication.AdmissionToken
-	attempt    *provider.PublicationAttempt
+	attempt    *provider.ResticAttemptV1
 	context    context.Context
 	cancel     context.CancelCauseFunc
 	heartbeat  chan struct{}
@@ -678,7 +678,7 @@ type publicationExecution struct {
 	closeOnce  sync.Once
 }
 
-func newPublicationExecution(service *PublicationService, mode publication.ExecutionMode, token publication.AdmissionToken, attempt *provider.PublicationAttempt, config *backupasset.LeaseConfig, parent context.Context) *publicationExecution {
+func newPublicationExecution(service *PublicationService, mode publication.ExecutionMode, token publication.AdmissionToken, attempt *provider.ResticAttemptV1, config *backupasset.LeaseConfig, parent context.Context) *publicationExecution {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -692,11 +692,11 @@ func newPublicationExecution(service *PublicationService, mode publication.Execu
 }
 
 func (execution *publicationExecution) Mode() publication.ExecutionMode { return execution.mode }
-func (execution *publicationExecution) Attempt() *provider.PublicationAttempt {
+func (execution *publicationExecution) Attempt() *provider.TaggedPublicationAttempt {
 	if execution == nil || execution.attempt == nil {
 		return nil
 	}
-	copy := *execution.attempt
+	copy := provider.NewResticPublicationAttempt(*execution.attempt)
 	return &copy
 }
 func (execution *publicationExecution) Context() context.Context {
@@ -759,9 +759,13 @@ func (execution *publicationExecution) CompleteCompatibility(_ context.Context) 
 	return nil
 }
 
-func (execution *publicationExecution) RecordProviderCommit(ctx context.Context, evidence provider.ProviderCommitEvidence) (publication.Outcome, error) {
+func (execution *publicationExecution) RecordProviderCommit(ctx context.Context, evidence provider.ProviderCommit) (publication.Outcome, error) {
 	if execution == nil || execution.mode != publication.ModeEvidence || execution.attempt == nil || execution.service == nil {
 		return publication.Outcome{}, fmt.Errorf("%w: evidence publication execution required", backupasset.ErrInvalidState)
+	}
+	resticEvidence, err := evidence.ResticCommit()
+	if err != nil {
+		return publication.Outcome{}, err
 	}
 	if err := execution.Cancel(nil); err != nil {
 		return publication.Outcome{}, err
@@ -771,7 +775,7 @@ func (execution *publicationExecution) RecordProviderCommit(ctx context.Context,
 	}
 	commitContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), sshutil.CommandExecutionJoinTimeout)
 	defer cancel()
-	outcome, transitioned, err := execution.service.recordProviderCommit(commitContext, *execution.attempt, evidence)
+	outcome, transitioned, err := execution.service.recordProviderCommit(commitContext, *execution.attempt, resticEvidence)
 	if err != nil {
 		return publication.Outcome{}, err
 	}

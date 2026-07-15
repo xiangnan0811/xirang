@@ -33,38 +33,41 @@ type ResticConfig struct {
 //   - task.RsyncTarget = restic 仓库路径（如 /backup/repo 或 sftp:user@host:/backup）
 //   - task.ExecutorConfig = JSON，含 repository_password 和 exclude_patterns
 type ResticExecutor struct {
-	binary    string // restic 二进制名称，默认 "restic"
-	publisher provider.ResticPublisher
+	binary   string // restic 二进制名称，默认 "restic"
+	strategy provider.PublicationStrategy
 }
 
 type resticEvidenceConfig struct {
 	ExcludePatterns []string `json:"exclude_patterns"`
 }
 
-// RunWithEvidence uses the Provider-owned Restic command lane. It must never
-// initialize repositories, construct password files, or read legacy access
-// secrets from a Task configuration.
-func (e *ResticExecutor) RunWithEvidence(ctx context.Context, request EvidenceExecutionRequest, logf LogFunc, progressf ProgressFunc) (EvidenceExecutionResult, error) {
-	if e == nil || e.publisher == nil || request.TaskRunID == 0 || request.Task.ID == 0 ||
-		request.Task.ID != request.Attempt.TaskID || request.TaskRunID != request.Attempt.TaskRunID ||
-		request.Attempt.Provider != backupasset.ProviderRestic || strings.ToLower(strings.TrimSpace(request.Task.ExecutorType)) != "restic" {
-		return EvidenceExecutionResult{}, fmt.Errorf("%w: Restic evidence executor unavailable", backupasset.ErrInvalidState)
+// RunWithPublication uses the Provider-owned Restic strategy lane. It must
+// never initialize repositories, construct password files, or read legacy
+// access secrets from a Task configuration.
+func (e *ResticExecutor) RunWithPublication(ctx context.Context, request PublicationExecutionRequest, logf LogFunc, progressf ProgressFunc) (PublicationExecutionResult, error) {
+	attempt, err := request.Attempt.ResticAttempt()
+	if e == nil || e.strategy == nil || e.strategy.Kind() != backupasset.ProviderRestic || err != nil || request.TaskRunID == 0 || request.Task.ID == 0 ||
+		request.Task.ID != attempt.TaskID || request.TaskRunID != attempt.TaskRunID ||
+		strings.ToLower(strings.TrimSpace(request.Task.ExecutorType)) != "restic" {
+		return PublicationExecutionResult{}, fmt.Errorf("%w: Restic publication executor unavailable", backupasset.ErrInvalidState)
 	}
 	config, err := parseResticEvidenceConfig(request.Task.ExecutorConfig)
 	if err != nil {
-		return EvidenceExecutionResult{}, fmt.Errorf("parse Restic evidence config: %w", err)
+		return PublicationExecutionResult{}, fmt.Errorf("parse Restic publication config: %w", err)
+	}
+	input := provider.ResticBackupInput{Source: strings.TrimSpace(request.Task.RsyncSource), Excludes: append([]string(nil), config.ExcludePatterns...)}
+	prepared, err := e.strategy.Prepare(ctx, provider.PublicationPrepareRequest{Attempt: request.Attempt, ResticInput: &input})
+	if err != nil {
+		return PublicationExecutionResult{}, err
 	}
 	if logf != nil {
 		logf("info", "开始受管 restic 证据备份")
 	}
-	result, runErr := e.publisher.Backup(ctx, request.Attempt, provider.ResticBackupInput{
-		Source:   strings.TrimSpace(request.Task.RsyncSource),
-		Excludes: append([]string(nil), config.ExcludePatterns...),
-	}, func(progress provider.ResticBackupProgress) {
+	result, runErr := e.strategy.Execute(ctx, prepared, provider.PublicationProgress{OnResticProgress: func(progress provider.ResticBackupProgress) {
 		if progressf != nil {
 			progressf(ProgressSample{ObservedAt: progress.ObservedAt, Percent: progress.Percent, ThroughputMbps: progress.ThroughputMbps})
 		}
-	})
+	}})
 	if logf != nil {
 		if runErr == nil {
 			logf("info", "受管 restic 证据备份已结束")
@@ -72,9 +75,16 @@ func (e *ResticExecutor) RunWithEvidence(ctx context.Context, request EvidenceEx
 			logf("warn", "受管 restic 证据备份未确认")
 		}
 	}
-	return EvidenceExecutionResult{
-		ExitCode: result.ExitCode, Completion: result.Completion, ProviderCommit: result.ProviderCommit, EvidenceCode: result.EvidenceCode,
-	}, runErr
+	output := PublicationExecutionResult{ExitCode: result.ExitCode, Completion: result.Completion, EvidenceCode: result.EvidenceCode}
+	if runErr != nil || result.Completion != backupasset.CompletionKnownExitZero || result.ExitCode != 0 || result.EvidenceCode != "" || result.ProviderCommit == nil {
+		return output, runErr
+	}
+	commit, err := e.strategy.RecordCommit(ctx, prepared, result)
+	if err != nil {
+		return output, err
+	}
+	output.ProviderCommit = &commit
+	return output, nil
 }
 
 func parseResticEvidenceConfig(raw string) (resticEvidenceConfig, error) {
@@ -631,4 +641,4 @@ func validResticSnapshotReference(value string) bool {
 	return true
 }
 
-var _ EvidenceExecutor = (*ResticExecutor)(nil)
+var _ PublicationExecutor = (*ResticExecutor)(nil)

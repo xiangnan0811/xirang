@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	backupAssetMigrationVersion   = 62
-	backupAssetPublicationVersion = 63
+	backupAssetMigrationVersion        = 62
+	backupAssetPublicationVersion      = 63
+	backupAssetRsyncPublicationVersion = 64
 )
 
 var backupAssetFoundationTables = []string{
@@ -261,6 +262,14 @@ func TestBackupAssetMigration063Postgres(t *testing.T) {
 	runBackupAssetMigration063Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration064SQLite(t *testing.T) {
+	runBackupAssetMigration064Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration064Postgres(t *testing.T) {
+	runBackupAssetMigration064Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
 type migrationFixture struct {
 	engine string
 	open   func(*testing.T) (*migrate.Migrate, *sql.DB)
@@ -298,6 +307,18 @@ func runBackupAssetMigration063Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("DownRejectsEveryNativePointStateAndNullableLineage", fixture.testDownRejectsEveryNativePointStateAndNullableLineage)
 	t.Run("RejectedDownLeavesVersionSchemaAndDataUnchanged", fixture.testRejectedDownLeavesVersionSchemaAndDataUnchanged)
 	t.Run("UTCAndModelParity", fixture.testUTCAndModelParity)
+}
+
+func runBackupAssetMigration064Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyAndParity", fixture.test064ApplyAndParity)
+	t.Run("BackfillsEveryResticManagedState", fixture.test064BackfillsEveryResticManagedState)
+	t.Run("AllowsPristineMutableHead", fixture.test064AllowsPristineMutableHead)
+	t.Run("ManagedTreeSourceFingerprintIsRepositoryScoped", fixture.test064ManagedTreeSourceUnique)
+	t.Run("DownRejectsLatch", fixture.test064DownRejectsLatch)
+	t.Run("DownRejectsManagedPointAndVersionedLink", fixture.test064DownRejectsManagedHistory)
+	t.Run("DownRejectsPublicationAndParentLease", fixture.test064DownRejectsPublicationAndParentLease)
+	t.Run("RejectedDownLeavesSchemaAndRowsUntouched", fixture.test064DownIsAtomic)
 }
 
 func (fixture migrationFixture) openAt(t *testing.T, version uint) (*migrate.Migrate, *sql.DB) {
@@ -495,6 +516,180 @@ func (fixture migrationFixture) testUTCAndModelParity(t *testing.T) {
 	assertPostgresUTCRoundTripAndNoTimeDefaults(t, db)
 }
 
+func (fixture migrationFixture) test064ApplyAndParity(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetPublicationVersion)
+	migrateToBackupAssetVersion(t, migrator, backupAssetRsyncPublicationVersion)
+	assertMigrationVersion(t, migrator, backupAssetRsyncPublicationVersion)
+	fixture.assertRsyncPublicationContractSchema(t, db)
+	assertRsyncPublicationModelParity(t, db, fixture.engine)
+	if fixture.engine == "sqlite" {
+		assertSQLiteTimeColumnsHaveNoDefault(t, db, "backup_asset_managed_history_latches")
+	}
+
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s migration down to 000063: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetPublicationVersion)
+	fixture.assertRsyncPublicationContractAbsent(t, db)
+}
+
+func (fixture migrationFixture) test064BackfillsEveryResticManagedState(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetPublicationVersion)
+	now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+	firstRepositoryID := strings.Repeat("1", 32)
+	secondRepositoryID := strings.Repeat("2", 32)
+	fixture.insertRepository(t, db, firstRepositoryID, "restic", now)
+	fixture.insertRepository(t, db, secondRepositoryID, "restic", now.Add(time.Hour))
+	states := []string{
+		"preparing", "verifying", "committed", "degraded", "expiring",
+		"expired", "failed", "purge_blocked",
+	}
+	for index, state := range states {
+		if err := fixture.insertRecoveryPoint(db, publicationPointSeed{
+			ID: fmt.Sprintf("%032x", index+1), RepositoryID: firstRepositoryID,
+			Semantics: "native_snapshot", State: state,
+		}, now.Add(time.Duration(index)*time.Second)); err != nil {
+			t.Fatalf("insert first repository native point in %s: %v", state, err)
+		}
+	}
+	if err := fixture.insertRecoveryPoint(db, publicationPointSeed{
+		ID: strings.Repeat("f", 32), RepositoryID: secondRepositoryID,
+		Semantics: "native_snapshot", State: "committed",
+	}, now.Add(time.Hour)); err != nil {
+		t.Fatalf("insert second repository native point: %v", err)
+	}
+
+	migrateToBackupAssetVersion(t, migrator, backupAssetRsyncPublicationVersion)
+	fixture.assertManagedHistoryLatch(t, db, "installation", "", now)
+	fixture.assertManagedHistoryLatch(t, db, "repository", firstRepositoryID, now)
+	fixture.assertManagedHistoryLatch(t, db, "repository", secondRepositoryID, now.Add(time.Hour))
+	if got := fixture.managedHistoryLatchCount(t, db); got != 3 {
+		t.Fatalf("managed history latch count=%d, want 3", got)
+	}
+}
+
+func (fixture migrationFixture) test064AllowsPristineMutableHead(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetPublicationVersion)
+	now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+	repositoryID := strings.Repeat("3", 32)
+	fixture.insertRepository(t, db, repositoryID, "rsync", now)
+	if err := fixture.insertRecoveryPoint(db, publicationPointSeed{
+		ID: strings.Repeat("4", 32), RepositoryID: repositoryID,
+		Semantics: "mutable_head", State: "observed",
+	}, now); err != nil {
+		t.Fatalf("insert mutable head: %v", err)
+	}
+
+	migrateToBackupAssetVersion(t, migrator, backupAssetRsyncPublicationVersion)
+	if got := fixture.managedHistoryLatchCount(t, db); got != 0 {
+		t.Fatalf("pristine mutable head created %d managed history latches", got)
+	}
+}
+
+func (fixture migrationFixture) test064ManagedTreeSourceUnique(t *testing.T) {
+	_, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+	now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+	firstRepositoryID := strings.Repeat("5", 32)
+	secondRepositoryID := strings.Repeat("6", 32)
+	fingerprint := "managed-tree-source-fingerprint"
+	fixture.insertRepository(t, db, firstRepositoryID, "rsync", now)
+	fixture.insertRepository(t, db, secondRepositoryID, "rsync", now)
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: strings.Repeat("7", 32), RepositoryID: firstRepositoryID,
+		Semantics: "xirang_manifest", State: "preparing", SourceFingerprint: fingerprint,
+	})
+	if err := fixture.insertRecoveryPoint(db, publicationPointSeed{
+		ID: strings.Repeat("8", 32), RepositoryID: firstRepositoryID,
+		Semantics: "imported_baseline", State: "preparing", SourceFingerprint: fingerprint,
+	}, now); err == nil {
+		t.Fatal("same repository managed-tree source fingerprint unexpectedly succeeded")
+	}
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: strings.Repeat("9", 32), RepositoryID: secondRepositoryID,
+		Semantics: "imported_baseline", State: "preparing", SourceFingerprint: fingerprint,
+	})
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: strings.Repeat("a", 32), RepositoryID: firstRepositoryID,
+		Semantics: "xirang_manifest", State: "preparing",
+	})
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: strings.Repeat("b", 32), RepositoryID: firstRepositoryID,
+		Semantics: "imported_baseline", State: "preparing",
+	})
+}
+
+func (fixture migrationFixture) test064DownRejectsLatch(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+	now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+	fixture.insertManagedHistoryLatch(t, db, "installation", "", now)
+	fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+}
+
+func (fixture migrationFixture) test064DownRejectsManagedHistory(t *testing.T) {
+	states := []string{
+		"preparing", "verifying", "committed", "degraded", "expiring",
+		"expired", "failed", "purge_blocked",
+	}
+	for index, state := range states {
+		state := state
+		t.Run("xirang_manifest_"+state, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+			now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+			repositoryID := fmt.Sprintf("%032x", index+101)
+			fixture.insertRepository(t, db, repositoryID, "rsync", now)
+			fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+				ID: fmt.Sprintf("%032x", index+1), RepositoryID: repositoryID,
+				Semantics: "xirang_manifest", State: state,
+			})
+			fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+
+	for index, publicationMode := range []string{"native_snapshot", "versioned_hardlink", "versioned_full_copy"} {
+		publicationMode := publicationMode
+		t.Run("link_"+publicationMode, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+			now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+			repositoryID := fmt.Sprintf("%032x", index+201)
+			taskID := int64(9800 + index*2)
+			fixture.insertRepository(t, db, repositoryID, "rsync", now)
+			fixture.insertTaskAndRun(t, db, taskID, taskID+1, now)
+			fixture.insertTaskLink(t, db, fmt.Sprintf("%032x", index+301), taskID, repositoryID, publicationMode, now)
+			fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+}
+
+func (fixture migrationFixture) test064DownRejectsPublicationAndParentLease(t *testing.T) {
+	for index, holderType := range []string{"point_publication", "rsync_parent"} {
+		holderType := holderType
+		t.Run(holderType, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+			now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+			repositoryID := fmt.Sprintf("%032x", index+401)
+			pointID := fmt.Sprintf("%032x", index+501)
+			fixture.insertRepository(t, db, repositoryID, "rsync", now)
+			fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+				ID: pointID, RepositoryID: repositoryID, Semantics: "mutable_head", State: "observed",
+			})
+			fixture.insertPublicationLease(t, db, fmt.Sprintf("%032x", index+601), pointID, holderType, "active", now)
+			fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+}
+
+func (fixture migrationFixture) test064DownIsAtomic(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+	now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
+	repositoryID := strings.Repeat("c", 32)
+	fixture.insertRepository(t, db, repositoryID, "rsync", now)
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: strings.Repeat("d", 32), RepositoryID: repositoryID,
+		Semantics: "imported_baseline", State: "failed", SourceFingerprint: "retained-managed-tree",
+	})
+	fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+}
+
 type publicationPointSeed struct {
 	ID                string
 	RepositoryID      string
@@ -614,6 +809,19 @@ type publicationMigrationSnapshot struct {
 	leaseRows                    []string
 }
 
+type rsyncPublicationMigrationSnapshot struct {
+	version                          uint
+	dirty                            bool
+	latchDefinition                  string
+	installationLatchIndexDefinition string
+	repositoryLatchIndexDefinition   string
+	managedTreeIndexDefinition       string
+	latchRows                        []string
+	linkRows                         []string
+	pointRows                        []string
+	leaseRows                        []string
+}
+
 func (fixture migrationFixture) assertPublicationDownRejectedUnchanged(t *testing.T, migrator *migrate.Migrate, db *sql.DB) {
 	t.Helper()
 	before := fixture.capturePublicationMigrationSnapshot(t, migrator, db)
@@ -626,11 +834,41 @@ func (fixture migrationFixture) assertPublicationDownRejectedUnchanged(t *testin
 	}
 }
 
+func (fixture migrationFixture) assertRsyncPublicationDownRejectedUnchanged(t *testing.T, migrator *migrate.Migrate, db *sql.DB) {
+	t.Helper()
+	before := fixture.captureRsyncPublicationMigrationSnapshot(t, migrator, db)
+	if err := fixture.executeRsyncPublicationDown(db); err == nil {
+		t.Fatal("000064 down unexpectedly succeeded while managed history remains")
+	}
+	after := fixture.captureRsyncPublicationMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("rejected 000064 down changed migration state\nbefore=%+v\nafter=%+v", before, after)
+	}
+}
+
 func (fixture migrationFixture) executePublicationDown(db *sql.DB) error {
 	path := "migrations/sqlite/000063_backup_asset_publication_contract.down.sql"
 	migrationFS := sqliteMigrationsFS
 	if fixture.engine == "postgres" {
 		path = "migrations/postgres/000063_backup_asset_publication_contract.down.sql"
+		migrationFS = postgresMigrationsFS
+	}
+	script, err := migrationFS.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(string(script))
+	if err != nil {
+		_, _ = db.Exec("ROLLBACK")
+	}
+	return err
+}
+
+func (fixture migrationFixture) executeRsyncPublicationDown(db *sql.DB) error {
+	path := "migrations/sqlite/000064_backup_asset_rsync_publication_contract.down.sql"
+	migrationFS := sqliteMigrationsFS
+	if fixture.engine == "postgres" {
+		path = "migrations/postgres/000064_backup_asset_rsync_publication_contract.down.sql"
 		migrationFS = postgresMigrationsFS
 	}
 	script, err := migrationFS.ReadFile(path)
@@ -657,6 +895,32 @@ func (fixture migrationFixture) capturePublicationMigrationSnapshot(t *testing.T
 		leaseDefinition:              fixture.tableDefinition(t, db, "recovery_point_leases"),
 		producingRunIndexDefinition:  fixture.indexDefinition(t, db, "idx_recovery_points_producing_task_run_unique"),
 		nativeSourceIndexDefinition:  fixture.indexDefinition(t, db, "idx_recovery_points_native_source_unique"),
+		linkRows: fixture.rowStrings(t, db, `SELECT id || '|' || repository_id || '|' || publication_mode
+			FROM task_repository_links ORDER BY id`),
+		pointRows: fixture.rowStrings(t, db, `SELECT id || '|' || repository_id || '|' || semantics || '|' || state || '|' ||
+			COALESCE(CAST(producing_task_run_id AS TEXT), '<null>') || '|' || source_fingerprint
+			FROM recovery_points ORDER BY id`),
+		leaseRows: fixture.rowStrings(t, db, `SELECT id || '|' || recovery_point_id || '|' || holder_type || '|' || status
+			FROM recovery_point_leases ORDER BY id`),
+	}
+}
+
+func (fixture migrationFixture) captureRsyncPublicationMigrationSnapshot(t *testing.T, migrator *migrate.Migrate, db *sql.DB) rsyncPublicationMigrationSnapshot {
+	t.Helper()
+	version, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s migration version: %v", fixture.engine, err)
+	}
+	return rsyncPublicationMigrationSnapshot{
+		version:                          version,
+		dirty:                            dirty,
+		latchDefinition:                  fixture.tableDefinition(t, db, "backup_asset_managed_history_latches"),
+		installationLatchIndexDefinition: fixture.indexDefinition(t, db, "idx_backup_asset_managed_history_latches_installation_unique"),
+		repositoryLatchIndexDefinition:   fixture.indexDefinition(t, db, "idx_backup_asset_managed_history_latches_repository_unique"),
+		managedTreeIndexDefinition:       fixture.indexDefinition(t, db, "idx_recovery_points_managed_tree_source_unique"),
+		latchRows: fixture.rowStrings(t, db, `SELECT id || '|' || scope || '|' || COALESCE(repository_id, '<null>') || '|' ||
+			repository_identity_digest || '|' || first_semantics || '|' || first_origin || '|' || CAST(first_seen_at AS TEXT)
+			FROM backup_asset_managed_history_latches ORDER BY id`),
 		linkRows: fixture.rowStrings(t, db, `SELECT id || '|' || repository_id || '|' || publication_mode
 			FROM task_repository_links ORDER BY id`),
 		pointRows: fixture.rowStrings(t, db, `SELECT id || '|' || repository_id || '|' || semantics || '|' || state || '|' ||
@@ -753,6 +1017,152 @@ func (fixture migrationFixture) assertPublicationContractSchema(t *testing.T, db
 	}
 }
 
+func (fixture migrationFixture) assertRsyncPublicationContractSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if !databaseTableExists(t, db, fixture.engine, "backup_asset_managed_history_latches") {
+		t.Fatalf("%s managed-history latch table is missing", fixture.engine)
+	}
+	for _, column := range []string{
+		"id", "scope", "repository_id", "repository_identity_digest", "first_semantics", "first_origin",
+		"first_seen_at", "created_at", "updated_at",
+	} {
+		if !databaseColumnExists(t, db, fixture.engine, "backup_asset_managed_history_latches", column) {
+			t.Fatalf("%s managed-history latch column %s is missing", fixture.engine, column)
+		}
+	}
+	definition := fixture.tableDefinition(t, db, "backup_asset_managed_history_latches")
+	for _, fragment := range []string{"check", "installation", "repository", "repository_id"} {
+		if !strings.Contains(definition, fragment) {
+			t.Fatalf("%s managed-history latch constraint omits %q: %s", fixture.engine, fragment, definition)
+		}
+	}
+	fixture.assertManagedHistoryLatchHasNoRepositoryForeignKey(t, db)
+	for index, fragments := range map[string][]string{
+		"idx_backup_asset_managed_history_latches_installation_unique": {"unique", "scope", "where", "installation"},
+		"idx_backup_asset_managed_history_latches_repository_unique":   {"unique", "repository_id", "where", "repository"},
+		"idx_recovery_points_managed_tree_source_unique":               {"unique", "repository_id", "source_fingerprint", "where", "xirang_manifest", "imported_baseline"},
+	} {
+		indexDefinition := fixture.indexDefinition(t, db, index)
+		if indexDefinition == "" {
+			t.Fatalf("%s Rsync publication index %s is missing", fixture.engine, index)
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(indexDefinition, fragment) {
+				t.Fatalf("%s Rsync publication index %s omits %q: %s", fixture.engine, index, fragment, indexDefinition)
+			}
+		}
+	}
+}
+
+func (fixture migrationFixture) assertRsyncPublicationContractAbsent(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if databaseTableExists(t, db, fixture.engine, "backup_asset_managed_history_latches") {
+		t.Fatalf("%s managed-history latch table remains after 000064 down", fixture.engine)
+	}
+	for _, index := range []string{
+		"idx_backup_asset_managed_history_latches_installation_unique",
+		"idx_backup_asset_managed_history_latches_repository_unique",
+		"idx_recovery_points_managed_tree_source_unique",
+	} {
+		if definition := fixture.indexDefinition(t, db, index); definition != "" {
+			t.Fatalf("%s Rsync publication index %s remains after down: %s", fixture.engine, index, definition)
+		}
+	}
+}
+
+func (fixture migrationFixture) assertManagedHistoryLatchHasNoRepositoryForeignKey(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var count int
+	var err error
+	if fixture.engine == "sqlite" {
+		rows, queryErr := db.Query(`PRAGMA foreign_key_list('backup_asset_managed_history_latches')`)
+		if queryErr != nil {
+			t.Fatalf("inspect SQLite managed-history latch foreign keys: %v", queryErr)
+		}
+		defer closeMigrationRows(t, rows)
+		for rows.Next() {
+			var id, seq int
+			var table, from, to, onUpdate, onDelete, match string
+			if scanErr := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); scanErr != nil {
+				t.Fatalf("scan SQLite managed-history latch foreign key: %v", scanErr)
+			}
+			if from == "repository_id" {
+				count++
+			}
+		}
+		if rowErr := rows.Err(); rowErr != nil {
+			t.Fatalf("iterate SQLite managed-history latch foreign keys: %v", rowErr)
+		}
+	} else {
+		err = db.QueryRow(`SELECT COUNT(*)
+			FROM pg_constraint AS constraint_row
+			JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid
+			JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+			WHERE namespace.nspname = current_schema()
+			  AND relation.relname = 'backup_asset_managed_history_latches'
+			  AND constraint_row.contype = 'f'`).Scan(&count)
+		if err != nil {
+			t.Fatalf("inspect PostgreSQL managed-history latch foreign keys: %v", err)
+		}
+	}
+	if count != 0 {
+		t.Fatalf("%s managed-history latch has %d repository foreign keys, want none", fixture.engine, count)
+	}
+}
+
+func (fixture migrationFixture) managedHistoryLatchCount(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM backup_asset_managed_history_latches`).Scan(&count); err != nil {
+		t.Fatalf("count %s managed-history latches: %v", fixture.engine, err)
+	}
+	return count
+}
+
+func (fixture migrationFixture) assertManagedHistoryLatch(t *testing.T, db *sql.DB, scope, repositoryID string, wantFirstSeenAt time.Time) {
+	t.Helper()
+	var gotScope, identityDigest, firstSemantics, firstOrigin string
+	var gotRepositoryID sql.NullString
+	var firstSeenAt time.Time
+	query := `SELECT scope, repository_id, repository_identity_digest, first_semantics, first_origin, first_seen_at
+		FROM backup_asset_managed_history_latches
+		WHERE scope = ? AND ((? = '' AND repository_id IS NULL) OR repository_id = ?)`
+	if err := db.QueryRow(fixture.bind(query), scope, repositoryID, repositoryID).Scan(
+		&gotScope, &gotRepositoryID, &identityDigest, &firstSemantics, &firstOrigin, &firstSeenAt,
+	); err != nil {
+		t.Fatalf("read %s %s managed-history latch for repository %q: %v", fixture.engine, scope, repositoryID, err)
+	}
+	if gotScope != scope || firstSemantics != "native_snapshot" || firstOrigin != "migration_backfill" {
+		t.Fatalf("managed-history latch got scope=%q semantics=%q origin=%q, want %q/native_snapshot/migration_backfill", gotScope, firstSemantics, firstOrigin, scope)
+	}
+	if scope == "installation" {
+		if gotRepositoryID.Valid || identityDigest != "" {
+			t.Fatalf("installation latch has repository_id=%q valid=%t identity_digest=%q", gotRepositoryID.String, gotRepositoryID.Valid, identityDigest)
+		}
+	} else if !gotRepositoryID.Valid || gotRepositoryID.String != repositoryID || len(identityDigest) != 64 {
+		t.Fatalf("repository latch got repository_id=%q valid=%t identity_digest=%q, want %q and a 64-char opaque digest", gotRepositoryID.String, gotRepositoryID.Valid, identityDigest, repositoryID)
+	}
+	if !firstSeenAt.Equal(wantFirstSeenAt) || firstSeenAt.Location() != time.UTC {
+		t.Fatalf("managed-history latch first_seen_at=%s (%s), want %s UTC", firstSeenAt.Format(time.RFC3339), firstSeenAt.Location(), wantFirstSeenAt.Format(time.RFC3339))
+	}
+}
+
+func (fixture migrationFixture) insertManagedHistoryLatch(t *testing.T, db *sql.DB, scope, repositoryID string, now time.Time) {
+	t.Helper()
+	id := "managed-history-installation"
+	var repositoryIDValue any
+	identityDigest := ""
+	if scope == "repository" {
+		id = "managed-history-repository-" + repositoryID
+		repositoryIDValue = repositoryID
+		identityDigest = strings.Repeat("0", 32) + repositoryID
+	}
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_managed_history_latches
+		(id, scope, repository_id, repository_identity_digest, first_semantics, first_origin, first_seen_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'xirang_manifest', 'provider_commit', ?, ?, ?)`,
+		id, scope, repositoryIDValue, identityDigest, now, now, now)
+}
+
 func (fixture migrationFixture) assertPublicationContractAbsent(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if definition := fixture.tableDefinition(t, db, "task_repository_links"); strings.Contains(definition, "native_snapshot") {
@@ -802,6 +1212,22 @@ func assertFoundationModelParity(t *testing.T, db *sql.DB, engine string) {
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", engine, table, got, want)
 		}
+	}
+}
+
+func assertRsyncPublicationModelParity(t *testing.T, db *sql.DB, engine string) {
+	t.Helper()
+	want := gormColumnNames(t, model.BackupAssetManagedHistoryLatch{})
+	var got []string
+	if engine == "sqlite" {
+		got = sqliteColumnNames(t, db, "backup_asset_managed_history_latches")
+	} else {
+		got = postgresColumnNames(t, db, "backup_asset_managed_history_latches")
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("%s backup_asset_managed_history_latches columns mismatch\n got: %v\nwant: %v", engine, got, want)
 	}
 }
 

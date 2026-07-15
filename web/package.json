@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run --coverage"
+    "test": "NODE_ENV=test vitest run --coverage"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

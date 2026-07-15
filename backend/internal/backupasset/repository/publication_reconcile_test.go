@@ -57,18 +57,18 @@ func TestProcessVerifyingPointOutcomeSelectsImmutableSameTaskPreviousCommittedPo
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	if _, err := execution.RecordProviderCommit(context.Background(), commit); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(commit)); err != nil {
 		t.Fatal(err)
 	}
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, _ provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
-		return provider.ManifestEvidence{
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, _ provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestComplete, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: commit.CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
 		}, nil
 	}
 
-	outcome, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID)
+	outcome, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,25 +85,25 @@ func TestProcessVerifyingPointUsesFreshFenceAndOriginalDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	if _, err := execution.RecordProviderCommit(context.Background(), commit); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(commit)); err != nil {
 		t.Fatal(err)
 	}
-	firstFence := execution.Attempt().Fence
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
+	firstFence := resticAttemptForExecution(t, execution).Fence
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
 		if evidence != commit {
 			t.Fatalf("manifest commit evidence=%+v want=%+v", evidence, commit)
 		}
-		if attempt.Fence.LeaseID == firstFence.LeaseID || !attempt.PointDeadlineAt.Equal(execution.Attempt().PointDeadlineAt) {
+		if attempt.Fence.LeaseID == firstFence.LeaseID || !attempt.PointDeadlineAt.Equal(resticAttemptForExecution(t, execution).PointDeadlineAt) {
 			t.Fatalf("manifest attempt did not use a fresh lease/fixed deadline: %+v", attempt)
 		}
-		return provider.ManifestEvidence{
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestComplete, EntryCount: 2, LogicalBytes: 3456, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: commit.CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
 		}, nil
 	}
 
-	outcome, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID)
+	outcome, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestProcessVerifyingPointUsesFreshFenceAndOriginalDeadline(t *testing.T) {
 		t.Fatalf("manifest outcome=%+v", outcome)
 	}
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.State != string(backupasset.RecoveryPointCommitted) || point.CommittedAt == nil || point.CapturedAt == nil || !point.CapturedAt.Equal(commit.CaptureStartedAt) ||
@@ -145,15 +145,15 @@ func TestProcessVerifyingPointRejectsLateManifestAfterTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan provider.PublicationAttempt, 1)
+	started := make(chan provider.ResticAttemptV1, 1)
 	releaseBuilder := make(chan struct{})
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, _ provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, _ provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
 		started <- attempt
 		<-releaseBuilder
-		return provider.ManifestEvidence{
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestComplete, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: fixture.commitEvidence().CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
@@ -161,7 +161,7 @@ func TestProcessVerifyingPointRejectsLateManifestAfterTakeover(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID)
+		_, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID)
 		result <- err
 	}()
 	claim := <-started
@@ -173,7 +173,7 @@ func TestProcessVerifyingPointRejectsLateManifestAfterTakeover(t *testing.T) {
 		t.Fatalf("late manifest error=%v, want fence lost", err)
 	}
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.State != string(backupasset.RecoveryPointVerifying) {
@@ -193,24 +193,24 @@ func TestProcessVerifyingPointDetectsTagRewriteWhenCommittedIDDisappears(t *test
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	if _, err := execution.RecordProviderCommit(context.Background(), commit); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(commit)); err != nil {
 		t.Fatal(err)
 	}
-	fixture.manifest.build = func(context.Context, provider.PublicationAttempt, provider.ProviderCommitEvidence, provider.ManifestLimits) (provider.ManifestEvidence, error) {
-		return provider.ManifestEvidence{
+	fixture.manifest.build = func(context.Context, provider.ResticAttemptV1, provider.ResticCommitV1, provider.ManifestLimits) (provider.ResticManifestV1, error) {
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Generator: "xirang-restic-ls", GeneratorVersion: "1", Completeness: backupasset.ManifestUnavailable,
 			Fidelity: provider.ResticManifestFidelityV1(), FailureCode: backupasset.FailureManifestUnavailable,
 		}, nil
 	}
 	rewrittenID := strings.Repeat("d", 64)
-	fixture.publisher.lookup = func(_ context.Context, attempt provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, attempt provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return []provider.ResticSnapshotObservation{{
 			RepositoryIdentity: fixture.attemptIdentity(), NativePointID: rewrittenID, SnapshotTime: commit.CaptureStartedAt,
 			Tags: []string{attempt.RequiredTags[0], attempt.RequiredTags[1]},
 		}}, nil
 	}
 
-	outcome, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID)
+	outcome, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,18 +226,18 @@ func TestProcessVerifyingPointPersistsInactivePartialDiagnosticAndFailsResourceL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, _ provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
-		return provider.ManifestEvidence{
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, _ provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestPartial, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: fixture.commitEvidence().CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
 			FailureCode: backupasset.FailureProviderResourceLimit,
 		}, nil
 	}
-	outcome, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID)
+	outcome, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestProcessVerifyingPointPersistsInactivePartialDiagnosticAndFailsResourceL
 		t.Fatalf("partial resource-limit outcome=%+v", outcome)
 	}
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.State != string(backupasset.RecoveryPointFailed) || point.ManifestDigest != "" || point.EntryCount != 0 || point.LogicalBytes != 0 {
@@ -271,7 +271,7 @@ func TestReconcilePreparingKnownExitZeroRebuildsFromValidStoredSummary(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestReconcilePreparingKnownExitZeroRebuildsFromValidStoredSummary(t *testin
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		if recovered.RequiredTags != attempt.RequiredTags || recovered.RecoveryPointID != attempt.RecoveryPointID {
 			t.Fatalf("reconcile attempt=%+v want tags/point from %+v", recovered, attempt)
 		}
@@ -316,7 +316,7 @@ func TestReconcilePreparingOutcomeUnknownQuarantinesCompletionUnproven(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionOutcomeUnknown, Code: backupasset.FailureProviderTimeout}); err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestReconcilePreparingOutcomeUnknownQuarantinesCompletionUnproven(t *testin
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return []provider.ResticSnapshotObservation{{
 			RepositoryIdentity: fixture.attemptIdentity(), NativePointID: commit.NativePointID, SnapshotTime: commit.CaptureStartedAt,
 			Tags: []string{recovered.RequiredTags[0], recovered.RequiredTags[1]},
@@ -367,7 +367,7 @@ func TestListCandidatesSkipsLiveLeaseWhileReadinessIncludesEveryUnresolvedPoint(
 	if err != nil {
 		t.Fatal(err)
 	}
-	pointID := execution.Attempt().RecoveryPointID
+	pointID := resticAttemptForExecution(t, execution).RecoveryPointID
 	if candidates, err := fixture.service.ListCandidates(context.Background(), 10); err != nil || len(candidates) != 0 {
 		t.Fatalf("live lease candidates=%v err=%v", candidates, err)
 	}
@@ -375,7 +375,7 @@ func TestListCandidatesSkipsLiveLeaseWhileReadinessIncludesEveryUnresolvedPoint(
 	if err != nil || !unresolved {
 		t.Fatalf("live lease unresolved=%v err=%v", unresolved, err)
 	}
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", execution.Attempt().Fence.LeaseID).Updates(map[string]any{
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", resticAttemptForExecution(t, execution).Fence.LeaseID).Updates(map[string]any{
 		"status": backupasset.LeaseReleased, "released_at": fixture.now,
 	}).Error; err != nil {
 		t.Fatal(err)
@@ -423,26 +423,26 @@ func TestProcessVerifyingPointTakesOverExpiredPublicationLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	previousFence := execution.Attempt().Fence
+	previousFence := resticAttemptForExecution(t, execution).Fence
 	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", previousFence.LeaseID).Updates(map[string]any{
 		"status": backupasset.LeaseActive, "released_at": nil, "lease_expires_at": fixture.now.Add(-time.Second),
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, _ provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, _ provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
 		if attempt.Fence.LeaseID != previousFence.LeaseID || attempt.Fence.FenceToken == previousFence.FenceToken || attempt.Fence.AttemptID == previousFence.AttemptID {
 			t.Fatalf("expired lease was not fenced-taken-over: old=%+v new=%+v", previousFence, attempt.Fence)
 		}
-		return provider.ManifestEvidence{
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestComplete, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: fixture.commitEvidence().CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
 		}, nil
 	}
-	if _, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID); err != nil {
+	if _, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -454,7 +454,7 @@ func TestExpireAtDeadlineRequiresElapsedDeadlineNoLiveLeaseAndExactRevision(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	pointID := execution.Attempt().RecoveryPointID
+	pointID := resticAttemptForExecution(t, execution).RecoveryPointID
 
 	if _, expired, err := fixture.service.expireAtDeadline(context.Background(), pointID); err != nil || expired {
 		t.Fatalf("live lease deadline expiry expired=%v err=%v", expired, err)
@@ -511,7 +511,7 @@ func TestReconcilePreparingZeroMatchKeepsStableMissingOriginUntilDeadline(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func TestReconcilePreparingZeroMatchKeepsStableMissingOriginUntilDeadline(t *tes
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		if recovered.RecoveryPointID != attempt.RecoveryPointID || recovered.RequiredTags != attempt.RequiredTags {
 			t.Fatalf("reconciliation lookup attempt=%+v", recovered)
 		}
@@ -572,30 +572,30 @@ func TestReconcilePreparingMissingGraceEmitsBoundedSafeAuditAndMetric(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", execution.Attempt().Fence.LeaseID).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": fixture.now}).Error; err != nil {
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", resticAttemptForExecution(t, execution).Fence.LeaseID).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": fixture.now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	fixture.publisher.lookup = func(context.Context, provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(context.Context, provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return nil, nil
 	}
-	if _, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID); err != nil {
+	if _, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", execution.Attempt().RecoveryPointID, backupasset.LeaseActive).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": fixture.now}).Error; err != nil {
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.LeaseActive).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": fixture.now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	clock = clock.Add(31 * time.Minute)
-	if _, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID); err != nil {
+	if _, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID); err != nil {
 		t.Fatal(err)
 	}
 	if len(fixture.audit.inputs) != 2 || len(metrics.outcomes) != 1 {
 		t.Fatalf("missing grace did not emit one bounded audit/metric: audits=%+v outcomes=%+v", fixture.audit.inputs, metrics.outcomes)
 	}
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", execution.Attempt().RecoveryPointID, backupasset.LeaseActive).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": clock}).Error; err != nil {
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.LeaseActive).Updates(map[string]any{"status": backupasset.LeaseReleased, "released_at": clock}).Error; err != nil {
 		t.Fatal(err)
 	}
 	clock = clock.Add(time.Minute)
-	if _, err := fixture.service.ProcessPoint(context.Background(), execution.Attempt().RecoveryPointID); err != nil {
+	if _, err := fixture.service.ProcessPoint(context.Background(), resticAttemptForExecution(t, execution).RecoveryPointID); err != nil {
 		t.Fatal(err)
 	}
 	if len(fixture.audit.inputs) != 2 || len(metrics.outcomes) != 1 {
@@ -619,7 +619,7 @@ func TestReconcilePreparingTransientProviderFailureRemainsPending(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +628,7 @@ func TestReconcilePreparingTransientProviderFailureRemainsPending(t *testing.T) 
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	fixture.publisher.lookup = func(context.Context, provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(context.Context, provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return nil, context.DeadlineExceeded
 	}
 
@@ -659,7 +659,7 @@ func TestReconcilePreparingMultipleMatchesFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +669,7 @@ func TestReconcilePreparingMultipleMatchesFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return []provider.ResticSnapshotObservation{
 			{
 				RepositoryIdentity: fixture.attemptIdentity(), NativePointID: commit.NativePointID, SnapshotTime: commit.CaptureStartedAt,
@@ -713,7 +713,7 @@ func TestReconcilePreparingRewriteFailsWithoutClaimingChangedNativeID(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +724,7 @@ func TestReconcilePreparingRewriteFailsWithoutClaimingChangedNativeID(t *testing
 	}
 	commit := fixture.commitEvidence()
 	original := strings.Repeat("e", 64)
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return []provider.ResticSnapshotObservation{{
 			RepositoryIdentity: fixture.attemptIdentity(), NativePointID: commit.NativePointID, SnapshotTime: commit.CaptureStartedAt,
 			Tags: []string{recovered.RequiredTags[0], recovered.RequiredTags[1]}, OriginalPresent: true, Original: &original,
@@ -766,7 +766,7 @@ func TestReconcilePreparingMissingStoredSummaryFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: backupasset.FailureEvidenceMissingSummary}); err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +776,7 @@ func TestReconcilePreparingMissingStoredSummaryFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := fixture.commitEvidence()
-	fixture.publisher.lookup = func(_ context.Context, recovered provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+	fixture.publisher.lookup = func(_ context.Context, recovered provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 		return []provider.ResticSnapshotObservation{{
 			RepositoryIdentity: fixture.attemptIdentity(), NativePointID: commit.NativePointID, SnapshotTime: commit.CaptureStartedAt,
 			Tags: []string{recovered.RequiredTags[0], recovered.RequiredTags[1]},
@@ -810,12 +810,12 @@ func TestProcessVerifyingPointTransientManifestErrorRemainsVerifying(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	pointID := execution.Attempt().RecoveryPointID
-	fixture.manifest.build = func(context.Context, provider.PublicationAttempt, provider.ProviderCommitEvidence, provider.ManifestLimits) (provider.ManifestEvidence, error) {
-		return provider.ManifestEvidence{}, context.DeadlineExceeded
+	pointID := resticAttemptForExecution(t, execution).RecoveryPointID
+	fixture.manifest.build = func(context.Context, provider.ResticAttemptV1, provider.ResticCommitV1, provider.ManifestLimits) (provider.ResticManifestV1, error) {
+		return provider.ResticManifestV1{}, context.DeadlineExceeded
 	}
 
 	outcome, err := fixture.service.ProcessPoint(context.Background(), pointID)
@@ -852,12 +852,12 @@ func TestProcessVerifyingPointFailsDeterministicManifestRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	pointID := execution.Attempt().RecoveryPointID
-	fixture.manifest.build = func(_ context.Context, attempt provider.PublicationAttempt, _ provider.ProviderCommitEvidence, _ provider.ManifestLimits) (provider.ManifestEvidence, error) {
-		return provider.ManifestEvidence{
+	pointID := resticAttemptForExecution(t, execution).RecoveryPointID
+	fixture.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, _ provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
+		return provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
 			Completeness: backupasset.ManifestPartial, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
 			HeaderCapturedAt: fixture.commitEvidence().CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),

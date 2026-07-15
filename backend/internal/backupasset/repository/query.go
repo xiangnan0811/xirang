@@ -11,23 +11,28 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
 )
 
 const (
-	defaultRepositoryPageLimit = 100
-	maxRepositoryPageLimit     = 200
-	lineageSourceTaskLink      = "task_link"
-	lineageSourceRecoveryPoint = "recovery_point"
-	repositoryCursorVersion    = 1
-	repositoryCursorTTL        = 15 * time.Minute
-	repositoryCursorMaxBytes   = 4096
-	repositoryCursorDomain     = "backup-repository-list-cursor:v1"
+	defaultRepositoryPageLimit  = 100
+	maxRepositoryPageLimit      = 200
+	lineageSourceTaskLink       = "task_link"
+	lineageSourceRecoveryPoint  = "recovery_point"
+	repositoryCursorVersion     = 1
+	repositoryCursorTTL         = 15 * time.Minute
+	repositoryCursorMaxBytes    = 4096
+	repositoryCursorDomain      = "backup-repository-list-cursor:v1"
+	managedRsyncReaderPageSize  = 200
+	managedRsyncReaderCursorTTL = 15 * time.Minute
 )
 
 type VisibilityScope struct {
@@ -369,4 +374,330 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 		})
 	}
 	return lineages, nil
+}
+
+type managedRsyncPointReadAdapter interface {
+	ListPoints(context.Context, provider.ReadSnapshot, provider.PageRequest) (provider.NativePointPage, error)
+	ListEntries(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error)
+	StatEntry(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator) (provider.Entry, error)
+	OpenSequential(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.ReadRequest) (provider.ReadHandle, provider.ContentStat, error)
+	OpenRange(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.ByteRange) (provider.ReadHandle, provider.ContentStat, error)
+}
+
+// ManagedRsyncPointReadSession owns the only internal path to a committed
+// managed Rsync tree. It deliberately exposes provider-level opaque locators
+// only; roots, marker material, and point locators remain private to this
+// package. Its admission token remains active until every returned read handle
+// has been closed.
+type ManagedRsyncPointReadSession struct {
+	adapter  managedRsyncPointReadAdapter
+	snapshot provider.ReadSnapshot
+	point    provider.PointLocator
+	token    publication.AdmissionToken
+
+	mu            sync.Mutex
+	closed        bool
+	active        int
+	tokenReleased bool
+}
+
+// BeginManagedRsyncPointRead reconstructs one exact committed managed Rsync
+// tree. It never accepts a root, path, marker, or locator from its caller.
+func (service *Service) BeginManagedRsyncPointRead(ctx context.Context, taskID uint, recoveryPointID string) (*ManagedRsyncPointReadSession, error) {
+	if service == nil || service.db == nil || service.foundation == nil || service.admission == nil || service.keyring == nil ||
+		taskID == 0 || backupasset.ValidateOpaqueID(recoveryPointID) != nil {
+		return nil, fmt.Errorf("%w: managed Rsync point reader request is invalid", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	token, err := service.admission.Acquire(ctx, publication.OperationManagedRsyncPointRead)
+	if err != nil {
+		return nil, err
+	}
+	keepToken := false
+	defer func() {
+		if !keepToken {
+			_ = token.Close()
+		}
+	}()
+	if token.Mode() != publication.AdmissionManaged && token.Mode() != publication.AdmissionRollbackSafe {
+		return nil, fmt.Errorf("%w: managed Rsync point reader is not admitted", backupasset.ErrForbidden)
+	}
+
+	runtime, err := loadExactManagedRsyncPublicationRuntime(ctx, service.db, taskID)
+	if err != nil {
+		return nil, err
+	}
+	var point model.RecoveryPoint
+	if err := service.db.WithContext(ctx).Where("id = ? AND repository_id = ?", recoveryPointID, runtime.repository.ID).First(&point).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: managed Rsync recovery point", backupasset.ErrNotFound)
+		}
+		return nil, fmt.Errorf("load managed Rsync recovery point: %w", err)
+	}
+	if backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointCommitted {
+		return nil, capabilityError(backupasset.CapabilityPointNotCommitted, "")
+	}
+	request, access, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := service.newManagedRsyncCommittedPointAdapter()
+	if err != nil {
+		return nil, err
+	}
+	runtimeAccess, err := provider.NewRsyncCommittedPointRuntimeAccess(ctx, request)
+	if err != nil {
+		return nil, mapManagedRsyncCommittedPointReadOpenError(ctx, err)
+	}
+	access.AdapterData = runtimeAccess
+	snapshot := provider.ReadSnapshot{
+		RepositoryID: runtime.repository.ID, CapabilityRevision: point.CapabilityRevision,
+		SourceRevision: runtimeAccess.SourceRevision, Access: access,
+	}
+	points, err := adapter.ListPoints(ctx, snapshot, provider.PageRequest{Limit: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(points.Items) != 1 || points.NextCursor != "" {
+		return nil, fmt.Errorf("%w: committed Rsync point reader returned an invalid point set", backupasset.ErrInvalidState)
+	}
+	keepToken = true
+	return &ManagedRsyncPointReadSession{adapter: adapter, snapshot: snapshot, point: points.Items[0].Locator, token: token}, nil
+}
+
+func mapManagedRsyncCommittedPointReadOpenError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		return capabilityError(backupasset.CapabilityProviderUnavailable, "")
+	}
+	return capabilityError(backupasset.CapabilityMutableSourceChanged, "")
+}
+
+func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Context, runtime managedRsyncPublicationRuntime, point model.RecoveryPoint) (provider.RsyncCommittedPointReadRequest, provider.AccessBinding, error) {
+	if point.RepositoryID != runtime.repository.ID || point.ID == "" || backupasset.ValidateOpaqueID(point.ID) != nil ||
+		point.ProducingTaskID == nil || *point.ProducingTaskID != runtime.task.ID || point.ProducingTaskRunID == nil ||
+		point.CapabilityRevision <= 0 || point.CapturedAt == nil || point.CapturedAt.IsZero() || point.EntryCount < 0 || point.LogicalBytes < 0 ||
+		point.ManifestDigestAlgorithm != "sha256" || !isLowerHex64(point.SourceFingerprint) || !isLowerHex64(point.ManifestDigest) {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point evidence is invalid", backupasset.ErrConflict)
+	}
+	semantics := backupasset.PointVersionSemantics(point.Semantics)
+	if semantics != backupasset.PointXirangManifest && semantics != backupasset.PointImportedBaseline {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point semantics are invalid", backupasset.ErrConflict)
+	}
+	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	if lineage.TaskID != runtime.task.ID || lineage.TaskRunID != *point.ProducingTaskRunID ||
+		lineage.TaskRepositoryLinkID != runtime.link.ID || lineage.PublicationMode != runtime.link.PublicationMode {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point lineage changed", backupasset.ErrConflict)
+	}
+	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	if consistency.Provider != backupasset.ProviderRsync || consistency.RepositoryIdentityDigest != runtime.binding.ManagedRootIdentityDigest ||
+		!isLowerHex64(consistency.ProviderCommitDigest) {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point consistency changed", backupasset.ErrConflict)
+	}
+	locator, err := decodeManagedRsyncPointLocator(point.EncryptedProviderLocator)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	attempt, err := provider.DecodeRsyncTreeAttemptV1(locator.TaggedAttempt)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	if locator.RepositoryID != runtime.repository.ID || locator.RecoveryPointID != point.ID || locator.FinalComponent != point.ID ||
+		attempt.RepositoryID != runtime.repository.ID || attempt.RecoveryPointID != point.ID || attempt.TaskID != runtime.task.ID ||
+		attempt.TaskRunID != *point.ProducingTaskRunID || attempt.TaskRepositoryLinkID != runtime.link.ID ||
+		attempt.PublicationMode != backupasset.TaskPublicationMode(runtime.link.PublicationMode) ||
+		!lineage.PointDeadlineAt.Equal(attempt.PointDeadlineAt.UTC()) || runtime.binding.validateForAttempt(attempt) != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point locator changed", backupasset.ErrConflict)
+	}
+	markerKey, err := service.rsyncCommittedPointMarkerKey(ctx, runtime.repository.ID)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	if point.SourceFingerprint != managedRsyncSourceFingerprint(markerKey, runtime.binding, point.ID) {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point source changed", backupasset.ErrConflict)
+	}
+	limits, err := service.managedRsyncManifestLimits()
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	salt, err := hexDecodeSalt(runtime.binding.IdentitySalt)
+	if err != nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
+	}
+	request := provider.RsyncCommittedPointReadRequest{
+		ManagedRoot: runtime.binding.ManagedRootLocator, MarkerKey: markerKey, Attempt: attempt,
+		CommitMarkerDigest: locator.CommitMarkerDigest, SourceFingerprint: point.SourceFingerprint,
+		ChildFenceDigest: locator.ChildFenceDigest, ManifestDigest: point.ManifestDigest,
+		ManifestEntryCount: uint64(point.EntryCount), LogicalBytes: uint64(point.LogicalBytes),
+		CapturedAt: point.CapturedAt.UTC(), Semantics: semantics, ManifestLimits: limits,
+	}
+	access := provider.AccessBinding{
+		Provider: backupasset.ProviderRsync, RepositoryID: runtime.repository.ID, TaskID: runtime.task.ID,
+		NodeID: runtime.binding.NodeID, IdentitySalt: salt,
+	}
+	return request, access, nil
+}
+
+func (service *Service) rsyncCommittedPointMarkerKey(ctx context.Context, repositoryID string) ([]byte, error) {
+	if service == nil || service.keyring == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return nil, fmt.Errorf("%w: managed Rsync point marker key is unavailable", backupasset.ErrInvalidState)
+	}
+	material, err := service.keyring.Active(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	if err != nil {
+		return nil, fmt.Errorf("load managed Rsync point marker key: %w", err)
+	}
+	return rsyncOwnershipDigest(material.Key, "xirang.rsync.tree.marker-key.v1", repositoryID), nil
+}
+
+func (service *Service) managedRsyncManifestLimits() (provider.ManifestLimits, error) {
+	if service == nil || service.foundation == nil {
+		return provider.ManifestLimits{}, fmt.Errorf("%w: managed Rsync manifest limits are unavailable", backupasset.ErrInvalidState)
+	}
+	config, err := service.foundation.PublicationConfig()
+	if err != nil {
+		return provider.ManifestLimits{}, err
+	}
+	maxBytes := config.ManifestMaxBytes
+	if maxBytes > provider.MaxRsyncTreeMetadataBytes {
+		maxBytes = provider.MaxRsyncTreeMetadataBytes
+	}
+	return provider.ManifestLimits{
+		Timeout: config.ManifestTimeout, MaxBytes: maxBytes, MaxEntries: config.ManifestMaxEntries,
+		MaxRecordBytes: config.ManifestMaxRecordBytes, MaxDepth: config.ManifestMaxDepth,
+	}, nil
+}
+
+func (service *Service) newManagedRsyncCommittedPointAdapter() (*provider.RsyncCommittedPointAdapter, error) {
+	if service == nil || service.foundation == nil || service.keyring == nil {
+		return nil, fmt.Errorf("%w: managed Rsync point reader dependencies are unavailable", backupasset.ErrInvalidState)
+	}
+	limitsSource := func() (provider.OperationLimits, error) {
+		config, err := service.foundation.ProviderConfig()
+		if err != nil {
+			return provider.OperationLimits{}, err
+		}
+		return provider.NewMetadataOperationLimits(config.OperationTimeout, config.MetadataLimitBytes)
+	}
+	return provider.NewRsyncCommittedPointAdapterWithLimitsSource(
+		provider.NewCursorCodec(service.keyring, service.now, managedRsyncReaderCursorTTL), limitsSource, managedRsyncReaderPageSize,
+	)
+}
+
+func (session *ManagedRsyncPointReadSession) ListEntries(ctx context.Context, parent provider.EntryLocator, request provider.PageRequest) (provider.EntryPage, error) {
+	if err := session.begin(); err != nil {
+		return provider.EntryPage{}, err
+	}
+	defer session.end()
+	return session.adapter.ListEntries(ctx, session.snapshot, session.point, parent, request)
+}
+
+func (session *ManagedRsyncPointReadSession) StatEntry(ctx context.Context, locator provider.EntryLocator) (provider.Entry, error) {
+	if err := session.begin(); err != nil {
+		return provider.Entry{}, err
+	}
+	defer session.end()
+	return session.adapter.StatEntry(ctx, session.snapshot, session.point, locator)
+}
+
+func (session *ManagedRsyncPointReadSession) OpenSequential(ctx context.Context, locator provider.EntryLocator, request provider.ReadRequest) (provider.ReadHandle, provider.ContentStat, error) {
+	if err := session.begin(); err != nil {
+		return nil, provider.ContentStat{}, err
+	}
+	handle, stat, err := session.adapter.OpenSequential(ctx, session.snapshot, session.point, locator, request)
+	if err != nil {
+		session.end()
+		return nil, provider.ContentStat{}, err
+	}
+	return &managedRsyncPointReadHandle{underlying: handle, session: session}, stat, nil
+}
+
+func (session *ManagedRsyncPointReadSession) OpenRange(ctx context.Context, locator provider.EntryLocator, byteRange provider.ByteRange) (provider.ReadHandle, provider.ContentStat, error) {
+	if err := session.begin(); err != nil {
+		return nil, provider.ContentStat{}, err
+	}
+	handle, stat, err := session.adapter.OpenRange(ctx, session.snapshot, session.point, locator, byteRange)
+	if err != nil {
+		session.end()
+		return nil, provider.ContentStat{}, err
+	}
+	return &managedRsyncPointReadHandle{underlying: handle, session: session}, stat, nil
+}
+
+func (session *ManagedRsyncPointReadSession) Close() error {
+	if session == nil {
+		return nil
+	}
+	session.mu.Lock()
+	session.closed = true
+	token := session.releaseTokenLocked()
+	session.mu.Unlock()
+	if token == nil {
+		return nil
+	}
+	return token.Close()
+}
+
+func (session *ManagedRsyncPointReadSession) begin() error {
+	if session == nil || session.adapter == nil || session.token == nil {
+		return fmt.Errorf("%w: managed Rsync point reader is unavailable", backupasset.ErrInvalidState)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed {
+		return fmt.Errorf("%w: managed Rsync point reader session is closed", backupasset.ErrForbidden)
+	}
+	session.active++
+	return nil
+}
+
+func (session *ManagedRsyncPointReadSession) end() {
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	if session.active > 0 {
+		session.active--
+	}
+	token := session.releaseTokenLocked()
+	session.mu.Unlock()
+	if token != nil {
+		_ = token.Close()
+	}
+}
+
+func (session *ManagedRsyncPointReadSession) releaseTokenLocked() publication.AdmissionToken {
+	if !session.closed || session.active != 0 || session.tokenReleased || session.token == nil {
+		return nil
+	}
+	session.tokenReleased = true
+	return session.token
+}
+
+type managedRsyncPointReadHandle struct {
+	underlying provider.ReadHandle
+	session    *ManagedRsyncPointReadSession
+	once       sync.Once
+}
+
+func (handle *managedRsyncPointReadHandle) Read(buffer []byte) (int, error) {
+	return handle.underlying.Read(buffer)
+}
+
+func (handle *managedRsyncPointReadHandle) Close() error {
+	if handle == nil || handle.underlying == nil {
+		return nil
+	}
+	err := handle.underlying.Close()
+	handle.once.Do(func() { handle.session.end() })
+	return err
 }

@@ -88,6 +88,74 @@ func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testin
 	}
 }
 
+func TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfig(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"import-node","host":"10.0.0.8","port":22,"username":"root","auth_type":"key"}],
+  "tasks":[{
+    "name":"foreign-managed-rsync","node_name":"import-node","executor_type":"rsync",
+    "rsync_source":"/foreign/source","rsync_target":"/foreign/legacy",
+    "executor_config":"{\"version\":1,\"publication_mode\":\"versioned_hardlink\",\"managed_root\":\"/foreign/managed\",\"preflight_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+    "cron_spec":"*/5 * * * *","enabled":true
+  }]
+}`
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var imported model.Task
+	if err := db.Where("name = ?", "foreign-managed-rsync").First(&imported).Error; err != nil {
+		t.Fatal(err)
+	}
+	if imported.Enabled || imported.RsyncSource != "" || imported.RsyncTarget != "" ||
+		imported.ExecutorConfig != `{"version":1,"publication_mode":"legacy_mutable"}` {
+		t.Fatalf("managed import was not paused and disconnected: %+v", imported)
+	}
+}
+
+func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"import-node","host":"10.0.0.8","port":22,"username":"root","auth_type":"key"}],
+  "tasks":[{
+    "name":"foreign-managed-rsync-paths","node_name":"import-node","executor_type":"rsync",
+    "rsync_source":"relative/../../foreign","rsync_target":"not-an-absolute-target",
+    "executor_config":"{\"version\":1,\"managed_root\":\"/foreign/managed\",\"publication_mode\":\"versioned_full_copy\",\"preflight_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+    "cron_spec":"*/5 * * * *","enabled":true
+  }]
+}`
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var imported model.Task
+	if err := db.Where("name = ?", "foreign-managed-rsync-paths").First(&imported).Error; err != nil {
+		t.Fatal(err)
+	}
+	if imported.Enabled || imported.RsyncSource != "" || imported.RsyncTarget != "" ||
+		imported.ExecutorConfig != `{"version":1,"publication_mode":"legacy_mutable"}` {
+		t.Fatalf("managed import retained foreign runtime inputs: %+v", imported)
+	}
+}
+
 func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	sourceDB := openConfigHandlerTestDB(t)
 	if err := sourceDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {

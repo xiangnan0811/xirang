@@ -405,7 +405,7 @@ func newRuntimeAdmissionDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}); err != nil {
+	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

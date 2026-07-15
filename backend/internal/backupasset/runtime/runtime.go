@@ -41,13 +41,14 @@ type Dependencies struct {
 // admission, and guarded legacy Restic callers. It does not own Task Manager;
 // callback ports are set explicitly before StartupPass.
 type Runtime struct {
-	foundation  *backupasset.FoundationService
-	repository  *repository.Service
-	publication *repository.PublicationService
-	restic      *provider.ResticAdapter
-	admission   *AdmissionController
-	worker      *PublicationWorker
-	metrics     publication.Metrics
+	foundation     *backupasset.FoundationService
+	repository     *repository.Service
+	publication    *repository.PublicationService
+	resticStrategy provider.PublicationStrategy
+	rsyncStrategy  provider.PublicationStrategy
+	admission      *AdmissionController
+	worker         *PublicationWorker
+	metrics        publication.Metrics
 
 	mu        sync.Mutex
 	starting  bool
@@ -117,6 +118,14 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	resticStrategy, err := provider.NewResticPublicationStrategy(resticAdapter, resticAdapter)
+	if err != nil {
+		return nil, err
+	}
+	rsyncStrategy, err := provider.NewLocalRsyncTreePublicationStrategy(dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
 	rcloneAdapter, err := provider.NewRcloneAdapterWithLimitsSource(transport, cursorCodec, limitsSource, runtimeProviderMaxPageSize, dependencies.Now)
 	if err != nil {
 		return nil, err
@@ -126,8 +135,8 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		kind  backupasset.ProviderKind
 		value provider.Registration
 	}{
-		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter}},
-		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, ResticPublisher: resticAdapter, ManifestBuilder: resticAdapter}},
+		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, PublicationStrategy: rsyncStrategy}},
+		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, PublicationStrategy: resticStrategy}},
 		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter}},
 	} {
 		if err := registry.Register(registration.kind, registration.value); err != nil {
@@ -140,7 +149,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}
 	var worker *PublicationWorker
 	publicationService, err := repository.NewPublicationService(repository.PublicationDependencies{
-		DB: dependencies.DB, Foundation: foundation, Registry: registry, Lease: lease, Admission: admission, Metrics: metricsSink,
+		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Lease: lease, Admission: admission, Metrics: metricsSink,
 		Audit: auditSink, History: history, Now: dependencies.Now,
 		TryWake: func(pointID string) bool {
 			if worker == nil {
@@ -158,12 +167,12 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}
 	repositoryService, err := repository.NewService(repository.Dependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: dependencies.Now,
-		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink,
+		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink, Publication: publicationService,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{foundation: foundation, repository: repositoryService, publication: publicationService, restic: resticAdapter, admission: admission, worker: worker, metrics: metricsSink}, nil
+	return &Runtime{foundation: foundation, repository: repositoryService, publication: publicationService, resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, admission: admission, worker: worker, metrics: metricsSink}, nil
 }
 
 func runtimeTransport(dependencies Dependencies, foundation *backupasset.FoundationService) (provider.CommandTransport, provider.CommandStreamTransport, error) {
@@ -210,9 +219,19 @@ func (runtime *Runtime) FoundationService() *backupasset.FoundationService { ret
 func (runtime *Runtime) RepositoryService() *repository.Service            { return runtime.repository }
 func (runtime *Runtime) PublicationCoordinator() publication.Coordinator   { return runtime.publication }
 func (runtime *Runtime) PublicationReconciler() publication.Reconciler     { return runtime.publication }
-func (runtime *Runtime) ResticPublisher() provider.ResticPublisher         { return runtime.restic }
-func (runtime *Runtime) ManifestBuilder() provider.ManifestBuilder         { return runtime.restic }
-func (runtime *Runtime) LineageGuard() publication.LineageGuard            { return runtime.repository }
+func (runtime *Runtime) ResticPublicationStrategy() provider.PublicationStrategy {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.resticStrategy
+}
+func (runtime *Runtime) RsyncTreePublicationStrategy() provider.PublicationStrategy {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.rsyncStrategy
+}
+func (runtime *Runtime) LineageGuard() publication.LineageGuard { return runtime.repository }
 func (runtime *Runtime) LegacyBlockRecorder() publication.LegacyBlockRecorder {
 	return runtime.publication
 }
@@ -334,6 +353,9 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if runtime.admission != nil {
+		runtime.admission.StopAccepting()
 	}
 	if runtime.worker != nil {
 		if err := runtime.worker.Shutdown(ctx); err != nil {

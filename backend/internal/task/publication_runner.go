@@ -26,6 +26,10 @@ type providerRunResult struct {
 	WarningCode   backupasset.PublicationFailureCode
 }
 
+func shouldRunLegacyVerification(result providerRunResult, policy *model.Policy) bool {
+	return !result.Managed && policy != nil && policy.VerifyEnabled
+}
+
 // executeProvider keeps TaskRun transfer truth separate from asynchronous
 // recovery-point publication. A successful evidence transfer returns as soon
 // as its exact commit fact is durable; manifest work remains with the worker.
@@ -37,7 +41,8 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 	if exec == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor unavailable", backupasset.ErrInvalidState)}
 	}
-	if m.publicationCoordinator == nil || strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType)) != "restic" {
+	providerKind := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
+	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync") {
 		exitCode, err := exec.Run(ctx, taskEntity, logf, progressf)
 		return providerRunResult{ExitCode: exitCode, Err: err}
 	}
@@ -85,23 +90,67 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		resolved = true
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: invalid publication evidence session", backupasset.ErrInvalidState), Managed: true}
 	}
-	evidenceExecutor, ok := exec.(executor.EvidenceExecutor)
+	publicationExecutor, ok := exec.(executor.PublicationExecutor)
 	if !ok {
 		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
 		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: Restic executor has no evidence lane", backupasset.ErrInvalidState), Managed: true}
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: Restic executor has no publication lane", backupasset.ErrInvalidState), Managed: true}
 	}
 	attempt := session.Attempt()
-	result, runErr := evidenceExecutor.RunWithEvidence(commandCtx, executor.EvidenceExecutionRequest{Task: taskEntity, TaskRunID: runID, Attempt: *attempt}, logf, progressf)
-	providerResult := m.finishEvidenceExecution(cleanupCtx, session, result, runErr)
+	if attempt == nil {
+		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+		resolved = true
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: missing tagged publication attempt", backupasset.ErrInvalidState), Managed: true}
+	}
+	request := executor.PublicationExecutionRequest{Task: taskEntity, TaskRunID: runID, Attempt: *attempt}
+	recoveryPointID := ""
+	switch providerKind {
+	case "restic":
+		resticAttempt, attemptErr := attempt.ResticAttempt()
+		if attemptErr != nil {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+		}
+		recoveryPointID = resticAttempt.RecoveryPointID
+	case "rsync":
+		rsyncAttempt, attemptErr := attempt.RsyncTreeAttempt()
+		if attemptErr != nil {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+		}
+		inputProvider, ok := session.(interface {
+			RsyncTreePublicationInput() (provider.RsyncTreePublicationInput, error)
+		})
+		if !ok {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rsync publication input is unavailable", backupasset.ErrInvalidState), Managed: true}
+		}
+		input, inputErr := inputProvider.RsyncTreePublicationInput()
+		if inputErr != nil {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: inputErr, Managed: true}
+		}
+		request.RsyncTreeInput = &input
+		recoveryPointID = rsyncAttempt.RecoveryPointID
+	default:
+		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+		resolved = true
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: unsupported managed publication provider", backupasset.ErrInvalidState), Managed: true}
+	}
+	result, runErr := publicationExecutor.RunWithPublication(commandCtx, request, logf, progressf)
+	providerResult := m.finishPublicationExecution(cleanupCtx, session, result, runErr)
 	if providerResult.WarningCode != "" && logf != nil {
-		logf("warn", fmt.Sprintf("恢复点发布未提交: point_id=%s code=%s", attempt.RecoveryPointID, providerResult.WarningCode))
+		logf("warn", fmt.Sprintf("恢复点发布未提交: point_id=%s code=%s", recoveryPointID, providerResult.WarningCode))
 	}
 	resolved = true
 	return providerResult
 }
 
-func (m *Manager) finishEvidenceExecution(ctx context.Context, session publication.Execution, result executor.EvidenceExecutionResult, runErr error) providerRunResult {
+func (m *Manager) finishPublicationExecution(ctx context.Context, session publication.Execution, result executor.PublicationExecutionResult, runErr error) providerRunResult {
 	if session == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution unavailable", backupasset.ErrInvalidState), Managed: true}
 	}
@@ -164,7 +213,7 @@ func (m *Manager) finishEvidenceExecution(ctx context.Context, session publicati
 	}
 }
 
-func recordPublicationCommit(ctx context.Context, session publication.Execution, evidence provider.ProviderCommitEvidence) error {
+func recordPublicationCommit(ctx context.Context, session publication.Execution, evidence provider.ProviderCommit) error {
 	for {
 		_, err := session.RecordProviderCommit(ctx, evidence)
 		if !errors.Is(err, backupasset.ErrPublicationUnconfirmed) {

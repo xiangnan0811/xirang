@@ -35,7 +35,7 @@ type resticBackupParser struct {
 	summarySeen bool
 }
 
-func (adapter *ResticAdapter) Backup(ctx context.Context, attempt PublicationAttempt, input ResticBackupInput, progress func(ResticBackupProgress)) (ResticBackupResult, error) {
+func (adapter *ResticAdapter) Backup(ctx context.Context, attempt ResticAttemptV1, input ResticBackupInput, progress func(ResticBackupProgress)) (ResticBackupResult, error) {
 	unknown := ResticBackupResult{ExitCode: UnknownProviderExitCode, Completion: backupasset.CompletionOutcomeUnknown}
 	attempt, err := adapter.normalizePublicationAttempt(attempt)
 	if err != nil {
@@ -123,7 +123,7 @@ func (adapter *ResticAdapter) Backup(ctx context.Context, attempt PublicationAtt
 	return ResticBackupResult{
 		ExitCode:   0,
 		Completion: backupasset.CompletionKnownExitZero,
-		ProviderCommit: &ProviderCommitEvidence{
+		ProviderCommit: &ResticCommitV1{
 			Provider:           backupasset.ProviderRestic,
 			RepositoryIdentity: attempt.RepositoryIdentity,
 			NativePointID:      parser.summary.NativePointID,
@@ -135,7 +135,7 @@ func (adapter *ResticAdapter) Backup(ctx context.Context, attempt PublicationAtt
 	}, nil
 }
 
-func (adapter *ResticAdapter) LookupAttempt(ctx context.Context, attempt PublicationAttempt) ([]ResticSnapshotObservation, error) {
+func (adapter *ResticAdapter) LookupAttempt(ctx context.Context, attempt ResticAttemptV1) ([]ResticSnapshotObservation, error) {
 	attempt, err := adapter.normalizePublicationAttempt(attempt)
 	if err != nil {
 		return nil, err
@@ -181,31 +181,31 @@ func (adapter *ResticAdapter) LookupAttempt(ctx context.Context, attempt Publica
 	return parseResticSnapshotObservations(payload, attempt.RepositoryIdentity, limits)
 }
 
-func (adapter *ResticAdapter) normalizePublicationAttempt(attempt PublicationAttempt) (PublicationAttempt, error) {
+func (adapter *ResticAdapter) normalizePublicationAttempt(attempt ResticAttemptV1) (ResticAttemptV1, error) {
 	if adapter == nil || adapter.transport == nil || adapter.streamTransport == nil || attempt.Provider != backupasset.ProviderRestic ||
 		backupasset.ValidateOpaqueID(attempt.RepositoryID) != nil || backupasset.ValidateOpaqueID(attempt.TaskRepositoryLinkID) != nil ||
 		backupasset.ValidateOpaqueID(attempt.RecoveryPointID) != nil || attempt.TaskID == 0 || attempt.TaskRunID == 0 ||
 		attempt.CapabilityRevision <= 0 || attempt.AdapterRevision != resticAdapterRevision || attempt.PointDeadlineAt.IsZero() {
-		return PublicationAttempt{}, fmt.Errorf("%w: invalid Restic publication attempt", backupasset.ErrInvalidState)
+		return ResticAttemptV1{}, fmt.Errorf("%w: invalid Restic publication attempt", backupasset.ErrInvalidState)
 	}
 	attempt.PointDeadlineAt = attempt.PointDeadlineAt.UTC()
 	if !attempt.PointDeadlineAt.After(adapter.now().UTC()) || !strings.HasPrefix(attempt.RepositoryIdentity, NativeResticIdentityPrefix) ||
 		!lowerHex(strings.TrimPrefix(attempt.RepositoryIdentity, NativeResticIdentityPrefix), 64) ||
 		!validGeneratedResticTag(attempt.RequiredTags[0], 0) || !validGeneratedResticTag(attempt.RequiredTags[1], 1) {
-		return PublicationAttempt{}, fmt.Errorf("%w: invalid Restic publication attempt", backupasset.ErrInvalidState)
+		return ResticAttemptV1{}, fmt.Errorf("%w: invalid Restic publication attempt", backupasset.ErrInvalidState)
 	}
 	if err := backupasset.ValidatePublicationAuditContext(attempt.Audit); err != nil {
-		return PublicationAttempt{}, err
+		return ResticAttemptV1{}, err
 	}
 	if err := validatePublicationFence(attempt.Fence, attempt.RecoveryPointID); err != nil {
-		return PublicationAttempt{}, err
+		return ResticAttemptV1{}, err
 	}
 	if err := adapter.validateBinding(attempt.Access); err != nil || attempt.Access.RepositoryID != attempt.RepositoryID || attempt.Access.TaskID != attempt.TaskID {
-		return PublicationAttempt{}, fmt.Errorf("%w: invalid Restic publication access", backupasset.ErrInvalidState)
+		return ResticAttemptV1{}, fmt.Errorf("%w: invalid Restic publication access", backupasset.ErrInvalidState)
 	}
 	runtimeAccess, ok := attempt.Access.AdapterData.(ResticRuntimeAccess)
 	if !ok || !lowerHex(runtimeAccess.NativeRepositoryID, 64) || NativeResticIdentityPrefix+runtimeAccess.NativeRepositoryID != attempt.RepositoryIdentity || runtimeAccess.Command == nil {
-		return PublicationAttempt{}, fmt.Errorf("%w: invalid Restic publication runtime", backupasset.ErrInvalidState)
+		return ResticAttemptV1{}, fmt.Errorf("%w: invalid Restic publication runtime", backupasset.ErrInvalidState)
 	}
 	return attempt, nil
 }
@@ -218,7 +218,7 @@ func validatePublicationFence(fence backupasset.LeaseFence, pointID string) erro
 	return nil
 }
 
-func publicationAccessBinding(attempt PublicationAttempt) (AccessBinding, error) {
+func publicationAccessBinding(attempt ResticAttemptV1) (AccessBinding, error) {
 	binding := attempt.Access
 	runtimeAccess, ok := binding.AdapterData.(ResticRuntimeAccess)
 	if !ok || runtimeAccess.Command == nil {
@@ -639,4 +639,129 @@ func decodeJSONNumber(raw json.RawMessage) (string, error) {
 	return number.String(), nil
 }
 
+// resticPublicationStrategy is the tagged bridge from the shared publication
+// coordinator to the existing Restic command and manifest ports. It owns the
+// only conversion between a Restic V1 payload and the legacy adapter types;
+// callers outside this package cannot pass an untagged attempt or a free-form
+// provider payload through the boundary.
+type resticPublicationStrategy struct {
+	publisher ResticPublisher
+	manifest  ManifestBuilder
+}
+
+func NewResticPublicationStrategy(publisher ResticPublisher, manifest ManifestBuilder) (PublicationStrategy, error) {
+	if interfaceNil(publisher) || interfaceNil(manifest) {
+		return nil, fmt.Errorf("%w: Restic publication strategy dependencies are unavailable", backupasset.ErrInvalidState)
+	}
+	return &resticPublicationStrategy{publisher: publisher, manifest: manifest}, nil
+}
+
+func (*resticPublicationStrategy) Kind() backupasset.ProviderKind { return backupasset.ProviderRestic }
+
+func (strategy *resticPublicationStrategy) Prepare(_ context.Context, request PublicationPrepareRequest) (PreparedPublication, error) {
+	if strategy == nil || interfaceNil(strategy.publisher) || interfaceNil(strategy.manifest) || request.ResticInput == nil || request.RsyncTreeInput != nil {
+		return PreparedPublication{}, fmt.Errorf("%w: Restic publication prepare request is unavailable", backupasset.ErrInvalidState)
+	}
+	if _, err := request.Attempt.ResticAttempt(); err != nil {
+		return PreparedPublication{}, err
+	}
+	input := *request.ResticInput
+	input.Excludes = append([]string(nil), input.Excludes...)
+	return PreparedPublication{Attempt: request.Attempt, ResticInput: &input}, nil
+}
+
+func (strategy *resticPublicationStrategy) Execute(ctx context.Context, prepared PreparedPublication, progress PublicationProgress) (ProviderExecutionResult, error) {
+	attempt, input, err := strategy.resticExecutionPrepared(prepared)
+	if err != nil {
+		return ProviderExecutionResult{}, err
+	}
+	result, err := strategy.publisher.Backup(ctx, attempt, input, progress.OnResticProgress)
+	output := ProviderExecutionResult{ExitCode: result.ExitCode, Completion: result.Completion, EvidenceCode: result.EvidenceCode}
+	if result.ProviderCommit != nil {
+		commit := NewResticProviderCommit(*result.ProviderCommit)
+		if validateErr := commit.Validate(); validateErr != nil {
+			return ProviderExecutionResult{}, validateErr
+		}
+		output.ProviderCommit = &commit
+	}
+	return output, err
+}
+
+func (strategy *resticPublicationStrategy) RecordCommit(_ context.Context, prepared PreparedPublication, result ProviderExecutionResult) (ProviderCommit, error) {
+	attempt, err := strategy.resticPreparedAttempt(prepared)
+	if err != nil {
+		return ProviderCommit{}, err
+	}
+	if result.Completion != backupasset.CompletionKnownExitZero || result.ExitCode != 0 || result.EvidenceCode != "" || result.ProviderCommit == nil {
+		return ProviderCommit{}, fmt.Errorf("%w: Restic execution has no commit fact", backupasset.ErrInvalidState)
+	}
+	commit, err := result.ProviderCommit.ResticCommit()
+	if err != nil {
+		return ProviderCommit{}, err
+	}
+	if commit.RepositoryIdentity != attempt.RepositoryIdentity || !commit.CaptureStartedAt.Before(attempt.PointDeadlineAt) || !commit.CaptureFinishedAt.Before(attempt.PointDeadlineAt) {
+		return ProviderCommit{}, fmt.Errorf("%w: Restic strategy commit does not match its attempt", backupasset.ErrConflict)
+	}
+	return *result.ProviderCommit, nil
+}
+
+func (strategy *resticPublicationStrategy) VerifyOrBuildManifest(ctx context.Context, prepared PreparedPublication, commit ProviderCommit, limits ManifestLimits) (ManifestResult, error) {
+	attempt, err := strategy.resticPreparedAttempt(prepared)
+	if err != nil {
+		return ManifestResult{}, err
+	}
+	resticCommit, err := commit.ResticCommit()
+	if err != nil {
+		return ManifestResult{}, err
+	}
+	if resticCommit.RepositoryIdentity != attempt.RepositoryIdentity {
+		return ManifestResult{}, fmt.Errorf("%w: Restic manifest commit identity mismatch", backupasset.ErrConflict)
+	}
+	manifest, err := strategy.manifest.BuildManifest(ctx, attempt, resticCommit, limits)
+	if err != nil {
+		return ManifestResult{}, err
+	}
+	return ManifestResult{Provider: backupasset.ProviderRestic, Version: taggedPublicationSchemaV1, Restic: &manifest}, nil
+}
+
+func (strategy *resticPublicationStrategy) Reconcile(ctx context.Context, request PublicationReconcileRequest) (PublicationReconcileResult, error) {
+	if strategy == nil || interfaceNil(strategy.publisher) {
+		return PublicationReconcileResult{}, fmt.Errorf("%w: Restic publication reconciler is unavailable", backupasset.ErrInvalidState)
+	}
+	attempt, err := request.Attempt.ResticAttempt()
+	if err != nil {
+		return PublicationReconcileResult{}, err
+	}
+	observations, err := strategy.publisher.LookupAttempt(ctx, attempt)
+	if err != nil {
+		return PublicationReconcileResult{}, err
+	}
+	return PublicationReconcileResult{ResticObservations: observations}, nil
+}
+
+func (strategy *resticPublicationStrategy) resticPreparedAttempt(prepared PreparedPublication) (ResticAttemptV1, error) {
+	if strategy == nil || interfaceNil(strategy.publisher) || interfaceNil(strategy.manifest) {
+		return ResticAttemptV1{}, fmt.Errorf("%w: Restic prepared publication is unavailable", backupasset.ErrInvalidState)
+	}
+	attempt, err := prepared.Attempt.ResticAttempt()
+	if err != nil {
+		return ResticAttemptV1{}, err
+	}
+	return attempt, nil
+}
+
+func (strategy *resticPublicationStrategy) resticExecutionPrepared(prepared PreparedPublication) (ResticAttemptV1, ResticBackupInput, error) {
+	attempt, err := strategy.resticPreparedAttempt(prepared)
+	if err != nil {
+		return ResticAttemptV1{}, ResticBackupInput{}, err
+	}
+	if prepared.ResticInput == nil {
+		return ResticAttemptV1{}, ResticBackupInput{}, fmt.Errorf("%w: Restic execution input is unavailable", backupasset.ErrInvalidState)
+	}
+	input := *prepared.ResticInput
+	input.Excludes = append([]string(nil), input.Excludes...)
+	return attempt, input, nil
+}
+
 var _ ResticPublisher = (*ResticAdapter)(nil)
+var _ PublicationStrategy = (*resticPublicationStrategy)(nil)

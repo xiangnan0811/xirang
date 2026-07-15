@@ -63,6 +63,20 @@ var dangerousRoots = []string{
 
 func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cutoff time.Time) {
 	log := logger.Module("task")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if m.lineageGuard != nil {
+		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
+		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
+			if session != nil {
+				defer func() { _ = session.Close() }()
+			}
+			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyRetention)
+			log.Warn().Uint("task_id", task.ID).Msg("受管 Rsync 保留清理已被安全边界阻止")
+			return
+		}
+		defer func() { _ = session.Close() }()
+	}
 	targetPath := strings.TrimSpace(policy.TargetPath)
 	if targetPath == "" {
 		return

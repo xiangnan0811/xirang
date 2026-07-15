@@ -209,6 +209,138 @@ func TestConnectSameTaskDifferentIdentityConflictsWithoutMutation(t *testing.T) 
 	}
 }
 
+func TestConnectRequiresDedicatedActivationForManagedRsyncBinding(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var link model.TaskRepositoryLink
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	document := managedRsyncBindingDocumentV2{
+		Version:                   managedRsyncBindingDocumentVersion,
+		Provider:                  backupasset.ProviderRsync,
+		IdentityClass:             provider.IdentityXirangManagedRepository,
+		TaskID:                    taskEntity.ID,
+		NodeID:                    taskEntity.NodeID,
+		RepositoryID:              connected.Repository.ID,
+		TaskRepositoryLinkID:      link.ID,
+		LayoutRevision:            managedRsyncLayoutRevisionV1,
+		ManagedRootLocator:        t.TempDir(),
+		RootMarkerDigest:          strings.Repeat("a", 64),
+		ManagedRootIdentityDigest: strings.Repeat("b", 64),
+		PublicationMode:           backupasset.PublicationVersionedFullCopy,
+		PreflightID:               strings.Repeat("c", 32),
+		PreflightDigest:           strings.Repeat("d", 64),
+		IdentitySalt:              strings.Repeat("42", provider.IdentitySaltBytes),
+	}
+	payload, err := encodeManagedRsyncBindingDocumentV2(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding model.RepositoryAccessBinding
+	if err := db.Where("repository_id = ? AND status = ?", connected.Repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	binding.EncryptedConfig = payload
+	if err := db.Save(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("normal connect with managed binding error=%v, want conflict", err)
+	}
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	if link.PublicationMode != string(backupasset.PublicationLegacyMutable) || link.EncryptedLegacyLocator != taskEntity.RsyncTarget {
+		t.Fatalf("normal connect mutated legacy link: %+v", link)
+	}
+}
+
+func TestPrepareManagedRsyncActivationRequiresRevisionPreflightAndFence(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task model.Task
+	if err := db.First(&task, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var link model.TaskRepositoryLink
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", task.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	document := managedRsyncBindingDocumentV2{
+		Version:                   managedRsyncBindingDocumentVersion,
+		Provider:                  backupasset.ProviderRsync,
+		IdentityClass:             provider.IdentityXirangManagedRepository,
+		TaskID:                    task.ID,
+		NodeID:                    task.NodeID,
+		RepositoryID:              connected.Repository.ID,
+		TaskRepositoryLinkID:      link.ID,
+		LayoutRevision:            managedRsyncLayoutRevisionV1,
+		ManagedRootLocator:        t.TempDir(),
+		RootMarkerDigest:          strings.Repeat("a", 64),
+		ManagedRootIdentityDigest: strings.Repeat("b", 64),
+		PublicationMode:           backupasset.PublicationVersionedFullCopy,
+		PreflightID:               strings.Repeat("c", 32),
+		PreflightDigest:           strings.Repeat("d", 64),
+		IdentitySalt:              strings.Repeat("42", provider.IdentitySaltBytes),
+	}
+	revision, err := managedRsyncTaskRevision(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := managedRsyncActivationRequest{
+		TaskID:                  task.ID,
+		ExpectedTaskRevision:    revision,
+		PreflightID:             strings.Repeat("c", 32),
+		PreflightIdentityDigest: document.RootMarkerDigest,
+		PreflightFenceDigest:    strings.Repeat("d", 64),
+		Binding:                 document,
+	}
+	plan, err := service.prepareManagedRsyncActivation(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Task.ID != task.ID || plan.Repository.ID != connected.Repository.ID || plan.Link.ID != link.ID || plan.Binding != document {
+		t.Fatalf("activation plan=%+v", plan)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*managedRsyncActivationRequest)
+	}{
+		{"revision", func(value *managedRsyncActivationRequest) { value.ExpectedTaskRevision++ }},
+		{"preflight identity", func(value *managedRsyncActivationRequest) { value.PreflightIdentityDigest = strings.Repeat("e", 64) }},
+		{"preflight fence", func(value *managedRsyncActivationRequest) { value.PreflightFenceDigest = "not-a-digest" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := request
+			tt.mutate(&candidate)
+			if _, err := service.prepareManagedRsyncActivation(context.Background(), candidate); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("activation gate error=%v, want conflict", err)
+			}
+		})
+	}
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", task.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	if link.PublicationMode != string(backupasset.PublicationLegacyMutable) || link.EncryptedLegacyLocator != task.RsyncTarget {
+		t.Fatalf("activation validation mutated legacy link: %+v", link)
+	}
+}
+
 func TestConnectSharedResticIdentityReusesRepositoryWithoutLineageExpansion(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	firstTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo-a", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)

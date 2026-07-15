@@ -95,6 +95,27 @@ func featureDisabledBackupRepositoryError(requestContext backuprepository.Reques
 	}
 }
 
+// featureDisabledRsyncVersioningService keeps the migration routes inert when
+// a lightweight router lacks the shared backup runtime. It cannot derive or
+// mutate any repository, Task, or Provider state.
+type featureDisabledRsyncVersioningService struct{}
+
+func (featureDisabledRsyncVersioningService) CreateRsyncVersioningPreflightForRequest(_ context.Context, _ backupasset.RsyncVersioningPreflightRequest, requestContext backuprepository.RequestContext) (backupasset.RsyncVersioningPreflightResult, error) {
+	return backupasset.RsyncVersioningPreflightResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRsyncVersioningService) ActivateRsyncVersioningForRequest(_ context.Context, _ backupasset.RsyncVersioningActivationRequest, requestContext backuprepository.RequestContext) (backupasset.RsyncVersioningActivationResult, error) {
+	return backupasset.RsyncVersioningActivationResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRsyncVersioningService) PrepareRsyncVersioningRollbackForRequest(_ context.Context, _ backupasset.RsyncVersioningRollbackPreparationRequest, requestContext backuprepository.RequestContext) (backupasset.RsyncVersioningRollbackPreparationResult, error) {
+	return backupasset.RsyncVersioningRollbackPreparationResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRsyncVersioningService) RsyncVersioningSummary(_ context.Context, _ uint) (backupasset.RsyncVersioningSummary, error) {
+	return backupasset.RsyncVersioningSummary{}, featureDisabledBackupRepositoryError(backuprepository.RequestContext{})
+}
+
 func NewRouter(dep Dependencies) *gin.Engine {
 	appCtx := dep.AppContext
 	if appCtx == nil {
@@ -197,6 +218,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
+	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
+	if dep.BackupAssets != nil {
+		rsyncVersioningService = dep.BackupAssets.RepositoryService()
+	}
+	rsyncVersioningHandler := handlers.NewTaskRsyncVersioningHandler(rsyncVersioningService)
+	taskHandler.WithRsyncVersioningService(rsyncVersioningService)
 
 	v1 := router.Group("/api/v1")
 	// Captcha is unauthenticated; rate-limit to reduce store spam / memory pressure.
@@ -381,6 +408,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/:id/skip-next", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.SkipNext)
 	secured.POST("/tasks/:id/restore", middleware.RequireRole("admin"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskRestoreTrigger, sshutil.PurposeTaskRestore, "task_restore"), handlers.RequireTaskRestoreCredentialGrant(dep.DB), taskHandler.Restore)
 	secured.GET("/tasks/:id/backup-files", middleware.RequireRole("admin"), fileHandler.ListTaskBackupFiles)
+	secured.POST("/tasks/:id/rsync-versioning/preflights", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.CreatePreflight)
+	secured.POST("/tasks/:id/rsync-versioning/activate", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.Activate)
+	secured.POST("/tasks/:id/rsync-versioning/rollback-preparations", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.PrepareRollback)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
 	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)

@@ -17,27 +17,30 @@ type AssetAuditSink interface {
 }
 
 type Dependencies struct {
-	DB         *gorm.DB
-	Foundation *backupasset.FoundationService
-	Registry   *provider.Registry
-	Keyring    *backupasset.Keyring
-	Now        func() time.Time
-	Audit      AssetAuditSink
-	Admission  publication.Admission
-	History    *ManagedHistoryResolver
-	Metrics    publication.Metrics
+	DB          *gorm.DB
+	Foundation  *backupasset.FoundationService
+	Registry    *provider.Registry
+	Keyring     *backupasset.Keyring
+	Now         func() time.Time
+	Audit       AssetAuditSink
+	Admission   publication.Admission
+	History     *ManagedHistoryResolver
+	Metrics     publication.Metrics
+	Publication *PublicationService
 }
 
 type Service struct {
-	db         *gorm.DB
-	foundation *backupasset.FoundationService
-	registry   *provider.Registry
-	keyring    *backupasset.Keyring
-	now        func() time.Time
-	audit      AssetAuditSink
-	admission  publication.Admission
-	history    *ManagedHistoryResolver
-	metrics    publication.Metrics
+	db          *gorm.DB
+	foundation  *backupasset.FoundationService
+	registry    *provider.Registry
+	keyring     *backupasset.Keyring
+	now         func() time.Time
+	audit       AssetAuditSink
+	admission   publication.Admission
+	history     *ManagedHistoryResolver
+	metrics     publication.Metrics
+	publication *PublicationService
+	preflights  *rsyncVersioningPreflightStore
 }
 
 func NewService(dependencies Dependencies) (*Service, error) {
@@ -50,6 +53,8 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	return &Service{
 		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring,
 		now: dependencies.Now, audit: dependencies.Audit, admission: dependencies.Admission, history: dependencies.History, metrics: dependencies.Metrics,
+		publication: dependencies.Publication,
+		preflights:  newRsyncVersioningPreflightStore(dependencies.Now),
 	}, nil
 }
 

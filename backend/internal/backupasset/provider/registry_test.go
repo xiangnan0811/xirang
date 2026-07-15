@@ -69,45 +69,44 @@ func TestRegistryReturnsOnlyRequestedNarrowPort(t *testing.T) {
 	}
 }
 
-func TestRegistryReturnsTypedPublicationPortsOnlyWhenRegistered(t *testing.T) {
+func TestRegistryReturnsTypedPublicationStrategyOnlyWhenRegistered(t *testing.T) {
 	missing := NewRegistry()
 	if err := missing.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, lookup := range []func(backupasset.ProviderKind) error{
-		func(kind backupasset.ProviderKind) error { _, err := missing.ResticPublisher(kind); return err },
-		func(kind backupasset.ProviderKind) error { _, err := missing.ManifestBuilder(kind); return err },
-	} {
-		if err := lookup(backupasset.ProviderRestic); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
-			t.Fatalf("missing optional publication port error=%v", err)
-		}
+	if _, err := missing.PublicationStrategy(backupasset.ProviderRestic); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("missing publication strategy error=%v", err)
 	}
-	publisher := &fakeResticPublisher{}
-	builder := &fakeManifestBuilder{}
+	strategy := &fakePublicationStrategy{}
 	registered := NewRegistry()
-	if err := registered.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}, ResticPublisher: publisher, ManifestBuilder: builder}); err != nil {
+	if err := registered.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}, PublicationStrategy: strategy}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := registered.ResticPublisher(backupasset.ProviderRestic); err != nil || got != publisher {
-		t.Fatalf("ResticPublisher=%T err=%v", got, err)
-	}
-	if got, err := registered.ManifestBuilder(backupasset.ProviderRestic); err != nil || got != builder {
-		t.Fatalf("ManifestBuilder=%T err=%v", got, err)
+	if got, err := registered.PublicationStrategy(backupasset.ProviderRestic); err != nil || got != strategy {
+		t.Fatalf("PublicationStrategy=%T err=%v", got, err)
 	}
 }
 
-type fakeResticPublisher struct{}
+type fakePublicationStrategy struct{}
 
-func (*fakeResticPublisher) Backup(context.Context, PublicationAttempt, ResticBackupInput, func(ResticBackupProgress)) (ResticBackupResult, error) {
-	return ResticBackupResult{}, nil
+func (*fakePublicationStrategy) Kind() backupasset.ProviderKind { return backupasset.ProviderRestic }
+
+func (*fakePublicationStrategy) Prepare(context.Context, PublicationPrepareRequest) (PreparedPublication, error) {
+	return PreparedPublication{}, nil
 }
 
-func (*fakeResticPublisher) LookupAttempt(context.Context, PublicationAttempt) ([]ResticSnapshotObservation, error) {
-	return nil, nil
+func (*fakePublicationStrategy) Execute(context.Context, PreparedPublication, PublicationProgress) (ProviderExecutionResult, error) {
+	return ProviderExecutionResult{}, nil
 }
 
-type fakeManifestBuilder struct{}
+func (*fakePublicationStrategy) RecordCommit(context.Context, PreparedPublication, ProviderExecutionResult) (ProviderCommit, error) {
+	return ProviderCommit{}, nil
+}
 
-func (*fakeManifestBuilder) BuildManifest(context.Context, PublicationAttempt, ProviderCommitEvidence, ManifestLimits) (ManifestEvidence, error) {
-	return ManifestEvidence{}, nil
+func (*fakePublicationStrategy) VerifyOrBuildManifest(context.Context, PreparedPublication, ProviderCommit, ManifestLimits) (ManifestResult, error) {
+	return ManifestResult{}, nil
+}
+
+func (*fakePublicationStrategy) Reconcile(context.Context, PublicationReconcileRequest) (PublicationReconcileResult, error) {
+	return PublicationReconcileResult{}, nil
 }

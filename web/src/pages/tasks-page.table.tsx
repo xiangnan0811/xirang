@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   GitFork,
+  GitBranch,
   History,
   Loader2,
   Pause,
@@ -38,6 +39,8 @@ export const TasksTable = React.memo(function TasksTable({
   handleResume,
   onEdit,
   onViewHistory,
+  canManageRsyncVersioning,
+  onManageRsyncVersioning,
   selectedTaskSet,
   allVisibleSelected,
   toggleTaskSelection,
@@ -245,6 +248,18 @@ export const TasksTable = React.memo(function TasksTable({
                           <RotateCcw className="size-4" />
                         )}
                       </Button>
+                      {canManageRsyncVersioning && task.executorType === "rsync" && task.rsyncPublication ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("tasks.rsyncVersioningAriaLabel", { name: task.name || task.policyName })}
+                          disabled={isPendingAny}
+                          onClick={() => onManageRsyncVersioning(task)}
+                        >
+                          <GitBranch className="size-4" aria-hidden />
+                        </Button>
+                      ) : null}
                       <Button
                         variant="ghost"
                         size="icon"

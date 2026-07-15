@@ -52,7 +52,7 @@ func TestPublicationSharedRepositoryConcurrentTasksRetriesAndManualSnapshotsNeve
 	}
 	defer func() { _ = second.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
 
-	firstAttempt, secondAttempt := first.Attempt(), second.Attempt()
+	firstAttempt, secondAttempt := resticAttemptForExecution(t, first), resticAttemptForExecution(t, second)
 	if firstAttempt.RepositoryID != secondAttempt.RepositoryID || firstAttempt.RecoveryPointID == secondAttempt.RecoveryPointID ||
 		firstAttempt.RequiredTags[0] == secondAttempt.RequiredTags[0] || firstAttempt.RequiredTags[1] == secondAttempt.RequiredTags[1] {
 		t.Fatalf("shared Repository attempts are not run-scoped: first=%+v second=%+v", firstAttempt, secondAttempt)
@@ -61,12 +61,12 @@ func TestPublicationSharedRepositoryConcurrentTasksRetriesAndManualSnapshotsNeve
 		firstAttempt.Access.NodeID != fixture.node.ID || secondAttempt.Access.NodeID != secondNode.ID {
 		t.Fatalf("shared Repository attempt used another Task's access: first_task=%d first_node=%d second_task=%d second_node=%d", firstAttempt.Access.TaskID, firstAttempt.Access.NodeID, secondAttempt.Access.TaskID, secondAttempt.Access.NodeID)
 	}
-	if _, err := first.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := first.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatalf("commit first Task evidence: %v", err)
 	}
 	secondEvidence := fixture.commitEvidence()
 	secondEvidence.NativePointID = strings.Repeat("d", 64)
-	if _, err := second.RecordProviderCommit(context.Background(), secondEvidence); err != nil {
+	if _, err := second.RecordProviderCommit(context.Background(), resticProviderCommit(secondEvidence)); err != nil {
 		t.Fatalf("commit second Task evidence: %v", err)
 	}
 

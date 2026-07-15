@@ -69,7 +69,7 @@ coverage-backend: ## Run backend tests with coverage
 	cd backend && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
 
 coverage-frontend: ## Run frontend tests with coverage
-	cd web && npx vitest run --coverage
+	cd web && npm run test
 
 check: lint test build ## Full pre-commit quality gate
 

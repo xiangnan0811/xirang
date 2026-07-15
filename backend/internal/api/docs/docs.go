@@ -7404,6 +7404,306 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/{id}/rsync-versioning/activate": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "消费精确预检，并显式选择 imported_baseline 或 first_new_point；任务保持暂停直到受管流程完成",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "激活 Rsync 版本化迁移",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rsync 版本化激活请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRsyncVersioningActivationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningActivationResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rsync-versioning/preflights": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "对一个 legacy Rsync Task 执行有界本地预检；响应不包含路径、locator、命令或文件系统原始证据",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "检查 Rsync 版本化迁移条件",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rsync 版本化预检请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRsyncVersioningPreflightRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningPreflightResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rsync-versioning/rollback-preparations": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "排空受管 admission 并保留所有已提交恢复点；不会删除 Provider tree 或重新启用 mutable 写入",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "准备 Rsync 版本化回退",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rsync 回退准备请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRsyncVersioningRollbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningRollbackPreparationResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}/runs": {
             "get": {
                 "security": [
@@ -9401,6 +9701,39 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.taskRsyncVersioningActivationRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "migration_choice": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningMigrationChoice"
+                },
+                "preflight_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRsyncVersioningPreflightRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "requested_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.TaskPublicationMode"
+                }
+            }
+        },
+        "internal_api_handlers.taskRsyncVersioningRollbackRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.totpDisableRequest": {
             "type": "object",
             "required": [
@@ -9795,6 +10128,173 @@ const docTemplate = `{
                 "RepositoryDisconnected",
                 "RepositoryPurging",
                 "RepositoryPurgeBlocked"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningActivationResult": {
+            "type": "object",
+            "properties": {
+                "migration_choice": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningMigrationChoice"
+                },
+                "summary": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningSummary"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningEstimateBucket": {
+            "type": "string",
+            "enum": [
+                "unknown",
+                "constrained",
+                "available"
+            ],
+            "x-enum-varnames": [
+                "RsyncVersioningEstimateUnknown",
+                "RsyncVersioningEstimateConstrained",
+                "RsyncVersioningEstimateAvailable"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningMigrationChoice": {
+            "type": "string",
+            "enum": [
+                "imported_baseline",
+                "first_new_point"
+            ],
+            "x-enum-varnames": [
+                "RsyncVersioningImportedBaseline",
+                "RsyncVersioningFirstNewPoint"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningPreflightResult": {
+            "type": "object",
+            "properties": {
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "capacity_estimate": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningEstimateBucket"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "inode_estimate": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningEstimateBucket"
+                },
+                "mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.TaskPublicationMode"
+                },
+                "preflight_id": {
+                    "type": "string"
+                },
+                "reason_code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningReasonCode"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningState"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningReasonCode": {
+            "type": "string",
+            "enum": [
+                "legacy",
+                "preflight_required",
+                "ready",
+                "preflight_expired",
+                "task_revision_changed",
+                "preflight_mismatch",
+                "root_drift",
+                "unsupported",
+                "admission_blocked",
+                "rollback_prepared"
+            ],
+            "x-enum-varnames": [
+                "RsyncVersioningReasonLegacy",
+                "RsyncVersioningReasonPreflightRequired",
+                "RsyncVersioningReasonReady",
+                "RsyncVersioningReasonPreflightExpired",
+                "RsyncVersioningReasonTaskRevisionChanged",
+                "RsyncVersioningReasonPreflightMismatch",
+                "RsyncVersioningReasonRootDrift",
+                "RsyncVersioningReasonUnsupported",
+                "RsyncVersioningReasonAdmissionBlocked",
+                "RsyncVersioningReasonRollbackPrepared"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningRollbackPreparationResult": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningSummary"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningState": {
+            "type": "string",
+            "enum": [
+                "legacy",
+                "preflight_required",
+                "ready",
+                "preparing",
+                "verifying",
+                "committed",
+                "failed",
+                "blocked",
+                "rollback_prepared"
+            ],
+            "x-enum-varnames": [
+                "RsyncVersioningLegacy",
+                "RsyncVersioningPreflightRequired",
+                "RsyncVersioningReady",
+                "RsyncVersioningPreparing",
+                "RsyncVersioningVerifying",
+                "RsyncVersioningCommitted",
+                "RsyncVersioningFailed",
+                "RsyncVersioningBlocked",
+                "RsyncVersioningRollbackPrepared"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RsyncVersioningSummary": {
+            "type": "object",
+            "properties": {
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.TaskPublicationMode"
+                },
+                "reason_code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningReasonCode"
+                },
+                "seed_full_copy_required": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningState"
+                },
+                "task_revision": {
+                    "description": "TaskRevision is an exact decimal CAS token, intentionally represented as\na string so JavaScript clients cannot lose nanosecond precision.",
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.TaskPublicationMode": {
+            "type": "string",
+            "enum": [
+                "legacy_mutable",
+                "versioned_hardlink",
+                "versioned_full_copy",
+                "versioned_prefix",
+                "native_object_versions",
+                "native_snapshot"
+            ],
+            "x-enum-varnames": [
+                "PublicationLegacyMutable",
+                "PublicationVersionedHardlink",
+                "PublicationVersionedFullCopy",
+                "PublicationVersionedPrefix",
+                "PublicationNativeObjectVersions",
+                "PublicationNativeSnapshot"
             ]
         },
         "xirang_backend_internal_backupasset.VersionMode": {

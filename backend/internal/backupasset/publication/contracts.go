@@ -32,6 +32,7 @@ const (
 	OperationEvidenceBackup        ResticOperation = "evidence_backup"
 	OperationManifest              ResticOperation = "manifest"
 	OperationReconcile             ResticOperation = "reconcile"
+	OperationManagedRsyncPointRead ResticOperation = "managed_rsync_point_read"
 )
 
 var validResticOperations = map[ResticOperation]struct{}{
@@ -48,6 +49,7 @@ var validResticOperations = map[ResticOperation]struct{}{
 	OperationEvidenceBackup:        {},
 	OperationManifest:              {},
 	OperationReconcile:             {},
+	OperationManagedRsyncPointRead: {},
 }
 
 func ValidateResticOperation(value ResticOperation) error {
@@ -202,6 +204,10 @@ type Run struct {
 	ChainRunID string
 	StartedAt  time.Time
 	Audit      backupasset.PublicationAuditContext
+	// ImportedBaseline is an internal migration-only signal. It is never
+	// populated from an API request and makes the prepared Rsync point use
+	// imported_baseline semantics with full-copy mechanics.
+	ImportedBaseline bool
 }
 
 type Deferral struct {
@@ -228,12 +234,12 @@ type Coordinator interface {
 
 type Execution interface {
 	Mode() ExecutionMode
-	Attempt() *provider.PublicationAttempt
+	Attempt() *provider.TaggedPublicationAttempt
 	Context() context.Context
 	Cancel(error) error
 	Abandon(error) error
 	CompleteCompatibility(context.Context) error
-	RecordProviderCommit(context.Context, provider.ProviderCommitEvidence) (Outcome, error)
+	RecordProviderCommit(context.Context, provider.ProviderCommit) (Outcome, error)
 	Defer(context.Context, Deferral) error
 	Reject(context.Context, backupasset.PublicationFailureCode) error
 	Fail(context.Context, backupasset.PublicationFailureCode) error

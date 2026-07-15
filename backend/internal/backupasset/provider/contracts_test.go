@@ -185,3 +185,118 @@ func TestProviderProductionImportsStayBelowAPIAndExecutorBoundaries(t *testing.T
 		}
 	}
 }
+
+func TestTaggedPublicationAttemptsAreStrictAndProviderSeparated(t *testing.T) {
+	restic := ResticAttemptV1{
+		RepositoryID:         strings.Repeat("a", 32),
+		RepositoryIdentity:   NativeResticIdentityPrefix + strings.Repeat("f", 64),
+		TaskRepositoryLinkID: strings.Repeat("b", 32),
+		RecoveryPointID:      strings.Repeat("c", 32),
+		TaskID:               41,
+		TaskRunID:            42,
+		RequiredTags: [2]string{
+			"xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+		PointDeadlineAt:    time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC),
+		CapabilityRevision: 1,
+		AdapterRevision:    "restic-v1",
+	}
+	encoded, err := EncodePublicationAttempt(NewResticPublicationAttempt(restic))
+	if err != nil {
+		t.Fatalf("encode Restic tagged attempt: %v", err)
+	}
+	decoded, err := DecodeResticAttemptV1(encoded)
+	if err != nil {
+		t.Fatalf("decode Restic tagged attempt: %v", err)
+	}
+	if decoded.RepositoryID != restic.RepositoryID || decoded.RecoveryPointID != restic.RecoveryPointID || decoded.RequiredTags != restic.RequiredTags {
+		t.Fatalf("Restic tagged round-trip drifted: got=%+v want=%+v", decoded, restic)
+	}
+	if _, err := DecodeRsyncTreeAttemptV1(encoded); err == nil {
+		t.Fatal("Rsync decoder accepted a Restic attempt")
+	}
+
+	for name, raw := range map[string]string{
+		"unknown provider": `{"provider":"rclone","version":1,"restic":{"repository_id":"` + strings.Repeat("a", 32) + `"}}`,
+		"unknown version":  `{"provider":"restic","version":2,"restic":{"repository_id":"` + strings.Repeat("a", 32) + `"}}`,
+		"unknown field":    strings.TrimSuffix(encoded, "}") + `,"unexpected":"value"}`,
+		"duplicate field":  strings.Replace(encoded, `"provider":"restic"`, `"provider":"restic","provider":"restic"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodePublicationAttempt(raw); err == nil {
+				t.Fatalf("unsafe tagged attempt accepted: %s", raw)
+			}
+		})
+	}
+}
+
+func TestTaggedPublicationCommitRejectsMixedProviderPayloads(t *testing.T) {
+	commit := ResticCommitV1{
+		RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("f", 64),
+		NativePointID:      strings.Repeat("a", 64),
+		CaptureStartedAt:   time.Date(2026, 7, 16, 3, 0, 0, 0, time.UTC),
+		CaptureFinishedAt:  time.Date(2026, 7, 16, 3, 0, 1, 0, time.UTC),
+		FilesProcessed:     7,
+		LogicalBytes:       16 << 10,
+	}
+	encoded, err := EncodeProviderCommit(NewResticProviderCommit(commit))
+	if err != nil {
+		t.Fatalf("encode Restic commit: %v", err)
+	}
+	if _, err := DecodeRsyncTreeCommitV1(encoded); err == nil {
+		t.Fatal("Rsync decoder accepted a Restic provider commit")
+	}
+	if _, err := DecodeProviderCommit(strings.TrimSuffix(encoded, "}") + `,"rsync_tree":{}}`); err == nil {
+		t.Fatal("mixed provider commit payload was accepted")
+	}
+	if _, err := DecodeProviderCommit(strings.Replace(encoded, `"provider":"restic"`, `"provider":"restic","provider":"restic"`, 1)); err == nil {
+		t.Fatal("duplicate provider commit field was accepted")
+	}
+}
+
+func TestRsyncTreeFailedCommitCarriesIdentityWithoutSuccessEvidence(t *testing.T) {
+	failed := RsyncTreeCommitV1{
+		LayoutVersion:        taggedPublicationSchemaV1,
+		RepositoryID:         strings.Repeat("a", 32),
+		TaskRepositoryLinkID: strings.Repeat("b", 32),
+		RecoveryPointID:      strings.Repeat("c", 32),
+		AttemptID:            strings.Repeat("d", 32),
+		PublicationMode:      backupasset.PublicationVersionedFullCopy,
+		PointDeadlineAt:      time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC),
+		FailureCode:          backupasset.FailureProviderNonzeroExit,
+	}
+	if err := failed.Validate(); err != nil {
+		t.Fatalf("failed Rsync tree commit rejected: %v", err)
+	}
+	failed.ManifestDigest = strings.Repeat("e", 64)
+	if err := failed.Validate(); err == nil {
+		t.Fatal("failed Rsync tree commit accepted success evidence")
+	}
+}
+
+func TestRsyncTreeAttemptAcceptsFixedOpaqueStagingComponent(t *testing.T) {
+	pointID := strings.Repeat("a", 32)
+	attemptID := strings.Repeat("b", 32)
+	attempt := RsyncTreeAttemptV1{
+		RepositoryID:              strings.Repeat("c", 32),
+		TaskRepositoryLinkID:      strings.Repeat("d", 32),
+		RecoveryPointID:           pointID,
+		AttemptID:                 attemptID,
+		TaskID:                    7,
+		TaskRunID:                 8,
+		PublicationMode:           backupasset.PublicationVersionedFullCopy,
+		PointDeadlineAt:           time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC),
+		ExpectedTaskRevision:      1,
+		RepositoryMarkerDigest:    strings.Repeat("e", 64),
+		ManagedRootIdentityDigest: strings.Repeat("f", 64),
+		StagingComponent:          pointID + "." + attemptID,
+		FinalComponent:            pointID,
+		CommandProfileVersion:     1,
+		PreflightID:               strings.Repeat("1", 32),
+		PreflightDigest:           strings.Repeat("2", 64),
+	}
+	if err := attempt.Validate(); err != nil {
+		t.Fatalf("fixed opaque staging component rejected: %v", err)
+	}
+}

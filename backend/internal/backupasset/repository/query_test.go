@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -98,6 +102,171 @@ func TestVisibilityRejectsViewerUnknownAndInvalidOperatorScope(t *testing.T) {
 			t.Fatalf("scope=%+v error=%v", scope, err)
 		}
 	}
+}
+
+func TestBeginManagedRsyncPointReadRejectsUncommittedPointBeforeReaderAccess(t *testing.T) {
+	fixture := newRsyncPublicationFixture(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
+	attempt, err := execution.Attempt().RsyncTreeAttempt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, History: fixture.service.history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.BeginManagedRsyncPointRead(context.Background(), fixture.task.ID, attempt.RecoveryPointID)
+	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("uncommitted managed Rsync reader error=%v, want capability unavailable", err)
+	}
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Reason.Code != backupasset.CapabilityPointNotCommitted {
+		t.Fatalf("uncommitted managed Rsync reader reason=%+v", capabilityErr)
+	}
+	operations := fixture.admission.operations()
+	if len(operations) != 2 || operations[1] != publication.ResticOperation("managed_rsync_point_read") {
+		t.Fatalf("managed Rsync reader admission operations=%v", operations)
+	}
+	if got := fixture.admission.closedCount(); got != 1 {
+		t.Fatalf("rejected managed Rsync reader left admission open: closed=%d", got)
+	}
+}
+
+func TestManagedRsyncPointReadSessionRetainsAdmissionUntilReadHandleCloses(t *testing.T) {
+	token := &managedRsyncPointReadTokenFake{}
+	session := &ManagedRsyncPointReadSession{
+		adapter: &managedRsyncPointReadAdapterFake{}, token: token,
+	}
+	handle, _, err := session.OpenSequential(context.Background(), provider.EntryLocator{Native: "file"}, provider.ReadRequest{MaxBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := token.closed.Load(); got != 0 {
+		t.Fatalf("session released admission before read handle close: %d", got)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := token.closed.Load(); got != 1 {
+		t.Fatalf("session admission close count=%d, want 1", got)
+	}
+	if _, _, err := session.OpenSequential(context.Background(), provider.EntryLocator{Native: "file"}, provider.ReadRequest{MaxBytes: 16}); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("closed session open error=%v, want forbidden", err)
+	}
+}
+
+func TestManagedRsyncCommittedPointReadRequestBindsExactCommittedEvidence(t *testing.T) {
+	fixture := newRsyncPublicationFixture(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
+	state := execution.(*rsyncPublicationExecution)
+	commit := provider.RsyncTreeCommitV1{
+		LayoutVersion: 1, RepositoryID: state.attempt.RepositoryID, TaskRepositoryLinkID: state.attempt.TaskRepositoryLinkID,
+		RecoveryPointID: state.attempt.RecoveryPointID, AttemptID: state.attempt.AttemptID, PublicationMode: state.attempt.PublicationMode,
+		ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat("1", 64), ManifestEntryCount: 1, LogicalBytes: 42,
+		FidelityDigest: strings.Repeat("2", 64), SourceFingerprint: managedRsyncSourceFingerprint(state.markerKey, fixture.binding, state.attempt.RecoveryPointID),
+		ProviderCommittedAt: fixture.now, CommitMarkerDigest: strings.Repeat("3", 64), ChildFenceDigest: rsyncChildFenceDigest(state.markerKey, state.childFence),
+		PointDeadlineAt: state.attempt.PointDeadlineAt, RenameVerified: true, DirectoryFsyncVerified: true,
+	}
+	if _, err := execution.RecordProviderCommit(context.Background(), provider.NewRsyncTreeProviderCommit(commit)); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", state.attempt.RecoveryPointID).Updates(map[string]any{
+		"state": string(backupasset.RecoveryPointCommitted), "committed_at": fixture.now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, History: fixture.service.history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := loadExactManagedRsyncPublicationRuntime(context.Background(), fixture.db, fixture.task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", state.attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	request, access, err := service.managedRsyncCommittedPointReadRequest(context.Background(), runtime, point)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Attempt != state.attempt || request.ManagedRoot != fixture.binding.ManagedRootLocator ||
+		request.CommitMarkerDigest != commit.CommitMarkerDigest || request.SourceFingerprint != point.SourceFingerprint ||
+		request.ManifestDigest != point.ManifestDigest || request.ManifestEntryCount != uint64(point.EntryCount) || request.LogicalBytes != uint64(point.LogicalBytes) {
+		t.Fatalf("committed Rsync reader request=%+v", request)
+	}
+	if access.AdapterData != nil || access.Locator != "" || access.RepositoryID != fixture.repository.ID || access.TaskID != fixture.task.ID || access.NodeID != fixture.task.NodeID {
+		t.Fatalf("committed Rsync reader access=%+v", access)
+	}
+	if _, err := service.BeginManagedRsyncPointRead(context.Background(), fixture.task.ID, point.ID); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("unreadable committed Rsync tree error=%v, want capability unavailable", err)
+	} else if reason, _, ok := CapabilityFromError(err); !ok || reason.Code != backupasset.CapabilityMutableSourceChanged {
+		t.Fatalf("unreadable committed Rsync tree capability=%+v ok=%t", reason, ok)
+	}
+
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).Update("lineage_json", `{}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.First(&point, "id = ?", point.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.managedRsyncCommittedPointReadRequest(context.Background(), runtime, point); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("drifted committed Rsync lineage error=%v, want invalid state", err)
+	}
+}
+
+type managedRsyncPointReadAdapterFake struct{}
+
+func (*managedRsyncPointReadAdapterFake) ListPoints(context.Context, provider.ReadSnapshot, provider.PageRequest) (provider.NativePointPage, error) {
+	return provider.NativePointPage{}, nil
+}
+
+func (*managedRsyncPointReadAdapterFake) ListEntries(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error) {
+	return provider.EntryPage{}, nil
+}
+
+func (*managedRsyncPointReadAdapterFake) StatEntry(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator) (provider.Entry, error) {
+	return provider.Entry{}, nil
+}
+
+func (*managedRsyncPointReadAdapterFake) OpenSequential(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.ReadRequest) (provider.ReadHandle, provider.ContentStat, error) {
+	return io.NopCloser(strings.NewReader("managed-rsync")), provider.ContentStat{}, nil
+}
+
+func (*managedRsyncPointReadAdapterFake) OpenRange(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.ByteRange) (provider.ReadHandle, provider.ContentStat, error) {
+	return io.NopCloser(strings.NewReader("managed-rsync")), provider.ContentStat{}, nil
+}
+
+type managedRsyncPointReadTokenFake struct{ closed atomic.Int32 }
+
+func (*managedRsyncPointReadTokenFake) Generation() uint64 { return 1 }
+func (*managedRsyncPointReadTokenFake) Mode() publication.AdmissionMode {
+	return publication.AdmissionManaged
+}
+func (*managedRsyncPointReadTokenFake) Operation() publication.ResticOperation {
+	return publication.OperationManagedRsyncPointRead
+}
+func (token *managedRsyncPointReadTokenFake) Close() error {
+	token.closed.Add(1)
+	return nil
 }
 
 func TestVisibilityOwnershipQueryFailureFailsClosed(t *testing.T) {

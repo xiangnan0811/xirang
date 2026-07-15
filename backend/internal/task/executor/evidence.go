@@ -14,24 +14,29 @@ const (
 	maxResticEvidenceExcludeBytes = 4096
 )
 
-// EvidenceExecutionRequest carries the coordinator-owned exact publication
-// attempt into the Restic-only evidence lane. Repository access and secrets
+// PublicationExecutionRequest carries the coordinator-owned, tagged exact
+// publication attempt into a provider executor. Repository access and secrets
 // are intentionally absent: they belong to the validated Provider binding.
-type EvidenceExecutionRequest struct {
-	Task      model.Task
-	TaskRunID uint
-	Attempt   provider.PublicationAttempt
+type PublicationExecutionRequest struct {
+	Task           model.Task
+	TaskRunID      uint
+	Attempt        provider.TaggedPublicationAttempt
+	RsyncTreeInput *provider.RsyncTreePublicationInput
 }
 
-type EvidenceExecutionResult struct {
+// PublicationExecutionResult deliberately preserves the transfer outcome
+// independently from the optional Provider commit fact. The task runner owns
+// the resulting database publication transition.
+type PublicationExecutionResult struct {
 	ExitCode       int
 	Completion     backupasset.ProviderCompletionClass
-	ProviderCommit *provider.ProviderCommitEvidence
+	ProviderCommit *provider.ProviderCommit
 	EvidenceCode   backupasset.PublicationFailureCode
 }
 
-// EvidenceExecutor is deliberately separate from Executor so non-Restic
-// executors retain their legacy compatibility contracts.
-type EvidenceExecutor interface {
-	RunWithEvidence(context.Context, EvidenceExecutionRequest, LogFunc, ProgressFunc) (EvidenceExecutionResult, error)
+// PublicationExecutor is deliberately separate from Executor so legacy
+// mutable executors retain their compatibility contracts. Providers receive a
+// closed tagged attempt and must never accept an untyped payload here.
+type PublicationExecutor interface {
+	RunWithPublication(context.Context, PublicationExecutionRequest, LogFunc, ProgressFunc) (PublicationExecutionResult, error)
 }

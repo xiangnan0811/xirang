@@ -162,6 +162,47 @@ func TestLineageRollbackSafeTokenWithActiveLeaseOnlyNeverUsesLegacyRead(t *testi
 	}
 }
 
+func TestRsyncLegacyGuardAllowsOnlyExactPristineMutableBinding(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 15, 13, 0, 0, 0, time.UTC)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	connect := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	if _, err := connect.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: backupasset.NewFoundationService(completeRepositoryFoundationSettings(false)),
+		Now: func() time.Time { return now }, Admission: &lineageAdmission{mode: publication.AdmissionPristineLegacy, generation: 9},
+		History: history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Begin(context.Background(), taskEntity.ID, publication.OperationLegacyRestoreLatest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Mode() != publication.LineageCompatibility {
+		_ = session.Close()
+		t.Fatalf("pristine Rsync session mode=%s, want compatibility", session.Mode())
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Model(&model.TaskRepositoryLink{}).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).
+		Update("publication_mode", string(backupasset.PublicationVersionedFullCopy)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Begin(context.Background(), taskEntity.ID, publication.OperationLegacyRestoreLatest); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("managed Rsync legacy guard error=%v, want forbidden", err)
+	}
+}
+
 type lineageFixture struct {
 	t          *testing.T
 	db         *gorm.DB

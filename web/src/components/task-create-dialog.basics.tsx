@@ -1,13 +1,35 @@
 import { useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { Select } from "@/components/ui/select";
 import type {
   NodeRecord,
   PolicyRecord,
+  RsyncPublicationState,
   TaskExecutorType,
   TaskRecord,
 } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
+
+function publicationStateTone(state: RsyncPublicationState): "success" | "warning" | "destructive" | "info" | "neutral" {
+  switch (state) {
+    case "ready":
+    case "committed":
+      return "success";
+    case "preparing":
+    case "verifying":
+      return "info";
+    case "failed":
+    case "blocked":
+      return "destructive";
+    case "preflight_required":
+    case "rollback_prepared":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
 
 type TaskBasicsProps = {
   draft: TaskDraft;
@@ -121,6 +143,25 @@ export function TaskBasics({
           <option value="rclone">{t("taskCreate.executorTypes.rclone")}</option>
         </Select>
       </div>
+
+      {draft.executorType === "rsync" && editingTask?.rsyncPublication ? (
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs text-muted-foreground">{t("rsyncVersioning.currentMode")}</p>
+              <p className="text-sm font-medium">{t("rsyncVersioning.mode." + editingTask.rsyncPublication.mode)}</p>
+            </div>
+            <Badge tone={publicationStateTone(editingTask.rsyncPublication.state)}>
+              {t("rsyncVersioning.state." + editingTask.rsyncPublication.state)}
+            </Badge>
+          </div>
+          {editingTask.rsyncPublication.state === "blocked" ? (
+            <InlineAlert tone="critical">
+              {t("rsyncVersioning.reason." + editingTask.rsyncPublication.reasonCode)}
+            </InlineAlert>
+          ) : null}
+        </div>
+      ) : null}
 
       {tasks && tasks.length > 0 && (
         <div>
