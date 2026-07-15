@@ -643,3 +643,36 @@ Implemented exact Restic run evidence, fenced asynchronous RecoveryPoint publica
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Rsync versioned recovery points
+
+**Date**: 2026-07-15
+**Task**: Rsync versioned recovery points
+**Branch**: `codex/backup-assets-rsync-versioning`
+
+### Summary
+
+Implemented managed Rsync versioned recovery points with paired 000064 migrations, strict publication/reconciliation, safe task API and UI migration flows, and verified cross-layer contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8e45e22` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
