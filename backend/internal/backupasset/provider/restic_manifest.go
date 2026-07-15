@@ -55,8 +55,8 @@ type manifestCanonicalizer struct {
 }
 
 type resticManifestState struct {
-	attempt PublicationAttempt
-	commit  ProviderCommitEvidence
+	attempt ResticAttemptV1
+	commit  ResticCommitV1
 	limits  ManifestLimits
 
 	walk   walkState
@@ -78,16 +78,16 @@ func (limits ManifestLimits) Validate() error {
 	return nil
 }
 
-func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt PublicationAttempt, commit ProviderCommitEvidence, limits ManifestLimits) (ManifestEvidence, error) {
+func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt ResticAttemptV1, commit ResticCommitV1, limits ManifestLimits) (ResticManifestV1, error) {
 	if err := limits.Validate(); err != nil {
-		return ManifestEvidence{}, err
+		return ResticManifestV1{}, err
 	}
 	attempt, err := adapter.normalizePublicationAttempt(attempt)
 	if err != nil {
-		return ManifestEvidence{}, err
+		return ResticManifestV1{}, err
 	}
 	if err := validateManifestCommit(attempt, commit); err != nil {
-		return ManifestEvidence{}, err
+		return ResticManifestV1{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -112,7 +112,7 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt Publica
 	}
 	binding, err := publicationAccessBinding(attempt)
 	if err != nil {
-		return ManifestEvidence{}, err
+		return ResticManifestV1{}, err
 	}
 	if !adapter.manifestProbeMatches(manifestContext, binding, operationLimits, attempt) {
 		return unavailableManifestEvidence(backupasset.FailureRepositoryIdentityDrift), nil
@@ -121,7 +121,7 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt Publica
 		"--password-file", "/dev/stdin", "ls", "--json", "--recursive", "--", commit.NativePointID, "/",
 	}, CommandPurposeManifest)
 	if err := invocation.Validate(); err != nil {
-		return ManifestEvidence{}, err
+		return ResticManifestV1{}, err
 	}
 	execution, err := adapter.streamTransport.OpenExecution(manifestContext, invocation, operationLimits, limits.MaxBytes)
 	if err != nil || execution == nil {
@@ -149,7 +149,7 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt Publica
 	return state.completeEvidence(), nil
 }
 
-func validateManifestCommit(attempt PublicationAttempt, commit ProviderCommitEvidence) error {
+func validateManifestCommit(attempt ResticAttemptV1, commit ResticCommitV1) error {
 	if commit.Provider != backupasset.ProviderRestic || commit.RepositoryIdentity != attempt.RepositoryIdentity || !lowerHex(commit.NativePointID, 64) ||
 		commit.CaptureStartedAt.IsZero() || commit.CaptureFinishedAt.IsZero() || commit.CaptureFinishedAt.Before(commit.CaptureStartedAt) {
 		return fmt.Errorf("%w: invalid Restic manifest commit evidence", backupasset.ErrInvalidState)
@@ -157,7 +157,7 @@ func validateManifestCommit(attempt PublicationAttempt, commit ProviderCommitEvi
 	return nil
 }
 
-func (adapter *ResticAdapter) manifestProbeMatches(ctx context.Context, binding AccessBinding, limits OperationLimits, attempt PublicationAttempt) bool {
+func (adapter *ResticAdapter) manifestProbeMatches(ctx context.Context, binding AccessBinding, limits OperationLimits, attempt ResticAttemptV1) bool {
 	observation, err := adapter.Probe(ctx, binding, limits)
 	return err == nil && observation.Provider == backupasset.ProviderRestic && observation.RepositoryIdentity == attempt.RepositoryIdentity &&
 		observation.AdapterRevision == attempt.AdapterRevision && observation.VersionMode == backupasset.VersionNativeSnapshot
@@ -176,7 +176,7 @@ func manifestFailureForLifecycle(readErr error, hardLimit bool, joinErr error, c
 	}
 }
 
-func newResticManifestState(attempt PublicationAttempt, commit ProviderCommitEvidence, limits ManifestLimits) *resticManifestState {
+func newResticManifestState(attempt ResticAttemptV1, commit ResticCommitV1, limits ManifestLimits) *resticManifestState {
 	return &resticManifestState{
 		attempt: attempt,
 		commit:  commit,
@@ -548,7 +548,7 @@ func manifestNodeBitmap(node manifestNode) uint8 {
 	return bitmap
 }
 
-func (state *resticManifestState) completeEvidence() ManifestEvidence {
+func (state *resticManifestState) completeEvidence() ResticManifestV1 {
 	if state.header == nil || state.hasher == nil || state.entryCount > math.MaxInt64 || state.logical > math.MaxInt64 {
 		state.fail(backupasset.FailureProviderResourceLimit)
 		return state.evidence()
@@ -559,14 +559,14 @@ func (state *resticManifestState) completeEvidence() ManifestEvidence {
 	if err != nil {
 		return unavailableManifestEvidence(backupasset.FailureManifestUnavailable)
 	}
-	return ManifestEvidence{
+	return ResticManifestV1{
 		DigestAlgorithm: "sha256", Digest: digest, Generator: "xirang-restic-ls", GeneratorVersion: "1",
 		Completeness: backupasset.ManifestComplete, EntryCount: int64(state.entryCount), LogicalBytes: int64(state.logical),
 		Fidelity: ResticManifestFidelityV1(), HeaderCapturedAt: state.header.CapturedAt.UTC(), ObservedTagDigest: digestExactTags(state.header.Tags),
 	}
 }
 
-func (state *resticManifestState) evidence() ManifestEvidence {
+func (state *resticManifestState) evidence() ResticManifestV1 {
 	if state.failure == "" {
 		state.failure = backupasset.FailureManifestUnavailable
 	}
@@ -581,15 +581,15 @@ func (state *resticManifestState) evidence() ManifestEvidence {
 	if err != nil {
 		return unavailableManifestEvidence(backupasset.FailureManifestUnavailable)
 	}
-	return ManifestEvidence{
+	return ResticManifestV1{
 		DigestAlgorithm: "sha256", Digest: digest, Generator: "xirang-restic-ls", GeneratorVersion: "1",
 		Completeness: backupasset.ManifestPartial, EntryCount: int64(state.entryCount), LogicalBytes: int64(state.logical),
 		Fidelity: ResticManifestFidelityV1(), HeaderCapturedAt: state.header.CapturedAt.UTC(), ObservedTagDigest: digestExactTags(state.header.Tags), FailureCode: state.failure,
 	}
 }
 
-func unavailableManifestEvidence(code backupasset.PublicationFailureCode) ManifestEvidence {
-	return ManifestEvidence{DigestAlgorithm: "sha256", Generator: "xirang-restic-ls", GeneratorVersion: "1", Completeness: backupasset.ManifestUnavailable, Fidelity: ResticManifestFidelityV1(), FailureCode: code}
+func unavailableManifestEvidence(code backupasset.PublicationFailureCode) ResticManifestV1 {
+	return ResticManifestV1{DigestAlgorithm: "sha256", Generator: "xirang-restic-ls", GeneratorVersion: "1", Completeness: backupasset.ManifestUnavailable, Fidelity: ResticManifestFidelityV1(), FailureCode: code}
 }
 
 func (state *resticManifestState) fail(code backupasset.PublicationFailureCode) {

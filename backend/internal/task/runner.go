@@ -470,7 +470,7 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		verifyStatus := "none"
 
 		// 检查关联策略是否启用校验
-		if taskEntity.Policy != nil && taskEntity.Policy.VerifyEnabled {
+		if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
 				m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, string(StatusRunning))
@@ -700,7 +700,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	defer m.chainRunner.Delete(taskID)
 	defer cancel()
 
-	if strings.EqualFold(strings.TrimSpace(restoreTask.ExecutorType), "restic") && m.lineageGuard != nil {
+	if isLegacyGuardedProvider(restoreTask.ExecutorType) && m.lineageGuard != nil {
 		session, err := m.lineageGuard.Begin(execCtx, taskID, publication.OperationLegacyRestoreLatest)
 		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
 			if session != nil {
@@ -940,7 +940,16 @@ func (m *Manager) failLegacyRestore(taskID uint, runID uint) {
 		"finished_at": &finishedAt,
 		"last_error":  string(backupasset.FailureLegacyOperationBlocked),
 	})
-	m.logDispatcher.Dispatch(taskID, &runID, "warn", "受管 Restic 恢复操作已被安全边界阻止", "failed")
+	m.logDispatcher.Dispatch(taskID, &runID, "warn", "受管备份恢复操作已被安全边界阻止", "failed")
+}
+
+func isLegacyGuardedProvider(executorType string) bool {
+	switch strings.ToLower(strings.TrimSpace(executorType)) {
+	case "restic", "rsync":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) recordLegacyResticBlock(ctx context.Context, taskID uint, taskRunID *uint, operation publication.ResticOperation) {

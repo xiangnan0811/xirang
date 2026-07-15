@@ -131,7 +131,7 @@ func TestResticManifestCompleteDigestIsChunkAndJSONFieldOrderIndependent(t *test
 }
 
 func TestResticManifestPreservesUTF8WithoutNormalizationOrCaseFolding(t *testing.T) {
-	build := func(name string) ManifestEvidence {
+	build := func(name string) ResticManifestV1 {
 		body := []byte(manifestHeaderForTest() + `{"struct_type":"node","name":"` + name + `","path":"/` + name + `","type":"file","size":1}` + "\n")
 		evidence, err := buildResticManifestForTest(t, body, manifestLimitsForTest())
 		if err != nil || evidence.Completeness != backupasset.ManifestComplete {
@@ -202,17 +202,17 @@ func TestResticManifestReprobesRepositoryIdentityBeforeAndAfterEnumeration(t *te
 	}
 }
 
-func buildResticManifestForTest(t *testing.T, body []byte, limits ManifestLimits) (ManifestEvidence, error) {
+func buildResticManifestForTest(t *testing.T, body []byte, limits ManifestLimits) (ResticManifestV1, error) {
 	return buildResticManifestWithExecutionForTest(t, body, limits, CommandCompletion{ExitCode: 0, ExitCodeKnown: true}, nil, nil)
 }
 
-func buildResticManifestWithExecutionForTest(t *testing.T, body []byte, limits ManifestLimits, completion CommandCompletion, joinErr error, probeIDs []string) (ManifestEvidence, error) {
+func buildResticManifestWithExecutionForTest(t *testing.T, body []byte, limits ManifestLimits, completion CommandCompletion, joinErr error, probeIDs []string) (ResticManifestV1, error) {
 	t.Helper()
 	stream := &fakePublicationExecution{Reader: bytes.NewReader(body), completion: completion, joinErr: joinErr}
 	transport := &fakeManifestTransport{execution: stream, probeIDs: probeIDs}
 	adapter := newManifestResticAdapterForTest(t, transport)
 	attempt := manifestAttemptForTest()
-	commit := ProviderCommitEvidence{Provider: backupasset.ProviderRestic, RepositoryIdentity: attempt.RepositoryIdentity, NativePointID: strings.Repeat("a", 64), CaptureStartedAt: time.Date(2026, 7, 14, 3, 0, 0, 0, time.UTC), CaptureFinishedAt: time.Date(2026, 7, 14, 3, 0, 2, 0, time.UTC), FilesProcessed: 1, LogicalBytes: 1}
+	commit := ResticCommitV1{Provider: backupasset.ProviderRestic, RepositoryIdentity: attempt.RepositoryIdentity, NativePointID: strings.Repeat("a", 64), CaptureStartedAt: time.Date(2026, 7, 14, 3, 0, 0, 0, time.UTC), CaptureFinishedAt: time.Date(2026, 7, 14, 3, 0, 2, 0, time.UTC), FilesProcessed: 1, LogicalBytes: 1}
 	return adapter.BuildManifest(context.Background(), attempt, commit, limits)
 }
 
@@ -232,7 +232,7 @@ func newManifestResticAdapterForTest(t *testing.T, transport *fakeManifestTransp
 	return adapter
 }
 
-func manifestAttemptForTest() PublicationAttempt {
+func manifestAttemptForTest() ResticAttemptV1 {
 	attempt := publicationAttemptForTest()
 	attempt.RequiredTags = [2]string{"xirang.link.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "xirang.point.v1.cccccccccccccccccccccccccccccccc"}
 	return attempt

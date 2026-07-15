@@ -1,6 +1,21 @@
-import type { LogEvent, NewTaskInput, TaskRecord, TaskStatus } from "@/types/domain";
+import type {
+  LogEvent,
+  NewTaskInput,
+  RsyncPublicationMode,
+  RsyncPublicationReasonCode,
+  RsyncPublicationState,
+  RsyncPublicationSummary,
+  RsyncVersionedPublicationMode,
+  RsyncVersioningActivationResult,
+  RsyncVersioningEstimateBucket,
+  RsyncVersioningMigrationChoice,
+  RsyncVersioningPreflightResult,
+  RsyncVersioningRollbackPreparationResult,
+  TaskRecord,
+  TaskStatus,
+} from "@/types/domain";
 import i18n from "@/i18n";
-import { extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+import { ApiError, extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 
 type TaskResponse = {
   id: number;
@@ -34,7 +49,50 @@ type TaskResponse = {
   enabled?: boolean;
   skip_next?: boolean;
   progress?: number;
+  rsync_publication?: RawRsyncPublicationSummary;
 };
+
+type RawRsyncPublicationSummary = {
+  mode?: unknown;
+  state?: unknown;
+  reason_code?: unknown;
+  capability_revision?: unknown;
+  task_revision?: unknown;
+  seed_full_copy_required?: unknown;
+};
+
+type RawRsyncVersioningPreflightResult = {
+  preflight_id?: unknown;
+  mode?: unknown;
+  state?: unknown;
+  reason_code?: unknown;
+  capability_revision?: unknown;
+  expires_at?: unknown;
+  capacity_estimate?: unknown;
+  inode_estimate?: unknown;
+};
+
+type RawRsyncVersioningActivationResult = {
+  summary?: RawRsyncPublicationSummary;
+  migration_choice?: unknown;
+};
+
+type RawRsyncVersioningRollbackPreparationResult = {
+  summary?: RawRsyncPublicationSummary;
+};
+
+export type RsyncVersioningErrorCode =
+  | "feature_disabled"
+  | "repository_offline"
+  | "repository_disconnected"
+  | "provider_unavailable"
+  | "provider_operation_timeout"
+  | "provider_resource_limit"
+  | "forbidden"
+  | "not_found"
+  | "conflict"
+  | "unsupported"
+  | "request_failed";
 
 type TaskLogResponse = {
   id: number;
@@ -80,6 +138,163 @@ function mapTaskExecutor(raw?: string): TaskRecord["executorType"] {
   }
 }
 
+function mapRsyncPublicationMode(raw: unknown): RsyncPublicationMode | undefined {
+  switch (raw) {
+    case "legacy_mutable":
+    case "versioned_hardlink":
+    case "versioned_full_copy":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRsyncPublicationState(raw: unknown): RsyncPublicationState | undefined {
+  switch (raw) {
+    case "legacy":
+    case "preflight_required":
+    case "ready":
+    case "preparing":
+    case "verifying":
+    case "committed":
+    case "failed":
+    case "blocked":
+    case "rollback_prepared":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRsyncPublicationReasonCode(raw: unknown): RsyncPublicationReasonCode | undefined {
+  switch (raw) {
+    case "legacy":
+    case "preflight_required":
+    case "ready":
+    case "preflight_expired":
+    case "task_revision_changed":
+    case "preflight_mismatch":
+    case "root_drift":
+    case "unsupported":
+    case "admission_blocked":
+    case "rollback_prepared":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRsyncVersioningEstimate(raw: unknown): RsyncVersioningEstimateBucket {
+  switch (raw) {
+    case "constrained":
+    case "available":
+      return raw;
+    default:
+      return "unknown";
+  }
+}
+
+function safePositiveInteger(raw: unknown, fallback: number): number {
+  const value = typeof raw === "number" ? raw : Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function safeTaskRevision(raw: unknown): string {
+  return typeof raw === "string" && /^[1-9]\d*$/.test(raw) ? raw : "";
+}
+
+function blockedRsyncPublicationSummary(): RsyncPublicationSummary {
+  return {
+    mode: "legacy_mutable",
+    state: "blocked",
+    reasonCode: "unsupported",
+    capabilityRevision: 1,
+    taskRevision: "",
+    seedFullCopyRequired: false,
+  };
+}
+
+function legacyRsyncPublicationSummary(): RsyncPublicationSummary {
+  return {
+    mode: "legacy_mutable",
+    state: "legacy",
+    reasonCode: "legacy",
+    capabilityRevision: 1,
+    taskRevision: "",
+    seedFullCopyRequired: false,
+  };
+}
+
+function mapRsyncPublicationSummary(raw: unknown, fallbackToLegacy = false): RsyncPublicationSummary {
+  if (!raw || typeof raw !== "object") {
+    return fallbackToLegacy ? legacyRsyncPublicationSummary() : blockedRsyncPublicationSummary();
+  }
+  const source = raw as RawRsyncPublicationSummary;
+  const mode = mapRsyncPublicationMode(source.mode);
+  const state = mapRsyncPublicationState(source.state);
+  const reasonCode = mapRsyncPublicationReasonCode(source.reason_code);
+  if (!mode || !state || !reasonCode) {
+    return blockedRsyncPublicationSummary();
+  }
+  return {
+    mode,
+    state,
+    reasonCode,
+    capabilityRevision: safePositiveInteger(source.capability_revision, 1),
+    taskRevision: safeTaskRevision(source.task_revision),
+    seedFullCopyRequired: source.seed_full_copy_required === true,
+  };
+}
+
+function mapRsyncVersionedPublicationMode(raw: unknown): RsyncVersionedPublicationMode | undefined {
+  const mode = mapRsyncPublicationMode(raw);
+  return mode === "versioned_hardlink" || mode === "versioned_full_copy" ? mode : undefined;
+}
+
+function mapRsyncVersioningMigrationChoice(raw: unknown): RsyncVersioningMigrationChoice | undefined {
+  return raw === "imported_baseline" || raw === "first_new_point" ? raw : undefined;
+}
+
+function mapRsyncVersioningPreflightResult(raw: RawRsyncVersioningPreflightResult): RsyncVersioningPreflightResult {
+  const mode = mapRsyncVersionedPublicationMode(raw.mode);
+  const state = mapRsyncPublicationState(raw.state);
+  const reasonCode = mapRsyncPublicationReasonCode(raw.reason_code);
+  const preflightId = typeof raw.preflight_id === "string" && /^[a-f0-9]{32}$/.test(raw.preflight_id) ? raw.preflight_id : "";
+  if (!mode || !state || !reasonCode || !preflightId) {
+    return {
+      preflightId: "",
+      mode: "versioned_full_copy",
+      state: "blocked",
+      reasonCode: "unsupported",
+      capabilityRevision: 1,
+      expiresAt: "",
+      capacityEstimate: "unknown",
+      inodeEstimate: "unknown",
+    };
+  }
+  return {
+    preflightId,
+    mode,
+    state,
+    reasonCode,
+    capabilityRevision: safePositiveInteger(raw.capability_revision, 1),
+    expiresAt: typeof raw.expires_at === "string" ? raw.expires_at : "",
+    capacityEstimate: mapRsyncVersioningEstimate(raw.capacity_estimate),
+    inodeEstimate: mapRsyncVersioningEstimate(raw.inode_estimate),
+  };
+}
+
+function mapRsyncVersioningActivationResult(raw: RawRsyncVersioningActivationResult): RsyncVersioningActivationResult {
+  return {
+    summary: mapRsyncPublicationSummary(raw.summary),
+    migrationChoice: mapRsyncVersioningMigrationChoice(raw.migration_choice) ?? "first_new_point",
+  };
+}
+
+function mapRsyncVersioningRollbackPreparationResult(raw: RawRsyncVersioningRollbackPreparationResult): RsyncVersioningRollbackPreparationResult {
+  return { summary: mapRsyncPublicationSummary(raw.summary) };
+}
+
 function mapLogLevel(raw?: string): LogEvent["level"] {
   if (raw === "error") {
     return "error";
@@ -109,6 +324,7 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
   const status = mapTaskStatus(row.status);
   const retryCount = row.retry_count ?? 0;
   const errorCode = status === "failed" ? extractErrorCode(row.last_error) : undefined;
+  const executorType = mapTaskExecutor(row.executor_type);
 
   return {
     id: row.id,
@@ -130,16 +346,67 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     command: row.command ?? undefined,
     rsyncSource: row.rsync_source ?? undefined,
     rsyncTarget: row.rsync_target ?? undefined,
-    executorType: mapTaskExecutor(row.executor_type),
+    executorType,
     executorConfig: row.executor_config ?? undefined,
     cronSpec: row.cron_spec ?? undefined,
     updatedAt: formatTime(row.updated_at),
     speedMbps: 0,
     source: row.source ?? "manual",
     verifyStatus: mapVerifyStatus(row.verify_status),
+    rsyncPublication: executorType === "rsync"
+      ? mapRsyncPublicationSummary(row.rsync_publication, true)
+      : undefined,
     enabled: row.enabled !== false,
     skipNext: row.skip_next === true,
   };
+}
+
+function readRsyncVersioningErrorCode(error: unknown): RsyncVersioningErrorCode | undefined {
+  if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== "object") {
+    return undefined;
+  }
+  const data = (error.detail as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const reason = (data as { reason?: unknown }).reason;
+  if (!reason || typeof reason !== "object") {
+    return undefined;
+  }
+  const code = (reason as { code?: unknown }).code;
+  switch (code) {
+    case "feature_disabled":
+    case "repository_offline":
+    case "repository_disconnected":
+    case "provider_unavailable":
+    case "provider_operation_timeout":
+    case "provider_resource_limit":
+      return code;
+    default:
+      return undefined;
+  }
+}
+
+export function getRsyncVersioningErrorCode(error: unknown): RsyncVersioningErrorCode {
+  const capabilityCode = readRsyncVersioningErrorCode(error);
+  if (capabilityCode) {
+    return capabilityCode;
+  }
+  if (error instanceof ApiError) {
+    switch (error.status) {
+      case 403:
+        return "forbidden";
+      case 404:
+        return "not_found";
+      case 409:
+        return "conflict";
+      case 501:
+        return "unsupported";
+      default:
+        return "request_failed";
+    }
+  }
+  return "request_failed";
 }
 
 function mapTaskLog(row: TaskLogResponse): LogEvent {
@@ -207,6 +474,52 @@ export function createTasksApi() {
         }
       });
       return mapTask(row, 0);
+    },
+
+    async createRsyncVersioningPreflight(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; requestedMode: RsyncVersionedPublicationMode },
+    ): Promise<RsyncVersioningPreflightResult> {
+      const raw = await request<RawRsyncVersioningPreflightResult>(`/tasks/${taskId}/rsync-versioning/preflights`, {
+        method: "POST",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          requested_mode: input.requestedMode,
+        },
+      });
+      return mapRsyncVersioningPreflightResult(raw);
+    },
+
+    async activateRsyncVersioning(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; preflightId: string; migrationChoice: RsyncVersioningMigrationChoice },
+    ): Promise<RsyncVersioningActivationResult> {
+      const raw = await request<RawRsyncVersioningActivationResult>(`/tasks/${taskId}/rsync-versioning/activate`, {
+        method: "POST",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          preflight_id: input.preflightId,
+          migration_choice: input.migrationChoice,
+        },
+      });
+      return mapRsyncVersioningActivationResult(raw);
+    },
+
+    async prepareRsyncVersioningRollback(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string },
+    ): Promise<RsyncVersioningRollbackPreparationResult> {
+      const raw = await request<RawRsyncVersioningRollbackPreparationResult>(`/tasks/${taskId}/rsync-versioning/rollback-preparations`, {
+        method: "POST",
+        token,
+        body: { expected_task_revision: input.expectedTaskRevision },
+      });
+      return mapRsyncVersioningRollbackPreparationResult(raw);
     },
 
     async deleteTask(token: string, taskId: number): Promise<void> {

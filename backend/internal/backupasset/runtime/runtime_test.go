@@ -64,9 +64,16 @@ func TestRuntimeExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.
 		t.Fatalf("construct runtime: %v", err)
 	}
 	if runtime.FoundationService() == nil || runtime.RepositoryService() == nil || runtime.PublicationCoordinator() == nil ||
-		runtime.PublicationReconciler() == nil || runtime.ResticPublisher() == nil || runtime.ManifestBuilder() == nil ||
+		runtime.PublicationReconciler() == nil || runtime.ResticPublicationStrategy() == nil ||
+		runtime.RsyncTreePublicationStrategy() == nil ||
 		runtime.LineageGuard() == nil || runtime.LegacyBlockRecorder() == nil || runtime.FeatureTransitioner() == nil {
 		t.Fatal("runtime omitted a required shared graph port")
+	}
+	if runtime.ResticPublicationStrategy().Kind() != backupasset.ProviderRestic {
+		t.Fatalf("publication strategy kind=%q, want %q", runtime.ResticPublicationStrategy().Kind(), backupasset.ProviderRestic)
+	}
+	if runtime.RsyncTreePublicationStrategy().Kind() != backupasset.ProviderRsync {
+		t.Fatalf("publication strategy kind=%q, want %q", runtime.RsyncTreePublicationStrategy().Kind(), backupasset.ProviderRsync)
 	}
 }
 
@@ -82,7 +89,7 @@ func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 
 func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) {
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}); err != nil {
+	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
 		t.Fatal(err)
 	}
 	settingsService := settings.NewService(db)
@@ -99,4 +106,64 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 	if err := runtime.StartupPass(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
 		t.Fatalf("managed startup without TaskRun readiness error=%v, want invalid state", err)
 	}
+}
+
+func TestRuntimeShutdownStopsAdmissionBeforeCancelingWorker(t *testing.T) {
+	fixture := newAdmissionControllerFixture(t, true, nil)
+	fixture.initialize(t)
+	reconciler := &shutdownOrderReconciler{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
+		Foundation: fixture.controller.foundation, Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointID := strings.Repeat("a", 32)
+	go worker.process(context.Background(), pointID)
+	select {
+	case <-reconciler.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not begin shutdown-order fixture work")
+	}
+	runtime := &Runtime{admission: fixture.controller, worker: worker}
+	done := make(chan error, 1)
+	go func() { done <- runtime.Shutdown(context.Background()) }()
+	select {
+	case <-reconciler.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("runtime shutdown did not cancel active worker work")
+	}
+	token, acquireErr := fixture.controller.Acquire(context.Background(), publication.OperationManifest)
+	if token != nil {
+		_ = token.Close()
+	}
+	if !errors.Is(acquireErr, ErrAdmissionStopped) {
+		close(reconciler.release)
+		<-done
+		t.Fatalf("shutdown admitted a new publication token after worker cancellation: %v", acquireErr)
+	}
+	close(reconciler.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type shutdownOrderReconciler struct {
+	started  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+}
+
+func (*shutdownOrderReconciler) ListCandidates(context.Context, int) ([]string, error) {
+	return nil, nil
+}
+func (reconciler *shutdownOrderReconciler) ProcessPoint(ctx context.Context, pointID string) (publication.Outcome, error) {
+	close(reconciler.started)
+	<-ctx.Done()
+	close(reconciler.canceled)
+	<-reconciler.release
+	return publication.Outcome{RecoveryPointID: pointID}, nil
+}
+func (*shutdownOrderReconciler) HasUnresolvedPublication(context.Context) (bool, error) {
+	return false, nil
 }

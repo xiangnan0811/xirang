@@ -183,6 +183,114 @@ func TestRsyncRejectsChangedSourceAndSymlinkOpen(t *testing.T) {
 	}
 }
 
+func TestRsyncCommittedPointReaderReadsOnlyExactPublishedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	access, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), RsyncCommittedPointReadRequest{
+		ManagedRoot: fixture.root, MarkerKey: fixture.input.MarkerKey, Attempt: fixture.attempt,
+		CommitMarkerDigest: fixture.commit.CommitMarkerDigest, SourceFingerprint: fixture.commit.SourceFingerprint,
+		ChildFenceDigest: fixture.commit.ChildFenceDigest, ManifestDigest: fixture.commit.ManifestDigest,
+		ManifestEntryCount: fixture.commit.ManifestEntryCount, LogicalBytes: fixture.commit.LogicalBytes,
+		CapturedAt: fixture.commit.ProviderCommittedAt, Semantics: backupasset.PointXirangManifest, ManifestLimits: fixture.input.ManifestLimits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.Root.Path != filepath.Join(fixture.root, "points", fixture.attempt.RecoveryPointID, "tree") {
+		t.Fatalf("committed reader root=%q, want exact point tree", access.Root.Path)
+	}
+	adapter := newRsyncCommittedPointAdapterForTest(t)
+	binding := AccessBinding{
+		Provider: backupasset.ProviderRsync, RepositoryID: fixture.attempt.RepositoryID, TaskID: fixture.attempt.TaskID, NodeID: 9,
+		IdentitySalt: bytes.Repeat([]byte{0x42}, IdentitySaltBytes), AdapterData: access,
+	}
+	snapshot := ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: access.SourceRevision, Access: binding}
+	points, err := adapter.ListPoints(context.Background(), snapshot, PageRequest{Limit: 10})
+	if err != nil || len(points.Items) != 1 || points.Items[0].Semantics != backupasset.PointXirangManifest {
+		t.Fatalf("committed points=%+v err=%v", points, err)
+	}
+	entries, err := adapter.ListEntries(context.Background(), snapshot, points.Items[0].Locator, EntryLocator{}, PageRequest{Limit: 10})
+	if err != nil || len(entries.Items) != 1 || entries.Items[0].Name != "file" {
+		t.Fatalf("committed point entries=%+v err=%v", entries, err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsMalformedPointIdentity(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	request := rsyncCommittedPointRequestForTest(fixture)
+	request.Attempt.RecoveryPointID = "../not-a-point"
+	if _, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("malformed committed point identity error=%v, want invalid state", err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsTraversalLocator(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	adapter, snapshot, point := rsyncCommittedPointReaderForTest(t)
+	if _, err := adapter.ListEntries(context.Background(), snapshot, point, EntryLocator{Native: "../tree"}, PageRequest{Limit: 10}); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("traversal entry locator error=%v, want invalid state", err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsMarkerMismatch(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	if err := os.WriteFile(filepath.Join(fixture.root, "repository.json"), []byte(`{"layout_version":1,"repository":"replaced"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ListEntries(context.Background(), snapshot, point, EntryLocator{}, PageRequest{Limit: 10}); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("marker mismatch read error=%v, want capability unavailable", err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsFinalTreeSymlink(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	treePath := filepath.Join(fixture.root, "points", fixture.attempt.RecoveryPointID, "tree")
+	if err := os.Rename(treePath, treePath+"-original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), treePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ListEntries(context.Background(), snapshot, point, EntryLocator{}, PageRequest{Limit: 10}); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("symlinked final tree read error=%v, want capability unavailable", err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsManagedRootReplacement(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	if err := os.Rename(fixture.root, fixture.root+"-replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(fixture.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.root, "repository.json"), fixture.marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ListEntries(context.Background(), snapshot, point, EntryLocator{}, PageRequest{Limit: 10}); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("managed root replacement read error=%v, want capability unavailable", err)
+	}
+}
+
 func TestRsyncPackageCannotReachTaskExecutor(t *testing.T) {
 	source, err := os.ReadFile("rsync.go")
 	if err != nil {
@@ -217,6 +325,48 @@ func newRsyncAdapterForTest(t *testing.T) *RsyncAdapter {
 		t.Fatal(err)
 	}
 	return adapter
+}
+
+func newRsyncCommittedPointAdapterForTest(t *testing.T) *RsyncCommittedPointAdapter {
+	t.Helper()
+	now := time.Date(2026, 7, 15, 11, 0, 0, 0, time.UTC)
+	material := backupasset.DomainKeyMaterial{Version: 1, Domain: backupasset.KeyDomainCursorSigning, Key: []byte("FAKE_CURSOR_SIGNING_KEY_FOR_TEST_ONLY")}
+	keys := staticCursorKeys{active: material, versions: map[int]backupasset.DomainKeyMaterial{1: material}}
+	adapter, err := NewRsyncCommittedPointAdapter(NewCursorCodec(keys, func() time.Time { return now }, time.Hour), testOperationLimits(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+func rsyncCommittedPointRequestForTest(fixture rsyncTreeReconcileFixture) RsyncCommittedPointReadRequest {
+	return RsyncCommittedPointReadRequest{
+		ManagedRoot: fixture.root, MarkerKey: fixture.input.MarkerKey, Attempt: fixture.attempt,
+		CommitMarkerDigest: fixture.commit.CommitMarkerDigest, SourceFingerprint: fixture.commit.SourceFingerprint,
+		ChildFenceDigest: fixture.commit.ChildFenceDigest, ManifestDigest: fixture.commit.ManifestDigest,
+		ManifestEntryCount: fixture.commit.ManifestEntryCount, LogicalBytes: fixture.commit.LogicalBytes,
+		CapturedAt: fixture.commit.ProviderCommittedAt, Semantics: backupasset.PointXirangManifest, ManifestLimits: fixture.input.ManifestLimits,
+	}
+}
+
+func rsyncCommittedPointReaderForTest(t *testing.T) (*RsyncCommittedPointAdapter, ReadSnapshot, PointLocator) {
+	t.Helper()
+	return rsyncCommittedPointReaderForFixture(t, newPublishedRsyncTreeReconcileFixture(t))
+}
+
+func rsyncCommittedPointReaderForFixture(t *testing.T, fixture rsyncTreeReconcileFixture) (*RsyncCommittedPointAdapter, ReadSnapshot, PointLocator) {
+	t.Helper()
+	access, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), rsyncCommittedPointRequestForTest(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newRsyncCommittedPointAdapterForTest(t)
+	binding := AccessBinding{
+		Provider: backupasset.ProviderRsync, RepositoryID: fixture.attempt.RepositoryID, TaskID: fixture.attempt.TaskID, NodeID: 9,
+		IdentitySalt: bytes.Repeat([]byte{0x42}, IdentitySaltBytes), AdapterData: access,
+	}
+	snapshot := ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: access.SourceRevision, Access: binding}
+	return adapter, snapshot, rsyncCommittedPointLocator(access.request)
 }
 
 func rsyncBindingForTest(root string) AccessBinding {

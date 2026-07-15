@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -94,6 +95,149 @@ func TestManagedHistoryLatchDoesNotTripFromMigrationOnlyOrMutableHead(t *testing
 	}
 }
 
+func TestManagedHistoryLatchPersistsAfterRepositoryRowsAreRemoved(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 15, 8, 0, 0, 0, time.UTC)
+	repository := seedManagedHistoryRepository(t, db, strings.Repeat("2", 32), now)
+	pointID := strings.Repeat("3", 32)
+	seedManagedHistoryPoint(t, db, pointID, repository.ID, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, now)
+	createManagedHistoryLatchFixtureTable(t, db)
+	insertManagedHistoryLatchFixture(t, db, "installation", "", now)
+	insertManagedHistoryLatchFixture(t, db, "repository", repository.ID, now)
+	if err := db.Delete(&model.RecoveryPoint{}, "id = ?", pointID).Error; err != nil {
+		t.Fatalf("delete managed RecoveryPoint: %v", err)
+	}
+	if err := db.Delete(&model.BackupRepository{}, "id = ?", repository.ID).Error; err != nil {
+		t.Fatalf("delete managed repository: %v", err)
+	}
+
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolver.HasRepositoryManagedHistory(context.Background(), repository.ID); err != nil || !got {
+		t.Fatalf("durable repository latch history=%t err=%v, want true/nil", got, err)
+	}
+	if got, err := resolver.HasInstallationManagedHistory(context.Background()); err != nil || !got {
+		t.Fatalf("durable installation latch history=%t err=%v, want true/nil", got, err)
+	}
+}
+
+func TestManagedHistoryResolverRecognizesRsyncManagedStatesAndParentLease(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 15, 8, 0, 0, 0, time.UTC)
+	repository := seedManagedHistoryRepository(t, db, strings.Repeat("4", 32), now)
+	for index, point := range []struct {
+		semantics backupasset.PointVersionSemantics
+		state     backupasset.RecoveryPointState
+	}{
+		{backupasset.PointXirangManifest, backupasset.RecoveryPointPreparing},
+		{backupasset.PointImportedBaseline, backupasset.RecoveryPointFailed},
+		{backupasset.PointXirangManifest, backupasset.RecoveryPointCommitted},
+	} {
+		seedManagedHistoryPoint(t, db, fmt.Sprintf("%032x", index+10), repository.ID, point.semantics, point.state, now.Add(time.Duration(index)*time.Second))
+	}
+	lease := model.RecoveryPointLease{
+		ID: strings.Repeat("5", 32), RecoveryPointID: fmt.Sprintf("%032x", 10), HolderType: string(backupasset.LeaseHolderRsyncParent),
+		OwnerID: "rsync-publication-worker", AttemptID: strings.Repeat("6", 32), FenceToken: strings.Repeat("7", 64),
+		Status: string(backupasset.LeaseActive), LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour),
+		LastHeartbeatAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&lease).Error; err != nil {
+		t.Fatalf("create rsync parent lease: %v", err)
+	}
+
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolver.HasRepositoryManagedHistory(context.Background(), repository.ID); err != nil || !got {
+		t.Fatalf("Rsync repository history=%t err=%v, want true/nil", got, err)
+	}
+	if got, err := resolver.HasInstallationManagedHistory(context.Background()); err != nil || !got {
+		t.Fatalf("Rsync installation history=%t err=%v, want true/nil", got, err)
+	}
+	if got, err := resolver.HasActivePublicationLease(context.Background()); err != nil || !got {
+		t.Fatalf("active rsync parent lease=%t err=%v, want true/nil", got, err)
+	}
+}
+
+func TestManagedHistoryInstallationLatchAllowsOnlyExactPristineLegacyBinding(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 15, 8, 0, 0, 0, time.UTC)
+	exactTask := seedTask(t, db, "rsync", t.TempDir(), "")
+	connect := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	if _, err := connect.Connect(context.Background(), ConnectRequest{TaskID: exactTask.ID}, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	otherRepository := seedManagedHistoryRepository(t, db, strings.Repeat("6", 32), now)
+	seedManagedHistoryPoint(t, db, strings.Repeat("7", 32), otherRepository.ID, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, now)
+
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := resolver.legacyFallbackAllowed(context.Background(), exactTask); err != nil || !allowed {
+		t.Fatalf("exact pristine legacy binding allowed=%t err=%v, want true/nil", allowed, err)
+	}
+
+	ambiguousTask := seedTask(t, db, "rsync", t.TempDir(), "")
+	if allowed, err := resolver.legacyFallbackAllowed(context.Background(), ambiguousTask); err != nil || allowed {
+		t.Fatalf("unlinked Task fallback allowed=%t err=%v, want false/nil", allowed, err)
+	}
+}
+
+func TestManagedHistoryResolverBlocksManagedBindingWhenLegacyLinkDrifts(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var link model.TaskRepositoryLink
+	if err := db.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	managed := managedRsyncBindingDocumentV2{
+		Version:                   managedRsyncBindingDocumentVersion,
+		Provider:                  backupasset.ProviderRsync,
+		IdentityClass:             provider.IdentityXirangManagedRepository,
+		TaskID:                    taskEntity.ID,
+		NodeID:                    taskEntity.NodeID,
+		RepositoryID:              connected.Repository.ID,
+		TaskRepositoryLinkID:      link.ID,
+		LayoutRevision:            managedRsyncLayoutRevisionV1,
+		ManagedRootLocator:        t.TempDir(),
+		RootMarkerDigest:          strings.Repeat("a", 64),
+		ManagedRootIdentityDigest: strings.Repeat("b", 64),
+		PublicationMode:           backupasset.PublicationVersionedFullCopy,
+		PreflightID:               strings.Repeat("c", 32),
+		PreflightDigest:           strings.Repeat("d", 64),
+		IdentitySalt:              strings.Repeat("42", provider.IdentitySaltBytes),
+	}
+	payload, err := encodeManagedRsyncBindingDocumentV2(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding model.RepositoryAccessBinding
+	if err := db.Where("repository_id = ? AND status = ?", connected.Repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	binding.EncryptedConfig = payload
+	if err := db.Save(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := resolver.legacyFallbackAllowed(context.Background(), taskEntity); err != nil || allowed {
+		t.Fatalf("managed binding fallback allowed=%t err=%v, want false/nil", allowed, err)
+	}
+}
+
 type managedHistoryTombstoneFake struct {
 	repository   bool
 	installation bool
@@ -132,5 +276,40 @@ func seedManagedHistoryPoint(t *testing.T, db *gorm.DB, id, repositoryID string,
 	}
 	if err := db.Create(&point).Error; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func createManagedHistoryLatchFixtureTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS backup_asset_managed_history_latches (
+		id TEXT PRIMARY KEY,
+		scope TEXT NOT NULL,
+		repository_id TEXT,
+		repository_identity_digest TEXT NOT NULL,
+		first_semantics TEXT NOT NULL,
+		first_origin TEXT NOT NULL,
+		first_seen_at DATETIME NOT NULL,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`).Error; err != nil {
+		t.Fatalf("create managed-history latch fixture table: %v", err)
+	}
+}
+
+func insertManagedHistoryLatchFixture(t *testing.T, db *gorm.DB, scope, repositoryID string, now time.Time) {
+	t.Helper()
+	id := "managed-history-installation"
+	var repositoryIDValue any
+	identityDigest := ""
+	if scope == "repository" {
+		id = "managed-history-repository-" + repositoryID
+		repositoryIDValue = repositoryID
+		identityDigest = strings.Repeat("0", 32) + repositoryID
+	}
+	if err := db.Exec(`INSERT INTO backup_asset_managed_history_latches
+		(id, scope, repository_id, repository_identity_digest, first_semantics, first_origin, first_seen_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'native_snapshot', 'migration_backfill', ?, ?, ?)`,
+		id, scope, repositoryIDValue, identityDigest, now, now, now).Error; err != nil {
+		t.Fatalf("insert %s managed-history latch fixture: %v", scope, err)
 	}
 }

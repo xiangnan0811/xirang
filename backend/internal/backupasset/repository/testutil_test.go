@@ -10,6 +10,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -73,7 +74,7 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
@@ -195,4 +196,20 @@ func seedTask(t *testing.T, db *gorm.DB, executorType, target, executorConfig st
 		t.Fatal(err)
 	}
 	return taskEntity
+}
+
+func resticAttemptForExecution(t *testing.T, execution publication.Execution) provider.ResticAttemptV1 {
+	t.Helper()
+	if execution == nil || execution.Attempt() == nil {
+		t.Fatal("publication execution has no attempt")
+	}
+	attempt, err := execution.Attempt().ResticAttempt()
+	if err != nil {
+		t.Fatalf("publication attempt is not Restic: %v", err)
+	}
+	return attempt
+}
+
+func resticProviderCommit(value provider.ResticCommitV1) provider.ProviderCommit {
+	return provider.NewResticProviderCommit(value)
 }

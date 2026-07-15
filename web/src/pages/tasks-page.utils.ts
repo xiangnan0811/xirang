@@ -41,6 +41,8 @@ export type TasksViewProps = {
   handleResume: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
   onViewHistory: (task: TaskRecord) => void;
+  canManageRsyncVersioning: boolean;
+  onManageRsyncVersioning: (task: TaskRecord) => void;
   selectedTaskSet: Set<number>;
   allVisibleSelected: boolean;
   toggleTaskSelection: (id: number, checked: boolean) => void;

@@ -62,6 +62,24 @@ func TestPrepareDisabledManagedHistoryBlocksLegacyBackupBeforeExecutorOrProvider
 	}
 }
 
+func TestPrepareDisabledAllowsExactPristineLegacyBindingDespiteOtherManagedHistory(t *testing.T) {
+	fixture := newPublicationFixture(t, false, publication.AdmissionRollbackSafe)
+	fixture.connectExactLegacyRsyncBinding(t)
+	seedManagedHistoryPoint(t, fixture.db, strings.Repeat("9", 32), fixture.repository.ID, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, fixture.now)
+
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execution.CompleteCompatibility(context.Background()) }()
+	if execution.Mode() != publication.ModeCompatibility || execution.Attempt() != nil {
+		t.Fatalf("exact legacy compatibility execution=%s attempt=%+v", execution.Mode(), execution.Attempt())
+	}
+	if fixture.prober.calls != 0 || fixture.publisher.backup != nil {
+		t.Fatalf("exact legacy compatibility reached provider: probes=%d backup=%v", fixture.prober.calls, fixture.publisher.backup != nil)
+	}
+}
+
 func TestPrepareEnabledRequiresExactActiveResticBindingBeforeMutation(t *testing.T) {
 	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
 	if _, err := fixture.service.Prepare(context.Background(), fixture.run()); !errors.Is(err, backupasset.ErrForbidden) {
@@ -87,7 +105,7 @@ func TestPrepareCreatesOneDeterministicPointAndExecutionLease(t *testing.T) {
 	if execution.Mode() != publication.ModeEvidence || execution.Attempt() == nil {
 		t.Fatalf("evidence execution=%s attempt=%+v", execution.Mode(), execution.Attempt())
 	}
-	attempt := execution.Attempt()
+	attempt := resticAttemptForExecution(t, execution)
 	if attempt.Provider != backupasset.ProviderRestic || attempt.TaskID != fixture.task.ID || attempt.TaskRunID != fixture.taskRun.ID ||
 		attempt.RepositoryID != fixture.repository.ID || attempt.RequiredTags[0] != "xirang.link.v1."+fixture.link.ID || attempt.Fence.HolderType != backupasset.LeaseHolderPointPublication {
 		t.Fatalf("invalid publication attempt: %+v", attempt)
@@ -115,7 +133,7 @@ func TestPrepareCopiesImmutableTaskRunAndLinkLineage(t *testing.T) {
 	}
 	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.ProducingTaskID == nil || *point.ProducingTaskID != fixture.task.ID || point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != fixture.taskRun.ID ||
@@ -138,12 +156,27 @@ func TestPrepareCopiesDatabaseTaskSnapshotInsteadOfCallerFields(t *testing.T) {
 	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
 
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.ProducingTaskNameSnapshot != fixture.task.Name || point.ProducingNodeIDSnapshot != fixture.task.NodeID ||
 		point.ProducingNodeNameSnapshot != fixture.node.Name {
 		t.Fatalf("publication snapshot trusted caller fields: %+v", point)
+	}
+}
+
+func TestPrepareLegacyRsyncKeepsCompatibilityExecutionWhenManagedAdmissionIsOpen(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	fixture.connectExactLegacyRsyncBinding(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Mode() != publication.ModeCompatibility || execution.Attempt() != nil {
+		t.Fatalf("legacy Rsync execution mode=%s attempt=%+v", execution.Mode(), execution.Attempt())
+	}
+	if err := execution.CompleteCompatibility(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -244,7 +277,9 @@ func TestPrepareDifferentRetryRunCreatesDifferentPointAndTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = second.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
-	if first.Attempt().RecoveryPointID == second.Attempt().RecoveryPointID || first.Attempt().RequiredTags[1] == second.Attempt().RequiredTags[1] {
+	firstAttempt := resticAttemptForExecution(t, first)
+	secondAttempt := resticAttemptForExecution(t, second)
+	if firstAttempt.RecoveryPointID == secondAttempt.RecoveryPointID || firstAttempt.RequiredTags[1] == secondAttempt.RequiredTags[1] {
 		t.Fatalf("retry reused point/tag: first=%+v second=%+v", first.Attempt(), second.Attempt())
 	}
 	fixture.requirePublicationCounts(t, 2, 2)
@@ -294,8 +329,12 @@ func newPublicationFixture(t *testing.T, enabled bool, mode publication.Admissio
 	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, identity)}
 	publisher := &scriptedResticPublisher{}
 	manifest := &scriptedManifestBuilder{}
+	strategy, err := provider.NewResticPublicationStrategy(publisher, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	registry := provider.NewRegistry()
-	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{Prober: prober, ResticPublisher: publisher, ManifestBuilder: manifest}); err != nil {
+	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{Prober: prober, PublicationStrategy: strategy}); err != nil {
 		t.Fatal(err)
 	}
 	lease, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: 168 * time.Hour})
@@ -345,13 +384,56 @@ func (fixture *publicationFixture) connectExactResticBinding(t *testing.T) {
 	fixture.link = link
 }
 
+func (fixture *publicationFixture) connectExactLegacyRsyncBinding(t *testing.T) {
+	t.Helper()
+	legacyTarget := t.TempDir()
+	if err := fixture.db.Model(&model.Task{}).Where("id = ?", fixture.task.ID).Updates(map[string]any{
+		"executor_type": "rsync",
+		"rsync_target":  legacyTarget,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.task.ExecutorType = "rsync"
+	fixture.task.RsyncTarget = legacyTarget
+	identity := provider.ScopedIdentityPrefix(backupasset.ProviderRsync) + strings.Repeat("d", 64)
+	repository := model.BackupRepository{
+		ID: strings.Repeat("4", 32), ProviderKind: string(backupasset.ProviderRsync), RepositoryIdentity: &identity, DisplayName: "legacy-rsync-repository",
+		VersionMode: string(backupasset.VersionMutableHead), Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1,
+		CapabilitiesJSON: `{"list":true,"open_sequential":true}`, ImmutabilityLevel: string(backupasset.ImmutabilityMutable), CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	link := model.TaskRepositoryLink{
+		ID: strings.Repeat("5", 32), TaskID: &fixture.task.ID, RepositoryID: repository.ID, TaskNameSnapshot: fixture.task.Name,
+		NodeIDSnapshot: fixture.node.ID, NodeNameSnapshot: fixture.node.Name, PublicationMode: string(backupasset.PublicationLegacyMutable),
+		EncryptedLegacyLocator: legacyTarget, LinkedAt: fixture.now, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	document := bindingDocument{
+		Version: bindingDocumentVersion, Provider: backupasset.ProviderRsync, IdentityClass: provider.IdentityTaskScopedEndpoint,
+		TaskID: fixture.task.ID, NodeID: fixture.node.ID, IdentitySalt: strings.Repeat("07", provider.IdentitySaltBytes), Locator: legacyTarget,
+		EndpointFacts: []string{fmt.Sprintf("task:%d", fixture.task.ID), fmt.Sprintf("node:%d", fixture.node.ID), "transport:local", "root:" + legacyTarget},
+	}
+	payload, err := encodeBindingDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := model.RepositoryAccessBinding{ID: strings.Repeat("6", 32), RepositoryID: repository.ID, BindingKind: "task_derived_v1", EncryptedConfig: payload, ConfigFingerprint: strings.Repeat("e", 64), Status: bindingStatusActive, CreatedAt: fixture.now, UpdatedAt: fixture.now}
+	if err := fixture.db.Create(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (fixture *publicationFixture) run() publication.Run {
 	return publication.Run{Task: fixture.task, TaskRunID: fixture.taskRun.ID, Trigger: fixture.taskRun.TriggerType, StartedAt: *fixture.taskRun.StartedAt,
 		Audit: backupasset.PublicationAuditContext{Actor: backupasset.AuditActor{UserID: 9, Username: "operator", Role: "operator"}, CorrelationID: "publication-prepare-1"}}
 }
 
-func (fixture *publicationFixture) commitEvidence() provider.ProviderCommitEvidence {
-	return provider.ProviderCommitEvidence{
+func (fixture *publicationFixture) commitEvidence() provider.ResticCommitV1 {
+	return provider.ResticCommitV1{
 		Provider: backupasset.ProviderRestic, RepositoryIdentity: fixture.attemptIdentity(), NativePointID: strings.Repeat("c", 64),
 		CaptureStartedAt: fixture.now.Add(-5 * time.Second), CaptureFinishedAt: fixture.now, FilesProcessed: 12, LogicalBytes: 3456,
 	}
@@ -461,18 +543,18 @@ func (token *publicationAdmissionToken) Close() error {
 func timePointer(value time.Time) *time.Time { return &value }
 
 type scriptedResticPublisher struct {
-	backup func(context.Context, provider.PublicationAttempt, provider.ResticBackupInput, func(provider.ResticBackupProgress)) (provider.ResticBackupResult, error)
-	lookup func(context.Context, provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error)
+	backup func(context.Context, provider.ResticAttemptV1, provider.ResticBackupInput, func(provider.ResticBackupProgress)) (provider.ResticBackupResult, error)
+	lookup func(context.Context, provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error)
 }
 
-func (publisher *scriptedResticPublisher) Backup(ctx context.Context, attempt provider.PublicationAttempt, input provider.ResticBackupInput, progress func(provider.ResticBackupProgress)) (provider.ResticBackupResult, error) {
+func (publisher *scriptedResticPublisher) Backup(ctx context.Context, attempt provider.ResticAttemptV1, input provider.ResticBackupInput, progress func(provider.ResticBackupProgress)) (provider.ResticBackupResult, error) {
 	if publisher.backup != nil {
 		return publisher.backup(ctx, attempt, input, progress)
 	}
 	return provider.ResticBackupResult{}, errors.New("FAKE_RESTIC_PUBLISHER_BACKUP_NOT_CONFIGURED_FOR_TEST_ONLY")
 }
 
-func (publisher *scriptedResticPublisher) LookupAttempt(ctx context.Context, attempt provider.PublicationAttempt) ([]provider.ResticSnapshotObservation, error) {
+func (publisher *scriptedResticPublisher) LookupAttempt(ctx context.Context, attempt provider.ResticAttemptV1) ([]provider.ResticSnapshotObservation, error) {
 	if publisher.lookup != nil {
 		return publisher.lookup(ctx, attempt)
 	}
@@ -480,14 +562,14 @@ func (publisher *scriptedResticPublisher) LookupAttempt(ctx context.Context, att
 }
 
 type scriptedManifestBuilder struct {
-	build func(context.Context, provider.PublicationAttempt, provider.ProviderCommitEvidence, provider.ManifestLimits) (provider.ManifestEvidence, error)
+	build func(context.Context, provider.ResticAttemptV1, provider.ResticCommitV1, provider.ManifestLimits) (provider.ResticManifestV1, error)
 }
 
-func (builder *scriptedManifestBuilder) BuildManifest(ctx context.Context, attempt provider.PublicationAttempt, commit provider.ProviderCommitEvidence, limits provider.ManifestLimits) (provider.ManifestEvidence, error) {
+func (builder *scriptedManifestBuilder) BuildManifest(ctx context.Context, attempt provider.ResticAttemptV1, commit provider.ResticCommitV1, limits provider.ManifestLimits) (provider.ResticManifestV1, error) {
 	if builder.build != nil {
 		return builder.build(ctx, attempt, commit, limits)
 	}
-	return provider.ManifestEvidence{}, errors.New("FAKE_RESTIC_MANIFEST_BUILDER_NOT_CONFIGURED_FOR_TEST_ONLY")
+	return provider.ResticManifestV1{}, errors.New("FAKE_RESTIC_MANIFEST_BUILDER_NOT_CONFIGURED_FOR_TEST_ONLY")
 }
 
 var _ publication.Admission = (*publicationAdmission)(nil)

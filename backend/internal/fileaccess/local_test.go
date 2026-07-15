@@ -70,6 +70,27 @@ func TestLocalStrictOpenRejectsSymlinkEscapeAndSpecialFile(t *testing.T) {
 	}
 }
 
+func TestLocalStrictOpenRejectsSymlinkRoot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local access is Linux-only")
+	}
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, "file"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "managed-tree")
+	if err := os.Symlink(external, root); err != nil {
+		t.Fatal(err)
+	}
+	locator, err := ParseLocator("file", ProviderPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := NewLocalTree().OpenRegular(context.Background(), Root{Path: root}, locator, ProviderPolicy); !errors.Is(err, ErrSymlinkDenied) {
+		t.Fatalf("symlink root open error=%v, want symlink denied", err)
+	}
+}
+
 func TestLocalLegacyFollowsOnlyInternalSymlink(t *testing.T) {
 	root := t.TempDir()
 	external := t.TempDir()

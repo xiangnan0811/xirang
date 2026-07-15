@@ -14,7 +14,7 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 	source := string(sourceBytes)
 	requiredInOrder := []string{
 		"assetRuntime, err := backupruntime.New(",
-		"executor.NewFactoryWithResticPublisher(",
+		"executor.NewFactoryWithPublicationStrategies(",
 		"taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())",
 		"taskManager.SetLineageGuard(assetRuntime.LineageGuard())",
 		"assetRuntime.SetCommitObserver(taskManager)",
@@ -33,6 +33,7 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 		previous = index
 	}
 	for _, required := range []string{
+		"assetRuntime.RsyncTreePublicationStrategy()",
 		"BackupAssets:          assetRuntime",
 		"LegacyResticSnapshots: legacyRestic",
 		"SnapshotDiffRunner:    legacyRestic",

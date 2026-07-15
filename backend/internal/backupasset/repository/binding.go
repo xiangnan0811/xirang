@@ -19,7 +19,11 @@ import (
 	"xirang/backend/internal/util"
 )
 
-const bindingDocumentVersion = 1
+const (
+	bindingDocumentVersion             = 1
+	managedRsyncBindingDocumentVersion = 2
+	managedRsyncLayoutRevisionV1       = provider.RsyncManagedTreeLayoutRevisionV1
+)
 
 type bindingDocument struct {
 	Version            int                         `json:"version"`
@@ -36,6 +40,46 @@ type bindingDocument struct {
 	ConfigSource       provider.RcloneConfigSource `json:"config_source,omitempty"`
 	NativeRepositoryID string                      `json:"native_repository_id,omitempty"`
 	AdapterRevision    string                      `json:"adapter_revision,omitempty"`
+}
+
+// managedRsyncBindingDocumentV2 is stored only inside the encrypted repository
+// access binding. It deliberately has no legacy Task.RsyncTarget locator: the
+// mutable target remains on TaskRepositoryLink as the rollback locator.
+type managedRsyncBindingDocumentV2 struct {
+	Version                   int                             `json:"version"`
+	Provider                  backupasset.ProviderKind        `json:"provider"`
+	IdentityClass             provider.IdentityClass          `json:"identity_class"`
+	TaskID                    uint                            `json:"task_id"`
+	NodeID                    uint                            `json:"node_id"`
+	RepositoryID              string                          `json:"repository_id"`
+	TaskRepositoryLinkID      string                          `json:"task_repository_link_id"`
+	LayoutRevision            string                          `json:"layout_revision"`
+	ManagedRootLocator        string                          `json:"managed_root_locator"`
+	RootMarkerDigest          string                          `json:"root_marker_digest"`
+	ManagedRootIdentityDigest string                          `json:"managed_root_identity_digest"`
+	PublicationMode           backupasset.TaskPublicationMode `json:"publication_mode"`
+	PreflightID               string                          `json:"preflight_id"`
+	PreflightDigest           string                          `json:"preflight_digest"`
+	SeedFullCopyRequired      bool                            `json:"seed_full_copy_required"`
+	RollbackPrepared          bool                            `json:"rollback_prepared"`
+	IdentitySalt              string                          `json:"identity_salt"`
+}
+
+// managedRsyncBindingAssociation is deliberately internal. Activation and
+// later point-read paths must bind an encrypted V2 document to the current
+// Task/link/marker facts before a managed root is used.
+type managedRsyncBindingAssociation struct {
+	Task             model.Task
+	Link             model.TaskRepositoryLink
+	RootMarkerDigest string
+}
+
+// storedBindingDocument is an internal closed union. New call sites must
+// inspect the exact decoded version instead of treating an encrypted V2
+// document as a mutable V1 locator.
+type storedBindingDocument struct {
+	V1             *bindingDocument
+	ManagedRsyncV2 *managedRsyncBindingDocumentV2
 }
 
 func generateBindingSalt() ([]byte, error) {
@@ -130,8 +174,10 @@ func encodeBindingDocument(document bindingDocument) (string, error) {
 
 func decodeBindingDocument(payload string) (bindingDocument, error) {
 	var document bindingDocument
-	decoder := json.NewDecoder(strings.NewReader(payload))
-	decoder.DisallowUnknownFields()
+	decoder, err := strictBindingDocumentDecoder(payload)
+	if err != nil {
+		return bindingDocument{}, fmt.Errorf("%w: invalid binding document", backupasset.ErrInvalidState)
+	}
 	if err := decoder.Decode(&document); err != nil {
 		return bindingDocument{}, fmt.Errorf("%w: invalid binding document", backupasset.ErrInvalidState)
 	}
@@ -142,6 +188,200 @@ func decodeBindingDocument(payload string) (bindingDocument, error) {
 		return bindingDocument{}, err
 	}
 	return document, nil
+}
+
+func decodeStoredBindingDocument(payload string) (storedBindingDocument, error) {
+	version, err := decodeBindingDocumentVersion(payload)
+	if err != nil {
+		return storedBindingDocument{}, fmt.Errorf("%w: invalid binding document", backupasset.ErrInvalidState)
+	}
+	switch version {
+	case bindingDocumentVersion:
+		document, err := decodeBindingDocument(payload)
+		if err != nil {
+			return storedBindingDocument{}, err
+		}
+		return storedBindingDocument{V1: &document}, nil
+	case managedRsyncBindingDocumentVersion:
+		document, err := decodeManagedRsyncBindingDocumentV2(payload)
+		if err != nil {
+			return storedBindingDocument{}, err
+		}
+		return storedBindingDocument{ManagedRsyncV2: &document}, nil
+	default:
+		return storedBindingDocument{}, fmt.Errorf("%w: unsupported binding document version", backupasset.ErrInvalidState)
+	}
+}
+
+func encodeManagedRsyncBindingDocumentV2(document managedRsyncBindingDocumentV2) (string, error) {
+	if err := validateManagedRsyncBindingDocumentV2(document); err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode managed Rsync binding document", backupasset.ErrInvalidState)
+	}
+	return string(payload), nil
+}
+
+func decodeManagedRsyncBindingDocumentV2(payload string) (managedRsyncBindingDocumentV2, error) {
+	var document managedRsyncBindingDocumentV2
+	decoder, err := strictBindingDocumentDecoder(payload)
+	if err != nil {
+		return managedRsyncBindingDocumentV2{}, fmt.Errorf("%w: invalid managed Rsync binding document", backupasset.ErrInvalidState)
+	}
+	if err := decoder.Decode(&document); err != nil {
+		return managedRsyncBindingDocumentV2{}, fmt.Errorf("%w: invalid managed Rsync binding document", backupasset.ErrInvalidState)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return managedRsyncBindingDocumentV2{}, fmt.Errorf("%w: trailing managed Rsync binding data", backupasset.ErrInvalidState)
+	}
+	if err := validateManagedRsyncBindingDocumentV2(document); err != nil {
+		return managedRsyncBindingDocumentV2{}, err
+	}
+	return document, nil
+}
+
+func decodeBindingDocumentVersion(payload string) (int, error) {
+	if err := rejectDuplicateBindingDocumentMembers(payload); err != nil {
+		return 0, err
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	if err := decoder.Decode(&header); err != nil {
+		return 0, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return 0, fmt.Errorf("trailing binding document data")
+		}
+		return 0, err
+	}
+	return header.Version, nil
+}
+
+func strictBindingDocumentDecoder(payload string) (*json.Decoder, error) {
+	if err := rejectDuplicateBindingDocumentMembers(payload); err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	return decoder, nil
+}
+
+func rejectDuplicateBindingDocumentMembers(payload string) error {
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("binding document must be a JSON object")
+	}
+	members := make(map[string]struct{})
+	for decoder.More() {
+		nameToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := nameToken.(string)
+		if !ok {
+			return fmt.Errorf("binding document member is not a string")
+		}
+		if _, exists := members[name]; exists {
+			return fmt.Errorf("duplicate binding document member")
+		}
+		members[name] = struct{}{}
+		var discard json.RawMessage
+		if err := decoder.Decode(&discard); err != nil {
+			return err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("invalid binding document terminator")
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("trailing binding document data")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateManagedRsyncBindingDocumentV2(document managedRsyncBindingDocumentV2) error {
+	if document.Version != managedRsyncBindingDocumentVersion ||
+		document.Provider != backupasset.ProviderRsync ||
+		document.IdentityClass != provider.IdentityXirangManagedRepository ||
+		document.TaskID == 0 || document.NodeID == 0 ||
+		backupasset.ValidateOpaqueID(document.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(document.TaskRepositoryLinkID) != nil ||
+		document.LayoutRevision != managedRsyncLayoutRevisionV1 ||
+		strings.TrimSpace(document.ManagedRootLocator) == "" ||
+		!isLowerHex64(document.RootMarkerDigest) || !isLowerHex64(document.ManagedRootIdentityDigest) ||
+		backupasset.ValidateOpaqueID(document.PreflightID) != nil || !isLowerHex64(document.PreflightDigest) {
+		return fmt.Errorf("%w: invalid managed Rsync binding document", backupasset.ErrInvalidState)
+	}
+	if !filepath.IsAbs(filepath.Clean(document.ManagedRootLocator)) {
+		return fmt.Errorf("%w: managed Rsync root must be an absolute local path", backupasset.ErrInvalidState)
+	}
+	if _, err := hexDecodeSalt(document.IdentitySalt); err != nil {
+		return err
+	}
+	switch document.PublicationMode {
+	case backupasset.PublicationVersionedHardlink:
+		return nil
+	case backupasset.PublicationVersionedFullCopy:
+		if document.SeedFullCopyRequired {
+			return fmt.Errorf("%w: full-copy managed Rsync binding cannot require a seed", backupasset.ErrInvalidState)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: invalid managed Rsync publication mode", backupasset.ErrInvalidState)
+	}
+}
+
+func managedRsyncRepositoryIdentity(document managedRsyncBindingDocumentV2) (string, error) {
+	if err := validateManagedRsyncBindingDocumentV2(document); err != nil {
+		return "", err
+	}
+	salt, err := hexDecodeSalt(document.IdentitySalt)
+	if err != nil {
+		return "", err
+	}
+	return provider.DeriveScopedIdentity(salt, provider.ScopedIdentityDocument{
+		Provider: backupasset.ProviderRsync, TaskID: document.TaskID, NodeID: document.NodeID,
+		EndpointFacts: []string{
+			"identity_class:xirang_managed_repository",
+			"layout:" + document.LayoutRevision,
+			"managed_root_identity:" + document.ManagedRootIdentityDigest,
+			"repository:" + document.RepositoryID,
+		},
+	})
+}
+
+func validateManagedRsyncBindingAssociation(document managedRsyncBindingDocumentV2, association managedRsyncBindingAssociation) error {
+	if err := validateManagedRsyncBindingDocumentV2(document); err != nil {
+		return err
+	}
+	if association.Task.ID != document.TaskID || association.Task.NodeID != document.NodeID ||
+		association.Link.TaskID == nil || *association.Link.TaskID != association.Task.ID ||
+		association.Link.ID != document.TaskRepositoryLinkID || association.Link.RepositoryID != document.RepositoryID ||
+		association.Link.PublicationMode != string(document.PublicationMode) ||
+		association.RootMarkerDigest != document.RootMarkerDigest || !isLowerHex64(association.RootMarkerDigest) {
+		return fmt.Errorf("%w: managed Rsync binding identity drift", backupasset.ErrConflict)
+	}
+	if strings.TrimSpace(association.Task.RsyncTarget) != "" &&
+		filepath.Clean(association.Task.RsyncTarget) == filepath.Clean(document.ManagedRootLocator) {
+		return fmt.Errorf("%w: managed Rsync root must not use Task legacy target", backupasset.ErrConflict)
+	}
+	return nil
 }
 
 func validateBindingDocument(document bindingDocument) error {

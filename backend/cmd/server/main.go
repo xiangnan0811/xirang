@@ -184,7 +184,11 @@ func main() {
 
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
 
-	executorFactory := executor.NewFactoryWithResticPublisher(cfg.RsyncBinary, assetRuntime.ResticPublisher())
+	executorFactory := executor.NewFactoryWithPublicationStrategies(
+		cfg.RsyncBinary,
+		assetRuntime.ResticPublicationStrategy(),
+		assetRuntime.RsyncTreePublicationStrategy(),
+	)
 	legacyRestic, ok := executorFactory.Resolve("restic").(*executor.ResticExecutor)
 	if !ok {
 		log.Fatal().Msg("Restic legacy adapter type mismatch")

@@ -211,6 +211,64 @@ func TestResticLookupAttemptKeepsOriginalNullEmptyAndRewriteDistinct(t *testing.
 	}
 }
 
+func TestResticPublicationStrategyRetainsKnownBackupAndReconciliationFixtures(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		fixture    string
+		wantCommit bool
+		wantCode   backupasset.PublicationFailureCode
+	}{
+		{name: "known success", fixture: "backup-success.ndjson", wantCommit: true},
+		{name: "missing summary", fixture: "backup-missing-summary.ndjson", wantCode: backupasset.FailureEvidenceMissingSummary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stream := &fakePublicationExecution{Reader: bytes.NewReader(readResticPublicationFixture(t, test.fixture)), completion: CommandCompletion{ExitCode: 0, ExitCodeKnown: true}}
+			adapter := newPublicationResticAdapterForTest(t, &fakePublicationTransport{execution: stream}, testOperationLimits())
+			strategy, err := NewResticPublicationStrategy(adapter, adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := strategy.Prepare(context.Background(), PublicationPrepareRequest{
+				Attempt:     NewResticPublicationAttempt(publicationAttemptForTest()),
+				ResticInput: &ResticBackupInput{Source: "/private/source"},
+			})
+			if err != nil {
+				t.Fatalf("prepare strategy: %v", err)
+			}
+			result, err := strategy.Execute(context.Background(), prepared, PublicationProgress{})
+			if err != nil || result.Completion != backupasset.CompletionKnownExitZero || result.EvidenceCode != test.wantCode || (result.ProviderCommit != nil) != test.wantCommit {
+				t.Fatalf("strategy result=%+v err=%v", result, err)
+			}
+			if test.wantCommit {
+				commit, err := strategy.RecordCommit(context.Background(), prepared, result)
+				if err != nil {
+					t.Fatalf("record typed Restic commit: %v", err)
+				}
+				typed, err := commit.ResticCommit()
+				if err != nil || typed.NativePointID != strings.Repeat("a", 64) {
+					t.Fatalf("typed Restic commit=%+v err=%v", typed, err)
+				}
+			} else if _, err := strategy.RecordCommit(context.Background(), prepared, result); err == nil {
+				t.Fatal("strategy recorded a commit without a Restic summary")
+			}
+		})
+	}
+
+	rewritten := &fakePublicationExecution{
+		Reader:     bytes.NewReader(readResticPublicationFixture(t, "snapshots-rewritten.json")),
+		completion: CommandCompletion{ExitCode: 0, ExitCodeKnown: true},
+	}
+	adapter := newPublicationResticAdapterForTest(t, &fakePublicationTransport{execution: rewritten}, testOperationLimits())
+	strategy, err := NewResticPublicationStrategy(adapter, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := strategy.Reconcile(context.Background(), PublicationReconcileRequest{Attempt: NewResticPublicationAttempt(publicationAttemptForTest())})
+	if err != nil || len(result.ResticObservations) != 3 || result.ResticObservations[0].Original == nil || *result.ResticObservations[0].Original != strings.Repeat("a", 64) {
+		t.Fatalf("rewritten fixture lost Restic lineage facts: result=%+v err=%v", result, err)
+	}
+}
+
 func TestResticLookupAttemptLeavesMissingOrInvalidStoredSummaryUnusable(t *testing.T) {
 	for _, payload := range []string{
 		`[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2026-07-14T03:00:00Z","tags":["xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}]`,
@@ -260,12 +318,12 @@ func newPublicationResticAdapterWithConfigForTest(t *testing.T, transport *fakeP
 	return adapter
 }
 
-func publicationAttemptForTest() PublicationAttempt {
+func publicationAttemptForTest() ResticAttemptV1 {
 	taskID := uint(41)
 	taskRunID := uint(42)
 	repositoryID := strings.Repeat("a", 32)
 	pointID := strings.Repeat("c", 32)
-	return PublicationAttempt{
+	return ResticAttemptV1{
 		Provider: backupasset.ProviderRestic, RepositoryID: repositoryID, RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("f", 64),
 		TaskRepositoryLinkID: strings.Repeat("b", 32), RecoveryPointID: pointID, TaskID: taskID, TaskRunID: taskRunID,
 		RequiredTags:    [2]string{"xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},

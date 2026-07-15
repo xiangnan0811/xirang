@@ -250,6 +250,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodPost, "/api/v1/tasks/:id/rsync-versioning/preflights"},
+		{http.MethodPost, "/api/v1/tasks/:id/rsync-versioning/activate"},
+		{http.MethodPost, "/api/v1/tasks/:id/rsync-versioning/rollback-preparations"},
 		{http.MethodPost, "/api/v1/backup-repositories/connect"},
 		{http.MethodGet, "/api/v1/backup-repositories"},
 		{http.MethodGet, "/api/v1/backup-repositories/:id"},

@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { History, Loader2, Pause, Pencil, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
+import { GitBranch, History, Loader2, Pause, Pencil, Play, RotateCcw, Square, Terminal, Trash2, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ export const TasksGrid = React.memo(function TasksGrid({
   handleResume,
   onEdit,
   onViewHistory,
+  canManageRsyncVersioning,
+  onManageRsyncVersioning,
   selectedTaskSet,
   toggleTaskSelection,
 }: TasksViewProps) {
@@ -149,6 +151,18 @@ export const TasksGrid = React.memo(function TasksGrid({
                 >
                   {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
                 </Button>
+                {canManageRsyncVersioning && task.executorType === "rsync" && task.rsyncPublication ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t("tasks.rsyncVersioningAriaLabel", { name: task.name || task.policyName })}
+                    disabled={isPendingAny}
+                    onClick={() => onManageRsyncVersioning(task)}
+                  >
+                    <GitBranch className="size-4" aria-hidden />
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="icon"

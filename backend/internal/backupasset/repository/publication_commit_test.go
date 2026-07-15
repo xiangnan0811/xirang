@@ -20,11 +20,11 @@ func TestRecordProviderCommitAdvancesOnlyPreparingToVerifying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence())
+	outcome, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.ProviderCommitRecorded || outcome.State != backupasset.RecoveryPointVerifying || outcome.RecoveryPointID != execution.Attempt().RecoveryPointID {
+	if !outcome.ProviderCommitRecorded || outcome.State != backupasset.RecoveryPointVerifying || outcome.RecoveryPointID != resticAttemptForExecution(t, execution).RecoveryPointID {
 		t.Fatalf("commit outcome=%+v", outcome)
 	}
 	var point model.RecoveryPoint
@@ -47,11 +47,11 @@ func TestRecordProviderCommitPersistsEncryptedLocatorAndSafeDigestEnvelope(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
 	var encryptedLocator, lineage, consistency string
-	if err := fixture.db.Raw("SELECT encrypted_provider_locator, lineage_json, consistency_json FROM recovery_points WHERE id = ?", execution.Attempt().RecoveryPointID).Row().Scan(&encryptedLocator, &lineage, &consistency); err != nil {
+	if err := fixture.db.Raw("SELECT encrypted_provider_locator, lineage_json, consistency_json FROM recovery_points WHERE id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Row().Scan(&encryptedLocator, &lineage, &consistency); err != nil {
 		t.Fatal(err)
 	}
 	fullID := fixture.commitEvidence().NativePointID
@@ -72,16 +72,16 @@ func TestRecordProviderCommitIsIdempotentOnlyForByteEquivalentEvidence(t *testin
 		t.Fatal(err)
 	}
 	evidence := fixture.commitEvidence()
-	first, err := execution.RecordProviderCommit(context.Background(), evidence)
+	first, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(evidence))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := execution.RecordProviderCommit(context.Background(), evidence)
+	second, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(evidence))
 	if err != nil || second != first {
 		t.Fatalf("idempotent replay=%+v first=%+v err=%v", second, first, err)
 	}
 	evidence.LogicalBytes++
-	if _, err := execution.RecordProviderCommit(context.Background(), evidence); !errors.Is(err, backupasset.ErrConflict) {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(evidence)); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("different commit evidence error=%v, want conflict", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestRecordProviderCommitReleasesExecutionLeaseAndWakeNeverBlocks(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
 	if wakes.Load() != 1 {
@@ -118,7 +118,7 @@ func TestRecordProviderCommitConflictCannotClaimAnotherRunOrNativePoint(t *testi
 	}
 	evidence := fixture.commitEvidence()
 	evidence.RepositoryIdentity = provider.NativeResticIdentityPrefix + strings.Repeat("b", 64)
-	if _, err := execution.RecordProviderCommit(context.Background(), evidence); !errors.Is(err, backupasset.ErrConflict) {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(evidence)); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("identity drift commit error=%v, want conflict", err)
 	}
 }
@@ -141,11 +141,11 @@ func TestRecordProviderCommitNativeSourceConstraintReturnsConflictWithoutMutatio
 	if err := fixture.db.Create(&claimed).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), evidence); !errors.Is(err, backupasset.ErrConflict) {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(evidence)); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("native source conflict error=%v, want conflict", err)
 	}
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if point.State != string(backupasset.RecoveryPointPreparing) || point.SourceFingerprint != "" || point.EncryptedProviderLocator != "" {
@@ -164,7 +164,7 @@ func TestPublicationDeferPersistsOnlyCompletionAndSafeCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var point model.RecoveryPoint
-	if err := fixture.db.First(&point, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&point, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
@@ -186,14 +186,14 @@ func TestPublicationDeferIdenticalReplayDoesNotRotateConsistencyOrDuplicateAudit
 		t.Fatal(err)
 	}
 	var first model.RecoveryPoint
-	if err := fixture.db.First(&first, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&first, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := execution.Defer(context.Background(), deferral); err != nil {
 		t.Fatal(err)
 	}
 	var second model.RecoveryPoint
-	if err := fixture.db.First(&second, "id = ?", execution.Attempt().RecoveryPointID).Error; err != nil {
+	if err := fixture.db.First(&second, "id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if second.ConsistencyJSON != first.ConsistencyJSON || second.UpdatedAt != first.UpdatedAt {
@@ -217,7 +217,7 @@ func TestPublicationRejectAllowsOnlyPreCommandPreconditionFailure(t *testing.T) 
 	if err := execution.Reject(context.Background(), backupasset.FailurePublicationPreconditionMissing); err != nil {
 		t.Fatal(err)
 	}
-	fixture.requirePointStateAndNoActiveLease(t, execution.Attempt().RecoveryPointID, backupasset.RecoveryPointFailed)
+	fixture.requirePointStateAndNoActiveLease(t, resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.RecoveryPointFailed)
 }
 
 func TestPublicationFailRejectsUnknownCodesAndNeverOverwritesCommitted(t *testing.T) {
@@ -230,16 +230,16 @@ func TestPublicationFailRejectsUnknownCodesAndNeverOverwritesCommitted(t *testin
 	if err := execution.Fail(context.Background(), backupasset.PublicationFailureCode("not-allowlisted")); err == nil {
 		t.Fatal("Fail accepted unknown code")
 	}
-	if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+	if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", execution.Attempt().RecoveryPointID).Update("state", backupasset.RecoveryPointCommitted).Error; err != nil {
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", resticAttemptForExecution(t, execution).RecoveryPointID).Update("state", backupasset.RecoveryPointCommitted).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := execution.Fail(context.Background(), backupasset.FailureProviderNonzeroExit); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("Fail committed point error=%v, want conflict", err)
 	}
-	fixture.requirePointStateAndNoActiveLease(t, execution.Attempt().RecoveryPointID, backupasset.RecoveryPointCommitted)
+	fixture.requirePointStateAndNoActiveLease(t, resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.RecoveryPointCommitted)
 }
 
 func TestPublicationFailIdenticalReplayDoesNotDuplicateAudit(t *testing.T) {
@@ -255,7 +255,7 @@ func TestPublicationFailIdenticalReplayDoesNotDuplicateAudit(t *testing.T) {
 	if err := execution.Fail(context.Background(), backupasset.FailureProviderNonzeroExit); err != nil {
 		t.Fatalf("identical terminal replay error=%v", err)
 	}
-	fixture.requirePointStateAndNoActiveLease(t, execution.Attempt().RecoveryPointID, backupasset.RecoveryPointFailed)
+	fixture.requirePointStateAndNoActiveLease(t, resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.RecoveryPointFailed)
 	if len(fixture.audit.inputs) != 2 {
 		t.Fatalf("identical terminal replay duplicated audit=%+v", fixture.audit.inputs)
 	}
@@ -268,13 +268,13 @@ func TestPublicationMutationRejectsStaleFenceInsideSameTransaction(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", execution.Attempt().Fence.LeaseID).Update("fence_token", strings.Repeat("d", 64)).Error; err != nil {
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", resticAttemptForExecution(t, execution).Fence.LeaseID).Update("fence_token", strings.Repeat("d", 64)).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := execution.Defer(context.Background(), publication.Deferral{Completion: backupasset.CompletionOutcomeUnknown, Code: backupasset.FailureProviderTimeout}); !errors.Is(err, backupasset.ErrLeaseFenceLost) {
 		t.Fatalf("stale fence Defer error=%v, want fence lost", err)
 	}
-	fixture.requirePointStateAndActiveLease(t, execution.Attempt().RecoveryPointID, backupasset.RecoveryPointPreparing)
+	fixture.requirePointStateAndActiveLease(t, resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.RecoveryPointPreparing)
 }
 
 func TestRecordLegacyBlockWritesTypedAuditAndMetricWithoutRawFacts(t *testing.T) {
@@ -334,7 +334,7 @@ func TestPublicationStateAuditsContainOnlyActorOpaqueIDsSafeCountsCodeAndCorrela
 			status: backupasset.RecoveryPointVerifying,
 			complete: func(t *testing.T, execution publication.Execution, fixture *publicationFixture) {
 				t.Helper()
-				if _, err := execution.RecordProviderCommit(context.Background(), fixture.commitEvidence()); err != nil {
+				if _, err := execution.RecordProviderCommit(context.Background(), resticProviderCommit(fixture.commitEvidence())); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -374,7 +374,7 @@ func TestPublicationStateAuditsContainOnlyActorOpaqueIDsSafeCountsCodeAndCorrela
 			}
 			input := fixture.audit.inputs[1]
 			if input.Action != test.action || input.Outcome != test.outcome || input.RepositoryID != fixture.repository.ID ||
-				input.RecoveryPointID != execution.Attempt().RecoveryPointID || input.TaskID == nil || *input.TaskID != fixture.task.ID ||
+				input.RecoveryPointID != resticAttemptForExecution(t, execution).RecoveryPointID || input.TaskID == nil || *input.TaskID != fixture.task.ID ||
 				input.TaskRunID == nil || *input.TaskRunID != fixture.taskRun.ID || input.Fields[backupasset.AuditFieldStage] != string(publication.StageExecution) ||
 				input.Fields[backupasset.AuditFieldStatus] != string(test.status) || input.Fields[backupasset.AuditFieldCorrelationID] != fixture.run().Audit.CorrelationID {
 				t.Fatalf("publication audit=%+v", input)

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xirang/backend/internal/apperr"
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
@@ -436,21 +437,8 @@ func isSecretConfigKey(key string) bool {
 
 // ValidateTaskInput validates all fields of a CreateTaskInput.
 func ValidateTaskInput(req CreateTaskInput) error {
-	if req.Name == "" {
-		return newValidationError("任务名称不能为空")
-	}
-	if req.NodeID == 0 {
-		return newValidationError("请选择目标节点")
-	}
-	switch req.ExecutorType {
-	case "rsync", "command", "restic", "rclone":
-	default:
-		return newValidationError("不支持的执行器类型，仅允许 rsync / command / restic / rclone")
-	}
-	if req.CronSpec != "" {
-		if err := validateCronSpec(req.CronSpec); err != nil {
-			return newValidationError(err.Error())
-		}
+	if err := validateTaskIdentityAndSchedule(req); err != nil {
+		return err
 	}
 
 	if req.ExecutorType == "command" {
@@ -483,7 +471,15 @@ func ValidateTaskInput(req CreateTaskInput) error {
 		}
 	}
 
-	if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
+	if req.ExecutorType == "rsync" {
+		publicationConfig, err := ParseRsyncPublicationConfigV1(req.ExecutorConfig)
+		if err != nil {
+			return err
+		}
+		if publicationConfig.PublicationMode != backupasset.PublicationLegacyMutable {
+			return newValidationError("rsync 版本化发布必须通过预检迁移流程启用")
+		}
+	} else if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
 		if !json.Valid([]byte(cfg)) {
 			return newValidationError("executor_config 必须是合法的 JSON 格式")
 		}
@@ -503,6 +499,26 @@ func ValidateTaskInput(req CreateTaskInput) error {
 		}
 	}
 
+	return nil
+}
+
+func validateTaskIdentityAndSchedule(req CreateTaskInput) error {
+	if req.Name == "" {
+		return newValidationError("任务名称不能为空")
+	}
+	if req.NodeID == 0 {
+		return newValidationError("请选择目标节点")
+	}
+	switch req.ExecutorType {
+	case "rsync", "command", "restic", "rclone":
+	default:
+		return newValidationError("不支持的执行器类型，仅允许 rsync / command / restic / rclone")
+	}
+	if req.CronSpec != "" {
+		if err := validateCronSpec(req.CronSpec); err != nil {
+			return newValidationError(err.Error())
+		}
+	}
 	return nil
 }
 

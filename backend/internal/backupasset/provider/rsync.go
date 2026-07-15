@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,42 @@ type RsyncRuntimeAccess struct {
 	Tree        fileaccess.Tree `json:"-"`
 	Root        fileaccess.Root `json:"-"`
 	RangeProven bool            `json:"-"`
+}
+
+// RsyncCommittedPointReadRequest contains only repository-owned, opaque
+// evidence for one final managed tree. ManagedRoot and MarkerKey are private
+// process inputs; callers cannot pass a tree path, prefix, or legacy target.
+type RsyncCommittedPointReadRequest struct {
+	ManagedRoot        string                            `json:"-"`
+	MarkerKey          []byte                            `json:"-"`
+	Attempt            RsyncTreeAttemptV1                `json:"-"`
+	CommitMarkerDigest string                            `json:"-"`
+	SourceFingerprint  string                            `json:"-"`
+	ChildFenceDigest   string                            `json:"-"`
+	ManifestDigest     string                            `json:"-"`
+	ManifestEntryCount uint64                            `json:"-"`
+	LogicalBytes       uint64                            `json:"-"`
+	CapturedAt         time.Time                         `json:"-"`
+	Semantics          backupasset.PointVersionSemantics `json:"-"`
+	ManifestLimits     ManifestLimits                    `json:"-"`
+}
+
+// RsyncCommittedPointRuntimeAccess is constructed only by
+// NewRsyncCommittedPointRuntimeAccess. The final Root is derived from the
+// authenticated point ID as points/<point-id>/tree and never from a caller
+// supplied path.
+type RsyncCommittedPointRuntimeAccess struct {
+	Tree           fileaccess.Tree `json:"-"`
+	Root           fileaccess.Root `json:"-"`
+	SourceRevision string          `json:"-"`
+	RangeProven    bool            `json:"-"`
+	request        RsyncCommittedPointReadRequest
+}
+
+type RsyncCommittedPointAdapter struct {
+	cursors      *CursorCodec
+	limitsSource OperationLimitsSource
+	maxPageSize  int
 }
 
 type RsyncAdapter struct {
@@ -44,6 +81,144 @@ func NewRsyncAdapterWithLimitsSource(cursors *CursorCodec, limitsSource Operatio
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &RsyncAdapter{cursors: cursors, limitsSource: limitsSource, maxPageSize: maxPageSize, now: now}, nil
+}
+
+func NewRsyncCommittedPointAdapter(cursors *CursorCodec, limits OperationLimits, maxPageSize int) (*RsyncCommittedPointAdapter, error) {
+	return NewRsyncCommittedPointAdapterWithLimitsSource(cursors, func() (OperationLimits, error) { return limits, nil }, maxPageSize)
+}
+
+func NewRsyncCommittedPointAdapterWithLimitsSource(cursors *CursorCodec, limitsSource OperationLimitsSource, maxPageSize int) (*RsyncCommittedPointAdapter, error) {
+	if cursors == nil || maxPageSize <= 0 {
+		return nil, fmt.Errorf("%w: invalid committed Rsync adapter dependencies", backupasset.ErrInvalidState)
+	}
+	if _, err := resolveOperationLimits(limitsSource); err != nil {
+		return nil, fmt.Errorf("%w: invalid committed Rsync adapter limits", backupasset.ErrInvalidState)
+	}
+	return &RsyncCommittedPointAdapter{cursors: cursors, limitsSource: limitsSource, maxPageSize: maxPageSize}, nil
+}
+
+// NewRsyncCommittedPointRuntimeAccess validates a complete immutable provider
+// commit before making the final tree available to strict fileaccess. It is
+// deliberately separate from the mutable-head binding and does not probe or
+// derive a point from the current Task target.
+func NewRsyncCommittedPointRuntimeAccess(ctx context.Context, request RsyncCommittedPointReadRequest) (RsyncCommittedPointRuntimeAccess, error) {
+	if err := validateRsyncCommittedPointReadRequest(request); err != nil {
+		return RsyncCommittedPointRuntimeAccess{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root, err := validateRsyncCommittedPointTree(ctx, request)
+	if err != nil {
+		return RsyncCommittedPointRuntimeAccess{}, err
+	}
+	sourceRevision, err := rsyncCommittedPointSourceRevision(request)
+	if err != nil {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: encode committed Rsync point source revision", backupasset.ErrInvalidState)
+	}
+	return RsyncCommittedPointRuntimeAccess{
+		Tree: fileaccess.NewLocalTree(), Root: fileaccess.Root{Path: root}, SourceRevision: sourceRevision,
+		request: cloneRsyncCommittedPointReadRequest(request),
+	}, nil
+}
+
+func validateRsyncCommittedPointReadRequest(request RsyncCommittedPointReadRequest) error {
+	if _, err := normalizeRsyncManagedRoot(request.ManagedRoot); err != nil || !validRsyncTreeMarkerKey(request.MarkerKey) ||
+		request.Attempt.Validate() != nil || !validRsyncTreeDigest(request.CommitMarkerDigest) || !validRsyncTreeDigest(request.SourceFingerprint) ||
+		!validRsyncTreeDigest(request.ChildFenceDigest) || !validRsyncTreeDigest(request.ManifestDigest) || request.CapturedAt.IsZero() ||
+		!validRsyncTreeManifestLimits(request.ManifestLimits) || request.ManifestLimits.MaxBytes > maxRsyncManagedTreeMetadataBytes {
+		return fmt.Errorf("%w: invalid committed Rsync point reader request", backupasset.ErrInvalidState)
+	}
+	switch request.Semantics {
+	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
+		return nil
+	default:
+		return fmt.Errorf("%w: invalid committed Rsync point semantics", backupasset.ErrInvalidState)
+	}
+}
+
+func cloneRsyncCommittedPointReadRequest(request RsyncCommittedPointReadRequest) RsyncCommittedPointReadRequest {
+	request.MarkerKey = append([]byte(nil), request.MarkerKey...)
+	return request
+}
+
+func rsyncCommittedPointSourceRevision(request RsyncCommittedPointReadRequest) (string, error) {
+	writer := backupasset.NewCanonicalSHA256()
+	writer.String("rsync-committed-point-source-revision:v1")
+	writer.String(request.Attempt.RepositoryID)
+	writer.String(request.Attempt.RecoveryPointID)
+	writer.String(request.CommitMarkerDigest)
+	writer.String(request.ManifestDigest)
+	writer.String(request.Attempt.ManagedRootIdentityDigest)
+	return writer.HexDigest()
+}
+
+func rsyncCommittedPointLocator(request RsyncCommittedPointReadRequest) PointLocator {
+	return PointLocator{Native: "committed:" + request.Attempt.RecoveryPointID + ":" + request.CommitMarkerDigest}
+}
+
+func validateRsyncCommittedPointTree(ctx context.Context, request RsyncCommittedPointReadRequest) (string, error) {
+	if err := validateRsyncCommittedPointReadRequest(request); err != nil {
+		return "", err
+	}
+	tree, err := openRsyncManagedTreeReadOnly(request.ManagedRoot)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tree.Close() }()
+	if err := validateRsyncTreeManagedRoot(tree, request.Attempt); err != nil {
+		return "", err
+	}
+	storedAttempt, err := tree.readFinalMetadata(request.Attempt.FinalComponent, "attempt.json")
+	if err != nil {
+		return "", err
+	}
+	markerAttempt, err := decodeRsyncTreeAttemptMarkerV1(storedAttempt, request.MarkerKey)
+	if err != nil {
+		return "", err
+	}
+	if markerAttempt != request.Attempt {
+		return "", fmt.Errorf("%w: committed Rsync attempt marker mismatch", backupasset.ErrConflict)
+	}
+	storedCommit, err := tree.readFinalMetadata(request.Attempt.FinalComponent, "commit.json")
+	if err != nil {
+		return "", err
+	}
+	commit, err := decodeRsyncTreeCommitMarkerV1(storedCommit, request.MarkerKey)
+	if err != nil {
+		return "", err
+	}
+	input := RsyncTreeReconcileInput{
+		ManagedRoot: request.ManagedRoot, MarkerKey: request.MarkerKey, SourceFingerprint: request.SourceFingerprint,
+		ChildFenceDigest: request.ChildFenceDigest, ManifestLimits: request.ManifestLimits,
+	}
+	if err := validateRsyncTreeReconcileCommit(request.Attempt, input, commit); err != nil {
+		return "", err
+	}
+	if commit.CommitMarkerDigest != request.CommitMarkerDigest || commit.ManifestDigest != request.ManifestDigest ||
+		commit.ManifestEntryCount != request.ManifestEntryCount || commit.LogicalBytes != request.LogicalBytes ||
+		!commit.ProviderCommittedAt.UTC().Equal(request.CapturedAt.UTC()) {
+		return "", fmt.Errorf("%w: committed Rsync point evidence mismatch", backupasset.ErrConflict)
+	}
+	finalFD, err := tree.openFinalTree(request.Attempt.FinalComponent)
+	if err != nil {
+		return "", err
+	}
+	manifest, manifestErr := buildRsyncTreeManifest(ctx, finalFD, request.ManifestLimits)
+	closeErr := unixClose(finalFD)
+	if manifestErr != nil {
+		return "", manifestErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if manifest.Digest != commit.ManifestDigest || manifest.EntryCount != commit.ManifestEntryCount || manifest.LogicalBytes != commit.LogicalBytes {
+		return "", fmt.Errorf("%w: committed Rsync point manifest changed", backupasset.ErrConflict)
+	}
+	if err := validateRsyncTreeReconcileFidelity(ctx, tree, request.Attempt, input, manifest); err != nil {
+		return "", err
+	}
+	return tree.finalTreePath(request.Attempt.FinalComponent)
 }
 
 func (adapter *RsyncAdapter) Probe(ctx context.Context, binding AccessBinding, limits OperationLimits) (RepositoryObservation, error) {
@@ -387,6 +562,249 @@ func (adapter *RsyncAdapter) pageEntries(ctx context.Context, snapshot ReadSnaps
 	return page, err
 }
 
+func (adapter *RsyncCommittedPointAdapter) ListPoints(ctx context.Context, snapshot ReadSnapshot, request PageRequest) (NativePointPage, error) {
+	runtimeAccess, err := adapter.validateOperation(ctx, snapshot, PointLocator{})
+	if err != nil {
+		return NativePointPage{}, err
+	}
+	request, err = request.Normalize(adapter.maxPageSize)
+	if err != nil {
+		return NativePointPage{}, err
+	}
+	pointDigest, err := rsyncCommittedPointOpaqueDigest(snapshot.RepositoryID, runtimeAccess.request)
+	if err != nil {
+		return NativePointPage{}, fmt.Errorf("%w: encode committed Rsync point digest", backupasset.ErrInvalidState)
+	}
+	point := NativePoint{
+		OpaqueDigest: pointDigest,
+		CapturedAt:   runtimeAccess.request.CapturedAt.UTC(), Semantics: runtimeAccess.request.Semantics, SourceRevision: snapshot.SourceRevision,
+		Locator: rsyncCommittedPointLocator(runtimeAccess.request),
+	}
+	if request.Cursor == "" {
+		return NativePointPage{Items: []NativePoint{point}}, nil
+	}
+	expected := CursorScope{
+		Provider: backupasset.ProviderRsync, RepositoryID: snapshot.RepositoryID, CapabilityRevision: snapshot.CapabilityRevision,
+		SourceRevision: snapshot.SourceRevision, Direction: CursorForward,
+	}
+	decoded, err := adapter.cursors.Decode(ctx, request.Cursor, expected)
+	if err != nil {
+		return NativePointPage{}, err
+	}
+	if decoded.LastItemDigest != point.OpaqueDigest {
+		return NativePointPage{}, ErrStaleCursor
+	}
+	return NativePointPage{}, nil
+}
+
+func rsyncCommittedPointOpaqueDigest(repositoryID string, request RsyncCommittedPointReadRequest) (string, error) {
+	writer := backupasset.NewCanonicalSHA256()
+	writer.String("rsync-committed-point-opaque-digest:v1")
+	writer.String(repositoryID)
+	writer.String(request.Attempt.RecoveryPointID)
+	writer.String(request.CommitMarkerDigest)
+	return writer.HexDigest()
+}
+
+func (adapter *RsyncCommittedPointAdapter) ListEntries(ctx context.Context, snapshot ReadSnapshot, point PointLocator, parent EntryLocator, request PageRequest) (EntryPage, error) {
+	runtimeAccess, err := adapter.validateOperation(ctx, snapshot, point)
+	if err != nil {
+		return EntryPage{}, err
+	}
+	parentLocator, parentScope, err := rsyncFileLocator(parent.Native, true)
+	if err != nil {
+		return EntryPage{}, err
+	}
+	limits, err := adapter.operationLimits()
+	if err != nil {
+		return EntryPage{}, err
+	}
+	page, err := runtimeAccess.Tree.List(ctx, runtimeAccess.Root, parentLocator, fileaccess.ProviderPolicy, fileaccess.PageRequest{
+		Limit: limits.MaxItems, MaxItems: limits.MaxItems, MaxBytes: limits.MaxMetadataBytes,
+	})
+	if err != nil {
+		return EntryPage{}, mapTreeError(ctx, err)
+	}
+	if page.HasMore {
+		return EntryPage{}, newCapabilityError(backupasset.CapabilityProviderResourceLimit)
+	}
+	if err := adapter.verifyRuntime(ctx, runtimeAccess); err != nil {
+		return EntryPage{}, err
+	}
+	entries := make([]Entry, 0, len(page.Items))
+	for _, item := range page.Items {
+		entryType, ok := catalogTypeFromFileAccess(item.Type)
+		if !ok {
+			return EntryPage{}, protocolCapabilityError()
+		}
+		entries = append(entries, Entry{
+			OpaqueDigest: item.OpaqueDigest, Name: item.Name, Type: entryType, Size: item.Size, ModTime: item.ModTime,
+			SourceRevision: item.SourceRevision, Locator: EntryLocator{Native: item.Locator.Path},
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Name == entries[j].Name {
+			return entries[i].OpaqueDigest < entries[j].OpaqueDigest
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	return adapter.pageEntries(ctx, snapshot, point, parentScope, entries, request)
+}
+
+func (adapter *RsyncCommittedPointAdapter) StatEntry(ctx context.Context, snapshot ReadSnapshot, point PointLocator, locator EntryLocator) (Entry, error) {
+	runtimeAccess, err := adapter.validateOperation(ctx, snapshot, point)
+	if err != nil {
+		return Entry{}, err
+	}
+	fileLocator, _, err := rsyncFileLocator(locator.Native, false)
+	if err != nil {
+		return Entry{}, err
+	}
+	item, err := runtimeAccess.Tree.Lstat(ctx, runtimeAccess.Root, fileLocator, fileaccess.ProviderPolicy)
+	if err != nil {
+		return Entry{}, mapTreeError(ctx, err)
+	}
+	if err := adapter.verifyRuntime(ctx, runtimeAccess); err != nil {
+		return Entry{}, err
+	}
+	entryType, ok := catalogTypeFromFileAccess(item.Type)
+	if !ok {
+		return Entry{}, protocolCapabilityError()
+	}
+	return Entry{OpaqueDigest: item.OpaqueDigest, Name: item.Name, Type: entryType, Size: item.Size, ModTime: item.ModTime, SourceRevision: item.SourceRevision, Locator: EntryLocator{Native: item.Locator.Path}}, nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) OpenSequential(ctx context.Context, snapshot ReadSnapshot, point PointLocator, locator EntryLocator, request ReadRequest) (ReadHandle, ContentStat, error) {
+	if err := request.Validate(); err != nil {
+		return nil, ContentStat{}, err
+	}
+	runtimeAccess, err := adapter.validateOperation(ctx, snapshot, point)
+	if err != nil {
+		return nil, ContentStat{}, err
+	}
+	fileLocator, _, err := rsyncFileLocator(locator.Native, false)
+	if err != nil {
+		return nil, ContentStat{}, err
+	}
+	handle, stat, err := runtimeAccess.Tree.OpenRegular(ctx, runtimeAccess.Root, fileLocator, fileaccess.ProviderPolicy)
+	if err != nil {
+		return nil, ContentStat{}, mapTreeError(ctx, err)
+	}
+	checked := &treeInvariantHandle{underlying: handle, verify: func() error { return adapter.verifyRuntime(context.Background(), runtimeAccess) }}
+	return newBoundedReadHandle(checked, request.MaxBytes), providerContentStat(stat), nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) OpenRange(ctx context.Context, snapshot ReadSnapshot, point PointLocator, locator EntryLocator, byteRange ByteRange) (ReadHandle, ContentStat, error) {
+	if err := byteRange.Validate(); err != nil {
+		return nil, ContentStat{}, err
+	}
+	runtimeAccess, err := adapter.validateOperation(ctx, snapshot, point)
+	if err != nil {
+		return nil, ContentStat{}, err
+	}
+	if !runtimeAccess.RangeProven {
+		return nil, ContentStat{}, newCapabilityError(backupasset.CapabilityRangeUnavailable)
+	}
+	fileLocator, _, err := rsyncFileLocator(locator.Native, false)
+	if err != nil {
+		return nil, ContentStat{}, err
+	}
+	handle, stat, err := runtimeAccess.Tree.OpenRange(ctx, runtimeAccess.Root, fileLocator, fileaccess.ProviderPolicy, fileaccess.ByteRange{Offset: byteRange.Offset, Length: byteRange.Length})
+	if err != nil {
+		return nil, ContentStat{}, mapTreeError(ctx, err)
+	}
+	checked := &treeInvariantHandle{underlying: handle, verify: func() error { return adapter.verifyRuntime(context.Background(), runtimeAccess) }}
+	return checked, providerContentStat(stat), nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) validateOperation(ctx context.Context, snapshot ReadSnapshot, point PointLocator) (RsyncCommittedPointRuntimeAccess, error) {
+	runtimeAccess, err := adapter.validateBinding(snapshot.Access)
+	if err != nil {
+		return RsyncCommittedPointRuntimeAccess{}, err
+	}
+	if backupasset.ValidateOpaqueID(snapshot.RepositoryID) != nil || snapshot.RepositoryID != snapshot.Access.RepositoryID ||
+		snapshot.RepositoryID != runtimeAccess.request.Attempt.RepositoryID || snapshot.CapabilityRevision <= 0 ||
+		snapshot.SourceRevision != runtimeAccess.SourceRevision {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: invalid committed Rsync read snapshot", backupasset.ErrInvalidState)
+	}
+	if point.Native != "" && point.Native != rsyncCommittedPointLocator(runtimeAccess.request).Native {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: invalid committed Rsync point locator", backupasset.ErrInvalidState)
+	}
+	if err := adapter.verifyRuntime(ctx, runtimeAccess); err != nil {
+		return RsyncCommittedPointRuntimeAccess{}, err
+	}
+	return runtimeAccess, nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) validateBinding(binding AccessBinding) (RsyncCommittedPointRuntimeAccess, error) {
+	if adapter == nil || binding.Provider != backupasset.ProviderRsync || backupasset.ValidateOpaqueID(binding.RepositoryID) != nil ||
+		binding.TaskID == 0 || binding.NodeID == 0 || len(binding.IdentitySalt) != IdentitySaltBytes {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: invalid committed Rsync access binding", backupasset.ErrInvalidState)
+	}
+	runtimeAccess, ok := binding.AdapterData.(RsyncCommittedPointRuntimeAccess)
+	if !ok || runtimeAccess.Tree == nil || strings.TrimSpace(runtimeAccess.Root.Path) == "" ||
+		validateRsyncCommittedPointReadRequest(runtimeAccess.request) != nil || binding.RepositoryID != runtimeAccess.request.Attempt.RepositoryID ||
+		binding.TaskID != runtimeAccess.request.Attempt.TaskID {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: committed Rsync tree access unavailable", backupasset.ErrInvalidState)
+	}
+	return runtimeAccess, nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) operationLimits() (OperationLimits, error) {
+	if adapter == nil {
+		return OperationLimits{}, fmt.Errorf("%w: committed Rsync adapter unavailable", backupasset.ErrInvalidState)
+	}
+	return resolveOperationLimits(adapter.limitsSource)
+}
+
+func (adapter *RsyncCommittedPointAdapter) verifyRuntime(ctx context.Context, runtimeAccess RsyncCommittedPointRuntimeAccess) error {
+	root, err := validateRsyncCommittedPointTree(ctx, runtimeAccess.request)
+	if err != nil {
+		return mapRsyncCommittedPointReadError(ctx, err)
+	}
+	if filepath.Clean(root) != filepath.Clean(runtimeAccess.Root.Path) {
+		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
+	}
+	return nil
+}
+
+func mapRsyncCommittedPointReadError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, errRsyncManagedTreeUnsupported) {
+		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
+}
+
+func (adapter *RsyncCommittedPointAdapter) pageEntries(ctx context.Context, snapshot ReadSnapshot, point PointLocator, parent string, items []Entry, request PageRequest) (EntryPage, error) {
+	request, err := request.Normalize(adapter.maxPageSize)
+	if err != nil {
+		return EntryPage{}, err
+	}
+	listRevision := entryListRevision(snapshot.SourceRevision, items)
+	start := 0
+	if request.Cursor != "" {
+		expected := CursorScope{Provider: backupasset.ProviderRsync, RepositoryID: snapshot.RepositoryID, PointScopeDigest: stableDigest("rsync-point-scope", point.Native), ParentScopeDigest: stableDigest("rsync-parent-scope", parent), CapabilityRevision: snapshot.CapabilityRevision, SourceRevision: listRevision, Direction: CursorForward}
+		decoded, decodeErr := adapter.cursors.Decode(ctx, request.Cursor, expected)
+		if decodeErr != nil {
+			return EntryPage{}, decodeErr
+		}
+		start = indexAfterEntry(items, decoded.LastItemDigest)
+		if start == 0 {
+			return EntryPage{}, ErrStaleCursor
+		}
+	}
+	end := min(start+request.Limit, len(items))
+	page := EntryPage{Items: append([]Entry(nil), items[start:end]...)}
+	if end < len(items) && len(page.Items) > 0 {
+		scope := CursorScope{Provider: backupasset.ProviderRsync, RepositoryID: snapshot.RepositoryID, PointScopeDigest: stableDigest("rsync-point-scope", point.Native), ParentScopeDigest: stableDigest("rsync-parent-scope", parent), CapabilityRevision: snapshot.CapabilityRevision, SourceRevision: listRevision, LastItemDigest: page.Items[len(page.Items)-1].OpaqueDigest, Direction: CursorForward}
+		page.NextCursor, err = adapter.cursors.Encode(ctx, scope)
+	}
+	return page, err
+}
+
 var (
 	_ RepositoryProber = (*RsyncAdapter)(nil)
 	_ PointLister      = (*RsyncAdapter)(nil)
@@ -394,4 +812,9 @@ var (
 	_ EntryStatter     = (*RsyncAdapter)(nil)
 	_ SequentialReader = (*RsyncAdapter)(nil)
 	_ RangeReader      = (*RsyncAdapter)(nil)
+	_ PointLister      = (*RsyncCommittedPointAdapter)(nil)
+	_ EntryLister      = (*RsyncCommittedPointAdapter)(nil)
+	_ EntryStatter     = (*RsyncCommittedPointAdapter)(nil)
+	_ SequentialReader = (*RsyncCommittedPointAdapter)(nil)
+	_ RangeReader      = (*RsyncCommittedPointAdapter)(nil)
 )

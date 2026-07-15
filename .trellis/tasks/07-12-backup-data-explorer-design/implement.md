@@ -38,7 +38,7 @@ After the user later requests implementation, create the next required child wit
 | 14 | `backup-assets-lifecycle-reconnect` | retention owner, reconnect/import, purge, GC, task archival migration | 3–13 |
 | 15 | `backup-assets-ga-hardening` | migration cutover, docs, observability, load/security tests, legacy UI removal | all |
 
-Task 3 first merges the typed `EvidenceExecutor`/publication-coordinator seam and paired `000063` contract repair. Tasks 4 and 5 may then develop in parallel, but both must rebase after either changes shared Task validation; Task 6 does not expose a complete Catalog until all three Provider contract suites pass. Tasks 7 and 8 may develop in parallel after Task 6, but Child 8 must rebase onto merged Child 7 and rerun every gate before the `000065` PR can merge after `000064`. No public feature is enabled by default before Task 15.
+Task 3 first merges the typed `EvidenceExecutor`/publication-coordinator seam and paired `000063` contract repair. Child 4 owns paired `000064` for its Rsync publication contract; Tasks 4 and 5 may then develop in parallel, but both must rebase after either changes shared Task validation. Task 6 does not expose a complete Catalog until all three Provider contract suites pass. Tasks 7 and 8 may develop in parallel after Task 6, but Child 8 must rebase onto merged Child 7 and rerun every gate before the `000066` PR can merge after `000065`. No public feature is enabled by default before Task 15.
 
 Task 7 owns the metadata/search projection contract and nullable encrypted-excerpt references; it does not create excerpt ciphertext. Task 10 depends on Task 7 and owns the encrypted Derived Store. Task 11 atomically publishes text/OCR/classification derivatives and their search postings/field coverage through those two stable ports, so neither side has a reverse or undeclared dependency.
 
@@ -74,7 +74,7 @@ python3 ./.trellis/scripts/task.py create "备份资产 GA 加固" --slug backup
 
 ### 0.4 Migration reservation
 
-The original reservation started from the then-current `000061` baseline. Current main already contains Child 1's `000062`; the user-approved Child 3 schema repair owns `000063`; the previously reserved search-through-GA migrations are renumbered to `000064…000070`. Migration-bearing PRs merge and deploy strictly in numeric order (`000062 → … → 000070`); parallel development never permits `000065` to merge before `000064`. Before each child writes a migration, verify the entire remaining reservation is still free in both engines. If another merged change consumed any number, renumber that migration and every later reserved migration, all four paired files, commands and references together; never create a skipped `golang-migrate` version or divergent SQLite/PostgreSQL numbers.
+The original reservation started from the then-current `000061` baseline. Current main already contains Child 1's `000062`; the user-approved Child 3 schema repair owns `000063`; the user-approved Child 4 Rsync publication contract owns `000064`; the previously reserved search-through-GA migrations are renumbered to `000065…000071`. Migration-bearing PRs merge and deploy strictly in numeric order (`000062 → … → 000071`); parallel development never permits `000065` to merge before `000064`. Before each child writes a migration, verify the entire remaining reservation is still free in both engines. If another merged change consumed any number, renumber that migration and every later reserved migration, all four paired files, commands and references together; never create a skipped `golang-migrate` version or divergent SQLite/PostgreSQL numbers.
 
 Child 1 creates a real SQLite/PostgreSQL apply/down integration harness and adds a PostgreSQL CI service. Every later migration child extends the same fixtures and must pass both engines before merge; pure Go tests or SQL text inspection do not count as PostgreSQL parity.
 
@@ -490,6 +490,8 @@ cd .. && make check
 
 - Create: `backend/internal/backupasset/provider/rsync_publication.go`, `backend/internal/backupasset/provider/rsync_publication_test.go`
 - Create: `backend/internal/backupasset/provider/rsync_preflight.go`, `backend/internal/backupasset/provider/rsync_preflight_test.go`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000064_backup_asset_rsync_publication_contract.{up,down}.sql`
+- Modify: `backend/internal/database/backup_asset_migrations_integration_test.go`
 - Modify: `backend/internal/task/executor/executor.go`, `backend/internal/task/executor/executor_test.go`
 - Modify: `backend/internal/task/service.go`; create `backend/internal/task/service_test.go`
 - Modify: `backend/internal/api/handlers/task_handler.go`, `backend/internal/api/handlers/task_handler_test.go`
@@ -640,7 +642,7 @@ git commit -m "feat: add atomic backup asset catalog"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_search.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000064_backup_asset_search.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000065_backup_asset_search.{up,down}.sql`
 - Create: `backend/internal/backupasset/catalog/{normalize,search,search_key,overlays}.go`
 - Create: `backend/internal/backupasset/catalog/{normalize,search,search_key,overlays}_test.go`
 - Create: `backend/internal/backupasset/catalog/search_integration_test.go` for SQLite/PostgreSQL parity fixtures
@@ -707,7 +709,7 @@ type ContentIndexIngest interface {
 cd backend && go test ./internal/backupasset/catalog -run 'Search|Normalize|Secret|Ownership' -count=1
 ```
 
-- [ ] **Step 5: Add paired search/overlay schema and dual-engine migration fixtures.** Include search documents/postings/generations, sensitivity state/revision, nullable encrypted-excerpt reference metadata, wrapped Search Token Key metadata, saved searches, favorites, tag definitions/assignments, and recent access with required indexes and composite AssetRef ownership FKs. Apply/down `000064` on SQLite and PostgreSQL.
+- [ ] **Step 5: Add paired search/overlay schema and dual-engine migration fixtures.** Include search documents/postings/generations, sensitivity state/revision, nullable encrypted-excerpt reference metadata, wrapped Search Token Key metadata, saved searches, favorites, tag definitions/assignments, and recent access with required indexes and composite AssetRef ownership FKs. Apply/down `000065` on SQLite and PostgreSQL.
 - [ ] **Step 6: Implement the portable metadata postings index and content-ingest port.** Generate a random Search Token Key in its keyring domain; store HMAC tokens/grams, a nullable opaque excerpt reference, field frequencies, and deterministic sort data. Child 7 does not create excerpt ciphertext. Go computes ranking/cursor with the independent Cursor Signing Key; DB-specific FTS is not the contract. `ContentIndexIngest` atomically checks source/fence/classification revision before replacing content postings and field coverage.
 - [ ] **Step 7: Implement search service, APIs and audit.** Use `POST /asset-search`; validate the versioned query AST, apply authorization/classification before grouping/count/suggestions, return composite AssetRef, hit field and coverage, sign cursor with user/generation/scope, and record sanitized `search` events without query text.
 - [ ] **Step 8: Implement overlay lifecycle, quotas and audit.** Saved searches store AST only; favorites/tags bind composite AssetRef; recent defaults 30 days and clears immediately on source expiry. Register safe limits for AST depth/nodes/bytes, per-user saved searches/favorites/tag definitions/assignments, label length, bulk mutation size and recent-write rate. Create/update/delete/clear/broken-scope changes use registered domain actions and never become retention holds.
@@ -716,7 +718,7 @@ cd backend && go test ./internal/backupasset/catalog -run 'Search|Normalize|Secr
 
 ```bash
 cd backend && go test ./internal/backupasset/catalog ./internal/api/... -run 'Search|SavedSearch|Favorite|AssetTag|Recent' -count=1
-TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration064' -count=1
+TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration065' -count=1
 cd ../web && npm run check
 cd .. && make backend-test
 ```
@@ -735,7 +737,7 @@ git commit -m "feat: add permission-aware backup asset search"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_content.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000065_backup_asset_content.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000066_backup_asset_content.{up,down}.sql`
 - Create: `backend/internal/backupasset/content/{broker,ticket,range,cache,renderer}.go`
 - Create: `backend/internal/backupasset/content/{broker,ticket,range,cache,renderer}_test.go`
 - Create: `backend/internal/api/handlers/backup_content_handler.go`, `backend/internal/api/handlers/backup_content_handler_test.go`
@@ -795,7 +797,7 @@ type DeliveryGrant struct {
 cd backend && go test ./internal/backupasset/content -count=1
 ```
 
-- [ ] **Step 5: Add delivery/session schema, settings and dual-engine fixtures.** Store typed resource kind plus mutually exclusive AssetRef/RecoveryResultRef columns, grant hash/state/revocation/TTL/activity/cumulative-budget counters and safe metrics fields only; RecoveryResult columns remain disabled/no-FK until Child 13. Register memory/cache/ticket/rate/concurrency limits and a dedicated cache root that cannot resolve under `/data`, `/backup`, or `/logs`; apply/down `000065` on SQLite and PostgreSQL.
+- [ ] **Step 5: Add delivery/session schema, settings and dual-engine fixtures.** Store typed resource kind plus mutually exclusive AssetRef/RecoveryResultRef columns, grant hash/state/revocation/TTL/activity/cumulative-budget counters and safe metrics fields only; RecoveryResult columns remain disabled/no-FK until Child 13. Register memory/cache/ticket/rate/concurrency limits and a dedicated cache root that cannot resolve under `/data`, `/backup`, or `/logs`; apply/down `000066` on SQLite and PostgreSQL.
 - [ ] **Step 6: Implement Broker and Provider capability routing.** Re-check RBAC/ownership and allow only committed/degraded immutable points or `PointObserved + SemanticsMutableHead`; mutable-head source fingerprint is checked before and after reads. Resolve composite opaque IDs server-side, propagate cancellation and enforce byte/rate quotas.
 - [ ] **Step 7: Implement authenticated chunk cache, fail-closed core sensitivity classification and renderer policy.** Path/name/MIME/config rules plus bounded content scanning set `secret | non_secret | unknown` before text reveal/content postings; unknown is treated as secret without proof. Core supports bounded escaped text/config/log, safe raster image, same-origin PDF policy, audio/video native delivery, metadata/hex fallback, and attachment download. HTML/XML/SVG never active-inline.
 - [ ] **Step 8: Add handler and audit tests.** Preview/list/download actions write safe domain audit summaries without raw path/content/ticket/cookie. Download issuance requires step-up; Viewer is denied before ticket creation.
@@ -805,7 +807,7 @@ cd backend && go test ./internal/backupasset/content -count=1
 
 ```bash
 cd backend && go test ./internal/backupasset/content ./internal/api/... -run 'BackupContent|Delivery|Range|Cache' -count=1
-TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration065' -count=1
+TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration066' -count=1
 cd ../web && npm run check
 cd .. && make backend-test
 git add backend/internal/model backend/internal/database/migrations backend/internal/database/backup_asset_migrations_integration_test.go backend/internal/backupasset/content backend/internal/api backend/internal/settings/service.go backend/internal/settings/service_test.go backend/cmd/server deploy/nginx web/src
@@ -884,7 +886,7 @@ git commit -m "feat: add backup asset explorer workspace"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_processing.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000066_backup_asset_processing.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000067_backup_asset_processing.{up,down}.sql`
 - Create: `backend/internal/backupasset/processing/{coordinator,protocol,grants,derived_store}.go`
 - Create: `backend/internal/backupasset/processing/{coordinator,protocol,grants,derived_store}_test.go`
 - Create: `backend/cmd/asset-worker/main.go`
@@ -963,7 +965,7 @@ type CapabilityAdvertisement struct {
 cd backend && go test ./internal/backupasset/processing -count=1
 ```
 
-- [ ] **Step 5: Add processing/derived/updater-metadata schema, dual-engine fixtures and persistent coordinator.** Persist the exact ProcessingState/DerivedArtifactState enums, transition revision, stable error codes, RecoveryPoint lease reference, and generic signed bundle source/version/fingerprint/activation/failure records for Child 11's updater; never store updater credentials or raw tool output. Apply/down `000066` on SQLite and PostgreSQL.
+- [ ] **Step 5: Add processing/derived/updater-metadata schema, dual-engine fixtures and persistent coordinator.** Persist the exact ProcessingState/DerivedArtifactState enums, transition revision, stable error codes, RecoveryPoint lease reference, and generic signed bundle source/version/fingerprint/activation/failure records for Child 11's updater; never store updater credentials or raw tool output. Apply/down `000067` on SQLite and PostgreSQL.
 - [ ] **Step 6: Implement pull lease, read/upload sessions and fencing.** Worker receives exact request/byte/range budgets from Content Broker, renews a `processing_job` RecoveryPoint lease, and uploads only through Artifact Sink; Xirang validates artifact manifest/digest/MIME/count/completeness/security-policy revision before one atomic publication.
 - [ ] **Step 7: Implement independent Derived Store keyring and projection-safe revoke.** Do not reuse Search/Export/cache keys; encrypted excerpt blocks are references from search postings. Revoke/expiry/key-loss/rollback calls the Child 7 projection port first and commits `unavailable`/postings removal before key destruction; startup reconciliation removes orphan ciphertext/key rows and ghost projections in the same order.
 - [ ] **Step 8: Add local/mTLS Worker transport and health API.** Default remote trust is disabled. Handler routes are internal/admin, feature-gated, rate/body limited, and sanitized.
@@ -1046,7 +1048,7 @@ git commit -m "feat: add optional backup content workers"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_export.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000067_backup_asset_export.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000068_backup_asset_export.{up,down}.sql`
 - Create: `backend/internal/backupasset/export/{service,archive,crypto,worker}.go`
 - Create: `backend/internal/backupasset/export/{service,archive,crypto,worker}_test.go`
 - Create: `backend/internal/api/handlers/backup_export_handler.go`, `backend/internal/api/handlers/backup_export_handler_test.go`
@@ -1095,7 +1097,7 @@ type ExportLease struct {
 cd backend && go test ./internal/backupasset/export -count=1
 ```
 
-- [ ] **Step 6: Add export/job/item schema, settings, dual-engine fixtures and persistent worker.** Persist attempt/lease owner/fencing/checkpoint, sanitized result/count/byte/error categories and a `export_job` RecoveryPoint lease per selected source; per-item paths/selections are encrypted and purged with artifact. Register Export KEK/root/quota/TTL/GC settings. The dedicated ciphertext root is outside `/data`, `/backup`, and `/logs`; durable container-volume wiring is a Child 15 readiness dependency. Apply/down `000067` on SQLite and PostgreSQL.
+- [ ] **Step 6: Add export/job/item schema, settings, dual-engine fixtures and persistent worker.** Persist attempt/lease owner/fencing/checkpoint, sanitized result/count/byte/error categories and a `export_job` RecoveryPoint lease per selected source; per-item paths/selections are encrypted and purged with artifact. Register Export KEK/root/quota/TTL/GC settings. The dedicated ciphertext root is outside `/data`, `/backup`, and `/logs`; durable container-volume wiring is a Child 15 readiness dependency. Apply/down `000068` on SQLite and PostgreSQL.
 - [ ] **Step 7: Implement archive writer and Export keyring.** Default downloaded format is ZIP, optional TAR profile; server at-rest artifact is always encrypted; delivery decrypts only after fresh download authorization/ticket over TLS.
 - [ ] **Step 8: Integrate archive inspect/member extraction.** Bind opaque member to outer composite AssetRef fingerprint/member chain; enforce Worker limits and inherit outer permissions/lifecycle. Encrypted/unsupported/bomb archives fail closed, and inspect/member retrieval emit registered sanitized `archive_member` events.
 - [ ] **Step 9: Add create/status/cancel/download-ticket APIs and grants.** Admin-only export/download by default; creation and download each authorize with their exact purpose; audit selection digest/count/bytes, never raw member/path names. Cancel revokes source leases and invalidates all attempts before key deletion.
@@ -1118,7 +1120,7 @@ git commit -m "feat: add durable backup asset exports"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_recovery.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000068_backup_asset_recovery.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000069_backup_asset_recovery.{up,down}.sql`
 - Create: `backend/internal/backupasset/recovery/{service,preflight,executor,worker}.go`
 - Create: `backend/internal/backupasset/recovery/{service,preflight,executor,worker}_test.go`
 - Create: `backend/internal/backupasset/recovery/result_lifecycle.go`, `backend/internal/backupasset/recovery/result_lifecycle_test.go`
@@ -1214,7 +1216,7 @@ const (
 cd backend && go test ./internal/backupasset/recovery -count=1
 ```
 
-- [ ] **Step 6: Add plan/job/item/evidence/result schema, settings, dual-engine fixtures and services.** Preflight is read-only, versioned and expiring; execute requires Admin + fresh `asset.recover` proof + reason + plan-bound grant. Persist the typed immutable/observation source revision in plan, grant, job and checkpoints; persist exact state/fencing and a `recovery_job` RecoveryPoint lease for every source. Add RecoveryResultSet/Result rows with job FK, typed lifecycle, target node, opaque result IDs, created/absolute-expiry/bounded-retain deadlines, cleanup attempt/lease/fence and HMAC-owned-marker digest without raw client paths; activate Child 8 recovery-result delivery FKs/checks. Register remote safe roots, preflight validity, job concurrency, isolated-result TTL/retain cap and cleanup cadence; apply/down `000068` on SQLite and PostgreSQL.
+- [ ] **Step 6: Add plan/job/item/evidence/result schema, settings, dual-engine fixtures and services.** Preflight is read-only, versioned and expiring; execute requires Admin + fresh `asset.recover` proof + reason + plan-bound grant. Persist the typed immutable/observation source revision in plan, grant, job and checkpoints; persist exact state/fencing and a `recovery_job` RecoveryPoint lease for every source. Add RecoveryResultSet/Result rows with job FK, typed lifecycle, target node, opaque result IDs, created/absolute-expiry/bounded-retain deadlines, cleanup attempt/lease/fence and HMAC-owned-marker digest without raw client paths; activate Child 8 recovery-result delivery FKs/checks. Register remote safe roots, preflight validity, job concurrency, isolated-result TTL/retain cap and cleanup cadence; apply/down `000069` on SQLite and PostgreSQL.
 - [ ] **Step 7: Implement default isolated recovery, result delivery and plaintext lifecycle.** Use configured `/var/tmp/xirang-recovery` only as the default remote-node root after its node probe passes; create an exact job child directory and atomically write an installation/job/root-revision/random-nonce marker authenticated by the Recovery Cleanup Ownership key before registering results. Restore, verify size/hash/fidelity, report differences, and expose regular-file/report download. Recovery-result download requires `backup_assets:recover`, exact RecoveryJob ownership, `recovery.result_download`, a typed ticket, restricted SSH purpose, existing Range/cumulative quotas/revocation and registered audit; `backup_assets:download` is neither sufficient nor additionally required. Directories fall back to ExportJob from the frozen source selection. Cleanup atomically enters revoking/increments fence, revokes grants/tickets and rejects retain/new reads, drains or closes old streams, revalidates safe root + non-symlink HMAC marker, deletes only the exact job directory, then writes a cleaned tombstone. Failure becomes cleanup_failed and retries the same idempotent sequence; unknown/invalid orphan markers are quarantined/alerted, never deleted.
 - [ ] **Step 8: Implement explicit in-place phase, result retain/cleanup APIs and audit.** Display create/overwrite/delete/skip impact before grant; add a second checkpoint before exact-mirror deletes. Cancellation after writes is best effort and reports partial target state. Retain requires Admin + `backup_assets:recover` + exact job ownership + fresh `recovery.result_retain`, validates a new deadline within the hard cap, and never revives revoking/cleaned results. Manual cleanup requires the same RBAC/ownership plus explicit confirmation; automatic expiry uses a service identity. Plan/preflight/authorize/execute/cancel/verify/cleanup/retain use registered, sanitized recovery audit actions with composite source digests and no raw paths/reasons.
 - [ ] **Step 9: Implement restart reconciliation.** Never blindly replay non-idempotent writes; takeover requires a new fence, renewed source lease and exact SourceRevision revalidation, resumes only from validated checkpoints, otherwise verifies and marks `needs_attention` with completed operations. Old attempts cannot mutate job state or target after takeover. Result reconciliation resumes revoking/cleanup_failed with a new cleanup fence, rejects old streams, and deletes only directories whose owned marker and job FK/tombstone reconcile; marker-key loss or mismatch fails closed for manual review.
@@ -1238,7 +1240,7 @@ git commit -m "feat: add controlled backup asset recovery"
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_lifecycle.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000069_backup_asset_lifecycle.{up,down}.sql`
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000070_backup_asset_lifecycle.{up,down}.sql`
 - Create: `backend/internal/backupasset/retention/{worker,reconcile}.go`
 - Create: `backend/internal/backupasset/retention/{worker,reconcile}_test.go`
 - Create: `backend/internal/backupasset/retention/{policy,hold}.go`, `backend/internal/backupasset/retention/{policy,hold}_test.go`
@@ -1266,7 +1268,7 @@ git commit -m "feat: add controlled backup asset recovery"
 cd backend && go test ./internal/backupasset/retention ./internal/task -run 'Retention|Reconnect|TaskArchive|Purge' -count=1
 ```
 
-- [ ] **Step 6: Add versioned retention-policy, RecoveryPointHold, lifecycle/tombstone schema, dual-engine fixtures and unified retention worker.** Reuse the Child 1 RecoveryPointLease contract rather than inventing retention-private leases. Store policy scope/rule revision and hold type/status/actor/encrypted-reason reference/timestamps; persist the managed-history latch in every native-point tombstone so physical metadata cleanup cannot reopen legacy fallback. The `000069` down migration must reject while any such tombstone exists, before a sequential down could erase the proof needed by `000063`. Add typed mutable-head retirement reason/time and the retire coordinator with revoke/drain/fence/clear/tombstone/legacy-locator ordering, plus a distinct explicit-purge path that uses expiring/expired and purge_blocked retry semantics. Add observed/retired/reconcile metrics; use startup + periodic idempotent/batched prune, retention-worker lease/heartbeat/fencing and explicit `purge_failed/purge_blocked` telemetry; apply/down `000069` on SQLite and PostgreSQL.
+- [ ] **Step 6: Add versioned retention-policy, RecoveryPointHold, lifecycle/tombstone schema, dual-engine fixtures and unified retention worker.** Reuse the Child 1 RecoveryPointLease contract rather than inventing retention-private leases. Store policy scope/rule revision and hold type/status/actor/encrypted-reason reference/timestamps; persist the managed-history latch in every native-point tombstone so physical metadata cleanup cannot reopen legacy fallback. The `000070` down migration must reject while any such tombstone exists, before a sequential down could erase the proof needed by `000063` or `000064`. Add typed mutable-head retirement reason/time and the retire coordinator with revoke/drain/fence/clear/tombstone/legacy-locator ordering, plus a distinct explicit-purge path that uses expiring/expired and purge_blocked retry semantics. Add observed/retired/reconcile metrics; use startup + periodic idempotent/batched prune, retention-worker lease/heartbeat/fencing and explicit `purge_failed/purge_blocked` telemetry; apply/down `000070` on SQLite and PostgreSQL.
 - [ ] **Step 7: Refactor Task retention to select exact RecoveryPoint IDs.** Remove direct directory-mtime, broad Restic forget, and Rclone min-age decisions from the source of truth. Provider adapters execute exact point deletion after plan selection.
 - [ ] **Step 8: Change Task delete to archive/unlink.** Schedule removal is immediate; metadata hard-delete waits until no repository/run/audit dependencies and copies required immutable lineage summary.
 - [ ] **Step 9: Add retention-policy/hold and extend reconnect/disconnect/purge APIs/UI.** Policy CRUD and hold create/release require Admin, impact preview and typed audit actions; hold release additionally requires fresh proof + reason. Build on Child 2 access-binding endpoints with full import/rebuild/admin-review/purge workflows. Purge requires the dedicated Admin fresh proof, reason, impact counts, hold/lease/WORM status and exact scope; audit contains opaque IDs/counts only.
@@ -1276,21 +1278,21 @@ cd backend && go test ./internal/backupasset/retention ./internal/task -run 'Ret
 
 ```bash
 cd backend && go test ./internal/backupasset/retention ./internal/task ./internal/api/... -run 'Retention|RetentionPolicy|RecoveryPointHold|Reconnect|Purge|TaskArchive|AuditRetention|ExportGC|DerivedGC|SavedSearch|Favorite|Recent|Config(Import|Export)|DisasterRecovery' -count=1
-TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration069' -count=1
+TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration070' -count=1
 cd ../web && npm run check
 cd .. && make backend-test
 git add backend/internal/model backend/internal/database/migrations backend/internal/database/backup_asset_migrations_integration_test.go backend/internal/backupasset/retention backend/internal/backupasset/provider backend/internal/task backend/internal/api backend/cmd/server backend/internal/settings web/src docs/admin/backup-recovery.md docs/admin/security.md docs/deployment.md
 git commit -m "feat: govern backup asset lifecycle"
 ```
 
-**Rollback:** Disable new purge/retention workers first. Keep `000069` additive whenever a managed-history tombstone exists; down must fail rather than erase the Child3 safety latch. Archived Tasks can be re-enabled/relinked. Never restore deleted Provider bytes from Catalog; use backup/provider-native recovery if purge already completed.
+**Rollback:** Disable new purge/retention workers first. Keep `000070` additive whenever a managed-history tombstone exists; down must fail rather than erase the Child3/Child4 safety latches. Archived Tasks can be re-enabled/relinked. Never restore deleted Provider bytes from Catalog; use backup/provider-native recovery if purge already completed.
 
 ## 16. Child 15 — GA Migration, Hardening, Docs And Legacy Removal
 
 **Files:**
 
 - Create: `backend/internal/model/backup_asset_migration.go`
-- Create: `backend/internal/database/migrations/{sqlite,postgres}/000070_backup_asset_ga.{up,down}.sql` with persistent installation migration/readiness status and repository-conflict records
+- Create: `backend/internal/database/migrations/{sqlite,postgres}/000071_backup_asset_ga.{up,down}.sql` with persistent installation migration/readiness status and repository-conflict records
 - Create: `scripts/check-backup-asset-migration.sh`
 - Create: `scripts/test-backup-asset-load.sh`
 - Modify: `backend/internal/settings/service.go`, `backend/internal/settings/service_test.go`
@@ -1310,7 +1312,7 @@ git commit -m "feat: govern backup asset lifecycle"
 - [ ] **Step 1: Write migration inventory tests.** Existing Restic/Rsync/Rclone Tasks map to Repository candidates; legacy index is never trusted complete; shared Restic repositories consolidate identity without cross-task ownership; mutable mirrors remain mutable heads.
 - [ ] **Step 2: Write feature-readiness tests.** Feature cannot enable unless dual-engine migrations, required key domains/paths, durable `/var/lib/xirang-asset-runtime` export/derived ciphertext volume, verified updater-bundle volume/permissions when Worker is enabled, repository migration status, retention-policy/hold enforcement, content route/log redaction, GC workers and RBAC routes pass. Worker absence is allowed and reported as optional.
 - [ ] **Step 3: Write load/security test scripts.** Cover million-entry Catalog pagination/search, deep directories, Range seek, concurrent previews, background backfill isolation, restart during export/recovery, malformed content/archive bombs, ticket replay and audit redaction.
-- [ ] **Step 4: Run migration dry-run and `000070` apply/down on SQLite and PostgreSQL fixtures.** The script prints counts/identity conflicts/capability gaps without changing Provider bytes; rerun is idempotent and the shared integration harness proves both engines.
+- [ ] **Step 4: Run migration dry-run and `000071` apply/down on SQLite and PostgreSQL fixtures.** The script prints counts/identity conflicts/capability gaps without changing Provider bytes; rerun is idempotent and the shared integration harness proves both engines.
 - [ ] **Step 5: Enable the feature for new installs and expose existing-installation migration UI.** Existing installations remain gated until admin preflight/acknowledgment; no automatic Provider conversion.
 - [ ] **Step 6: Remove legacy asset UX only after deep-link parity tests pass.** Tasks retains config/schedule/run logs and links into the new workspace. Legacy direct restore/search routes either redirect/deprecate safely or remain internal compatibility endpoints with no UI callers until the documented removal release.
 - [ ] **Step 7: Complete settings/risk/observability and durable runtime wiring.** Persist the export/derived ciphertext root and verified updater bundles as separate dedicated volumes across container replacement, mount bundles read-only into Workers, keep preview cache ephemeral, and verify key/volume backup semantics. Metrics avoid path/entry labels; immutable retained/history/health counts exclude mutable heads, whose observed/retired counts, observation age and reconcile failures are separate. Alerts cover offline/degraded/backlog/updater/GC/quarantine/purge/recovery verification. “Worker not configured” remains info.
@@ -1327,7 +1329,7 @@ docker build -f deploy/worker/Dockerfile -t xirang-worker:local .
 make docker-build
 bash scripts/check-doc-freshness.sh
 bash scripts/check-backup-asset-migration.sh
-cd backend && TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration070' -count=1
+cd backend && TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" go test ./internal/database -run 'BackupAssetMigration071' -count=1
 cd ..
 git diff --check
 ```
@@ -1338,7 +1340,7 @@ Expected: all commands PASS; no stale generated Swagger/docs, migrations, a11y, 
 - [ ] **Step 11: Commit GA hardening.**
 
 ```bash
-git add backend/internal/model/backup_asset_migration.go backend/internal/database/migrations/sqlite/000070_backup_asset_ga.up.sql backend/internal/database/migrations/sqlite/000070_backup_asset_ga.down.sql backend/internal/database/migrations/postgres/000070_backup_asset_ga.up.sql backend/internal/database/migrations/postgres/000070_backup_asset_ga.down.sql backend/internal/database/backup_asset_migrations_integration_test.go backend/internal/settings/service.go backend/internal/settings/service_test.go backend/internal/api/router.go backend/internal/api/handlers/settings_handler.go backend/internal/api/handlers/settings_handler_test.go backend/internal/api/handlers/snapshot_handler.go backend/internal/api/handlers/snapshot_handler_test.go backend/internal/api/handlers/snapshot_search_handler.go backend/internal/api/handlers/snapshot_search_handler_test.go backend/internal/api/handlers/snapshot_diff_handler.go backend/internal/api/handlers/snapshot_diff_handler_test.go backend/internal/api/docs/docs.go
+git add backend/internal/model/backup_asset_migration.go backend/internal/database/migrations/sqlite/000071_backup_asset_ga.up.sql backend/internal/database/migrations/sqlite/000071_backup_asset_ga.down.sql backend/internal/database/migrations/postgres/000071_backup_asset_ga.up.sql backend/internal/database/migrations/postgres/000071_backup_asset_ga.down.sql backend/internal/database/backup_asset_migrations_integration_test.go backend/internal/settings/service.go backend/internal/settings/service_test.go backend/internal/api/router.go backend/internal/api/handlers/settings_handler.go backend/internal/api/handlers/settings_handler_test.go backend/internal/api/handlers/snapshot_handler.go backend/internal/api/handlers/snapshot_handler_test.go backend/internal/api/handlers/snapshot_search_handler.go backend/internal/api/handlers/snapshot_search_handler_test.go backend/internal/api/handlers/snapshot_diff_handler.go backend/internal/api/handlers/snapshot_diff_handler_test.go backend/internal/api/docs/docs.go
 git add web/src/components/snapshot-browser.tsx web/src/components/snapshot-browser.test.tsx web/src/components/snapshot-search.tsx web/src/components/restore-confirm-dialog.tsx web/src/components/restore-confirm-dialog.test.tsx web/src/pages/tasks-page.dialogs.tsx web/src/pages/tasks-page.test.tsx web/src/pages/backups-page.tsx web/src/pages/backups-page.test.tsx web/src/pages/backups-page.overview.tsx web/src/pages/backups-page.data.tsx web/src/pages/backups-page.recovery.tsx web/src/pages/settings-page.system.tsx web/src/pages/settings-page.system.test.tsx web/src/lib/api/settings-api.ts web/src/lib/api/settings-api.test.ts web/src/types/domain.ts web/src/i18n/locales/zh.ts web/src/i18n/locales/en.ts
 git add docker-compose.yml .env.deploy backend/.env.production.example deploy/nginx/templates/default.conf.template deploy/worker/Dockerfile deploy/worker/entrypoint.sh deploy/worker/seccomp.json scripts/check-backup-asset-migration.sh scripts/test-backup-asset-load.sh scripts/check-compose-config.sh scripts/test-core-compose.sh scripts/test-asset-worker.sh
 git add README.md docs/deployment.md docs/env-vars.md docs/admin/backup-recovery.md docs/admin/security.md docs/maintainers/release.md .github/workflows/ci.yml .github/workflows/publish-images.yml .github/workflows/deploy.yml .github/workflows/dockerhub-description.yml

@@ -416,6 +416,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	}
 	// 校验任务路径
 	for i, taskData := range data.Tasks {
+		if importedRsyncConfigRequiresDisconnect(readStringField(taskData, "executor_type"), readStringField(taskData, "executor_config")) {
+			continue
+		}
 		name, _ := taskData["name"].(string)
 		if src, ok := taskData["rsync_source"].(string); ok && src != "" {
 			if err := validateImportPath(src); err != nil {
@@ -754,15 +757,30 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				taskPkg.HydrateTaskDefaultsFromPolicy(c.Request.Context(), importPolicyRepo, importNodeRepo, &req)
 				taskPkg.TrimTaskInput(&req)
 				taskPkg.InferTaskExecutor(&req, "")
-				taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
+				managedRsyncImport := importedRsyncConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
+				if managedRsyncImport {
+					req.RsyncSource = ""
+					req.RsyncTarget = ""
+					req.ExecutorConfig = canonicalLegacyRsyncImportConfig()
+				} else {
+					taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
+				}
 				if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
 					req.CronSpec = ""
 				}
-				taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
-				if err := taskPkg.ValidateTaskInput(req); err != nil {
+				if !managedRsyncImport {
+					taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
+				}
+				var validationErr error
+				if managedRsyncImport {
+					validationErr = taskPkg.ValidateDisconnectedImportedRsyncTask(req)
+				} else {
+					validationErr = taskPkg.ValidateTaskInput(req)
+				}
+				if validationErr != nil {
 					logger.Module("config").Warn().
 						Str("task", req.Name).
-						Err(err).
+						Err(validationErr).
 						Msg("导入任务校验失败，跳过")
 					continue
 				}
@@ -791,8 +809,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					existing.ExecutorConfig = req.ExecutorConfig
 					existing.CronSpec = req.CronSpec
 					existing.Source = readStringField(taskData, "source")
-					// overwrite 仅在导入数据显式携带 enabled 字段时才覆盖，避免意外改写已有任务启停状态。
-					if enabled, ok := taskData["enabled"].(bool); ok {
+					// Foreign managed Rsync configuration is always imported paused.
+					if managedRsyncImport {
+						existing.Enabled = false
+					} else if enabled, ok := taskData["enabled"].(bool); ok {
 						existing.Enabled = enabled
 					}
 					if err := tx.Save(&existing).Error; err == nil {
@@ -814,19 +834,30 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					CronSpec:       req.CronSpec,
 					Status:         "pending",
 					Source:         readStringField(taskData, "source"),
-					Enabled:        true,
+					Enabled:        !managedRsyncImport,
 				}
 				if newTask.Source == "" {
 					newTask.Source = "manual"
 				}
-				if enabled, ok := taskData["enabled"].(bool); ok {
-					newTask.Enabled = enabled
+				if !managedRsyncImport {
+					if enabled, ok := taskData["enabled"].(bool); ok {
+						newTask.Enabled = enabled
+					}
 				}
-				if err := tx.Create(&newTask).Error; err == nil {
-					importedTasks++
-					resolvedTaskIDs[taskKey] = newTask.ID
-					taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+				if err := tx.Create(&newTask).Error; err != nil {
+					continue
 				}
+				// GORM omits a false bool when the model declares default:true.
+				// Keep the corrective write in this transaction so a foreign
+				// managed task can never become visible as enabled.
+				if managedRsyncImport {
+					if err := tx.Model(&model.Task{}).Where("id = ?", newTask.ID).Update("enabled", false).Error; err != nil {
+						return err
+					}
+				}
+				importedTasks++
+				resolvedTaskIDs[taskKey] = newTask.ID
+				taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
 			}
 
 			for _, update := range taskDependencyUpdates {
@@ -1020,6 +1051,93 @@ func validateImportPath(p string) error {
 func readStringField(values map[string]interface{}, key string) string {
 	raw, _ := values[key].(string)
 	return strings.TrimSpace(raw)
+}
+
+func canonicalLegacyRsyncImportConfig() string {
+	return fmt.Sprintf(`{"version":%d,"publication_mode":"legacy_mutable"}`, taskPkg.RsyncPublicationConfigV1Version)
+}
+
+// importedRsyncConfigRequiresDisconnect reads only the top-level publication
+// mode. It does not decode, retain, or trust foreign roots, preflight IDs, or
+// any other provider configuration; a versioned mode is enough to force the
+// imported task through a fresh local migration.
+func importedRsyncConfigRequiresDisconnect(executorType, rawConfig string) bool {
+	normalizedExecutor := strings.TrimSpace(strings.ToLower(executorType))
+	if normalizedExecutor != "" && normalizedExecutor != "rsync" {
+		return false
+	}
+	decoder := json.NewDecoder(strings.NewReader(rawConfig))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return false
+	}
+	for decoder.More() {
+		member, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		name, ok := member.(string)
+		if !ok {
+			return false
+		}
+		if name == "publication_mode" {
+			var mode string
+			if err := decoder.Decode(&mode); err != nil {
+				return false
+			}
+			if mode == "versioned_hardlink" || mode == "versioned_full_copy" {
+				return true
+			}
+			continue
+		}
+		if err := discardImportedConfigValue(decoder); err != nil {
+			return false
+		}
+	}
+	return false
+}
+
+func discardImportedConfigValue(decoder *json.Decoder) error {
+	value, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := value.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		for decoder.More() {
+			member, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if _, ok := member.(string); !ok {
+				return fmt.Errorf("invalid imported config object member")
+			}
+			if err := discardImportedConfigValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return fmt.Errorf("invalid imported config object")
+		}
+	case '[':
+		for decoder.More() {
+			if err := discardImportedConfigValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return fmt.Errorf("invalid imported config array")
+		}
+	default:
+		return fmt.Errorf("invalid imported config delimiter")
+	}
+	return nil
 }
 
 func applyImportedSSHKeyScope(key *model.SSHKey, data map[string]interface{}) {

@@ -838,7 +838,7 @@ Preview cache、Worker tmpfs、derived blobs、exports、staging points 和 Cata
 - 每次 schema 变化提供成对 SQLite/PostgreSQL migration 和 down strategy；时间全部 UTC。
 - 新表先旁路建立，不直接改写旧 snapshot/task 数据。
 - Task/TaskRun FK 允许历史归档：RecoveryPoint 复制必要 immutable run summary，原 FK 可空/SET NULL。
-- Child 3 的 `000063_backup_asset_publication_contract` 修正 Restic Task link 的 `native_snapshot` 语义，增加 `point_publication` holder，以及 producing TaskRun/native snapshot 的 partial unique constraints；后续原 reservation 顺延为 `000064…000070`。
+- Child 3 的 `000063_backup_asset_publication_contract` 修正 Restic Task link 的 `native_snapshot` 语义，增加 `point_publication` holder，以及 producing TaskRun/native snapshot 的 partial unique constraints。Child 4 的批准 `000064_backup_asset_rsync_publication_contract` 增加 durable managed-history latch、managed-tree source 唯一防线和 fail-closed down；Search–GA 的后续 reservation 顺延为 `000065…000071`。
 - 旧 `SnapshotFileIndex` 标为 legacy generation；新索引完成前可保留旧 UI，但不得进入全局资产结果或信任状态。
 
 ### 19.2 现有任务引导

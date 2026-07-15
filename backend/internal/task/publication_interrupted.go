@@ -2,12 +2,15 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 
@@ -102,11 +105,11 @@ func (manager *Manager) ReconcileInterruptedRuns(ctx context.Context, limit int)
 		ctx = context.Background()
 	}
 	var runs []model.TaskRun
-	if err := manager.db.WithContext(ctx).Table("task_runs").
+	if err := interruptedPublicationRunsQuery(manager.db.WithContext(ctx)).
 		Select("task_runs.*").Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("LOWER(tasks.executor_type) = ? AND task_runs.status IN ?", "restic", []string{"pending", "running", "retrying"}).
+		Where("task_runs.status IN ?", []string{"pending", "running", "retrying"}).
 		Order("task_runs.id ASC").Limit(limit).Find(&runs).Error; err != nil {
-		return false, fmt.Errorf("list interrupted Restic TaskRuns: %w", err)
+		return false, fmt.Errorf("list interrupted managed publication TaskRuns: %w", err)
 	}
 	for _, run := range runs {
 		if _, live := manager.pendingRuns.Load(run.TaskID); live {
@@ -132,13 +135,24 @@ func (manager *Manager) ReconcileInterruptedRuns(ctx context.Context, limit int)
 		}
 	}
 	var remaining int64
-	if err := manager.db.WithContext(ctx).Table("task_runs").
+	if err := interruptedPublicationRunsQuery(manager.db.WithContext(ctx)).
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("LOWER(tasks.executor_type) = ? AND task_runs.status IN ?", "restic", []string{"pending", "running", "retrying"}).
+		Where("task_runs.status IN ?", []string{"pending", "running", "retrying"}).
 		Count(&remaining).Error; err != nil {
-		return false, fmt.Errorf("count unresolved Restic TaskRuns: %w", err)
+		return false, fmt.Errorf("count unresolved managed publication TaskRuns: %w", err)
 	}
 	return remaining > 0, nil
+}
+
+func interruptedPublicationRunsQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("task_runs").Where(`
+		LOWER(tasks.executor_type) = ? OR (
+			LOWER(tasks.executor_type) = ? AND EXISTS (
+				SELECT 1 FROM recovery_points AS points
+				WHERE points.producing_task_run_id = task_runs.id
+				AND points.semantics IN ?
+			)
+		)`, "restic", "rsync", []string{string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline)})
 }
 
 func interruptedOutcomeFromPoint(point model.RecoveryPoint, run model.TaskRun) (publication.Outcome, bool, error) {
@@ -149,7 +163,7 @@ func interruptedOutcomeFromPoint(point model.RecoveryPoint, run model.TaskRun) (
 	if err != nil {
 		return publication.Outcome{}, false, err
 	}
-	if lineage.TaskID != run.TaskID || lineage.TaskRunID != run.ID || lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
+	if lineage.TaskID != run.TaskID || lineage.TaskRunID != run.ID {
 		return publication.Outcome{}, false, fmt.Errorf("%w: interrupted publication immutable lineage drift", backupasset.ErrConflict)
 	}
 	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
@@ -157,11 +171,126 @@ func interruptedOutcomeFromPoint(point model.RecoveryPoint, run model.TaskRun) (
 		return publication.Outcome{}, false, err
 	}
 	state := backupasset.RecoveryPointState(point.State)
-	providerCommitRecorded := consistency.Provider == backupasset.ProviderRestic && consistency.ProviderCommitDigest != "" &&
-		consistency.CaptureStartedAt != nil && consistency.CaptureFinishedAt != nil && strings.TrimSpace(point.EncryptedProviderLocator) != ""
+	providerCommitRecorded, err := interruptedProviderCommitRecorded(point, lineage, consistency)
+	if err != nil {
+		return publication.Outcome{}, false, err
+	}
 	outcome := publication.Outcome{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID, TaskID: run.TaskID, TaskRunID: run.ID, State: state, ProviderCommitRecorded: providerCommitRecorded, Code: consistency.Code}
 	_, _, reportable := interruptedPublicationTaskRunState(outcome)
 	return outcome, reportable, nil
+}
+
+func interruptedProviderCommitRecorded(point model.RecoveryPoint, lineage backupasset.PublicationLineageV1, consistency backupasset.PublicationConsistencyV1) (bool, error) {
+	switch backupasset.PointVersionSemantics(point.Semantics) {
+	case backupasset.PointNativeSnapshot:
+		if lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
+			return false, fmt.Errorf("%w: interrupted Restic point lineage drift", backupasset.ErrConflict)
+		}
+		return consistency.Provider == backupasset.ProviderRestic && consistency.ProviderCommitDigest != "" &&
+			consistency.CaptureStartedAt != nil && consistency.CaptureFinishedAt != nil && strings.TrimSpace(point.EncryptedProviderLocator) != "", nil
+	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
+		switch backupasset.TaskPublicationMode(lineage.PublicationMode) {
+		case backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy:
+		default:
+			return false, fmt.Errorf("%w: interrupted managed Rsync point lineage drift", backupasset.ErrConflict)
+		}
+		locator, attempt, err := decodeInterruptedManagedRsyncLocator(point.EncryptedProviderLocator)
+		if err != nil {
+			return false, err
+		}
+		if locator.RepositoryID != point.RepositoryID || locator.RecoveryPointID != point.ID || attempt.RepositoryID != point.RepositoryID ||
+			attempt.RecoveryPointID != point.ID || attempt.TaskRepositoryLinkID != lineage.TaskRepositoryLinkID || attempt.TaskID != lineage.TaskID ||
+			attempt.TaskRunID != lineage.TaskRunID || attempt.PublicationMode != backupasset.TaskPublicationMode(lineage.PublicationMode) ||
+			!attempt.PointDeadlineAt.Equal(lineage.PointDeadlineAt.UTC()) || locator.ManagedRootIdentityDigest != attempt.ManagedRootIdentityDigest {
+			return false, fmt.Errorf("%w: interrupted managed Rsync locator drift", backupasset.ErrConflict)
+		}
+		return consistency.Provider == backupasset.ProviderRsync && validInterruptedDigest(consistency.ProviderCommitDigest) &&
+			consistency.RepositoryIdentityDigest == locator.ManagedRootIdentityDigest && consistency.CapabilityRevision > 0, nil
+	default:
+		return false, fmt.Errorf("%w: interrupted publication semantics are unsupported", backupasset.ErrConflict)
+	}
+}
+
+type interruptedManagedRsyncLocatorV1 struct {
+	Version                   int    `json:"version"`
+	Provider                  string `json:"provider"`
+	RepositoryID              string `json:"repository_id"`
+	RecoveryPointID           string `json:"recovery_point_id"`
+	FinalComponent            string `json:"final_component"`
+	ManagedRootIdentityDigest string `json:"managed_root_identity_digest"`
+	CommitMarkerDigest        string `json:"commit_marker_digest"`
+	TaggedAttempt             string `json:"tagged_attempt"`
+	ChildFenceDigest          string `json:"child_fence_digest"`
+}
+
+func decodeInterruptedManagedRsyncLocator(payload string) (interruptedManagedRsyncLocatorV1, provider.RsyncTreeAttemptV1, error) {
+	if payload == "" || len(payload) > 24*1024 || rejectDuplicateInterruptedLocatorMembers(payload) != nil {
+		return interruptedManagedRsyncLocatorV1{}, provider.RsyncTreeAttemptV1{}, fmt.Errorf("%w: invalid interrupted managed Rsync locator", backupasset.ErrInvalidState)
+	}
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var locator interruptedManagedRsyncLocatorV1
+	if err := decoder.Decode(&locator); err != nil {
+		return interruptedManagedRsyncLocatorV1{}, provider.RsyncTreeAttemptV1{}, fmt.Errorf("%w: invalid interrupted managed Rsync locator", backupasset.ErrInvalidState)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return interruptedManagedRsyncLocatorV1{}, provider.RsyncTreeAttemptV1{}, fmt.Errorf("%w: trailing interrupted managed Rsync locator", backupasset.ErrInvalidState)
+	}
+	attempt, err := provider.DecodeRsyncTreeAttemptV1(locator.TaggedAttempt)
+	if err != nil || locator.Version != 1 || locator.Provider != string(backupasset.ProviderRsync) ||
+		backupasset.ValidateOpaqueID(locator.RepositoryID) != nil || backupasset.ValidateOpaqueID(locator.RecoveryPointID) != nil ||
+		locator.FinalComponent != locator.RecoveryPointID || !validInterruptedDigest(locator.ManagedRootIdentityDigest) ||
+		!validInterruptedDigest(locator.CommitMarkerDigest) || !validInterruptedDigest(locator.ChildFenceDigest) {
+		return interruptedManagedRsyncLocatorV1{}, provider.RsyncTreeAttemptV1{}, fmt.Errorf("%w: invalid interrupted managed Rsync locator", backupasset.ErrInvalidState)
+	}
+	return locator, attempt, nil
+}
+
+func rejectDuplicateInterruptedLocatorMembers(payload string) error {
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return fmt.Errorf("invalid interrupted locator object")
+	}
+	members := make(map[string]struct{})
+	for decoder.More() {
+		nameToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := nameToken.(string)
+		if !ok {
+			return fmt.Errorf("invalid interrupted locator member")
+		}
+		if _, exists := members[name]; exists {
+			return fmt.Errorf("duplicate interrupted locator member")
+		}
+		members[name] = struct{}{}
+		var discard json.RawMessage
+		if err := decoder.Decode(&discard); err != nil {
+			return err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return fmt.Errorf("invalid interrupted locator terminator")
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("trailing interrupted locator data")
+	}
+	return nil
+}
+
+func validInterruptedDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func interruptedOutcomeStatus(outcome publication.Outcome) string {

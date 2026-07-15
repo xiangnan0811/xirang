@@ -51,6 +51,43 @@ func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testin
 	_ = manager.Shutdown(shutdownCtx)
 }
 
+func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "rsync"
+	target := t.TempDir()
+	stale := filepath.Join(target, "stale")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleAt := time.Now().AddDate(0, 0, -30)
+	if err := os.Chtimes(stale, staleAt, staleAt); err != nil {
+		t.Fatal(err)
+	}
+	session := &legacyLineageSessionFake{mode: publication.LineageExact}
+	guard := &legacyLineageGuardFake{session: session}
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLineageGuard(guard)
+	manager.SetLegacyBlockRecorder(recorder)
+
+	manager.enforceRsyncRetention(model.Policy{ID: 22, TargetPath: target, RetentionDays: 7}, taskEntity, time.Now().AddDate(0, 0, -7))
+
+	if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("managed Rsync retention deleted legacy directory: %v", err)
+	}
+	if len(recorder.blocks) != 1 || recorder.blocks[0].Operation != publication.OperationLegacyRetention {
+		t.Fatalf("managed Rsync retention blocks=%+v", recorder.blocks)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
+
 func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)

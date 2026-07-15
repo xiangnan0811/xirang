@@ -276,6 +276,70 @@ export interface NewPolicyInput {
   drill_auto_cleanup?: boolean;
 }
 
+export type RsyncPublicationMode =
+  | "legacy_mutable"
+  | "versioned_hardlink"
+  | "versioned_full_copy";
+
+export type RsyncVersionedPublicationMode = Exclude<RsyncPublicationMode, "legacy_mutable">;
+
+export type RsyncPublicationState =
+  | "legacy"
+  | "preflight_required"
+  | "ready"
+  | "preparing"
+  | "verifying"
+  | "committed"
+  | "failed"
+  | "blocked"
+  | "rollback_prepared";
+
+export type RsyncPublicationReasonCode =
+  | "legacy"
+  | "preflight_required"
+  | "ready"
+  | "preflight_expired"
+  | "task_revision_changed"
+  | "preflight_mismatch"
+  | "root_drift"
+  | "unsupported"
+  | "admission_blocked"
+  | "rollback_prepared";
+
+export type RsyncVersioningMigrationChoice = "imported_baseline" | "first_new_point";
+
+export type RsyncVersioningEstimateBucket = "unknown" | "constrained" | "available";
+
+export interface RsyncPublicationSummary {
+  mode: RsyncPublicationMode;
+  state: RsyncPublicationState;
+  reasonCode: RsyncPublicationReasonCode;
+  capabilityRevision: number;
+  /** Exact decimal CAS token. It is intentionally not a JavaScript number. */
+  taskRevision: string;
+  seedFullCopyRequired: boolean;
+}
+
+export interface RsyncVersioningPreflightResult {
+  preflightId: string;
+  mode: RsyncVersionedPublicationMode;
+  state: RsyncPublicationState;
+  reasonCode: RsyncPublicationReasonCode;
+  capabilityRevision: number;
+  expiresAt: string;
+  capacityEstimate: RsyncVersioningEstimateBucket;
+  inodeEstimate: RsyncVersioningEstimateBucket;
+}
+
+export interface RsyncVersioningActivationResult {
+  summary: RsyncPublicationSummary;
+  migrationChoice: RsyncVersioningMigrationChoice;
+}
+
+export interface RsyncVersioningRollbackPreparationResult {
+  summary: RsyncPublicationSummary;
+}
+
 export interface TaskRecord {
   id: number;
   name?: string;
@@ -303,6 +367,7 @@ export interface TaskRecord {
   speedMbps: number;
   source?: string;
   verifyStatus?: "none" | "passed" | "warning" | "failed";
+  rsyncPublication?: RsyncPublicationSummary;
   enabled: boolean;
   skipNext?: boolean;
 }

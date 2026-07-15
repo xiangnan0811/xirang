@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
@@ -10,9 +12,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// ManagedHistoryTombstoneSource is deliberately a narrow future port. Child 3
-// has no tombstone table, while the lifecycle child can later preserve this
-// permanent safety latch after a native RecoveryPoint row is removed.
+const (
+	managedHistoryLatchScopeInstallation = "installation"
+	managedHistoryLatchScopeRepository   = "repository"
+)
+
+type legacyFallbackBindingState uint8
+
+const (
+	legacyFallbackUnlinked legacyFallbackBindingState = iota
+	legacyFallbackExactPristine
+	legacyFallbackBlocked
+)
+
+// ManagedHistoryTombstoneSource is a narrow future port for lifecycle facts
+// beyond the durable latch table, such as a later tombstone contract.
 type ManagedHistoryTombstoneSource interface {
 	HasRepositoryManagedHistory(context.Context, string) (bool, error)
 	HasInstallationManagedHistory(context.Context) (bool, error)
@@ -42,8 +56,16 @@ func (resolver *ManagedHistoryResolver) HasRepositoryManagedHistory(ctx context.
 		return false, fmt.Errorf("%w: invalid managed history repository query", backupasset.ErrInvalidState)
 	}
 	var count int64
+	if err := resolver.db.WithContext(ctx).Model(&model.BackupAssetManagedHistoryLatch{}).
+		Where("scope = ? AND repository_id = ?", managedHistoryLatchScopeRepository, repositoryID).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query repository managed history latch: %w", err)
+	}
+	if count > 0 {
+		return true, nil
+	}
 	if err := resolver.db.WithContext(ctx).Model(&model.RecoveryPoint{}).
-		Where("repository_id = ? AND semantics = ?", repositoryID, backupasset.PointNativeSnapshot).
+		Where("repository_id = ? AND semantics IN ?", repositoryID, managedHistoryPointSemantics()).
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("query repository managed history: %w", err)
 	}
@@ -59,8 +81,16 @@ func (resolver *ManagedHistoryResolver) HasInstallationManagedHistory(ctx contex
 		return false, fmt.Errorf("%w: managed history database is unavailable", backupasset.ErrInvalidState)
 	}
 	var count int64
+	if err := resolver.db.WithContext(ctx).Model(&model.BackupAssetManagedHistoryLatch{}).
+		Where("scope = ?", managedHistoryLatchScopeInstallation).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query installation managed history latch: %w", err)
+	}
+	if count > 0 {
+		return true, nil
+	}
 	if err := resolver.db.WithContext(ctx).Model(&model.RecoveryPoint{}).
-		Where("semantics = ?", backupasset.PointNativeSnapshot).
+		Where("semantics IN ?", managedHistoryPointSemantics()).
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("query installation managed history: %w", err)
 	}
@@ -77,11 +107,113 @@ func (resolver *ManagedHistoryResolver) HasActivePublicationLease(ctx context.Co
 	}
 	var count int64
 	if err := resolver.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
-		Where("holder_type = ? AND status = ?", backupasset.LeaseHolderPointPublication, backupasset.LeaseActive).
+		Where("holder_type IN ? AND status = ?", managedHistoryLeaseHolderTypes(), backupasset.LeaseActive).
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("query active publication lease: %w", err)
 	}
 	return count > 0, nil
+}
+
+// legacyFallbackAllowed is the common fail-closed answer for disabled-mode
+// mutable paths. An installation latch blocks an unlinked or ambiguous Task,
+// but it does not retroactively disable a separately verified pristine mutable
+// binding. Any active publication lease remains globally unsafe.
+func (resolver *ManagedHistoryResolver) legacyFallbackAllowed(ctx context.Context, taskEntity model.Task) (bool, error) {
+	if resolver == nil || resolver.db == nil || taskEntity.ID == 0 {
+		return false, fmt.Errorf("%w: invalid legacy fallback query", backupasset.ErrInvalidState)
+	}
+	installationHistory, err := resolver.HasInstallationManagedHistory(ctx)
+	if err != nil {
+		return false, err
+	}
+	activeLease, err := resolver.HasActivePublicationLease(ctx)
+	if err != nil {
+		return false, err
+	}
+	if activeLease {
+		return false, nil
+	}
+	state, err := resolver.legacyFallbackBindingState(ctx, taskEntity)
+	if err != nil {
+		return false, err
+	}
+	switch state {
+	case legacyFallbackExactPristine:
+		return true, nil
+	case legacyFallbackUnlinked:
+		return !installationHistory, nil
+	default:
+		return false, nil
+	}
+}
+
+func (resolver *ManagedHistoryResolver) legacyFallbackBindingState(ctx context.Context, taskEntity model.Task) (legacyFallbackBindingState, error) {
+	var links []model.TaskRepositoryLink
+	if err := resolver.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).Find(&links).Error; err != nil {
+		return legacyFallbackBlocked, fmt.Errorf("load legacy fallback Task links: %w", err)
+	}
+	if len(links) == 0 {
+		return legacyFallbackUnlinked, nil
+	}
+	if len(links) != 1 {
+		return legacyFallbackBlocked, nil
+	}
+	link := links[0]
+	if link.TaskID == nil || *link.TaskID != taskEntity.ID || backupasset.ValidateOpaqueID(link.ID) != nil ||
+		backupasset.ValidateOpaqueID(link.RepositoryID) != nil || link.PublicationMode != string(backupasset.PublicationLegacyMutable) ||
+		strings.TrimSpace(link.EncryptedLegacyLocator) == "" {
+		return legacyFallbackBlocked, nil
+	}
+
+	var repository model.BackupRepository
+	if err := resolver.db.WithContext(ctx).First(&repository, "id = ?", link.RepositoryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return legacyFallbackBlocked, nil
+		}
+		return legacyFallbackBlocked, fmt.Errorf("load legacy fallback repository: %w", err)
+	}
+	if repository.ProviderKind != string(bindingProviderForTask(taskEntity)) || repository.VersionMode != string(backupasset.VersionMutableHead) {
+		return legacyFallbackBlocked, nil
+	}
+	repositoryHistory, err := resolver.HasRepositoryManagedHistory(ctx, repository.ID)
+	if err != nil {
+		return legacyFallbackBlocked, err
+	}
+	if repositoryHistory {
+		return legacyFallbackBlocked, nil
+	}
+
+	var binding model.RepositoryAccessBinding
+	if err := resolver.db.WithContext(ctx).Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return legacyFallbackBlocked, nil
+		}
+		return legacyFallbackBlocked, fmt.Errorf("load legacy fallback binding: %w", err)
+	}
+	document, err := decodeBindingDocument(binding.EncryptedConfig)
+	if err != nil {
+		return legacyFallbackBlocked, nil
+	}
+	if document.Provider != bindingProviderForTask(taskEntity) || document.TaskID != taskEntity.ID || document.NodeID != taskEntity.NodeID ||
+		document.Locator != taskEntity.RsyncTarget || document.Locator != link.EncryptedLegacyLocator {
+		return legacyFallbackBlocked, nil
+	}
+	return legacyFallbackExactPristine, nil
+}
+
+func managedHistoryPointSemantics() []string {
+	return []string{
+		string(backupasset.PointNativeSnapshot),
+		string(backupasset.PointXirangManifest),
+		string(backupasset.PointImportedBaseline),
+	}
+}
+
+func managedHistoryLeaseHolderTypes() []string {
+	return []string{
+		string(backupasset.LeaseHolderPointPublication),
+		string(backupasset.LeaseHolderRsyncParent),
+	}
 }
 
 func (resolver *ManagedHistoryResolver) repositoryTombstoneHistory(ctx context.Context, repositoryID string) (bool, error) {

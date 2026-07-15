@@ -70,14 +70,33 @@ func (service *PublicationService) ProcessPoint(ctx context.Context, pointID str
 		return outcome, nil
 	}
 
-	var state string
-	if err := service.db.WithContext(ctx).Model(&model.RecoveryPoint{}).Select("state").Where("id = ?", pointID).Take(&state).Error; err != nil {
+	var point model.RecoveryPoint
+	if err := service.db.WithContext(ctx).Select("id", "state", "semantics", "lineage_json", "consistency_json").Where("id = ?", pointID).Take(&point).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return publication.Outcome{}, fmt.Errorf("%w: publication point", backupasset.ErrNotFound)
 		}
 		return publication.Outcome{}, fmt.Errorf("load publication point state: %w", err)
 	}
-	switch backupasset.RecoveryPointState(state) {
+	providerKind, _, _, err := publicationReconciliationFacts(point)
+	if err != nil {
+		return publication.Outcome{}, err
+	}
+	switch providerKind {
+	case backupasset.ProviderRsync:
+		switch backupasset.RecoveryPointState(point.State) {
+		case backupasset.RecoveryPointPreparing:
+			return service.processRsyncPreparingPoint(ctx, pointID)
+		case backupasset.RecoveryPointVerifying:
+			return service.processRsyncVerifyingPoint(ctx, pointID)
+		default:
+			return publication.Outcome{}, fmt.Errorf("%w: managed Rsync publication point is not reconcilable", backupasset.ErrConflict)
+		}
+	case backupasset.ProviderRestic:
+		// Existing Restic reconciliation remains on its immutable snapshot path.
+	default:
+		return publication.Outcome{}, fmt.Errorf("%w: unsupported publication reconciler provider", backupasset.ErrInvalidState)
+	}
+	switch backupasset.RecoveryPointState(point.State) {
 	case backupasset.RecoveryPointVerifying:
 		return service.processVerifyingPoint(ctx, pointID)
 	case backupasset.RecoveryPointPreparing:
@@ -198,20 +217,13 @@ func (service *PublicationService) ListCandidates(ctx context.Context, limit int
 		scanLimit = limit
 	}
 	if err := service.db.WithContext(ctx).
-		Where("semantics = ? AND state IN ?", backupasset.PointNativeSnapshot, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
+		Where("semantics IN ? AND state IN ?", []backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline}, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
 		Order("updated_at ASC, id ASC").Limit(scanLimit).Find(&points).Error; err != nil {
 		return nil, fmt.Errorf("list publication candidates: %w", err)
 	}
 	result := make([]string, 0, limit)
 	for _, point := range points {
-		lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
-		if err != nil {
-			return nil, err
-		}
-		if lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
-			return nil, fmt.Errorf("%w: non-Restic publication candidate", backupasset.ErrInvalidState)
-		}
-		consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+		_, lineage, consistency, err := publicationReconciliationFacts(point)
 		if err != nil {
 			return nil, err
 		}
@@ -244,23 +256,49 @@ func (service *PublicationService) HasUnresolvedPublication(ctx context.Context)
 	}
 	var points []model.RecoveryPoint
 	if err := service.db.WithContext(ctx).
-		Where("semantics = ? AND state IN ?", backupasset.PointNativeSnapshot, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
+		Where("semantics IN ? AND state IN ?", []backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline}, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
 		Find(&points).Error; err != nil {
 		return false, fmt.Errorf("list unresolved publications: %w", err)
 	}
 	for _, point := range points {
-		lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
-		if err != nil {
-			return false, err
-		}
-		if lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
-			return false, fmt.Errorf("%w: unresolved publication has invalid lineage", backupasset.ErrInvalidState)
-		}
-		if _, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON); err != nil {
+		if _, _, _, err := publicationReconciliationFacts(point); err != nil {
 			return false, err
 		}
 	}
 	return len(points) > 0, nil
+}
+
+func publicationReconciliationFacts(point model.RecoveryPoint) (backupasset.ProviderKind, backupasset.PublicationLineageV1, backupasset.PublicationConsistencyV1, error) {
+	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
+	if err != nil {
+		return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, err
+	}
+	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+	if err != nil {
+		return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, err
+	}
+	switch backupasset.PointVersionSemantics(point.Semantics) {
+	case backupasset.PointNativeSnapshot:
+		if lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
+			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: native publication candidate has invalid lineage", backupasset.ErrInvalidState)
+		}
+		if consistency.Provider != "" && consistency.Provider != backupasset.ProviderRestic {
+			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: native publication candidate has invalid provider evidence", backupasset.ErrInvalidState)
+		}
+		return backupasset.ProviderRestic, lineage, consistency, nil
+	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
+		switch backupasset.TaskPublicationMode(lineage.PublicationMode) {
+		case backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy:
+		default:
+			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rsync publication candidate has invalid lineage", backupasset.ErrInvalidState)
+		}
+		if consistency.Provider != "" && consistency.Provider != backupasset.ProviderRsync {
+			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rsync publication candidate has invalid provider evidence", backupasset.ErrInvalidState)
+		}
+		return backupasset.ProviderRsync, lineage, consistency, nil
+	default:
+		return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: unsupported publication candidate semantics", backupasset.ErrInvalidState)
+	}
 }
 
 func publicationBackoff(attempt uint64) time.Duration {
@@ -303,13 +341,14 @@ func (service *PublicationService) processPreparingPoint(ctx context.Context, po
 	if err != nil {
 		return publication.Outcome{}, err
 	}
-	publisher, err := service.registry.ResticPublisher(backupasset.ProviderRestic)
+	strategy, err := service.registry.PublicationStrategy(backupasset.ProviderRestic)
 	if err != nil {
 		return publication.Outcome{}, err
 	}
 	workCtx, stopHeartbeat := service.startPublicationHeartbeat(ctx, attempt.Fence, leaseConfig)
 	service.metrics.ObserveAttempt(backupasset.ProviderRestic, publication.StageReconciliation)
-	observations, lookupErr := publisher.LookupAttempt(workCtx, attempt)
+	reconcileResult, lookupErr := strategy.Reconcile(workCtx, provider.PublicationReconcileRequest{Attempt: provider.NewResticPublicationAttempt(attempt)})
+	observations := reconcileResult.ResticObservations
 	workCause := context.Cause(workCtx)
 	stopHeartbeat()
 	if workCause != nil && lookupErr == nil {
@@ -421,14 +460,14 @@ func (service *PublicationService) processPreparingPoint(ctx context.Context, po
 	return outcome, nil
 }
 
-func pendingPreparingOutcome(claim publicationPreparingClaim, attempt provider.PublicationAttempt) publication.Outcome {
+func pendingPreparingOutcome(claim publicationPreparingClaim, attempt provider.ResticAttemptV1) publication.Outcome {
 	return publication.Outcome{
 		RepositoryID: claim.point.RepositoryID, RecoveryPointID: claim.point.ID, TaskID: attempt.TaskID, TaskRunID: attempt.TaskRunID,
 		State: backupasset.RecoveryPointPreparing,
 	}
 }
 
-func (service *PublicationService) failPreparing(ctx context.Context, claim publicationPreparingClaim, attempt provider.PublicationAttempt, code backupasset.PublicationFailureCode) (publication.Outcome, error) {
+func (service *PublicationService) failPreparing(ctx context.Context, claim publicationPreparingClaim, attempt provider.ResticAttemptV1, code backupasset.PublicationFailureCode) (publication.Outcome, error) {
 	if backupasset.ValidatePublicationFailureCode(code) != nil {
 		return publication.Outcome{}, fmt.Errorf("%w: invalid preparing publication failure", backupasset.ErrInvalidState)
 	}
@@ -491,7 +530,7 @@ func (service *PublicationService) failPreparing(ctx context.Context, claim publ
 // recordMissingAttempt persists the first exact-marker miss while retaining
 // the short-lived fence. The durable timestamp distinguishes a genuine
 // never-observed point from other retryable publication failures at deadline.
-func (service *PublicationService) recordMissingAttempt(ctx context.Context, claim publicationPreparingClaim, attempt provider.PublicationAttempt, missingGrace time.Duration) (publication.Outcome, bool, error) {
+func (service *PublicationService) recordMissingAttempt(ctx context.Context, claim publicationPreparingClaim, attempt provider.ResticAttemptV1, missingGrace time.Duration) (publication.Outcome, bool, error) {
 	if missingGrace <= 0 {
 		return publication.Outcome{}, false, fmt.Errorf("%w: invalid publication missing grace", backupasset.ErrInvalidState)
 	}
@@ -547,7 +586,7 @@ func (service *PublicationService) recordMissingAttempt(ctx context.Context, cla
 	return outcome, graceReported, nil
 }
 
-func (service *PublicationService) quarantineCompletionUnproven(ctx context.Context, claim publicationPreparingClaim, attempt provider.PublicationAttempt, observations []provider.ResticSnapshotObservation) (publication.Outcome, error) {
+func (service *PublicationService) quarantineCompletionUnproven(ctx context.Context, claim publicationPreparingClaim, attempt provider.ResticAttemptV1, observations []provider.ResticSnapshotObservation) (publication.Outcome, error) {
 	observation, err := exactAttemptObservation(attempt, observations)
 	if err != nil {
 		return publication.Outcome{}, err
@@ -555,7 +594,7 @@ func (service *PublicationService) quarantineCompletionUnproven(ctx context.Cont
 	return service.quarantinePreparingObservation(ctx, claim, attempt, observation, backupasset.FailureProviderCompletionUnproven)
 }
 
-func (service *PublicationService) quarantinePreparingObservation(ctx context.Context, claim publicationPreparingClaim, attempt provider.PublicationAttempt, observation provider.ResticSnapshotObservation, code backupasset.PublicationFailureCode) (publication.Outcome, error) {
+func (service *PublicationService) quarantinePreparingObservation(ctx context.Context, claim publicationPreparingClaim, attempt provider.ResticAttemptV1, observation provider.ResticSnapshotObservation, code backupasset.PublicationFailureCode) (publication.Outcome, error) {
 	if observation.RepositoryIdentity != attempt.RepositoryIdentity || !validFullNativeID(observation.NativePointID) || observation.SnapshotTime.IsZero() ||
 		backupasset.ValidatePublicationFailureCode(code) != nil {
 		return publication.Outcome{}, fmt.Errorf("%w: invalid quarantined preparing observation", backupasset.ErrInvalidState)
@@ -661,39 +700,39 @@ func (service *PublicationService) claimPreparingPoint(ctx context.Context, poin
 	return claim, err
 }
 
-func (service *PublicationService) rebuildPreparingAttempt(ctx context.Context, claim publicationPreparingClaim, audit backupasset.PublicationAuditContext) (provider.PublicationAttempt, error) {
+func (service *PublicationService) rebuildPreparingAttempt(ctx context.Context, claim publicationPreparingClaim, audit backupasset.PublicationAuditContext) (provider.ResticAttemptV1, error) {
 	runtime, link, err := service.loadExactPublicationRuntime(ctx, claim.lineage.TaskID, audit)
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
 	if runtime.repository.ID != claim.point.RepositoryID || link.ID != claim.lineage.TaskRepositoryLinkID || runtime.repository.RepositoryIdentity == nil ||
 		runtime.repository.CapabilityRevision != claim.point.CapabilityRevision || runtime.document.AdapterRevision == "" {
-		return provider.PublicationAttempt{}, fmt.Errorf("%w: preparing reconciliation binding drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, fmt.Errorf("%w: preparing reconciliation binding drift", backupasset.ErrConflict)
 	}
 	limits, err := service.providerOperationLimits()
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
 	prober, err := service.registry.Prober(backupasset.ProviderRestic)
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
 	observation, err := prober.Probe(ctx, runtime.access, limits)
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
 	if err := validateObservation(runtime.access, observation); err != nil || observation.RepositoryIdentity != *runtime.repository.RepositoryIdentity ||
 		observation.AdapterRevision != runtime.document.AdapterRevision {
 		if err != nil {
-			return provider.PublicationAttempt{}, err
+			return provider.ResticAttemptV1{}, err
 		}
-		return provider.PublicationAttempt{}, fmt.Errorf("%w: preparing reconciliation repository identity drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, fmt.Errorf("%w: preparing reconciliation repository identity drift", backupasset.ErrConflict)
 	}
 	tags, err := deriveResticPublicationTags(link.ID, claim.point.ID)
 	if err != nil {
-		return provider.PublicationAttempt{}, err
+		return provider.ResticAttemptV1{}, err
 	}
-	return provider.PublicationAttempt{
+	return provider.ResticAttemptV1{
 		Provider: backupasset.ProviderRestic, RepositoryID: claim.point.RepositoryID, RepositoryIdentity: observation.RepositoryIdentity,
 		TaskRepositoryLinkID: link.ID, RecoveryPointID: claim.point.ID, TaskID: claim.lineage.TaskID, TaskRunID: claim.lineage.TaskRunID,
 		RequiredTags: tags, PointDeadlineAt: claim.lineage.PointDeadlineAt, CapabilityRevision: runtime.repository.CapabilityRevision,
@@ -701,27 +740,27 @@ func (service *PublicationService) rebuildPreparingAttempt(ctx context.Context, 
 	}, nil
 }
 
-func storedSummaryCommitEvidence(attempt provider.PublicationAttempt, observations []provider.ResticSnapshotObservation) (provider.ProviderCommitEvidence, error) {
+func storedSummaryCommitEvidence(attempt provider.ResticAttemptV1, observations []provider.ResticSnapshotObservation) (provider.ResticCommitV1, error) {
 	observation, err := exactAttemptObservation(attempt, observations)
 	if err != nil {
-		return provider.ProviderCommitEvidence{}, err
+		return provider.ResticCommitV1{}, err
 	}
 	if observation.Summary == nil {
-		return provider.ProviderCommitEvidence{}, fmt.Errorf("%w: %w", backupasset.ErrConflict, errStoredSummaryMissing)
+		return provider.ResticCommitV1{}, fmt.Errorf("%w: %w", backupasset.ErrConflict, errStoredSummaryMissing)
 	}
 	summary := observation.Summary
 	if summary.BackupStartedAt.IsZero() || summary.BackupFinishedAt.IsZero() || summary.BackupFinishedAt.Before(summary.BackupStartedAt) ||
 		!observation.SnapshotTime.UTC().Equal(summary.BackupStartedAt.UTC()) {
-		return provider.ProviderCommitEvidence{}, fmt.Errorf("%w: %w", backupasset.ErrConflict, errStoredSummaryInvalid)
+		return provider.ResticCommitV1{}, fmt.Errorf("%w: %w", backupasset.ErrConflict, errStoredSummaryInvalid)
 	}
-	return provider.ProviderCommitEvidence{
+	return provider.ResticCommitV1{
 		Provider: backupasset.ProviderRestic, RepositoryIdentity: observation.RepositoryIdentity, NativePointID: observation.NativePointID,
 		CaptureStartedAt: summary.BackupStartedAt.UTC(), CaptureFinishedAt: summary.BackupFinishedAt.UTC(),
 		FilesProcessed: summary.FilesProcessed, LogicalBytes: summary.LogicalBytes,
 	}, nil
 }
 
-func exactAttemptObservation(attempt provider.PublicationAttempt, observations []provider.ResticSnapshotObservation) (provider.ResticSnapshotObservation, error) {
+func exactAttemptObservation(attempt provider.ResticAttemptV1, observations []provider.ResticSnapshotObservation) (provider.ResticSnapshotObservation, error) {
 	if len(observations) != 1 {
 		return provider.ResticSnapshotObservation{}, fmt.Errorf("%w: exact Restic run tags are ambiguous", backupasset.ErrConflict)
 	}
@@ -777,14 +816,18 @@ func (service *PublicationService) processVerifyingPoint(ctx context.Context, po
 	if err := limits.Validate(); err != nil {
 		return publication.Outcome{}, err
 	}
-	builder, err := service.registry.ManifestBuilder(backupasset.ProviderRestic)
+	strategy, err := service.registry.PublicationStrategy(backupasset.ProviderRestic)
 	if err != nil {
 		return publication.Outcome{}, err
 	}
 
 	workCtx, stopHeartbeat := service.startPublicationHeartbeat(ctx, attempt.Fence, leaseConfig)
 	service.metrics.ObserveAttempt(backupasset.ProviderRestic, publication.StageManifest)
-	manifest, buildErr := builder.BuildManifest(workCtx, attempt, evidence, limits)
+	manifestResult, buildErr := strategy.VerifyOrBuildManifest(workCtx, provider.PreparedPublication{Attempt: provider.NewResticPublicationAttempt(attempt)}, provider.NewResticProviderCommit(evidence), limits)
+	manifest := provider.ResticManifestV1{}
+	if buildErr == nil {
+		manifest, buildErr = manifestResult.ResticManifest()
+	}
 	workCause := context.Cause(workCtx)
 	stopHeartbeat()
 	if workCause != nil && buildErr == nil {
@@ -794,7 +837,7 @@ func (service *PublicationService) processVerifyingPoint(ctx context.Context, po
 		if errors.Is(buildErr, backupasset.ErrLeaseFenceLost) || errors.Is(buildErr, backupasset.ErrLeaseDeadlineExceeded) {
 			return publication.Outcome{}, buildErr
 		}
-		return service.commitTransientManifestDiagnostic(ctx, claim, attempt, evidence, provider.ManifestEvidence{
+		return service.commitTransientManifestDiagnostic(ctx, claim, attempt, evidence, provider.ResticManifestV1{
 			DigestAlgorithm: "sha256", Generator: "xirang-restic-ls", GeneratorVersion: "1", Completeness: backupasset.ManifestUnavailable,
 			Fidelity: provider.ResticManifestFidelityV1(), FailureCode: backupasset.FailureManifestUnavailable,
 		})
@@ -838,7 +881,7 @@ func (service *PublicationService) processVerifyingPoint(ctx context.Context, po
 	return outcome, nil
 }
 
-func pendingVerifyingOutcome(claim publicationManifestClaim, attempt provider.PublicationAttempt) publication.Outcome {
+func pendingVerifyingOutcome(claim publicationManifestClaim, attempt provider.ResticAttemptV1) publication.Outcome {
 	return publication.Outcome{
 		RepositoryID: claim.point.RepositoryID, RecoveryPointID: claim.point.ID, TaskID: attempt.TaskID, TaskRunID: attempt.TaskRunID,
 		State: backupasset.RecoveryPointVerifying, ProviderCommitRecorded: true,
@@ -849,17 +892,18 @@ func pendingVerifyingOutcome(claim publicationManifestClaim, attempt provider.Pu
 // distinguishes a temporarily unreadable committed ID from a tag/original/ID
 // rewrite. It runs under the manifest admission token and publication fence;
 // no repository-wide fallback, prefix, or latest selection is permitted.
-func (service *PublicationService) unavailableManifestWasRewritten(ctx context.Context, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence) (bool, error) {
-	publisher, err := service.registry.ResticPublisher(backupasset.ProviderRestic)
+func (service *PublicationService) unavailableManifestWasRewritten(ctx context.Context, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1) (bool, error) {
+	strategy, err := service.registry.PublicationStrategy(backupasset.ProviderRestic)
 	if err != nil {
 		return false, err
 	}
-	observations, err := publisher.LookupAttempt(ctx, attempt)
+	reconcileResult, err := strategy.Reconcile(ctx, provider.PublicationReconcileRequest{Attempt: provider.NewResticPublicationAttempt(attempt)})
 	if err != nil {
 		// Lookup unavailability is itself transient. The durable verifying row
 		// remains the source of truth and its lease will short-expire.
 		return false, nil
 	}
+	observations := reconcileResult.ResticObservations
 	if len(observations) == 0 {
 		return false, nil
 	}
@@ -877,7 +921,7 @@ func (service *PublicationService) unavailableManifestWasRewritten(ctx context.C
 // transient manifest failure while deliberately leaving the point verifying
 // and its fence active. The caller has already stopped its heartbeat, so a
 // later worker can take over without extending the immutable deadline.
-func (service *PublicationService) commitTransientManifestDiagnostic(ctx context.Context, claim publicationManifestClaim, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence, manifest provider.ManifestEvidence) (publication.Outcome, error) {
+func (service *PublicationService) commitTransientManifestDiagnostic(ctx context.Context, claim publicationManifestClaim, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, manifest provider.ResticManifestV1) (publication.Outcome, error) {
 	if manifest.Completeness != backupasset.ManifestPartial && manifest.Completeness != backupasset.ManifestUnavailable {
 		return publication.Outcome{}, fmt.Errorf("%w: invalid transient manifest completeness", backupasset.ErrInvalidState)
 	}
@@ -1051,63 +1095,63 @@ func (service *PublicationService) acquireOrTakeoverPublicationLeaseTx(ctx conte
 	return lease, err
 }
 
-func (service *PublicationService) rebuildManifestAttempt(ctx context.Context, claim publicationManifestClaim, audit backupasset.PublicationAuditContext) (provider.PublicationAttempt, provider.ProviderCommitEvidence, error) {
+func (service *PublicationService) rebuildManifestAttempt(ctx context.Context, claim publicationManifestClaim, audit backupasset.PublicationAuditContext) (provider.ResticAttemptV1, provider.ResticCommitV1, error) {
 	runtime, link, err := service.loadExactPublicationRuntime(ctx, claim.lineage.TaskID, audit)
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	if runtime.repository.ID != claim.point.RepositoryID || link.ID != claim.lineage.TaskRepositoryLinkID || runtime.repository.RepositoryIdentity == nil ||
 		runtime.repository.CapabilityRevision != claim.consistency.CapabilityRevision || runtime.document.AdapterRevision != claim.consistency.AdapterRevision {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, fmt.Errorf("%w: manifest publication binding drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, fmt.Errorf("%w: manifest publication binding drift", backupasset.ErrConflict)
 	}
 	limits, err := service.providerOperationLimits()
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	prober, err := service.registry.Prober(backupasset.ProviderRestic)
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	observation, err := prober.Probe(ctx, runtime.access, limits)
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	if err := validateObservation(runtime.access, observation); err != nil || observation.RepositoryIdentity != *runtime.repository.RepositoryIdentity ||
 		observation.AdapterRevision != runtime.document.AdapterRevision {
 		if err != nil {
-			return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+			return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 		}
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, fmt.Errorf("%w: manifest repository identity drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, fmt.Errorf("%w: manifest repository identity drift", backupasset.ErrConflict)
 	}
 	tags, err := deriveResticPublicationTags(link.ID, claim.point.ID)
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	if claim.consistency.RequestedTagDigest != publicationTagDigest(tags) || claim.consistency.RepositoryIdentityDigest != digestText(observation.RepositoryIdentity) {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, fmt.Errorf("%w: manifest provider evidence drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, fmt.Errorf("%w: manifest provider evidence drift", backupasset.ErrConflict)
 	}
-	attempt := provider.PublicationAttempt{
+	attempt := provider.ResticAttemptV1{
 		Provider: backupasset.ProviderRestic, RepositoryID: claim.point.RepositoryID, RepositoryIdentity: observation.RepositoryIdentity,
 		TaskRepositoryLinkID: link.ID, RecoveryPointID: claim.point.ID, TaskID: claim.lineage.TaskID, TaskRunID: claim.lineage.TaskRunID,
 		RequiredTags: tags, PointDeadlineAt: claim.lineage.PointDeadlineAt, CapabilityRevision: runtime.repository.CapabilityRevision,
 		AdapterRevision: observation.AdapterRevision, Audit: audit, Access: runtime.access, Fence: claim.lease.Fence,
 	}
-	evidence := provider.ProviderCommitEvidence{
+	evidence := provider.ResticCommitV1{
 		Provider: backupasset.ProviderRestic, RepositoryIdentity: observation.RepositoryIdentity, NativePointID: claim.locator.FullSnapshotID,
 		CaptureStartedAt: *claim.consistency.CaptureStartedAt, CaptureFinishedAt: *claim.consistency.CaptureFinishedAt,
 		FilesProcessed: claim.consistency.FilesProcessed, LogicalBytes: claim.consistency.LogicalBytes,
 	}
 	digest, err := canonicalProviderCommitDigest(attempt, evidence, claim.consistency.RequestedTagDigest)
 	if err != nil {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, err
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, err
 	}
 	if digest != claim.consistency.ProviderCommitDigest || claim.point.SourceFingerprint != resticSourceFingerprint(evidence.RepositoryIdentity, evidence.NativePointID) {
-		return provider.PublicationAttempt{}, provider.ProviderCommitEvidence{}, fmt.Errorf("%w: manifest provider commit digest drift", backupasset.ErrConflict)
+		return provider.ResticAttemptV1{}, provider.ResticCommitV1{}, fmt.Errorf("%w: manifest provider commit digest drift", backupasset.ErrConflict)
 	}
 	return attempt, evidence, nil
 }
 
-func (service *PublicationService) commitCompleteManifest(ctx context.Context, claim publicationManifestClaim, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence, manifest provider.ManifestEvidence) (publication.Outcome, error) {
+func (service *PublicationService) commitCompleteManifest(ctx context.Context, claim publicationManifestClaim, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, manifest provider.ResticManifestV1) (publication.Outcome, error) {
 	if manifest.DigestAlgorithm != "sha256" || !isLowerHex64(manifest.Digest) || manifest.EntryCount < 0 || manifest.LogicalBytes < 0 ||
 		manifest.HeaderCapturedAt.IsZero() || !manifest.HeaderCapturedAt.UTC().Equal(evidence.CaptureStartedAt.UTC()) || manifest.ObservedTagDigest != publicationTagDigest(attempt.RequiredTags) {
 		return publication.Outcome{}, fmt.Errorf("%w: invalid complete manifest evidence", backupasset.ErrConflict)
@@ -1242,7 +1286,7 @@ func previousCommittedNativePointTx(ctx context.Context, tx *gorm.DB, current mo
 	return "", nil
 }
 
-func (service *PublicationService) commitDiagnosticManifest(ctx context.Context, claim publicationManifestClaim, attempt provider.PublicationAttempt, evidence provider.ProviderCommitEvidence, manifest provider.ManifestEvidence) (publication.Outcome, error) {
+func (service *PublicationService) commitDiagnosticManifest(ctx context.Context, claim publicationManifestClaim, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, manifest provider.ResticManifestV1) (publication.Outcome, error) {
 	if manifest.Completeness != backupasset.ManifestPartial && manifest.Completeness != backupasset.ManifestUnavailable {
 		return publication.Outcome{}, fmt.Errorf("%w: invalid diagnostic manifest completeness", backupasset.ErrInvalidState)
 	}

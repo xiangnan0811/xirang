@@ -81,6 +81,156 @@ func TestBindingCodecRejectsUnknownSchemaAndTrailingData(t *testing.T) {
 	}
 }
 
+func TestManagedRsyncBindingV2RoundTripAndV1DecoderRefusesIt(t *testing.T) {
+	document := managedRsyncBindingDocumentV2{
+		Version:                   managedRsyncBindingDocumentVersion,
+		Provider:                  backupasset.ProviderRsync,
+		IdentityClass:             provider.IdentityXirangManagedRepository,
+		TaskID:                    7,
+		NodeID:                    9,
+		RepositoryID:              strings.Repeat("a", 32),
+		TaskRepositoryLinkID:      strings.Repeat("b", 32),
+		LayoutRevision:            managedRsyncLayoutRevisionV1,
+		ManagedRootLocator:        "/srv/xirang-managed/7",
+		RootMarkerDigest:          strings.Repeat("c", 64),
+		ManagedRootIdentityDigest: strings.Repeat("d", 64),
+		PublicationMode:           backupasset.PublicationVersionedHardlink,
+		PreflightID:               strings.Repeat("e", 32),
+		PreflightDigest:           strings.Repeat("f", 64),
+		IdentitySalt:              strings.Repeat("42", provider.IdentitySaltBytes),
+	}
+	payload, err := encodeManagedRsyncBindingDocumentV2(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeManagedRsyncBindingDocumentV2(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded != document {
+		t.Fatalf("managed binding round trip=%+v, want %+v", decoded, document)
+	}
+	if _, err := decodeBindingDocument(payload); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("v1 decoder accepted v2 managed binding: %v", err)
+	}
+	stored, err := decodeStoredBindingDocument(payload)
+	if err != nil || stored.ManagedRsyncV2 == nil || stored.V1 != nil || *stored.ManagedRsyncV2 != document {
+		t.Fatalf("stored v2 binding=%+v err=%v", stored, err)
+	}
+	if _, err := decodeManagedRsyncBindingDocumentV2(payload[:len(payload)-1] + `,"future":true}`); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("v2 decoder accepted unknown field: %v", err)
+	}
+	if _, err := decodeStoredBindingDocument(strings.Replace(payload, `"version":2`, `"version":2,"version":2`, 1)); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("stored decoder accepted duplicate version: %v", err)
+	}
+	if _, err := decodeStoredBindingDocument(strings.Replace(payload, `"version":2`, `"version":3`, 1)); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("stored decoder accepted unsupported version: %v", err)
+	}
+
+	serialized, err := json.Marshal(model.RepositoryAccessBinding{EncryptedConfig: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serialized), document.ManagedRootLocator) {
+		t.Fatalf("managed root locator leaked through public binding JSON: %s", serialized)
+	}
+}
+
+func TestManagedRsyncBindingV2RequiresExecutionProof(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"version":                      managedRsyncBindingDocumentVersion,
+		"provider":                     backupasset.ProviderRsync,
+		"identity_class":               provider.IdentityXirangManagedRepository,
+		"task_id":                      7,
+		"node_id":                      9,
+		"repository_id":                strings.Repeat("a", 32),
+		"task_repository_link_id":      strings.Repeat("b", 32),
+		"layout_revision":              managedRsyncLayoutRevisionV1,
+		"managed_root_locator":         "/srv/xirang-managed/7",
+		"root_marker_digest":           strings.Repeat("c", 64),
+		"managed_root_identity_digest": strings.Repeat("d", 64),
+		"publication_mode":             backupasset.PublicationVersionedFullCopy,
+		"preflight_id":                 strings.Repeat("e", 32),
+		"preflight_digest":             strings.Repeat("f", 64),
+		"identity_salt":                strings.Repeat("42", provider.IdentitySaltBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeManagedRsyncBindingDocumentV2(string(payload)); err != nil {
+		t.Fatalf("complete managed binding execution proof rejected: %v", err)
+	}
+	for _, field := range []string{"managed_root_identity_digest", "preflight_id", "preflight_digest"} {
+		t.Run("missing "+field, func(t *testing.T) {
+			var candidate map[string]any
+			if err := json.Unmarshal(payload, &candidate); err != nil {
+				t.Fatal(err)
+			}
+			delete(candidate, field)
+			encoded, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeManagedRsyncBindingDocumentV2(string(encoded)); !errors.Is(err, backupasset.ErrInvalidState) {
+				t.Fatalf("missing execution proof field error=%v, want invalid state", err)
+			}
+		})
+	}
+}
+
+func TestManagedRsyncBindingV2RejectsRootTaskAndLinkDrift(t *testing.T) {
+	task := model.Task{ID: 7, NodeID: 9, RsyncTarget: "/srv/legacy-rsync"}
+	linkTaskID := task.ID
+	link := model.TaskRepositoryLink{
+		ID:              strings.Repeat("b", 32),
+		TaskID:          &linkTaskID,
+		RepositoryID:    strings.Repeat("a", 32),
+		PublicationMode: string(backupasset.PublicationVersionedFullCopy),
+	}
+	document := managedRsyncBindingDocumentV2{
+		Version:                   managedRsyncBindingDocumentVersion,
+		Provider:                  backupasset.ProviderRsync,
+		IdentityClass:             provider.IdentityXirangManagedRepository,
+		TaskID:                    task.ID,
+		NodeID:                    task.NodeID,
+		RepositoryID:              link.RepositoryID,
+		TaskRepositoryLinkID:      link.ID,
+		LayoutRevision:            managedRsyncLayoutRevisionV1,
+		ManagedRootLocator:        "/srv/xirang-managed/7",
+		RootMarkerDigest:          strings.Repeat("c", 64),
+		ManagedRootIdentityDigest: strings.Repeat("d", 64),
+		PublicationMode:           backupasset.PublicationVersionedFullCopy,
+		PreflightID:               strings.Repeat("e", 32),
+		PreflightDigest:           strings.Repeat("f", 64),
+		IdentitySalt:              strings.Repeat("42", provider.IdentitySaltBytes),
+	}
+	association := managedRsyncBindingAssociation{Task: task, Link: link, RootMarkerDigest: document.RootMarkerDigest}
+	if err := validateManagedRsyncBindingAssociation(document, association); err != nil {
+		t.Fatalf("valid managed binding association: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*managedRsyncBindingAssociation)
+	}{
+		{"root marker", func(value *managedRsyncBindingAssociation) { value.RootMarkerDigest = strings.Repeat("d", 64) }},
+		{"task", func(value *managedRsyncBindingAssociation) { value.Task.ID++ }},
+		{"link", func(value *managedRsyncBindingAssociation) { value.Link.ID = strings.Repeat("e", 32) }},
+		{"mode", func(value *managedRsyncBindingAssociation) {
+			value.Link.PublicationMode = string(backupasset.PublicationLegacyMutable)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := association
+			tt.mutate(&candidate)
+			if err := validateManagedRsyncBindingAssociation(document, candidate); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("association drift error=%v, want conflict", err)
+			}
+		})
+	}
+}
+
 func TestBindingReconstructsRcloneNodeDefaultConfig(t *testing.T) {
 	salt := bytes.Repeat([]byte{0x42}, provider.IdentitySaltBytes)
 	node := model.Node{ID: 9, Name: "node", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY"}

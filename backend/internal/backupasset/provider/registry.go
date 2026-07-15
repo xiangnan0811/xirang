@@ -9,14 +9,13 @@ import (
 )
 
 type Registration struct {
-	Prober           RepositoryProber
-	PointLister      PointLister
-	EntryLister      EntryLister
-	EntryStatter     EntryStatter
-	SequentialReader SequentialReader
-	RangeReader      RangeReader
-	ResticPublisher  ResticPublisher
-	ManifestBuilder  ManifestBuilder
+	Prober              RepositoryProber
+	PointLister         PointLister
+	EntryLister         EntryLister
+	EntryStatter        EntryStatter
+	SequentialReader    SequentialReader
+	RangeReader         RangeReader
+	PublicationStrategy PublicationStrategy
 }
 
 type Registry struct {
@@ -107,26 +106,22 @@ func (registry *Registry) RangeReader(kind backupasset.ProviderKind) (RangeReade
 	return registration.RangeReader, nil
 }
 
-func (registry *Registry) ResticPublisher(kind backupasset.ProviderKind) (ResticPublisher, error) {
+// PublicationStrategy returns the one registered tagged publication strategy
+// for a provider. A missing or mismatched strategy is unavailable rather than
+// falling back to another provider's behavior.
+func (registry *Registry) PublicationStrategy(kind backupasset.ProviderKind) (PublicationStrategy, error) {
 	registration, err := registry.registration(kind)
-	if err != nil || interfaceNil(registration.ResticPublisher) {
+	if err != nil || interfaceNil(registration.PublicationStrategy) {
 		if err != nil {
 			return nil, err
 		}
 		return nil, newCapabilityError(backupasset.CapabilityProviderUnavailable)
 	}
-	return registration.ResticPublisher, nil
-}
-
-func (registry *Registry) ManifestBuilder(kind backupasset.ProviderKind) (ManifestBuilder, error) {
-	registration, err := registry.registration(kind)
-	if err != nil || interfaceNil(registration.ManifestBuilder) {
-		if err != nil {
-			return nil, err
-		}
-		return nil, newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	strategy := registration.PublicationStrategy
+	if strategy.Kind() != kind {
+		return nil, fmt.Errorf("%w: publication strategy provider mismatch", backupasset.ErrInvalidState)
 	}
-	return registration.ManifestBuilder, nil
+	return strategy, nil
 }
 
 func (registry *Registry) registration(kind backupasset.ProviderKind) (Registration, error) {

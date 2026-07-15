@@ -75,6 +75,7 @@
 - 只有强内容摘要与相同 pipeline fingerprint、输出 profile 和安全策略均一致时，派生计算结果才能跨恢复点去重复用；绑定、授权、敏感级别和到期仍逐恢复点维护。无强摘要时不得仅凭路径、大小或 mtime 复用。UI 必须区分已完成、部分覆盖、排队、失败、超限、加密、不支持和 Worker 未部署，任何不完整覆盖都不能被表述为“无匹配内容”或“文件安全”。
 - 用户于 2026-07-13 审阅并明确认可 `design.md` 技术设计，授权继续编写未来实施分解与验证计划；该认可不等于批准启动实现，`task.py start` 仍需等待 `implement.md` 完成并经用户最终审阅。
 - 用户于 2026-07-14 审阅 Child 3 的 current-main schema 证据并批准方案 A：由 `backup-assets-restic-lineage` 增加 paired `000063_backup_asset_publication_contract`，诚实修正 Restic `native_snapshot` publication mode、增加 `point_publication` lease holder 与双唯一防线，父计划原 `000063…000069` 顺延为 `000064…000070`。
+- 用户于 2026-07-15 审阅 Child 4 的 Rsync publication schema 证据并批准方案 A：由 `backup-assets-rsync-versioning` 增加 paired `000064_backup_asset_rsync_publication_contract`，建立 durable managed-history latch、回填既有 Restic managed history、保护 managed tree source identity 与 fail-closed down；Search–GA 的原 reservation 整体顺延为 `000065…000071`。
 
 ## Requirements
 
