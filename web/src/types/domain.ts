@@ -340,6 +340,139 @@ export interface RsyncVersioningRollbackPreparationResult {
   summary: RsyncPublicationSummary;
 }
 
+export type RclonePublicationMode =
+  | "legacy_mutable"
+  | "versioned_prefix"
+  | "native_object_versions";
+
+export type RcloneVersionedPublicationMode = Exclude<RclonePublicationMode, "legacy_mutable">;
+
+export type RclonePublicationState =
+  | "legacy"
+  | "preflight_required"
+  | "credential_setup_required"
+  | "capability_settling"
+  | "ready"
+  | "preparing"
+  | "verifying"
+  | "committed"
+  | "degraded"
+  | "at_risk"
+  | "failed"
+  | "blocked"
+  | "rollback_prepared";
+
+export type RclonePublicationReasonCode =
+  | "legacy"
+  | "preflight_required"
+  | "ready"
+  | "credential_setup_required"
+  | "capability_settling"
+  | "preflight_expired"
+  | "task_revision_changed"
+  | "binding_revision_changed"
+  | "preflight_mismatch"
+  | "feature_disabled"
+  | "unsupported_profile"
+  | "repository_offline"
+  | "provider_unavailable"
+  | "provider_timeout"
+  | "provider_resource_limit"
+  | "session_too_short"
+  | "versioning_disabled"
+  | "lifecycle_conflict"
+  | "encryption_unsupported"
+  | "kms_key_unavailable"
+  | "kms_permission_denied"
+  | "kms_key_ring_limit"
+  | "identity_mismatch"
+  | "credential_invalid"
+  | "verification_cost_limit"
+  | "source_drift"
+  | "external_writer_detected"
+  | "unexpected_version"
+  | "manifest_mismatch"
+  | "marker_mismatch"
+  | "admission_blocked"
+  | "outcome_unknown"
+  | "rollback_prepared";
+
+export type RcloneConsistencyClass = "not_evaluated" | "observationally_stable" | "provider_strong";
+export type RcloneHashFidelity = "not_evaluated" | "provider_strong_checksum" | "download_verified_bytes";
+export type RcloneCostClass = "not_evaluated" | "none" | "low" | "moderate" | "high";
+export type RcloneEncryptionProfile = "none" | "sse_s3" | "sse_kms_cmk";
+export type RcloneKmsKeyStatus = "not_applicable" | "ready" | "degraded" | "at_risk" | "blocked";
+export type RcloneRollbackCapability = "clean_available" | "preparation_only" | "prepared";
+export type RcloneVersioningMigrationChoice = "imported_baseline" | "first_new_point";
+
+export interface RclonePublicationSummary {
+  mode: RclonePublicationMode;
+  state: RclonePublicationState;
+  reasonCode: RclonePublicationReasonCode;
+  taskRevision: string;
+  bindingRevision: string;
+  capabilityRevision: string;
+  consistencyClass: RcloneConsistencyClass;
+  hashFidelity: RcloneHashFidelity;
+  estimatedReadBytes: string;
+  apiCostClass: RcloneCostClass;
+  storageCostClass: RcloneCostClass;
+  egressCostClass: RcloneCostClass;
+  credentialExpiresAt?: string;
+  encryptionProfile: RcloneEncryptionProfile;
+  kmsKeyStatus: RcloneKmsKeyStatus;
+  kmsReadKeyCount: number;
+  rollbackLocatorPresent: boolean;
+  rollbackCapability: RcloneRollbackCapability;
+}
+
+export interface RcloneBindingSetupResult {
+  setupId: string;
+  expiresAt: string;
+  externalId?: string;
+}
+
+export type RcloneNativeBootstrapInput =
+  | { mode: "workload_chain" }
+  | { mode: "static_sts_bootstrap"; accessKeyId: string; secretAccessKey: string };
+
+export interface RclonePortableBindingInput {
+  expectedTaskRevision: string;
+  expectedBindingRevision: string;
+  setupId: string;
+  targetRemote: string;
+  managedRootLocator: string;
+  boundConfig: string;
+}
+
+export interface RcloneNativeBindingInput {
+  expectedTaskRevision: string;
+  expectedBindingRevision: string;
+  setupId: string;
+  region: string;
+  bucket: string;
+  managedPrefix: string;
+  roleArn: string;
+  bootstrap: RcloneNativeBootstrapInput;
+  encryptionProfile: Exclude<RcloneEncryptionProfile, "none">;
+  kmsKeyArn?: string;
+}
+
+export interface RcloneVersioningPreflightResult {
+  preflightId: string;
+  expiresAt: string;
+  summary: RclonePublicationSummary;
+}
+
+export interface RcloneVersioningActivationResult {
+  summary: RclonePublicationSummary;
+  migrationChoice: RcloneVersioningMigrationChoice;
+}
+
+export interface RcloneVersioningRollbackResult {
+  summary: RclonePublicationSummary;
+}
+
 export interface TaskRecord {
   id: number;
   name?: string;
@@ -368,6 +501,7 @@ export interface TaskRecord {
   source?: string;
   verifyStatus?: "none" | "passed" | "warning" | "failed";
   rsyncPublication?: RsyncPublicationSummary;
+  rclonePublication?: RclonePublicationSummary;
   enabled: boolean;
   skipNext?: boolean;
 }

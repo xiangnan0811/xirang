@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -329,5 +331,125 @@ func TestReconcileInterruptedRunsReportsManagedRsyncProviderCommit(t *testing.T)
 	}
 	if run.Status != "warning" || run.LastError != taskRunCodeInterruptedAfterProviderCommit {
 		t.Fatalf("managed Rsync interrupted TaskRun=%+v", run)
+	}
+}
+
+func TestReconcileInterruptedRunsReportsManagedRcloneProviderCommit(t *testing.T) {
+	manager, db, taskEntity, runID, startedAt := setupInterruptedPublicationRun(t)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "rclone").Error; err != nil {
+		t.Fatal(err)
+	}
+	linkID := strings.Repeat("1", 32)
+	pointID := strings.Repeat("2", 32)
+	attemptID := strings.Repeat("3", 32)
+	repositoryID := strings.Repeat("4", 32)
+	deadline := startedAt.Add(time.Hour)
+	lineage, err := backupasset.EncodePublicationLineage(backupasset.PublicationLineageV1{
+		Version: 1, TaskRepositoryLinkID: linkID, TaskID: taskEntity.ID, TaskRunID: runID, Trigger: "manual",
+		PublicationMode: string(backupasset.PublicationVersionedPrefix), PointCodecVersion: 1,
+		StartedAt: startedAt, PreparedAt: startedAt.Add(time.Second), PointDeadlineAt: deadline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := provider.RcloneAttemptV1{
+		SchemaVersion: 1, LayoutVersion: 1, MinimumRuntimeRevision: 1, Provider: backupasset.ProviderRclone,
+		RepositoryID: repositoryID, TaskRepositoryLinkID: linkID, RecoveryPointID: pointID, AttemptID: attemptID,
+		TaskID: taskEntity.ID, TaskRunID: runID, Trigger: "manual", PublicationMode: backupasset.PublicationVersionedPrefix,
+		CaptureStartedAt: startedAt, PreparedAt: startedAt.Add(time.Second), PointDeadlineAt: deadline,
+		ExpectedTaskRevision: 1, BindingRevision: 1, ConfigRevision: 1, ConfigDigest: strings.Repeat("5", 64),
+		CapabilityRevision: 1, CredentialRevision: 1, PreflightID: strings.Repeat("6", 32), PreflightRevision: 1,
+		PreflightDigest: strings.Repeat("7", 64), ManifestSchemaRevision: 1, ManifestLimitsRevision: 1,
+		ManifestLimitsDigest: strings.Repeat("8", 64), RepositoryIdentityDigest: strings.Repeat("9", 64),
+		ManagedRootIdentityDigest: strings.Repeat("a", 64), ChildFenceDigest: strings.Repeat("b", 64),
+		LegacyOriginEvidenceDigest: strings.Repeat("c", 64),
+		Portable: &provider.RclonePortableAttemptV1{
+			AttemptComponent: pointID + "." + attemptID, DataComponent: "data", ControlComponent: "control",
+			AttemptMarkerDigest: strings.Repeat("d", 64), ExpectedConsistencyClass: string(backupasset.RcloneConsistencyObservationallyStable),
+			ExpectedHashFidelity: string(backupasset.RcloneHashProviderStrongChecksum),
+		},
+	}
+	taggedAttempt, err := provider.EncodePublicationAttempt(provider.NewRclonePublicationAttempt(attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := provider.RcloneCommitV1{
+		SchemaVersion: 1, LayoutVersion: 1, MinimumRuntimeRevision: 1,
+		RepositoryID: repositoryID, TaskRepositoryLinkID: linkID, RecoveryPointID: pointID, AttemptID: attemptID,
+		PublicationMode: backupasset.PublicationVersionedPrefix, PointDeadlineAt: deadline, ProviderCommittedAt: startedAt.Add(2 * time.Second),
+		ManifestIndexDigest: strings.Repeat("e", 64), ManifestChunkDigests: []string{strings.Repeat("f", 64)}, ManifestEntryCount: 1, LogicalBytes: 42,
+		SourceObservationDigest: strings.Repeat("1", 64), DestinationObservationDigest: strings.Repeat("2", 64),
+		ContentProofDigest: strings.Repeat("3", 64), FidelityEvidenceDigest: strings.Repeat("4", 64), CostEvidenceDigest: strings.Repeat("5", 64),
+		CapabilityEvidenceDigest: attempt.PreflightDigest, ChildFenceDigest: attempt.ChildFenceDigest,
+		Portable: &provider.RclonePortableCommitV1{
+			AttemptIdentityDigest: strings.Repeat("6", 64), ControlIdentityDigest: strings.Repeat("7", 64), DataIdentityDigest: strings.Repeat("8", 64),
+			AttemptMarkerDigest: attempt.Portable.AttemptMarkerDigest, CommitComponent: "commit.json", CommitPayloadDigest: strings.Repeat("9", 64),
+			CommitAuthenticationDigest: strings.Repeat("a", 64), ConsistencyEvidenceDigest: strings.Repeat("b", 64), HashEvidenceDigest: strings.Repeat("c", 64),
+		},
+	}
+	taggedCommit, err := provider.EncodeProviderCommit(provider.NewRcloneProviderCommit(commit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitDigest := sha256.Sum256([]byte(taggedCommit))
+	physicalIdentity := strings.Repeat("d", 64)
+	locator, err := json.Marshal(struct {
+		Version                 int                             `json:"version"`
+		Provider                backupasset.ProviderKind        `json:"provider"`
+		RepositoryID            string                          `json:"repository_id"`
+		RecoveryPointID         string                          `json:"recovery_point_id"`
+		AttemptID               string                          `json:"attempt_id"`
+		PublicationMode         backupasset.TaskPublicationMode `json:"publication_mode"`
+		TaggedAttempt           string                          `json:"tagged_attempt"`
+		TaggedCommit            string                          `json:"tagged_commit"`
+		ChildFenceDigest        string                          `json:"child_fence_digest"`
+		CommitPayloadDigest     string                          `json:"commit_payload_digest"`
+		PortableAttemptRoot     string                          `json:"portable_attempt_root,omitempty"`
+		NativeCommitKey         string                          `json:"native_commit_key,omitempty"`
+		NativeCommitVersionID   string                          `json:"native_commit_version_id,omitempty"`
+		PhysicalIdentityDigest  string                          `json:"physical_identity_digest"`
+		ProviderCommitDigest    string                          `json:"provider_commit_digest"`
+		ManifestControlIdentity string                          `json:"manifest_control_identity"`
+	}{
+		Version: 1, Provider: backupasset.ProviderRclone, RepositoryID: repositoryID, RecoveryPointID: pointID,
+		AttemptID: attemptID, PublicationMode: backupasset.PublicationVersionedPrefix, TaggedAttempt: taggedAttempt, TaggedCommit: taggedCommit,
+		ChildFenceDigest: attempt.ChildFenceDigest, CommitPayloadDigest: commit.Portable.CommitPayloadDigest,
+		PortableAttemptRoot:    "backup:managed/points/" + attempt.Portable.AttemptComponent,
+		PhysicalIdentityDigest: physicalIdentity, ProviderCommitDigest: hex.EncodeToString(commitDigest[:]),
+		ManifestControlIdentity: commit.Portable.ControlIdentityDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consistency, err := backupasset.EncodePublicationConsistency(backupasset.PublicationConsistencyV1{
+		Version: 1, Provider: backupasset.ProviderRclone, RepositoryIdentityDigest: attempt.RepositoryIdentityDigest,
+		ProviderCommitDigest: hex.EncodeToString(commitDigest[:]), CapabilityRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedAt := startedAt.Add(2 * time.Second)
+	point := model.RecoveryPoint{
+		ID: pointID, RepositoryID: repositoryID, ProducingTaskID: &taskEntity.ID, ProducingTaskRunID: &runID,
+		LineageJSON: lineage, EncryptedProviderLocator: string(locator), Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointVerifying),
+		ConsistencyJSON: consistency, FidelityJSON: `{}`, SourceFingerprint: physicalIdentity,
+		ManifestDigestAlgorithm: "sha256", ManifestDigest: commit.ManifestIndexDigest, EntryCount: 1, LogicalBytes: 42,
+		CapturedAt: &committedAt, CapabilityRevision: 1, CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged),
+		PhysicalAvailability: string(backupasset.PhysicalUnknown), HoldState: string(backupasset.HoldNone), CreatedAt: startedAt, UpdatedAt: startedAt,
+	}
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	unresolved, err := manager.ReconcileInterruptedRuns(context.Background(), 10)
+	if err != nil || unresolved {
+		t.Fatalf("managed Rclone interrupted reconciliation unresolved=%v err=%v", unresolved, err)
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "warning" || run.LastError != taskRunCodeInterruptedAfterProviderCommit {
+		t.Fatalf("managed Rclone interrupted TaskRun=%+v", run)
 	}
 }

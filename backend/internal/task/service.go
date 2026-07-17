@@ -479,6 +479,14 @@ func ValidateTaskInput(req CreateTaskInput) error {
 		if publicationConfig.PublicationMode != backupasset.PublicationLegacyMutable {
 			return newValidationError("rsync 版本化发布必须通过预检迁移流程启用")
 		}
+	} else if req.ExecutorType == "rclone" {
+		publicationConfig, err := ParseRcloneTaskConfigV1(req.ExecutorConfig)
+		if err != nil {
+			return err
+		}
+		if publicationConfig.PublicationMode != backupasset.PublicationLegacyMutable {
+			return newValidationError("rclone 版本化发布必须通过预检激活流程启用")
+		}
 	} else if cfg := strings.TrimSpace(req.ExecutorConfig); cfg != "" {
 		if !json.Valid([]byte(cfg)) {
 			return newValidationError("executor_config 必须是合法的 JSON 格式")

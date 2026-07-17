@@ -10,17 +10,25 @@ import (
 type AuditAction string
 
 const (
-	AuditActionRepositoryList           AuditAction = "repository_list"
-	AuditActionRepositoryConnect        AuditAction = "repository_connect"
-	AuditActionRepositoryReconcile      AuditAction = "repository_reconcile"
-	AuditActionRepositoryDisconnect     AuditAction = "repository_disconnect"
-	AuditActionRepositoryImport         AuditAction = "repository_import"
-	AuditActionRepositoryReview         AuditAction = "repository_review"
-	AuditActionRepositoryPurgePlan      AuditAction = "repository_purge_plan"
-	AuditActionRepositoryPurge          AuditAction = "repository_purge"
-	AuditActionRsyncVersioningPreflight AuditAction = "rsync_versioning_preflight"
-	AuditActionRsyncVersioningActivate  AuditAction = "rsync_versioning_activate"
-	AuditActionRsyncVersioningRollback  AuditAction = "rsync_versioning_rollback"
+	AuditActionRepositoryList                      AuditAction = "repository_list"
+	AuditActionRepositoryConnect                   AuditAction = "repository_connect"
+	AuditActionRepositoryReconcile                 AuditAction = "repository_reconcile"
+	AuditActionRepositoryDisconnect                AuditAction = "repository_disconnect"
+	AuditActionRepositoryImport                    AuditAction = "repository_import"
+	AuditActionRepositoryReview                    AuditAction = "repository_review"
+	AuditActionRepositoryPurgePlan                 AuditAction = "repository_purge_plan"
+	AuditActionRepositoryPurge                     AuditAction = "repository_purge"
+	AuditActionRsyncVersioningPreflight            AuditAction = "rsync_versioning_preflight"
+	AuditActionRsyncVersioningActivate             AuditAction = "rsync_versioning_activate"
+	AuditActionRsyncVersioningRollback             AuditAction = "rsync_versioning_rollback"
+	AuditActionRcloneVersioningPortableSetup       AuditAction = "rclone_versioning_portable_setup"
+	AuditActionRcloneVersioningPortableBinding     AuditAction = "rclone_versioning_portable_binding"
+	AuditActionRcloneVersioningNativeSetup         AuditAction = "rclone_versioning_native_setup"
+	AuditActionRcloneVersioningNativeBinding       AuditAction = "rclone_versioning_native_binding"
+	AuditActionRcloneVersioningPreflight           AuditAction = "rclone_versioning_preflight"
+	AuditActionRcloneVersioningActivate            AuditAction = "rclone_versioning_activate"
+	AuditActionRcloneVersioningCleanRollback       AuditAction = "rclone_versioning_clean_rollback"
+	AuditActionRcloneVersioningRollbackPreparation AuditAction = "rclone_versioning_rollback_preparation"
 
 	AuditActionRecoveryPointList                 AuditAction = "recovery_point_list"
 	AuditActionRecoveryPointDetail               AuditAction = "recovery_point_detail"
@@ -93,6 +101,14 @@ var AuditActions = []AuditAction{
 	AuditActionRsyncVersioningPreflight,
 	AuditActionRsyncVersioningActivate,
 	AuditActionRsyncVersioningRollback,
+	AuditActionRcloneVersioningPortableSetup,
+	AuditActionRcloneVersioningPortableBinding,
+	AuditActionRcloneVersioningNativeSetup,
+	AuditActionRcloneVersioningNativeBinding,
+	AuditActionRcloneVersioningPreflight,
+	AuditActionRcloneVersioningActivate,
+	AuditActionRcloneVersioningCleanRollback,
+	AuditActionRcloneVersioningRollbackPreparation,
 	AuditActionRecoveryPointList,
 	AuditActionRecoveryPointDetail,
 	AuditActionRecoveryPointEvidence,

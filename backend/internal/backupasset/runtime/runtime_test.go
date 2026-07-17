@@ -38,6 +38,18 @@ func (*runtimeExecutionFake) Join() (provider.CommandCompletion, error) {
 }
 func (*runtimeExecutionFake) Cancel() error { return nil }
 
+type runtimeStagedPayloadFake struct{}
+
+func (*runtimeStagedPayloadFake) Stage(context.Context, provider.RemoteCommandAccess, provider.StagedPayloadRequest) (provider.StagedPayloadRef, error) {
+	return provider.StagedPayloadRef{}, fmt.Errorf("not used")
+}
+func (*runtimeStagedPayloadFake) Cleanup(context.Context, provider.RemoteCommandAccess, provider.StagedPayloadRef) error {
+	return nil
+}
+func (*runtimeStagedPayloadFake) CleanupAged(context.Context, provider.RemoteCommandAccess, time.Duration, int) error {
+	return nil
+}
+
 var _ provider.CommandTransport = (*runtimeTransportFake)(nil)
 var _ provider.CommandStreamTransport = (*runtimeTransportFake)(nil)
 
@@ -58,14 +70,15 @@ func TestRuntimeExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
-		Metrics: publication.NoopMetrics{}, Now: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
+		StagedPayload: &runtimeStagedPayloadFake{},
+		Metrics:       publication.NoopMetrics{}, Now: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("construct runtime: %v", err)
 	}
-	if runtime.FoundationService() == nil || runtime.RepositoryService() == nil || runtime.PublicationCoordinator() == nil ||
+	if runtime.FoundationService() == nil || runtime.RepositoryService() == nil || runtime.PublicationCoordinator() == nil || runtime.healthWorker == nil ||
 		runtime.PublicationReconciler() == nil || runtime.ResticPublicationStrategy() == nil ||
-		runtime.RsyncTreePublicationStrategy() == nil ||
+		runtime.RsyncTreePublicationStrategy() == nil || runtime.RclonePublicationStrategy() == nil ||
 		runtime.LineageGuard() == nil || runtime.LegacyBlockRecorder() == nil || runtime.FeatureTransitioner() == nil {
 		t.Fatal("runtime omitted a required shared graph port")
 	}
@@ -75,12 +88,16 @@ func TestRuntimeExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.
 	if runtime.RsyncTreePublicationStrategy().Kind() != backupasset.ProviderRsync {
 		t.Fatalf("publication strategy kind=%q, want %q", runtime.RsyncTreePublicationStrategy().Kind(), backupasset.ProviderRsync)
 	}
+	if runtime.RclonePublicationStrategy().Kind() != backupasset.ProviderRclone {
+		t.Fatalf("publication strategy kind=%q, want %q", runtime.RclonePublicationStrategy().Kind(), backupasset.ProviderRclone)
+	}
 }
 
 func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	_, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: &runtimeTransportFake{marker: 1}, StreamTransport: &runtimeTransportFake{marker: 2}, Metrics: publication.NoopMetrics{},
+		StagedPayload: &runtimeStagedPayloadFake{},
 	})
 	if err == nil {
 		t.Fatal("runtime accepted distinct transport facets")
@@ -89,7 +106,7 @@ func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 
 func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) {
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
 		t.Fatal(err)
 	}
 	settingsService := settings.NewService(db)
@@ -98,7 +115,7 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 	}
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
-		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport, Metrics: publication.NoopMetrics{},
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport, StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
 	})
 	if err != nil {
 		t.Fatal(err)

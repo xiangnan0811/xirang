@@ -82,6 +82,15 @@ func (service *PublicationService) ProcessPoint(ctx context.Context, pointID str
 		return publication.Outcome{}, err
 	}
 	switch providerKind {
+	case backupasset.ProviderRclone:
+		switch backupasset.RecoveryPointState(point.State) {
+		case backupasset.RecoveryPointPreparing:
+			return service.processRclonePreparingPoint(ctx, pointID)
+		case backupasset.RecoveryPointVerifying:
+			return service.processRcloneVerifyingPoint(ctx, pointID)
+		default:
+			return publication.Outcome{}, fmt.Errorf("%w: managed Rclone publication point is not reconcilable", backupasset.ErrConflict)
+		}
 	case backupasset.ProviderRsync:
 		switch backupasset.RecoveryPointState(point.State) {
 		case backupasset.RecoveryPointPreparing:
@@ -289,13 +298,18 @@ func publicationReconciliationFacts(point model.RecoveryPoint) (backupasset.Prov
 	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
 		switch backupasset.TaskPublicationMode(lineage.PublicationMode) {
 		case backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy:
+			if consistency.Provider != "" && consistency.Provider != backupasset.ProviderRsync {
+				return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rsync publication candidate has invalid provider evidence", backupasset.ErrInvalidState)
+			}
+			return backupasset.ProviderRsync, lineage, consistency, nil
+		case backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions:
+			if consistency.Provider != "" && consistency.Provider != backupasset.ProviderRclone {
+				return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rclone publication candidate has invalid provider evidence", backupasset.ErrInvalidState)
+			}
+			return backupasset.ProviderRclone, lineage, consistency, nil
 		default:
-			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rsync publication candidate has invalid lineage", backupasset.ErrInvalidState)
+			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed publication candidate has invalid lineage", backupasset.ErrInvalidState)
 		}
-		if consistency.Provider != "" && consistency.Provider != backupasset.ProviderRsync {
-			return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: managed Rsync publication candidate has invalid provider evidence", backupasset.ErrInvalidState)
-		}
-		return backupasset.ProviderRsync, lineage, consistency, nil
 	default:
 		return "", backupasset.PublicationLineageV1{}, backupasset.PublicationConsistencyV1{}, fmt.Errorf("%w: unsupported publication candidate semantics", backupasset.ErrInvalidState)
 	}

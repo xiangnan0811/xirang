@@ -13,7 +13,8 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1 FROM task_repository_links
-        WHERE publication_mode IN ('native_snapshot', 'versioned_hardlink', 'versioned_full_copy')
+        WHERE unlinked_at IS NULL
+          AND publication_mode IN ('native_snapshot', 'versioned_hardlink', 'versioned_full_copy', 'versioned_prefix', 'native_object_versions')
     ) THEN
         RAISE EXCEPTION '000064 down blocked: managed repository link exists';
     END IF;

@@ -14,9 +14,9 @@
 
 ## 备份资产运行时
 
-`backend/internal/backupasset/runtime` 是备份资产的唯一组合根：它创建一套 Provider transport、admission barrier、Repository service、Restic publication/manifest worker 和 lineage guard。`cmd/server` 在 Task Manager 与 executor factory 之前创建该运行时；同一个 Restic adapter 同时服务 evidence backup 和受 guard 保护的 legacy snapshot list/files/diff/search 路径。Router 只接收已注入的 runtime/窄端口，不会自行创建第二个 Provider 图。
+`backend/internal/backupasset/runtime` 是备份资产的唯一组合根：它创建一套 Provider transport、admission barrier、Repository service、Restic/Rsync/Rclone publication strategy、manifest/reconciliation worker、Rclone health worker 和 lineage guard。`cmd/server` 在 Task Manager 与 executor factory 之前创建该运行时；同一套 admission 与精确血缘合同同时保护 legacy 读取、受管发布和后台调和。Router 只接收已注入的 runtime/窄端口，不会自行创建第二个 Provider 图。
 
-`backup_assets.enabled` 默认仍为 `false`。本层不新增公开的资产导航或恢复点 API；feature 开启后的 Restic 恢复点仅作为内部精确 lineage/发布事实，并保持现有 route 的认证、RBAC 与 ownership 边界。
+`backup_assets.enabled` 默认仍为 `false`。本层不新增公开的资产导航或恢复点 API；Restic、Rsync 和 Rclone 受管恢复点仍作为内部精确 lineage/发布事实。Rclone 版本化 setup、binding、preflight、activation 与 rollback 通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
 
 ## 快速运行
 
@@ -155,6 +155,14 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | POST | /tasks/:id/skip-next | 🔒 跳过下次 |
 | POST | /tasks/:id/restore | 🔒 从备份恢复（需二次验证 + task.restore_trigger/task_restore/task_id 临时授权） |
 | GET | /tasks/:id/backup-files | 🔒 备份文件列表 |
+| POST | /tasks/:id/rclone-versioning/portable-binding-setups | 🔒 创建一次性 Portable binding setup（Admin + `backup_repositories:manage` + Task ownership） |
+| PUT | /tasks/:id/rclone-versioning/portable-binding | 🔒 提交 write-only Portable bound config |
+| POST | /tasks/:id/rclone-versioning/native-binding-setups | 🔒 创建一次性 AWS Native binding setup |
+| PUT | /tasks/:id/rclone-versioning/native-binding | 🔒 提交 write-only STS/S3/KMS binding |
+| POST | /tasks/:id/rclone-versioning/preflights | 🔒 运行有界 Rclone 版本化预检 |
+| POST | /tasks/:id/rclone-versioning/activate | 🔒 激活 `first_new_point` 或 `imported_baseline` |
+| POST | /tasks/:id/rclone-versioning/clean-rollbacks | 🔒 在首个 reservation 前执行 clean rollback |
+| POST | /tasks/:id/rclone-versioning/rollback-preparations | 🔒 排空受管工作并准备保留证据的回退 |
 | GET | /task-runs/:id | 🔒 执行详情 |
 | GET | /task-runs/:id/logs | 🔒 执行日志 |
 

@@ -257,7 +257,14 @@ func TestFoundationConfigGettersUseFullEffectiveLeaseAndPublicationValues(t *tes
 	}
 	if publicationConfig.ReconcileInterval != 5*time.Minute || publicationConfig.WorkerConcurrency != 3 || publicationConfig.MissingGrace != 71*time.Second ||
 		publicationConfig.BackupStreamMaxBytes != 268435456 || publicationConfig.ManifestTimeout != time.Hour || publicationConfig.ManifestMaxBytes != 4294967296 ||
-		publicationConfig.ManifestMaxEntries != 10000000 || publicationConfig.ManifestMaxRecordBytes != 1048576 || publicationConfig.ManifestMaxDepth != 4096 {
+		publicationConfig.ManifestMaxEntries != 10000000 || publicationConfig.ManifestMaxRecordBytes != 1048576 || publicationConfig.ManifestMaxDepth != 4096 ||
+		publicationConfig.Rclone.PreflightTTL != 30*time.Minute || publicationConfig.Rclone.PortableDeadline != 24*time.Hour ||
+		publicationConfig.Rclone.NativeDeadline != 45*time.Minute || publicationConfig.Rclone.BoundConfigMaxBytes != 65536 ||
+		publicationConfig.Rclone.ControlPayloadMaxBytes != 8388608 || publicationConfig.Rclone.FullVerifyMaxBytes != 1099511627776 ||
+		publicationConfig.Rclone.ManifestChunkMaxBytes != 8388608 || publicationConfig.Rclone.LowLevelRetries != 3 ||
+		publicationConfig.Rclone.StagingOrphanAge != 24*time.Hour || publicationConfig.Rclone.StagingScanLimit != 256 ||
+		publicationConfig.Rclone.KMSReadKeyMaxCount != 8 || publicationConfig.Rclone.HealthInterval != 15*time.Minute ||
+		publicationConfig.Rclone.HealthBatchSize != 100 || publicationConfig.Rclone.AWSSDKMaxAttempts != 3 {
 		t.Fatalf("PublicationConfig=%+v", publicationConfig)
 	}
 }
@@ -296,4 +303,18 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.manifest_max_entries":             "10000000",
 	"backup_assets.manifest_max_record_bytes":        "1048576",
 	"backup_assets.manifest_max_depth":               "4096",
+	"backup_assets.rclone_preflight_ttl":             "30m",
+	"backup_assets.rclone_portable_deadline":         "24h",
+	"backup_assets.rclone_native_deadline":           "45m",
+	"backup_assets.rclone_bound_config_max_bytes":    "65536",
+	"backup_assets.rclone_control_payload_max_bytes": "8388608",
+	"backup_assets.rclone_full_verify_max_bytes":     "1099511627776",
+	"backup_assets.rclone_manifest_chunk_max_bytes":  "8388608",
+	"backup_assets.rclone_low_level_retries":         "3",
+	"backup_assets.rclone_staging_orphan_age":        "24h",
+	"backup_assets.rclone_staging_scan_limit":        "256",
+	"backup_assets.rclone_kms_read_key_max_count":    "8",
+	"backup_assets.rclone_health_interval":           "15m",
+	"backup_assets.rclone_health_batch_size":         "100",
+	"backup_assets.rclone_aws_sdk_max_attempts":      "3",
 }

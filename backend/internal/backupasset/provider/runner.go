@@ -35,30 +35,63 @@ const (
 	ToolRclone     CommandTool = "rclone"
 	ToolRemoteFind CommandTool = "remote_find"
 
-	OperationResticVersion         CommandOperation = "restic_version"
-	OperationResticConfig          CommandOperation = "restic_config"
-	OperationResticSnapshots       CommandOperation = "restic_snapshots"
-	OperationResticList            CommandOperation = "restic_list"
-	OperationResticDump            CommandOperation = "restic_dump"
-	OperationResticBackup          CommandOperation = "restic_backup"
-	OperationResticSnapshotsByTags CommandOperation = "restic_snapshots_by_tags"
-	OperationResticManifest        CommandOperation = "restic_manifest"
-	OperationRcloneVersion         CommandOperation = "rclone_version"
-	OperationRcloneFeatures        CommandOperation = "rclone_features"
-	OperationRcloneList            CommandOperation = "rclone_list"
-	OperationRcloneStat            CommandOperation = "rclone_stat"
-	OperationRcloneCat             CommandOperation = "rclone_cat"
-	OperationRemoteEnumerate       CommandOperation = "remote_enumerate"
+	OperationResticVersion              CommandOperation = "restic_version"
+	OperationResticConfig               CommandOperation = "restic_config"
+	OperationResticSnapshots            CommandOperation = "restic_snapshots"
+	OperationResticList                 CommandOperation = "restic_list"
+	OperationResticDump                 CommandOperation = "restic_dump"
+	OperationResticBackup               CommandOperation = "restic_backup"
+	OperationResticSnapshotsByTags      CommandOperation = "restic_snapshots_by_tags"
+	OperationResticManifest             CommandOperation = "restic_manifest"
+	OperationRcloneVersion              CommandOperation = "rclone_version"
+	OperationRcloneFeatures             CommandOperation = "rclone_features"
+	OperationRcloneList                 CommandOperation = "rclone_list"
+	OperationRcloneStat                 CommandOperation = "rclone_stat"
+	OperationRcloneCat                  CommandOperation = "rclone_cat"
+	OperationRcloneManagedVersion       CommandOperation = "rclone_managed_version"
+	OperationRcloneManagedFeatures      CommandOperation = "rclone_managed_features"
+	OperationRcloneManagedRecursiveList CommandOperation = "rclone_managed_recursive_list"
+	OperationRcloneManagedCopy          CommandOperation = "rclone_managed_copy"
+	OperationRcloneManagedNativeSync    CommandOperation = "rclone_managed_native_sync"
+	OperationRcloneManagedCheckDownload CommandOperation = "rclone_managed_check_download"
+	OperationRcloneManagedCopyTo        CommandOperation = "rclone_managed_copyto"
+	OperationRcloneManagedCat           CommandOperation = "rclone_managed_cat"
+	OperationRcloneManagedExactStat     CommandOperation = "rclone_managed_exact_stat"
+	OperationRemoteEnumerate            CommandOperation = "remote_enumerate"
 )
 
+type RclonePrivateLocator struct {
+	value string
+}
+
+func NewRclonePrivateLocator(value string) (RclonePrivateLocator, error) {
+	if value == "" || len(value) > 16<<10 || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") ||
+		strings.ContainsRune(value, '\x00') || strings.ContainsAny(value, "\r\n`") || strings.Contains(value, "$(") {
+		return RclonePrivateLocator{}, fmt.Errorf("%w: invalid private Rclone locator", ErrUnsafeInvocation)
+	}
+	return RclonePrivateLocator{value: value}, nil
+}
+
+func (value RclonePrivateLocator) valid() bool {
+	validated, err := NewRclonePrivateLocator(value.value)
+	return err == nil && validated.value == value.value
+}
+
 type CommandInvocation struct {
-	Tool           CommandTool          `json:"tool"`
-	Operation      CommandOperation     `json:"operation"`
-	Purpose        CommandPurpose       `json:"-"`
-	Args           []string             `json:"-"`
-	SecretStdin    []byte               `json:"-"`
-	PrivateLocator string               `json:"-"`
-	Runtime        *RemoteCommandAccess `json:"-"`
+	Tool                    CommandTool           `json:"tool"`
+	Operation               CommandOperation      `json:"operation"`
+	Purpose                 CommandPurpose        `json:"-"`
+	Args                    []string              `json:"-"`
+	SecretStdin             []byte                `json:"-"`
+	PrivateLocator          string                `json:"-"`
+	Runtime                 *RemoteCommandAccess  `json:"-"`
+	RcloneSource            *RclonePrivateLocator `json:"-"`
+	RcloneDestination       *RclonePrivateLocator `json:"-"`
+	RcloneStagedSource      *StagedPayloadRef     `json:"-"`
+	RcloneStagedDestination *StagedPayloadRef     `json:"-"`
+	RcloneCopyDest          *RclonePrivateLocator `json:"-"`
+	RcloneLowLevelRetries   int                   `json:"-"`
+	AbsoluteDeadline        time.Time             `json:"-"`
 }
 
 type RemoteCommandAccess struct {
@@ -76,6 +109,10 @@ func (invocation CommandInvocation) Validate() error {
 		ToolRclone: {
 			OperationRcloneVersion: true, OperationRcloneFeatures: true, OperationRcloneList: true,
 			OperationRcloneStat: true, OperationRcloneCat: true,
+			OperationRcloneManagedVersion: true, OperationRcloneManagedFeatures: true,
+			OperationRcloneManagedRecursiveList: true, OperationRcloneManagedCopy: true,
+			OperationRcloneManagedNativeSync: true, OperationRcloneManagedCheckDownload: true,
+			OperationRcloneManagedCopyTo: true, OperationRcloneManagedCat: true, OperationRcloneManagedExactStat: true,
 		},
 		ToolRemoteFind: {OperationRemoteEnumerate: true},
 	}
@@ -98,6 +135,9 @@ func (invocation CommandInvocation) Validate() error {
 }
 
 func validCommandInvocation(invocation CommandInvocation) bool {
+	if isManagedRcloneOperation(invocation.Operation) {
+		return validManagedRcloneInvocation(invocation)
+	}
 	arguments := invocation.Args
 	switch invocation.Tool {
 	case ToolRestic:
@@ -148,6 +188,101 @@ func validCommandInvocation(invocation CommandInvocation) bool {
 		return len(invocation.SecretStdin) == 0 && invocation.Operation == OperationRemoteEnumerate && equalArguments(arguments, "-mindepth", "1", "-maxdepth", "1", "-print0")
 	}
 	return false
+}
+
+func isManagedRcloneOperation(operation CommandOperation) bool {
+	switch operation {
+	case OperationRcloneManagedVersion, OperationRcloneManagedFeatures, OperationRcloneManagedRecursiveList,
+		OperationRcloneManagedCopy, OperationRcloneManagedNativeSync, OperationRcloneManagedCheckDownload,
+		OperationRcloneManagedCopyTo, OperationRcloneManagedCat, OperationRcloneManagedExactStat:
+		return true
+	default:
+		return false
+	}
+}
+
+func validManagedRcloneInvocation(invocation CommandInvocation) bool {
+	if invocation.Tool != ToolRclone || len(invocation.Args) != 0 || len(invocation.SecretStdin) == 0 || invocation.PrivateLocator != "" ||
+		invocation.RcloneLowLevelRetries < 1 || invocation.RcloneLowLevelRetries > 10 || !validTaggedPublicationTime(invocation.AbsoluteDeadline) {
+		return false
+	}
+	privateSource := invocation.RcloneSource != nil
+	privateDestination := invocation.RcloneDestination != nil
+	stagedSource := invocation.RcloneStagedSource != nil
+	stagedDestination := invocation.RcloneStagedDestination != nil
+	if (privateSource && !invocation.RcloneSource.valid()) || (privateDestination && !invocation.RcloneDestination.valid()) ||
+		(stagedSource && invocation.RcloneStagedSource.validate() != nil) || (stagedDestination && invocation.RcloneStagedDestination.validate() != nil) ||
+		(privateSource && stagedSource) || (privateDestination && stagedDestination) {
+		return false
+	}
+	if invocation.RcloneCopyDest != nil {
+		if invocation.Operation != OperationRcloneManagedCopy || !invocation.RcloneCopyDest.valid() || !privateDestination ||
+			invocation.RcloneCopyDest.value == invocation.RcloneDestination.value ||
+			strings.HasPrefix(invocation.RcloneCopyDest.value, invocation.RcloneDestination.value+"/") ||
+			strings.HasPrefix(invocation.RcloneDestination.value, invocation.RcloneCopyDest.value+"/") {
+			return false
+		}
+	}
+	switch invocation.Operation {
+	case OperationRcloneManagedVersion:
+		return !privateSource && !privateDestination && !stagedSource && !stagedDestination
+	case OperationRcloneManagedFeatures, OperationRcloneManagedRecursiveList, OperationRcloneManagedCat, OperationRcloneManagedExactStat:
+		return privateSource && !privateDestination && !stagedSource && !stagedDestination
+	case OperationRcloneManagedCopy, OperationRcloneManagedNativeSync, OperationRcloneManagedCheckDownload:
+		return privateSource && privateDestination && !stagedSource && !stagedDestination
+	case OperationRcloneManagedCopyTo:
+		return (privateSource || stagedSource) && (privateDestination || stagedDestination)
+	default:
+		return false
+	}
+}
+
+func managedRcloneArguments(invocation CommandInvocation) ([]string, error) {
+	if !validManagedRcloneInvocation(invocation) {
+		return nil, fmt.Errorf("%w: invalid managed Rclone invocation", ErrUnsafeInvocation)
+	}
+	arguments := []string{
+		"--config", "/dev/stdin", "--retries", "1", "--low-level-retries", strconv.Itoa(invocation.RcloneLowLevelRetries), "--links",
+	}
+	source := func() string {
+		if invocation.RcloneSource != nil {
+			return invocation.RcloneSource.value
+		}
+		return invocation.RcloneStagedSource.path
+	}
+	destination := func() string {
+		if invocation.RcloneDestination != nil {
+			return invocation.RcloneDestination.value
+		}
+		return invocation.RcloneStagedDestination.path
+	}
+	switch invocation.Operation {
+	case OperationRcloneManagedVersion:
+		arguments = append(arguments, "version")
+	case OperationRcloneManagedFeatures:
+		arguments = append(arguments, "backend", "features", "--", source())
+	case OperationRcloneManagedRecursiveList:
+		arguments = append(arguments, "lsjson", "--recursive", "--hash", "--metadata", "--", source())
+	case OperationRcloneManagedCopy:
+		arguments = append(arguments, "copy", "--create-empty-src-dirs")
+		if invocation.RcloneCopyDest != nil {
+			arguments = append(arguments, "--copy-dest", invocation.RcloneCopyDest.value)
+		}
+		arguments = append(arguments, "--", source(), destination())
+	case OperationRcloneManagedNativeSync:
+		arguments = append(arguments, "sync", "--create-empty-src-dirs", "--", source(), destination())
+	case OperationRcloneManagedCheckDownload:
+		arguments = append(arguments, "check", "--download", "--one-way", "--", source(), destination())
+	case OperationRcloneManagedCopyTo:
+		arguments = append(arguments, "copyto", "--", source(), destination())
+	case OperationRcloneManagedCat:
+		arguments = append(arguments, "cat", "--", source())
+	case OperationRcloneManagedExactStat:
+		arguments = append(arguments, "lsjson", "--stat", "--hash", "--metadata", "--", source())
+	default:
+		return nil, fmt.Errorf("%w: unsupported managed Rclone operation", ErrUnsafeInvocation)
+	}
+	return arguments, nil
 }
 
 func validRcloneCatArguments(arguments []string) bool {
@@ -389,12 +524,19 @@ func newSSHCommandTransportWithConcurrencySource(factory remoteCommandRunnerFact
 }
 
 func (transport *SSHCommandTransport) Run(ctx context.Context, invocation CommandInvocation, limits OperationLimits) (CommandOutput, error) {
-	specification, access, purpose, err := transport.commandSpec(invocation, limits, limits.MaxMetadataBytes)
+	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return CommandOutput{}, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	defer cancel()
+	releaseStaged, err := pinRcloneStagedPayloads(invocation)
+	if err != nil {
+		return CommandOutput{}, err
+	}
+	defer releaseStaged()
+	specification, access, purpose, err := transport.commandSpec(invocation, limits, limits.MaxMetadataBytes)
+	if err != nil {
+		return CommandOutput{}, err
 	}
 	if err := transport.acquire(ctx); err != nil {
 		return CommandOutput{}, err
@@ -422,19 +564,31 @@ func (transport *SSHCommandTransport) Run(ctx context.Context, invocation Comman
 }
 
 func (transport *SSHCommandTransport) Open(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (ReadHandle, error) {
-	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
+	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return nil, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	releaseStaged, err := pinRcloneStagedPayloads(invocation)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
+	if err != nil {
+		releaseStaged()
+		cancel()
+		return nil, err
 	}
 	if err := transport.acquire(ctx); err != nil {
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	runner, closer, err := transport.factory(ctx, access, purpose)
 	if err != nil {
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	if runner == nil || closer == nil {
@@ -442,36 +596,54 @@ func (transport *SSHCommandTransport) Open(ctx context.Context, invocation Comma
 			_ = closer.Close()
 		}
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, fmt.Errorf("%w: remote command runner unavailable", backupasset.ErrProviderUnavailable)
 	}
 	handle, err := runner.Open(ctx, specification)
 	if err != nil {
 		_ = closer.Close()
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	if handle == nil {
 		_ = closer.Close()
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, fmt.Errorf("%w: nil remote command stream", backupasset.ErrProviderUnavailable)
 	}
-	return &transportReadHandle{underlying: handle, closer: closer, release: transport.release}, nil
+	return &transportReadHandle{underlying: handle, closer: closer, release: func() { transport.release(); releaseStaged(); cancel() }}, nil
 }
 
 func (transport *SSHCommandTransport) OpenExecution(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (CommandExecution, error) {
-	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
+	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return nil, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	releaseStaged, err := pinRcloneStagedPayloads(invocation)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
+	if err != nil {
+		releaseStaged()
+		cancel()
+		return nil, err
 	}
 	if err := transport.acquire(ctx); err != nil {
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	runner, closer, err := transport.factory(ctx, access, purpose)
 	if err != nil {
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	if runner == nil || closer == nil {
@@ -479,26 +651,74 @@ func (transport *SSHCommandTransport) OpenExecution(ctx context.Context, invocat
 			_ = closer.Close()
 		}
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, fmt.Errorf("%w: remote command runner unavailable", backupasset.ErrProviderUnavailable)
 	}
 	executionRunner, ok := runner.(remoteCommandExecutionRunner)
 	if !ok {
 		_ = closer.Close()
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, fmt.Errorf("%w: remote command execution runner unavailable", backupasset.ErrProviderUnavailable)
 	}
 	execution, err := executionRunner.OpenExecution(ctx, specification)
 	if err != nil {
 		_ = closer.Close()
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, err
 	}
 	if execution == nil {
 		_ = closer.Close()
 		transport.release()
+		releaseStaged()
+		cancel()
 		return nil, fmt.Errorf("%w: nil remote command execution", backupasset.ErrProviderUnavailable)
 	}
-	return &transportExecution{underlying: execution, closer: closer, release: transport.release}, nil
+	return &transportExecution{underlying: execution, closer: closer, release: func() { transport.release(); releaseStaged(); cancel() }}, nil
+}
+
+func commandInvocationContext(ctx context.Context, invocation CommandInvocation) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !isManagedRcloneOperation(invocation.Operation) {
+		return ctx, func() {}, nil
+	}
+	if !validTaggedPublicationTime(invocation.AbsoluteDeadline) || time.Until(invocation.AbsoluteDeadline) <= 0 {
+		return nil, nil, fmt.Errorf("%w: managed Rclone deadline expired", ErrUnsafeInvocation)
+	}
+	bounded, cancel := context.WithDeadline(ctx, invocation.AbsoluteDeadline)
+	return bounded, cancel, nil
+}
+
+func pinRcloneStagedPayloads(invocation CommandInvocation) (func(), error) {
+	refs := []*StagedPayloadRef{invocation.RcloneStagedSource, invocation.RcloneStagedDestination}
+	releases := make([]func(), 0, len(refs))
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		release, err := ref.acquire()
+		if err != nil {
+			for index := len(releases) - 1; index >= 0; index-- {
+				releases[index]()
+			}
+			return nil, err
+		}
+		releases = append(releases, release)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for index := len(releases) - 1; index >= 0; index-- {
+				releases[index]()
+			}
+		})
+	}, nil
 }
 
 func (transport *SSHCommandTransport) commandSpec(invocation CommandInvocation, limits OperationLimits, maxStdoutBytes int64) (sshutil.CommandSpec, RemoteCommandAccess, string, error) {
@@ -533,7 +753,20 @@ func (transport *SSHCommandTransport) commandSpec(invocation CommandInvocation, 
 		}
 	case ToolRclone:
 		binary = transport.binaries.Rclone
-		if invocation.Operation == OperationRcloneVersion {
+		if isManagedRcloneOperation(invocation.Operation) {
+			managedArguments, managedErr := managedRcloneArguments(invocation)
+			if managedErr != nil {
+				return sshutil.CommandSpec{}, RemoteCommandAccess{}, "", managedErr
+			}
+			arguments = managedArguments
+			remaining := time.Until(invocation.AbsoluteDeadline)
+			if remaining <= 0 {
+				return sshutil.CommandSpec{}, RemoteCommandAccess{}, "", fmt.Errorf("%w: managed Rclone deadline expired", ErrUnsafeInvocation)
+			}
+			if remaining < limits.Timeout {
+				limits.Timeout = remaining
+			}
+		} else if invocation.Operation == OperationRcloneVersion {
 			secret = nil
 		} else {
 			if invocation.PrivateLocator == "" {

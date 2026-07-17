@@ -30,11 +30,12 @@ type TaskRunner interface {
 }
 
 type TaskHandler struct {
-	db              *gorm.DB
-	runner          TaskRunner
-	svc             *task.TaskApiService
-	jwtManager      *auth.JWTManager
-	rsyncVersioning TaskRsyncVersioningService
+	db               *gorm.DB
+	runner           TaskRunner
+	svc              *task.TaskApiService
+	jwtManager       *auth.JWTManager
+	rsyncVersioning  TaskRsyncVersioningService
+	rcloneVersioning TaskRcloneVersioningService
 }
 
 func NewTaskHandler(db *gorm.DB, runner TaskRunner) *TaskHandler {
@@ -72,6 +73,14 @@ func (h *TaskHandler) WithRsyncVersioningService(service TaskRsyncVersioningServ
 	return h
 }
 
+// WithRcloneVersioningService installs the safe Rclone publication summary
+// projection. Provider locators and write-only binding inputs remain private
+// to the repository service.
+func (h *TaskHandler) WithRcloneVersioningService(service TaskRcloneVersioningService) *TaskHandler {
+	h.rcloneVersioning = service
+	return h
+}
+
 type taskRequest struct {
 	Name            string `json:"name" binding:"required"`
 	NodeID          uint   `json:"node_id" binding:"required"`
@@ -101,22 +110,34 @@ func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 // marker, manifest, fence, command, or credential data.
 type taskResponse struct {
 	model.Task
-	RsyncPublication *backupasset.RsyncVersioningSummary `json:"rsync_publication,omitempty"`
+	RsyncPublication  *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
+	RclonePublication *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
 }
 
 func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
 	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity)}
-	if h == nil || h.rsyncVersioning == nil || !strings.EqualFold(strings.TrimSpace(taskEntity.ExecutorType), "rsync") {
+	if h == nil {
 		return response
 	}
-	summary, err := h.rsyncVersioning.RsyncVersioningSummary(ctx, taskEntity.ID)
-	if err != nil || summary.Validate() != nil {
-		summary = backupasset.RsyncVersioningSummary{
-			Mode: backupasset.PublicationLegacyMutable, State: backupasset.RsyncVersioningBlocked,
-			ReasonCode: backupasset.RsyncVersioningReasonUnsupported, CapabilityRevision: 1,
+	executorType := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
+	if executorType == "rsync" && h.rsyncVersioning != nil {
+		summary, err := h.rsyncVersioning.RsyncVersioningSummary(ctx, taskEntity.ID)
+		if err != nil || summary.Validate() != nil {
+			summary = backupasset.RsyncVersioningSummary{
+				Mode: backupasset.PublicationLegacyMutable, State: backupasset.RsyncVersioningBlocked,
+				ReasonCode: backupasset.RsyncVersioningReasonUnsupported, CapabilityRevision: 1,
+			}
 		}
+		response.RsyncPublication = &summary
 	}
-	response.RsyncPublication = &summary
+	if executorType == "rclone" && h.rcloneVersioning != nil {
+		summary, err := h.rcloneVersioning.RcloneVersioningSummary(ctx, taskEntity.ID)
+		if err != nil {
+			summary = backupasset.RclonePublicationSummary{}
+		}
+		summary = backupasset.SafeRclonePublicationSummary(summary)
+		response.RclonePublication = &summary
+	}
 	return response
 }
 

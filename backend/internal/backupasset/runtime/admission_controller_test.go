@@ -16,6 +16,7 @@ import (
 	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	appsettings "xirang/backend/internal/settings"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -346,6 +347,15 @@ type runtimeSettings map[string]string
 
 func (settings runtimeSettings) GetEffective(key string) string { return settings[key] }
 
+func TestRuntimeFoundationSettingsFixtureCoversRegistry(t *testing.T) {
+	values := runtimeFoundationSettingsFromEnvironment()
+	for _, key := range appsettings.BackupAssetFoundationSettingKeys() {
+		if strings.TrimSpace(values[key]) == "" {
+			t.Fatalf("runtime foundation fixture omitted %q", key)
+		}
+	}
+}
+
 func runtimeFoundationSettings(enabled bool) runtimeSettings {
 	settings := runtimeFoundationSettingsFromEnvironment()
 	settings["backup_assets.enabled"] = fmt.Sprintf("%t", enabled)
@@ -353,41 +363,18 @@ func runtimeFoundationSettings(enabled bool) runtimeSettings {
 }
 
 func runtimeFoundationSettingsFromEnvironment() runtimeSettings {
-	return runtimeSettings{
-		"backup_assets.enabled":                          strings.TrimSpace(getenv("BACKUP_ASSETS_ENABLED", "false")),
-		"backup_assets.catalog_batch_size":               "2000",
-		"backup_assets.catalog_build_timeout":            "30m",
-		"backup_assets.repository_reconcile_interval":    "15m",
-		"backup_assets.audit_segment_max_events":         "10000",
-		"backup_assets.audit_segment_max_age":            "24h",
-		"backup_assets.audit_detail_retention_days":      "180",
-		"backup_assets.audit_checkpoint_retention_days":  "2555",
-		"backup_assets.lease_duration":                   "5m",
-		"backup_assets.lease_heartbeat":                  "60s",
-		"backup_assets.lease_absolute_deadline":          "168h",
-		"backup_assets.provider_operation_timeout":       "2m",
-		"backup_assets.provider_max_concurrency":         "4",
-		"backup_assets.provider_metadata_limit_bytes":    "16777216",
-		"backup_assets.publication_reconcile_interval":   "5m",
-		"backup_assets.publication_reconcile_batch_size": "100",
-		"backup_assets.publication_worker_concurrency":   "2",
-		"backup_assets.publication_missing_grace":        "30m",
-		"backup_assets.publication_stream_max_bytes":     "268435456",
-		"backup_assets.manifest_timeout":                 "2h",
-		"backup_assets.manifest_max_bytes":               "4294967296",
-		"backup_assets.manifest_max_entries":             "10000000",
-		"backup_assets.manifest_max_record_bytes":        "1048576",
-		"backup_assets.manifest_max_depth":               "4096",
+	values := make(runtimeSettings)
+	for _, definition := range appsettings.NewService(nil).Registry() {
+		if !appsettings.IsBackupAssetFoundationSetting(definition.Key) {
+			continue
+		}
+		value := strings.TrimSpace(os.Getenv(definition.EnvVar))
+		if value == "" {
+			value = definition.CodeDefault
+		}
+		values[definition.Key] = value
 	}
-}
-
-func getenv(key, fallback string) string {
-	// t.Setenv controls the process environment; the tiny indirection keeps the
-	// settings reader focused on the same DB -> environment -> default shape.
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return fallback
+	return values
 }
 
 func newRuntimeAdmissionDB(t *testing.T) *gorm.DB {
@@ -405,7 +392,7 @@ func newRuntimeAdmissionDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
+	if err := db.AutoMigrate(&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

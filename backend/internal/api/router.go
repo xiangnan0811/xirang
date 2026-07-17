@@ -116,6 +116,44 @@ func (featureDisabledRsyncVersioningService) RsyncVersioningSummary(_ context.Co
 	return backupasset.RsyncVersioningSummary{}, featureDisabledBackupRepositoryError(backuprepository.RequestContext{})
 }
 
+type featureDisabledRcloneVersioningService struct{}
+
+func (featureDisabledRcloneVersioningService) CreateRclonePortableBindingSetupForRequest(_ context.Context, _ backupasset.RcloneBindingSetupRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneBindingSetupResult, error) {
+	return backupasset.RcloneBindingSetupResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) SetRclonePortableBindingForRequest(_ context.Context, _ backupasset.RclonePortableBindingRequest, requestContext backuprepository.RequestContext) (backupasset.RclonePublicationSummary, error) {
+	return backupasset.RclonePublicationSummary{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) CreateRcloneNativeBindingSetupForRequest(_ context.Context, _ backupasset.RcloneBindingSetupRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneBindingSetupResult, error) {
+	return backupasset.RcloneBindingSetupResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) SetRcloneNativeBindingForRequest(_ context.Context, _ backupasset.RcloneNativeBindingRequest, requestContext backuprepository.RequestContext) (backupasset.RclonePublicationSummary, error) {
+	return backupasset.RclonePublicationSummary{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) CreateRcloneVersioningPreflightForRequest(_ context.Context, _ backupasset.RcloneVersioningPreflightRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneVersioningPreflightResult, error) {
+	return backupasset.RcloneVersioningPreflightResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) ActivateRcloneVersioningForRequest(_ context.Context, _ backupasset.RcloneVersioningActivationRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneVersioningActivationResult, error) {
+	return backupasset.RcloneVersioningActivationResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) CleanRollbackRcloneVersioningForRequest(_ context.Context, _ backupasset.RcloneVersioningCleanRollbackRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneVersioningRollbackResult, error) {
+	return backupasset.RcloneVersioningRollbackResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) PrepareRcloneVersioningRollbackForRequest(_ context.Context, _ backupasset.RcloneVersioningRollbackPreparationRequest, requestContext backuprepository.RequestContext) (backupasset.RcloneVersioningRollbackResult, error) {
+	return backupasset.RcloneVersioningRollbackResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledRcloneVersioningService) RcloneVersioningSummary(_ context.Context, _ uint) (backupasset.RclonePublicationSummary, error) {
+	return backupasset.RclonePublicationSummary{}, featureDisabledBackupRepositoryError(backuprepository.RequestContext{})
+}
+
 func NewRouter(dep Dependencies) *gin.Engine {
 	appCtx := dep.AppContext
 	if appCtx == nil {
@@ -224,6 +262,12 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	}
 	rsyncVersioningHandler := handlers.NewTaskRsyncVersioningHandler(rsyncVersioningService)
 	taskHandler.WithRsyncVersioningService(rsyncVersioningService)
+	var rcloneVersioningService handlers.TaskRcloneVersioningService = featureDisabledRcloneVersioningService{}
+	if dep.BackupAssets != nil {
+		rcloneVersioningService = dep.BackupAssets.RepositoryService()
+	}
+	rcloneVersioningHandler := handlers.NewTaskRcloneVersioningHandler(rcloneVersioningService)
+	taskHandler.WithRcloneVersioningService(rcloneVersioningService)
 
 	v1 := router.Group("/api/v1")
 	// Captcha is unauthenticated; rate-limit to reduce store spam / memory pressure.
@@ -411,6 +455,14 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/:id/rsync-versioning/preflights", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.CreatePreflight)
 	secured.POST("/tasks/:id/rsync-versioning/activate", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.Activate)
 	secured.POST("/tasks/:id/rsync-versioning/rollback-preparations", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rsyncVersioningHandler.PrepareRollback)
+	secured.POST("/tasks/:id/rclone-versioning/portable-binding-setups", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.CreatePortableBindingSetup)
+	secured.PUT("/tasks/:id/rclone-versioning/portable-binding", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.SetPortableBinding)
+	secured.POST("/tasks/:id/rclone-versioning/native-binding-setups", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.CreateNativeBindingSetup)
+	secured.PUT("/tasks/:id/rclone-versioning/native-binding", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.SetNativeBinding)
+	secured.POST("/tasks/:id/rclone-versioning/preflights", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.CreatePreflight)
+	secured.POST("/tasks/:id/rclone-versioning/activate", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.Activate)
+	secured.POST("/tasks/:id/rclone-versioning/clean-rollbacks", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.CleanRollback)
+	secured.POST("/tasks/:id/rclone-versioning/rollback-preparations", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), rcloneVersioningHandler.PrepareRollback)
 
 	secured.GET("/task-runs/:id", middleware.RBAC("tasks:read"), taskRunHandler.Get)
 	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)

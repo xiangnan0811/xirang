@@ -20,6 +20,14 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 		AuditActionRsyncVersioningPreflight,
 		AuditActionRsyncVersioningActivate,
 		AuditActionRsyncVersioningRollback,
+		AuditActionRcloneVersioningPortableSetup,
+		AuditActionRcloneVersioningPortableBinding,
+		AuditActionRcloneVersioningNativeSetup,
+		AuditActionRcloneVersioningNativeBinding,
+		AuditActionRcloneVersioningPreflight,
+		AuditActionRcloneVersioningActivate,
+		AuditActionRcloneVersioningCleanRollback,
+		AuditActionRcloneVersioningRollbackPreparation,
 		AuditActionRecoveryPointList,
 		AuditActionRecoveryPointDetail,
 		AuditActionRecoveryPointEvidence,
@@ -222,6 +230,23 @@ func TestAuditRejectsNonOpaqueResourceIdentifiers(t *testing.T) {
 	for _, input := range tests {
 		if _, err := NewAuditEvent(input); !errors.Is(err, ErrInvalidState) {
 			t.Fatalf("non-opaque resource identifiers got %v, want ErrInvalidState: %+v", err, input)
+		}
+	}
+}
+
+func TestRcloneVersioningAuditActionsAreRegistered(t *testing.T) {
+	for _, action := range []AuditAction{
+		AuditActionRcloneVersioningPortableSetup,
+		AuditActionRcloneVersioningPortableBinding,
+		AuditActionRcloneVersioningNativeSetup,
+		AuditActionRcloneVersioningNativeBinding,
+		AuditActionRcloneVersioningPreflight,
+		AuditActionRcloneVersioningActivate,
+		AuditActionRcloneVersioningCleanRollback,
+		AuditActionRcloneVersioningRollbackPreparation,
+	} {
+		if !ValidAuditAction(action) {
+			t.Fatalf("Rclone versioning audit action is not registered: %q", action)
 		}
 	}
 }

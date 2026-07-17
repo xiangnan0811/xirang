@@ -42,7 +42,7 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor unavailable", backupasset.ErrInvalidState)}
 	}
 	providerKind := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
-	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync") {
+	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync" && providerKind != "rclone") {
 		exitCode, err := exec.Run(ctx, taskEntity, logf, progressf)
 		return providerRunResult{ExitCode: exitCode, Err: err}
 	}
@@ -94,7 +94,7 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 	if !ok {
 		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
 		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: Restic executor has no publication lane", backupasset.ErrInvalidState), Managed: true}
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: provider executor has no publication lane", backupasset.ErrInvalidState), Managed: true}
 	}
 	attempt := session.Attempt()
 	if attempt == nil {
@@ -136,6 +136,29 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		}
 		request.RsyncTreeInput = &input
 		recoveryPointID = rsyncAttempt.RecoveryPointID
+	case "rclone":
+		rcloneAttempt, attemptErr := attempt.RcloneAttempt()
+		if attemptErr != nil {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+		}
+		inputProvider, ok := session.(interface {
+			RclonePublicationInput() (provider.RclonePublicationInput, error)
+		})
+		if !ok {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rclone publication input is unavailable", backupasset.ErrInvalidState), Managed: true}
+		}
+		input, inputErr := inputProvider.RclonePublicationInput()
+		if inputErr != nil {
+			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
+			resolved = true
+			return providerRunResult{ExitCode: -1, Err: inputErr, Managed: true}
+		}
+		request.RcloneInput = &input
+		recoveryPointID = rcloneAttempt.RecoveryPointID
 	default:
 		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
 		resolved = true

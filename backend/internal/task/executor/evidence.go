@@ -22,6 +22,7 @@ type PublicationExecutionRequest struct {
 	TaskRunID      uint
 	Attempt        provider.TaggedPublicationAttempt
 	RsyncTreeInput *provider.RsyncTreePublicationInput
+	RcloneInput    *provider.RclonePublicationInput
 }
 
 // PublicationExecutionResult deliberately preserves the transfer outcome

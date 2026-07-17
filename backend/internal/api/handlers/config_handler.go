@@ -416,9 +416,12 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	}
 	// 校验任务路径
 	for i, taskData := range data.Tasks {
-		if importedRsyncConfigRequiresDisconnect(readStringField(taskData, "executor_type"), readStringField(taskData, "executor_config")) {
+		executorType := readStringField(taskData, "executor_type")
+		executorConfig := readStringField(taskData, "executor_config")
+		if importedRsyncConfigRequiresDisconnect(executorType, executorConfig) {
 			continue
 		}
+		managedRcloneImport := importedRcloneConfigRequiresDisconnect(executorType, executorConfig)
 		name, _ := taskData["name"].(string)
 		if src, ok := taskData["rsync_source"].(string); ok && src != "" {
 			if err := validateImportPath(src); err != nil {
@@ -431,7 +434,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				})
 			}
 		}
-		if tgt, ok := taskData["rsync_target"].(string); ok && tgt != "" {
+		if tgt, ok := taskData["rsync_target"].(string); ok && tgt != "" && !managedRcloneImport {
 			if err := validateImportPath(tgt); err != nil {
 				importErrList = append(importErrList, importValidationError{
 					Resource: "tasks",
@@ -758,22 +761,28 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				taskPkg.TrimTaskInput(&req)
 				taskPkg.InferTaskExecutor(&req, "")
 				managedRsyncImport := importedRsyncConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
+				managedRcloneImport := importedRcloneConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
 				if managedRsyncImport {
 					req.RsyncSource = ""
 					req.RsyncTarget = ""
 					req.ExecutorConfig = canonicalLegacyRsyncImportConfig()
+				} else if managedRcloneImport {
+					req.RsyncTarget = ""
+					req.ExecutorConfig = canonicalLegacyRcloneImportConfig()
 				} else {
 					taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
 				}
 				if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
 					req.CronSpec = ""
 				}
-				if !managedRsyncImport {
+				if !managedRsyncImport && !managedRcloneImport {
 					taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
 				}
 				var validationErr error
 				if managedRsyncImport {
 					validationErr = taskPkg.ValidateDisconnectedImportedRsyncTask(req)
+				} else if managedRcloneImport {
+					validationErr = taskPkg.ValidateDisconnectedImportedRcloneTask(req)
 				} else {
 					validationErr = taskPkg.ValidateTaskInput(req)
 				}
@@ -809,8 +818,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					existing.ExecutorConfig = req.ExecutorConfig
 					existing.CronSpec = req.CronSpec
 					existing.Source = readStringField(taskData, "source")
-					// Foreign managed Rsync configuration is always imported paused.
-					if managedRsyncImport {
+					// Foreign managed publication configuration is always imported paused.
+					if managedRsyncImport || managedRcloneImport {
 						existing.Enabled = false
 					} else if enabled, ok := taskData["enabled"].(bool); ok {
 						existing.Enabled = enabled
@@ -834,12 +843,12 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					CronSpec:       req.CronSpec,
 					Status:         "pending",
 					Source:         readStringField(taskData, "source"),
-					Enabled:        !managedRsyncImport,
+					Enabled:        !managedRsyncImport && !managedRcloneImport,
 				}
 				if newTask.Source == "" {
 					newTask.Source = "manual"
 				}
-				if !managedRsyncImport {
+				if !managedRsyncImport && !managedRcloneImport {
 					if enabled, ok := taskData["enabled"].(bool); ok {
 						newTask.Enabled = enabled
 					}
@@ -850,7 +859,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				// GORM omits a false bool when the model declares default:true.
 				// Keep the corrective write in this transaction so a foreign
 				// managed task can never become visible as enabled.
-				if managedRsyncImport {
+				if managedRsyncImport || managedRcloneImport {
 					if err := tx.Model(&model.Task{}).Where("id = ?", newTask.ID).Update("enabled", false).Error; err != nil {
 						return err
 					}
@@ -1057,6 +1066,10 @@ func canonicalLegacyRsyncImportConfig() string {
 	return fmt.Sprintf(`{"version":%d,"publication_mode":"legacy_mutable"}`, taskPkg.RsyncPublicationConfigV1Version)
 }
 
+func canonicalLegacyRcloneImportConfig() string {
+	return fmt.Sprintf(`{"version":%d,"publication_mode":"legacy_mutable"}`, taskPkg.RcloneTaskConfigV1Version)
+}
+
 // importedRsyncConfigRequiresDisconnect reads only the top-level publication
 // mode. It does not decode, retain, or trust foreign roots, preflight IDs, or
 // any other provider configuration; a versioned mode is enough to force the
@@ -1066,6 +1079,22 @@ func importedRsyncConfigRequiresDisconnect(executorType, rawConfig string) bool 
 	if normalizedExecutor != "" && normalizedExecutor != "rsync" {
 		return false
 	}
+	return importedConfigHasManagedMode(rawConfig, "versioned_hardlink", "versioned_full_copy")
+}
+
+// importedRcloneConfigRequiresDisconnect intentionally inspects only the
+// top-level publication mode. Foreign V3 binding, preflight and provider
+// fields are never decoded or retained; either managed mode forces a fresh
+// local setup before the task can run.
+func importedRcloneConfigRequiresDisconnect(executorType, rawConfig string) bool {
+	normalizedExecutor := strings.TrimSpace(strings.ToLower(executorType))
+	if normalizedExecutor != "" && normalizedExecutor != "rclone" {
+		return false
+	}
+	return importedConfigHasManagedMode(rawConfig, "versioned_prefix", "native_object_versions")
+}
+
+func importedConfigHasManagedMode(rawConfig string, managedModes ...string) bool {
 	decoder := json.NewDecoder(strings.NewReader(rawConfig))
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('{') {
@@ -1085,8 +1114,10 @@ func importedRsyncConfigRequiresDisconnect(executorType, rawConfig string) bool 
 			if err := decoder.Decode(&mode); err != nil {
 				return false
 			}
-			if mode == "versioned_hardlink" || mode == "versioned_full_copy" {
-				return true
+			for _, managedMode := range managedModes {
+				if mode == managedMode {
+					return true
+				}
 			}
 			continue
 		}

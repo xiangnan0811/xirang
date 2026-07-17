@@ -4,6 +4,7 @@ import { RotateCcw, FolderSearch, GitCompareArrows, SearchCode } from "lucide-re
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
+import { TaskRcloneVersioningDialog } from "@/components/task-rclone-versioning-dialog";
 import { TaskRsyncVersioningDialog } from "@/components/task-rsync-versioning-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
@@ -65,6 +66,10 @@ export interface TasksPageDialogsProps {
   setRsyncVersioningTask: (task: TaskRecord | null) => void;
   canManageRsyncVersioning: boolean;
   onRsyncVersioningUpdated: () => void | Promise<void>;
+  rcloneVersioningTask: TaskRecord | null;
+  setRcloneVersioningTask: (task: TaskRecord | null) => void;
+  canManageRcloneVersioning: boolean;
+  onRcloneVersioningUpdated: () => void | Promise<void>;
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   tasks: TaskRecord[];
@@ -109,6 +114,10 @@ export function TasksPageDialogs({
   setRsyncVersioningTask,
   canManageRsyncVersioning,
   onRsyncVersioningUpdated,
+  rcloneVersioningTask,
+  setRcloneVersioningTask,
+  canManageRcloneVersioning,
+  onRcloneVersioningUpdated,
   onRestoreTriggered,
   nodes,
   policies,
@@ -156,6 +165,20 @@ export function TasksPageDialogs({
           task={rsyncVersioningTask}
           token={authToken}
           onUpdated={onRsyncVersioningUpdated}
+        />
+      ) : null}
+
+      {canManageRcloneVersioning ? (
+        <TaskRcloneVersioningDialog
+          open={rcloneVersioningTask !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRcloneVersioningTask(null);
+            }
+          }}
+          task={rcloneVersioningTask}
+          token={authToken}
+          onUpdated={onRcloneVersioningUpdated}
         />
       ) : null}
 

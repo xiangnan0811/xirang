@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
@@ -27,6 +28,34 @@ type Result struct {
 	TotalSizeDst    int64
 	SampledFiles    int
 	MismatchedFiles int
+	LegacyBlocked   bool
+}
+
+// VerifyWithLineageGuard holds the mutable-lineage admission session across
+// the complete legacy Rclone verification. Managed Rclone never reaches the
+// empty-target shortcut, credentials, SSH, or a mutable Remote.
+func VerifyWithLineageGuard(
+	ctx context.Context,
+	task model.Task,
+	sampleRate int,
+	db *gorm.DB,
+	logf func(level, msg string),
+	isRestore bool,
+	guard publication.LineageGuard,
+) Result {
+	if !isRestore && strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rclone") && guard != nil {
+		session, err := guard.Begin(ctx, task.ID, publication.OperationLegacyIntegrity)
+		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
+			if session != nil {
+				_ = session.Close()
+			}
+			message := "受管 Rclone 完整性校验已被安全边界阻止"
+			logf("warn", message)
+			return Result{Status: "warning", Message: message, LegacyBlocked: true}
+		}
+		defer func() { _ = session.Close() }()
+	}
+	return Verify(ctx, task, sampleRate, db, logf, isRestore)
 }
 
 // Verify 执行备份完整性校验。

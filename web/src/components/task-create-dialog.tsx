@@ -125,6 +125,9 @@ export function TaskEditorDialog({
 }: TaskEditorDialogProps) {
   const { t } = useTranslation();
   const isEditing = Boolean(editingTask);
+  const managedRclone = editingTask?.executorType === "rclone"
+    && editingTask.rclonePublication?.mode !== undefined
+    && editingTask.rclonePublication.mode !== "legacy_mutable";
   const [draft, setDraft] = useDialogDraft<TaskDraft, TaskRecord>(
     open,
     defaultDraft,
@@ -160,7 +163,7 @@ export function TaskEditorDialog({
         exclude_patterns: excludePatterns,
         append_only: draft.resticAppendOnly || undefined,
       });
-    } else if (draft.executorType === "rclone") {
+    } else if (draft.executorType === "rclone" && !managedRclone) {
       const transfers = toNumberOrNull(draft.rcloneTransfers);
       executorConfig = JSON.stringify({
         bandwidth_limit: draft.rcloneBandwidthLimit.trim() || undefined,
@@ -176,7 +179,7 @@ export function TaskEditorDialog({
       executorType: draft.executorType,
       command: draft.executorType === "command" ? draft.command.trim() || undefined : undefined,
       rsyncSource: draft.executorType !== "command" ? draft.rsyncSource.trim() || undefined : undefined,
-      rsyncTarget: draft.executorType === "rclone" ? draft.rsyncTarget.trim() || undefined : undefined,
+      rsyncTarget: draft.executorType === "rclone" && !managedRclone ? draft.rsyncTarget.trim() || undefined : undefined,
       executorConfig,
       // 有前置任务时忽略 cronSpec（后端也会校验）
       cronSpec: dependsOnTaskId ? undefined : draft.cronSpec.trim() || undefined,
@@ -226,6 +229,7 @@ export function TaskEditorDialog({
         setDraft={setDraft}
         nodes={nodes}
         isEditing={isEditing}
+        managedRclone={managedRclone}
       />
     </FormDialog>
   );

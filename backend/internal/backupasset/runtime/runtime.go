@@ -32,6 +32,7 @@ type Dependencies struct {
 	Now             func() time.Time
 	Transport       provider.CommandTransport
 	StreamTransport provider.CommandStreamTransport
+	StagedPayload   provider.StagedPayloadTransport
 	ToolBinaries    provider.ToolBinaries
 	Metrics         publication.Metrics
 	Tombstones      repository.ManagedHistoryTombstoneSource
@@ -46,8 +47,10 @@ type Runtime struct {
 	publication    *repository.PublicationService
 	resticStrategy provider.PublicationStrategy
 	rsyncStrategy  provider.PublicationStrategy
+	rcloneStrategy provider.PublicationStrategy
 	admission      *AdmissionController
 	worker         *PublicationWorker
+	healthWorker   *RcloneHealthWorker
 	metrics        publication.Metrics
 
 	mu        sync.Mutex
@@ -130,6 +133,32 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	stagedPayload := dependencies.StagedPayload
+	if stagedPayload == nil {
+		ownership, ownershipErr := keyring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
+		if ownershipErr != nil {
+			return nil, ownershipErr
+		}
+		stagedPayload, err = provider.NewRcloneStagedPayloadTransport(sshutil.NewNodeDialer(dependencies.DB), ownership.Key, dependencies.Now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	portableRemote, err := provider.NewCommandRclonePortableRemote(transport, stagedPayload, limitsSource)
+	if err != nil {
+		return nil, err
+	}
+	nativeDataPlane, err := provider.NewCommandRcloneNativeDataPlane(transport, limitsSource)
+	if err != nil {
+		return nil, err
+	}
+	rcloneStrategy, err := provider.NewRclonePublicationStrategy(
+		provider.NewRclonePortablePublisher(portableRemote, nil, dependencies.Now),
+		provider.NewRcloneNativePublisher(nativeDataPlane, dependencies.Now),
+	)
+	if err != nil {
+		return nil, err
+	}
 	registry := provider.NewRegistry()
 	for _, registration := range []struct {
 		kind  backupasset.ProviderKind
@@ -137,7 +166,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}{
 		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, PublicationStrategy: rsyncStrategy}},
 		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, PublicationStrategy: resticStrategy}},
-		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter}},
+		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter, PublicationStrategy: rcloneStrategy}},
 	} {
 		if err := registry.Register(registration.kind, registration.value); err != nil {
 			return nil, err
@@ -165,6 +194,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	healthWorker, err := NewRcloneHealthWorker(RcloneHealthWorkerDependencies{Foundation: foundation, Health: publicationService})
+	if err != nil {
+		return nil, err
+	}
 	repositoryService, err := repository.NewService(repository.Dependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: dependencies.Now,
 		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink, Publication: publicationService,
@@ -172,7 +205,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{foundation: foundation, repository: repositoryService, publication: publicationService, resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, admission: admission, worker: worker, metrics: metricsSink}, nil
+	return &Runtime{foundation: foundation, repository: repositoryService, publication: publicationService, resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy, admission: admission, worker: worker, healthWorker: healthWorker, metrics: metricsSink}, nil
 }
 
 func runtimeTransport(dependencies Dependencies, foundation *backupasset.FoundationService) (provider.CommandTransport, provider.CommandStreamTransport, error) {
@@ -231,6 +264,12 @@ func (runtime *Runtime) RsyncTreePublicationStrategy() provider.PublicationStrat
 	}
 	return runtime.rsyncStrategy
 }
+func (runtime *Runtime) RclonePublicationStrategy() provider.PublicationStrategy {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.rcloneStrategy
+}
 func (runtime *Runtime) LineageGuard() publication.LineageGuard { return runtime.repository }
 func (runtime *Runtime) LegacyBlockRecorder() publication.LegacyBlockRecorder {
 	return runtime.publication
@@ -283,7 +322,7 @@ func (runtime *Runtime) SetInterruptedRunReadiness(readiness publication.Interru
 // StartupPass initializes admission before any command may be admitted, runs a
 // bounded worker pass, then uses unfiltered publication/TaskRun readiness.
 func (runtime *Runtime) StartupPass(ctx context.Context) error {
-	if runtime == nil || runtime.admission == nil || runtime.worker == nil || runtime.publication == nil {
+	if runtime == nil || runtime.admission == nil || runtime.worker == nil || runtime.healthWorker == nil || runtime.publication == nil {
 		return fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
 	}
 	runtime.mu.Lock()
@@ -301,6 +340,9 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 		return err
 	}
 	if err := runtime.worker.StartupPass(ctx); err != nil {
+		return err
+	}
+	if err := runtime.healthWorker.StartupPass(ctx); err != nil {
 		return err
 	}
 	unresolved, err := runtime.publication.HasUnresolvedPublication(ctx)
@@ -342,9 +384,25 @@ func (runtime *Runtime) StopAccepting() {
 }
 
 func (runtime *Runtime) Run(ctx context.Context) {
-	if runtime != nil && runtime.worker != nil {
-		runtime.worker.Run(ctx)
+	if runtime == nil || runtime.worker == nil {
+		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var health sync.WaitGroup
+	if runtime.healthWorker != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.healthWorker.Run(runCtx)
+		}()
+	}
+	runtime.worker.Run(runCtx)
+	cancel()
+	health.Wait()
 }
 
 func (runtime *Runtime) Shutdown(ctx context.Context) error {
@@ -359,6 +417,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if runtime.worker != nil {
 		if err := runtime.worker.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if runtime.healthWorker != nil {
+		if err := runtime.healthWorker.Shutdown(ctx); err != nil {
 			return err
 		}
 	}

@@ -6,24 +6,29 @@ import { Select } from "@/components/ui/select";
 import type {
   NodeRecord,
   PolicyRecord,
+  RclonePublicationState,
   RsyncPublicationState,
   TaskExecutorType,
   TaskRecord,
 } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
 
-function publicationStateTone(state: RsyncPublicationState): "success" | "warning" | "destructive" | "info" | "neutral" {
+function publicationStateTone(state: RsyncPublicationState | RclonePublicationState): "success" | "warning" | "destructive" | "info" | "neutral" {
   switch (state) {
     case "ready":
     case "committed":
       return "success";
     case "preparing":
     case "verifying":
+    case "capability_settling":
       return "info";
+    case "at_risk":
     case "failed":
     case "blocked":
       return "destructive";
     case "preflight_required":
+    case "credential_setup_required":
+    case "degraded":
     case "rollback_prepared":
       return "warning";
     default:
@@ -52,6 +57,9 @@ export function TaskBasics({
   errors,
 }: TaskBasicsProps) {
   const { t } = useTranslation();
+  const managedRclone = editingTask?.executorType === "rclone"
+    && editingTask.rclonePublication?.mode !== undefined
+    && editingTask.rclonePublication.mode !== "legacy_mutable";
 
   return (
     <>
@@ -130,6 +138,7 @@ export function TaskBasics({
           id="task-editor-executor-type"
           containerClassName="w-full"
           value={draft.executorType}
+          disabled={managedRclone}
           onChange={(event) =>
             setDraft((prev) => ({
               ...prev,
@@ -158,6 +167,25 @@ export function TaskBasics({
           {editingTask.rsyncPublication.state === "blocked" ? (
             <InlineAlert tone="critical">
               {t("rsyncVersioning.reason." + editingTask.rsyncPublication.reasonCode)}
+            </InlineAlert>
+          ) : null}
+        </div>
+      ) : null}
+
+      {draft.executorType === "rclone" && editingTask?.rclonePublication ? (
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs text-muted-foreground">{t("rcloneVersioning.currentMode")}</p>
+              <p className="text-sm font-medium">{t(`rcloneVersioning.mode.${editingTask.rclonePublication.mode}`)}</p>
+            </div>
+            <Badge tone={publicationStateTone(editingTask.rclonePublication.state)}>
+              {t(`rcloneVersioning.state.${editingTask.rclonePublication.state}`)}
+            </Badge>
+          </div>
+          {editingTask.rclonePublication.state === "blocked" || editingTask.rclonePublication.state === "at_risk" ? (
+            <InlineAlert tone="critical">
+              {t(`rcloneVersioning.reason.${editingTask.rclonePublication.reasonCode}`)}
             </InlineAlert>
           ) : null}
         </div>

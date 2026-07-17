@@ -131,6 +131,20 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.manifest_max_entries":             "10000000",
 	"backup_assets.manifest_max_record_bytes":        "1048576",
 	"backup_assets.manifest_max_depth":               "4096",
+	"backup_assets.rclone_preflight_ttl":             "30m",
+	"backup_assets.rclone_portable_deadline":         "24h",
+	"backup_assets.rclone_native_deadline":           "45m",
+	"backup_assets.rclone_bound_config_max_bytes":    "65536",
+	"backup_assets.rclone_control_payload_max_bytes": "8388608",
+	"backup_assets.rclone_full_verify_max_bytes":     "1099511627776",
+	"backup_assets.rclone_manifest_chunk_max_bytes":  "8388608",
+	"backup_assets.rclone_low_level_retries":         "3",
+	"backup_assets.rclone_staging_orphan_age":        "24h",
+	"backup_assets.rclone_staging_scan_limit":        "256",
+	"backup_assets.rclone_kms_read_key_max_count":    "8",
+	"backup_assets.rclone_health_interval":           "15m",
+	"backup_assets.rclone_health_batch_size":         "100",
+	"backup_assets.rclone_aws_sdk_max_attempts":      "3",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

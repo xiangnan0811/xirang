@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import i18n, { getLanguage, i18nReady, setLanguage } from "@/i18n";
 
+function leafKeys(value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [prefix] : [];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    leafKeys(child, prefix ? `${prefix}.${key}` : key),
+  );
+}
+
 describe("i18n bootstrap", () => {
   beforeEach(async () => {
     window.localStorage.setItem("xirang.language", "zh");
@@ -31,5 +40,16 @@ describe("i18n bootstrap", () => {
 
     await setLanguage("en");
     expect(i18n.t("nav.more")).toBe("More");
+  });
+
+  it("keeps every Rclone versioning locale key in zh/en parity", async () => {
+    await setLanguage("zh");
+    const zhBundle = i18n.getResourceBundle("zh", "translation") as Record<string, unknown>;
+    await setLanguage("en");
+    const enBundle = i18n.getResourceBundle("en", "translation") as Record<string, unknown>;
+
+    expect(leafKeys(zhBundle.rcloneVersioning).sort()).toEqual(
+      leafKeys(enBundle.rcloneVersioning).sort(),
+    );
   });
 });

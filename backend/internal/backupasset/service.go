@@ -154,6 +154,10 @@ func (service *FoundationService) PublicationConfig() (PublicationConfig, error)
 	if err != nil {
 		return PublicationConfig{}, err
 	}
+	rcloneConfig, err := parseRclonePublicationConfig(values)
+	if err != nil {
+		return PublicationConfig{}, err
+	}
 	return PublicationConfig{
 		ReconcileInterval:      reconcileInterval,
 		ReconcileBatchSize:     reconcileBatchSize,
@@ -165,6 +169,74 @@ func (service *FoundationService) PublicationConfig() (PublicationConfig, error)
 		ManifestMaxEntries:     manifestMaxEntries,
 		ManifestMaxRecordBytes: manifestMaxRecordBytes,
 		ManifestMaxDepth:       manifestMaxDepth,
+		Rclone:                 rcloneConfig,
+	}, nil
+}
+
+func parseRclonePublicationConfig(values map[string]string) (RclonePublicationConfig, error) {
+	preflightTTL, err := parseFoundationDuration(values, "backup_assets.rclone_preflight_ttl")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	portableDeadline, err := parseFoundationDuration(values, "backup_assets.rclone_portable_deadline")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	nativeDeadline, err := parseFoundationDuration(values, "backup_assets.rclone_native_deadline")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	boundConfigMaxBytes, err := parseFoundationInt64(values, "backup_assets.rclone_bound_config_max_bytes")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	controlPayloadMaxBytes, err := parseFoundationInt64(values, "backup_assets.rclone_control_payload_max_bytes")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	fullVerifyMaxBytes, err := parseFoundationInt64(values, "backup_assets.rclone_full_verify_max_bytes")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	manifestChunkMaxBytes, err := parseFoundationInt64(values, "backup_assets.rclone_manifest_chunk_max_bytes")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	lowLevelRetries, err := parseFoundationInt(values, "backup_assets.rclone_low_level_retries")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	stagingOrphanAge, err := parseFoundationDuration(values, "backup_assets.rclone_staging_orphan_age")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	stagingScanLimit, err := parseFoundationInt(values, "backup_assets.rclone_staging_scan_limit")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	kmsReadKeyMaxCount, err := parseFoundationInt(values, "backup_assets.rclone_kms_read_key_max_count")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	healthInterval, err := parseFoundationDuration(values, "backup_assets.rclone_health_interval")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	healthBatchSize, err := parseFoundationInt(values, "backup_assets.rclone_health_batch_size")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	awsSDKMaxAttempts, err := parseFoundationInt(values, "backup_assets.rclone_aws_sdk_max_attempts")
+	if err != nil {
+		return RclonePublicationConfig{}, err
+	}
+	return RclonePublicationConfig{
+		PreflightTTL: preflightTTL, PortableDeadline: portableDeadline, NativeDeadline: nativeDeadline,
+		BoundConfigMaxBytes: boundConfigMaxBytes, ControlPayloadMaxBytes: controlPayloadMaxBytes,
+		FullVerifyMaxBytes: fullVerifyMaxBytes, ManifestChunkMaxBytes: manifestChunkMaxBytes,
+		LowLevelRetries: lowLevelRetries, StagingOrphanAge: stagingOrphanAge, StagingScanLimit: stagingScanLimit,
+		KMSReadKeyMaxCount: kmsReadKeyMaxCount, HealthInterval: healthInterval, HealthBatchSize: healthBatchSize,
+		AWSSDKMaxAttempts: awsSDKMaxAttempts,
 	}, nil
 }
 

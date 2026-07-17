@@ -125,6 +125,12 @@ vi.mock("@/components/task-rsync-versioning-dialog", () => ({
   ),
 }));
 
+vi.mock("@/components/task-rclone-versioning-dialog", () => ({
+  TaskRcloneVersioningDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
+    open ? <div data-testid="rclone-versioning-dialog">{task?.id}</div> : null
+  ),
+}));
+
 vi.mock("@/components/task-run-history", () => ({
   TaskRunHistory: () => <div data-testid="task-run-history">历史记录</div>,
 }));
@@ -684,6 +690,105 @@ describe("TasksPage", () => {
     expect(screen.getByTestId("rsync-versioning-dialog")).toHaveTextContent("601");
   });
 
+  it("管理员可在卡片视图查看 Rclone publication 状态并打开版本化管理", async () => {
+    const user = userEvent.setup();
+    createContext({
+      tasks: [
+        {
+          id: 611,
+          name: "Rclone 归档任务",
+          policyName: "Rclone 归档任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-07-16 20:00:00",
+          executorType: "rclone",
+          rclonePublication: {
+            mode: "versioned_prefix",
+            state: "ready",
+            reasonCode: "ready",
+            taskRevision: "9007199254740993",
+            bindingRevision: "1",
+            capabilityRevision: "2",
+            consistencyClass: "observationally_stable",
+            hashFidelity: "download_verified_bytes",
+            estimatedReadBytes: "4096",
+            apiCostClass: "moderate",
+            storageCostClass: "low",
+            egressCostClass: "high",
+            encryptionProfile: "none",
+            kmsKeyStatus: "not_applicable",
+            kmsReadKeyCount: 0,
+            rollbackLocatorPresent: true,
+            rollbackCapability: "clean_available",
+          },
+          speedMbps: 0,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("已就绪")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "管理任务 Rclone 归档任务 的 Rclone 版本化恢复点" }));
+    expect(screen.getByTestId("rclone-versioning-dialog")).toHaveTextContent("611");
+  });
+
+  it("Rclone 版本化管理入口也出现在列表视图", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    createContext({
+      tasks: [
+        {
+          id: 612,
+          name: "Rclone 列表任务",
+          policyName: "Rclone 列表任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-07-16 20:00:00",
+          executorType: "rclone",
+          rclonePublication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reasonCode: "legacy",
+            taskRevision: "9007199254740993",
+            bindingRevision: "0",
+            capabilityRevision: "0",
+            consistencyClass: "not_evaluated",
+            hashFidelity: "not_evaluated",
+            estimatedReadBytes: "0",
+            apiCostClass: "not_evaluated",
+            storageCostClass: "not_evaluated",
+            egressCostClass: "not_evaluated",
+            encryptionProfile: "none",
+            kmsKeyStatus: "not_applicable",
+            kmsReadKeyCount: 0,
+            rollbackLocatorPresent: false,
+            rollbackCapability: "preparation_only",
+          },
+          speedMbps: 0,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "管理任务 Rclone 列表任务 的 Rclone 版本化恢复点" }));
+    expect(screen.getByTestId("rclone-versioning-dialog")).toHaveTextContent("612");
+  });
+
   it("非管理员不会看到 Rsync 版本化迁移操作", () => {
     authRef.current = {
       token: "test-token",
@@ -723,6 +828,58 @@ describe("TasksPage", () => {
     );
 
     expect(screen.queryByRole("button", { name: "管理任务 受限 Rsync 任务 的 Rsync 版本化恢复点" })).not.toBeInTheDocument();
+  });
+
+  it("非管理员不会看到 Rclone 版本化管理操作", () => {
+    authRef.current = {
+      token: "test-token",
+      username: "operator",
+      role: "operator",
+      logout: vi.fn(),
+    };
+    createContext({
+      tasks: [
+        {
+          id: 613,
+          name: "受限 Rclone 任务",
+          policyName: "受限 Rclone 任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-07-16 20:00:00",
+          executorType: "rclone",
+          rclonePublication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reasonCode: "legacy",
+            taskRevision: "1",
+            bindingRevision: "0",
+            capabilityRevision: "0",
+            consistencyClass: "not_evaluated",
+            hashFidelity: "not_evaluated",
+            estimatedReadBytes: "0",
+            apiCostClass: "not_evaluated",
+            storageCostClass: "not_evaluated",
+            egressCostClass: "not_evaluated",
+            encryptionProfile: "none",
+            kmsKeyStatus: "not_applicable",
+            kmsReadKeyCount: 0,
+            rollbackLocatorPresent: false,
+            rollbackCapability: "preparation_only",
+          },
+          speedMbps: 0,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole("button", { name: "管理任务 受限 Rclone 任务 的 Rclone 版本化恢复点" })).not.toBeInTheDocument();
   });
 
   it("缺少安全 publication 摘要时隐藏旧 Rsync 恢复入口", async () => {

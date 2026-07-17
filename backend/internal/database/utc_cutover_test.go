@@ -72,12 +72,41 @@ func TestNowFuncReturnsUTC(t *testing.T) {
 	}
 }
 
+func TestPostgresTimestamptzScanUsesConfiguredUTC(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	t.Setenv("TZ", "Asia/Shanghai")
+
+	db, err := Open(config.Config{DBType: "postgres", PostgresDSN: dsn})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	var row struct {
+		EventAt time.Time `gorm:"column:event_at"`
+	}
+	if err := db.Raw(`SELECT TIMESTAMPTZ '2026-07-13 03:04:05+00' AS event_at`).Scan(&row).Error; err != nil {
+		t.Fatalf("scan timestamptz: %v", err)
+	}
+	if row.EventAt.Location() != time.UTC || row.EventAt.Format(time.RFC3339) != "2026-07-13T03:04:05Z" {
+		t.Fatalf("timestamptz scan=%s (%s), want UTC", row.EventAt.Format(time.RFC3339), row.EventAt.Location())
+	}
+}
+
 // TestUTCCutoverSQLEquivalence simulates the migration 000050 scenario:
-// 1. Pretend the server was running in Local (Asia/Shanghai = +8h) and wrote
-//    a timestamp value that represents a specific absolute instant.
-// 2. Run the SQL fragment from 000050 to subtract 8 hours (the cutover).
-// 3. Read it back through a UTC-loc connection.
-// 4. Assert the absolute instant is preserved.
+//  1. Pretend the server was running in Local (Asia/Shanghai = +8h) and wrote
+//     a timestamp value that represents a specific absolute instant.
+//  2. Run the SQL fragment from 000050 to subtract 8 hours (the cutover).
+//  3. Read it back through a UTC-loc connection.
+//  4. Assert the absolute instant is preserved.
 //
 // This is the core correctness guarantee of the cutover: nothing about the
 // real-world moment recorded changes, only the storage representation
@@ -202,7 +231,7 @@ func TestSQLiteLocUTCRoundTrip(t *testing.T) {
 
 	cases := []time.Time{
 		time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Date(2025, 6, 15, 12, 0, 0, 0, shanghai),       // +8 zone
+		time.Date(2025, 6, 15, 12, 0, 0, 0, shanghai), // +8 zone
 		time.Date(2025, 12, 31, 23, 59, 59, 0, time.FixedZone("+09:30", 9*3600+30*60)),
 	}
 	for i, want := range cases {

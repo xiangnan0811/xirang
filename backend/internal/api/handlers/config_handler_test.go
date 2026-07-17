@@ -156,6 +156,66 @@ func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *tes
 	}
 }
 
+func TestConfigImportManagedRcloneTasksPauseAndDisconnectForeignPublicationConfig(t *testing.T) {
+	for _, mode := range []string{"versioned_prefix", "native_object_versions"} {
+		t.Run(mode, func(t *testing.T) {
+			db := openConfigHandlerTestDB(t)
+			if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+				t.Fatal(err)
+			}
+			handler := NewConfigHandler(db, nil)
+			router := gin.New()
+			router.POST("/config/import", handler.Import)
+
+			foreignConfig, err := json.Marshal(map[string]any{
+				"version":          1,
+				"publication_mode": mode,
+				"binding_version":  3,
+				"preflight_id":     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"provider_secret":  "FAKE_PROVIDER_SECRET_FOR_TEST_ONLY",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{
+				"nodes": []map[string]any{{
+					"name": "import-node", "host": "10.0.0.8", "port": 22,
+					"username": "root", "auth_type": "key",
+				}},
+				"tasks": []map[string]any{{
+					"name": "foreign-managed-rclone-" + mode, "node_name": "import-node",
+					"executor_type": "rclone", "rsync_source": "/srv/trusted-source",
+					"rsync_target": "foreign:bucket/private", "executor_config": string(foreignConfig),
+					"cron_spec": "*/5 * * * *", "enabled": true,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+
+			var imported model.Task
+			if err := db.Where("name = ?", "foreign-managed-rclone-"+mode).First(&imported).Error; err != nil {
+				t.Fatal(err)
+			}
+			if imported.Enabled || imported.RsyncSource != "/srv/trusted-source" || imported.RsyncTarget != "" ||
+				imported.ExecutorConfig != `{"version":1,"publication_mode":"legacy_mutable"}` {
+				t.Fatalf("managed Rclone import was not safely disconnected: %+v", imported)
+			}
+			if strings.Contains(imported.ExecutorConfig, "preflight") || strings.Contains(imported.ExecutorConfig, "secret") {
+				t.Fatalf("managed Rclone import retained foreign evidence: %q", imported.ExecutorConfig)
+			}
+		})
+	}
+}
+
 func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	sourceDB := openConfigHandlerTestDB(t)
 	if err := sourceDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {

@@ -884,3 +884,107 @@ Correct:
 const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
 if (!token && !demoModeEnabled) return <Navigate to="/login" replace />;
 ```
+
+---
+
+## Scenario: Rclone Publication Summary Closed Product Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing Rclone publication modes, encryption profiles,
+  KMS health fields, task summary responses, or the Rclone versioning dialog.
+- Applies to `backupasset.RclonePublicationSummary.Validate`,
+  `backupasset.SafeRclonePublicationSummary`, the task/versioning handlers,
+  `tasks-api.ts`, and `RclonePublicationSummary` frontend consumers.
+
+### 2. Signatures
+
+- Backend validator:
+  `func (value RclonePublicationSummary) Validate() error`.
+- Backend safe projection:
+  `func SafeRclonePublicationSummary(value RclonePublicationSummary) RclonePublicationSummary`.
+- Frontend boundary mapper:
+  `mapRclonePublicationSummary(raw: unknown, fallbackToLegacy?: boolean): RclonePublicationSummary`.
+- Coupled wire fields: `mode`, `encryption_profile`, `kms_key_status`, and
+  `kms_read_key_count`.
+
+### 3. Contracts
+
+- Treat the four coupled fields as one closed product, not four independent
+  enums:
+
+| Mode/profile | Required KMS status/count |
+|---|---|
+| `legacy_mutable` or `versioned_prefix` + `none` | `not_applicable`, count `0` |
+| `native_object_versions` + `sse_s3` | `not_applicable`, count `0` |
+| `native_object_versions` + `sse_kms_cmk` | status is `ready`, `degraded`, `at_risk`, or `blocked`; count is a non-negative safe integer |
+
+- Non-native modes must never expose SSE fields; native mode must never expose
+  `none`.
+- The backend validates the product before returning it. Invalid stored or
+  constructed state projects through `SafeRclonePublicationSummary` to
+  `native_object_versions + blocked + unsupported_profile + sse_kms_cmk +
+  blocked`, with KMS count `0`.
+- The frontend independently validates untrusted wire data. Missing, malformed,
+  unsafe, or impossible coupled fields project the entire summary to the same
+  blocked shape; they are never repaired field by field.
+- An unknown rollback capability remains a separate conservative projection to
+  `preparation_only`; it does not require discarding an otherwise valid summary.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Portable or legacy summary carries `sse_s3` / `sse_kms_cmk` | Reject or project the enclosing summary to blocked/unsupported. |
+| Native summary carries `none` | Reject or project the enclosing summary to blocked/unsupported. |
+| SSE-S3 or `none` carries a KMS status other than `not_applicable` | Reject or project the enclosing summary to blocked/unsupported. |
+| SSE-S3 or `none` carries a non-zero KMS key count | Reject or project the enclosing summary to blocked/unsupported. |
+| SSE-KMS carries `not_applicable` | Reject or project the enclosing summary to blocked/unsupported. |
+| KMS count is missing, negative, fractional, or outside JavaScript's safe integer range | Project the enclosing frontend summary to blocked/unsupported. |
+| A closed field has a future value | Project the enclosing summary to blocked/unsupported; do not guess a compatible profile. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a native SSE-KMS summary reports `degraded` with two retained read keys;
+  both backend and frontend preserve the exact safe values.
+- Base: a portable summary reports `none`, `not_applicable`, and count `0`.
+- Bad: accepting native SSE-S3 with `kms_key_status=ready`, or silently mapping
+  a missing KMS count to zero, creates a semantically impossible UI state.
+
+### 6. Tests Required
+
+- Backend table tests must cover every valid encryption/KMS class and reject
+  each impossible mode/profile/status/count combination.
+- `SafeRclonePublicationSummary` tests must prove invalid combinations become a
+  valid blocked projection without opening clean rollback.
+- `tasks-api.ts` tests must feed impossible and malformed raw combinations and
+  assert the whole camelCase summary becomes blocked/unsupported.
+- Handler/task projection tests must assert no provider-private ARN, bucket,
+  prefix, VersionId, config, or digest enters the safe DTO.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const encryptionProfile = mapRcloneEncryption(raw.encryption_profile) ?? "none";
+const kmsKeyStatus = mapRcloneKmsStatus(raw.kms_key_status) ?? "not_applicable";
+return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: Number(raw.kms_read_key_count) || 0 };
+```
+
+Correct:
+
+```ts
+const kmsCount = typeof source.kms_read_key_count === "number" &&
+  Number.isSafeInteger(source.kms_read_key_count) && source.kms_read_key_count >= 0
+  ? source.kms_read_key_count
+  : undefined;
+if (kmsCount === undefined ||
+    (mode === "native_object_versions") === (encryptionProfile === "none") ||
+    (encryptionProfile === "sse_kms_cmk"
+      ? kmsKeyStatus === "not_applicable"
+      : kmsKeyStatus !== "not_applicable" || kmsCount !== 0)) {
+  return blockedRclonePublicationSummary(source);
+}
+return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
+```

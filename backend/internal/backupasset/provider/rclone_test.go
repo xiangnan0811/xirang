@@ -70,6 +70,49 @@ func TestRcloneNodeDefaultConfigOmitsSecretTransport(t *testing.T) {
 	}
 }
 
+func TestRcloneManagedReaderRequiresExactCommittedPointAndNeverFallsBackToMutable(t *testing.T) {
+	listJSON := `[{"Path":"file.txt","Name":"file.txt","Size":4,"ModTime":"2026-07-16T01:00:00Z","IsDir":false,"Hashes":{"sha256":"abcd"}}]`
+	transport := &fakeCommandTransport{outputs: map[CommandOperation]CommandOutput{OperationRcloneList: {Stdout: []byte(listJSON)}}}
+	adapter := newRcloneAdapterForTest(t, transport)
+	binding := rcloneBindingForTest()
+	binding.Locator = "remote-name:managed/v1/points/point/attempts/attempt/data"
+	sourceRevision := rcloneListFingerprintForTest(t, listJSON)
+	managed := RcloneManagedPointAccess{
+		RecoveryPointID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32), DataLocator: binding.Locator,
+		ManifestDigest: strings.Repeat("c", 64), SourceRevision: sourceRevision, Committed: true,
+	}
+	binding.AdapterData = RcloneRuntimeAccess{Backend: "s3", ConfigSource: RcloneConfigBound, ManagedPoint: &managed}
+	snapshot := ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: sourceRevision, Access: binding}
+	points, err := adapter.ListPoints(context.Background(), snapshot, PageRequest{Limit: 10})
+	if err != nil || len(points.Items) != 1 || points.Items[0].Semantics != backupasset.PointXirangManifest || points.Items[0].Locator.Native == "" || strings.Contains(points.Items[0].Locator.Native, binding.Locator) {
+		t.Fatalf("managed points=%+v err=%v", points, err)
+	}
+	page, err := adapter.ListEntries(context.Background(), snapshot, points.Items[0].Locator, EntryLocator{}, PageRequest{Limit: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("managed page=%+v err=%v", page, err)
+	}
+	if _, err := adapter.ListEntries(context.Background(), snapshot, rclonePointLocator(sourceRevision), EntryLocator{}, PageRequest{Limit: 10}); err == nil {
+		t.Fatal("managed reader accepted mutable-head point fallback")
+	}
+
+	unsafeBinding := binding
+	unsafeRuntime := *unsafeBinding.AdapterData.(RcloneRuntimeAccess).ManagedPoint
+	unsafeRuntime.Committed = false
+	unsafeBinding.AdapterData = RcloneRuntimeAccess{Backend: "s3", ConfigSource: RcloneConfigBound, ManagedPoint: &unsafeRuntime}
+	unsafeSnapshot := snapshot
+	unsafeSnapshot.Access = unsafeBinding
+	if _, err := adapter.ListPoints(context.Background(), unsafeSnapshot, PageRequest{Limit: 10}); err == nil {
+		t.Fatal("preparing managed point was readable")
+	}
+	unsafeBinding = binding
+	unsafeBinding.Secret = nil
+	unsafeBinding.AdapterData = RcloneRuntimeAccess{Backend: "s3", ConfigSource: RcloneConfigNodeDefault, ManagedPoint: &managed}
+	unsafeSnapshot.Access = unsafeBinding
+	if _, err := adapter.ListPoints(context.Background(), unsafeSnapshot, PageRequest{Limit: 10}); err == nil {
+		t.Fatal("managed point accepted node-default config")
+	}
+}
+
 func TestRcloneRangeRemainsFalseWhenProofIsWrongOrUnavailable(t *testing.T) {
 	for _, transport := range []*fakeCommandTransport{rcloneProbeTransport(false), rcloneEmptyProbeTransport()} {
 		adapter := newRcloneAdapterForTest(t, transport)

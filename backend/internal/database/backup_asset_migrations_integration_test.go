@@ -317,6 +317,7 @@ func runBackupAssetMigration064Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("ManagedTreeSourceFingerprintIsRepositoryScoped", fixture.test064ManagedTreeSourceUnique)
 	t.Run("DownRejectsLatch", fixture.test064DownRejectsLatch)
 	t.Run("DownRejectsManagedPointAndVersionedLink", fixture.test064DownRejectsManagedHistory)
+	t.Run("DownAllowsUnlinkedRcloneManagedLinkWithoutHistory", fixture.test064DownAllowsUnlinkedRcloneManagedLink)
 	t.Run("DownRejectsPublicationAndParentLease", fixture.test064DownRejectsPublicationAndParentLease)
 	t.Run("RejectedDownLeavesSchemaAndRowsUntouched", fixture.test064DownIsAtomic)
 }
@@ -645,14 +646,18 @@ func (fixture migrationFixture) test064DownRejectsManagedHistory(t *testing.T) {
 		})
 	}
 
-	for index, publicationMode := range []string{"native_snapshot", "versioned_hardlink", "versioned_full_copy"} {
+	for index, publicationMode := range []string{"native_snapshot", "versioned_hardlink", "versioned_full_copy", "versioned_prefix", "native_object_versions"} {
 		publicationMode := publicationMode
 		t.Run("link_"+publicationMode, func(t *testing.T) {
 			migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
 			now := time.Date(2026, 7, 15, 3, 4, 5, 0, time.UTC)
 			repositoryID := fmt.Sprintf("%032x", index+201)
 			taskID := int64(9800 + index*2)
-			fixture.insertRepository(t, db, repositoryID, "rsync", now)
+			providerKind := "rsync"
+			if publicationMode == "versioned_prefix" || publicationMode == "native_object_versions" {
+				providerKind = "rclone"
+			}
+			fixture.insertRepository(t, db, repositoryID, providerKind, now)
 			fixture.insertTaskAndRun(t, db, taskID, taskID+1, now)
 			fixture.insertTaskLink(t, db, fmt.Sprintf("%032x", index+301), taskID, repositoryID, publicationMode, now)
 			fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
@@ -674,6 +679,28 @@ func (fixture migrationFixture) test064DownRejectsPublicationAndParentLease(t *t
 			})
 			fixture.insertPublicationLease(t, db, fmt.Sprintf("%032x", index+601), pointID, holderType, "active", now)
 			fixture.assertRsyncPublicationDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+}
+
+func (fixture migrationFixture) test064DownAllowsUnlinkedRcloneManagedLink(t *testing.T) {
+	for index, publicationMode := range []string{"versioned_prefix", "native_object_versions"} {
+		publicationMode := publicationMode
+		t.Run(publicationMode, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+			now := time.Date(2026, 7, 16, 9, 0, 0, 0, time.UTC)
+			repositoryID := fmt.Sprintf("%032x", index+701)
+			linkID := fmt.Sprintf("%032x", index+801)
+			taskID := int64(9900 + index*2)
+			fixture.insertRepository(t, db, repositoryID, "rclone", now)
+			fixture.insertTaskAndRun(t, db, taskID, taskID+1, now)
+			fixture.insertTaskLink(t, db, linkID, taskID, repositoryID, publicationMode, now)
+			fixture.mustExec(t, db, `UPDATE task_repository_links SET unlinked_at = ? WHERE id = ?`, now.Add(time.Minute), linkID)
+			if err := migrator.Steps(-1); err != nil {
+				t.Fatalf("000064 down rejected clean unlinked %s link: %v", publicationMode, err)
+			}
+			assertMigrationVersion(t, migrator, backupAssetPublicationVersion)
+			fixture.assertRsyncPublicationContractAbsent(t, db)
 		})
 	}
 }
@@ -1291,7 +1318,7 @@ func newPostgresBackupAssetMigrator(t *testing.T, dsn string) (*migrate.Migrate,
 	if err != nil || parsed.Scheme == "" {
 		t.Fatalf("TEST_POSTGRES_DSN must be a PostgreSQL URL: %v", err)
 	}
-	baseDB, err := sql.Open("pgx", dsn)
+	baseDB, err := openPostgresSQLDB(dsn)
 	if err != nil {
 		t.Fatalf("open base PostgreSQL database: %v", err)
 	}
@@ -1307,7 +1334,7 @@ func newPostgresBackupAssetMigrator(t *testing.T, dsn string) (*migrate.Migrate,
 	query.Set("search_path", schema)
 	query.Set("timezone", "UTC")
 	parsed.RawQuery = query.Encode()
-	db, err := sql.Open("pgx", parsed.String())
+	db, err := openPostgresSQLDB(parsed.String())
 	if err != nil {
 		t.Fatalf("open scoped PostgreSQL database: %v", err)
 	}
