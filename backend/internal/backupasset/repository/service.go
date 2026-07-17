@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -17,16 +18,17 @@ type AssetAuditSink interface {
 }
 
 type Dependencies struct {
-	DB          *gorm.DB
-	Foundation  *backupasset.FoundationService
-	Registry    *provider.Registry
-	Keyring     *backupasset.Keyring
-	Now         func() time.Time
-	Audit       AssetAuditSink
-	Admission   publication.Admission
-	History     *ManagedHistoryResolver
-	Metrics     publication.Metrics
-	Publication *PublicationService
+	DB              *gorm.DB
+	Foundation      *backupasset.FoundationService
+	Registry        *provider.Registry
+	Keyring         *backupasset.Keyring
+	Now             func() time.Time
+	Audit           AssetAuditSink
+	Admission       publication.Admission
+	History         *ManagedHistoryResolver
+	Metrics         publication.Metrics
+	Publication     *PublicationService
+	RclonePreflight RcloneVersioningPreflighter
 }
 
 type Service struct {
@@ -41,6 +43,12 @@ type Service struct {
 	metrics     publication.Metrics
 	publication *PublicationService
 	preflights  *rsyncVersioningPreflightStore
+
+	rcloneWorkflowMu  sync.Mutex
+	rcloneSetups      *rcloneVersioningSetupStore
+	rcloneCandidates  *rcloneBindingCandidateStore
+	rclonePreflights  *rcloneVersioningPreflightStore
+	rclonePreflighter RcloneVersioningPreflighter
 }
 
 func NewService(dependencies Dependencies) (*Service, error) {
@@ -53,8 +61,9 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	return &Service{
 		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring,
 		now: dependencies.Now, audit: dependencies.Audit, admission: dependencies.Admission, history: dependencies.History, metrics: dependencies.Metrics,
-		publication: dependencies.Publication,
-		preflights:  newRsyncVersioningPreflightStore(dependencies.Now),
+		publication:       dependencies.Publication,
+		rclonePreflighter: dependencies.RclonePreflight,
+		preflights:        newRsyncVersioningPreflightStore(dependencies.Now),
 	}, nil
 }
 

@@ -69,6 +69,14 @@ func (resolver *ManagedHistoryResolver) HasRepositoryManagedHistory(ctx context.
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("query repository managed history: %w", err)
 	}
+	if count > 0 {
+		return true, nil
+	}
+	if err := resolver.db.WithContext(ctx).Model(&model.TaskRepositoryLink{}).
+		Where("repository_id = ? AND unlinked_at IS NULL AND publication_mode IN ?", repositoryID, managedHistoryPublicationModes()).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query repository managed history links: %w", err)
+	}
 	tombstoneHistory, err := resolver.repositoryTombstoneHistory(ctx, repositoryID)
 	if err != nil {
 		return false, err
@@ -94,6 +102,14 @@ func (resolver *ManagedHistoryResolver) HasInstallationManagedHistory(ctx contex
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("query installation managed history: %w", err)
 	}
+	if count > 0 {
+		return true, nil
+	}
+	if err := resolver.db.WithContext(ctx).Model(&model.TaskRepositoryLink{}).
+		Where("unlinked_at IS NULL AND publication_mode IN ?", managedHistoryPublicationModes()).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query installation managed history links: %w", err)
+	}
 	tombstoneHistory, err := resolver.installationTombstoneHistory(ctx)
 	if err != nil {
 		return false, err
@@ -112,6 +128,48 @@ func (resolver *ManagedHistoryResolver) HasActivePublicationLease(ctx context.Co
 		return false, fmt.Errorf("query active publication lease: %w", err)
 	}
 	return count > 0, nil
+}
+
+// rcloneCleanRollbackAvailable deliberately ignores the active managed link:
+// that link is the object a clean rollback will atomically replace. Every
+// durable reservation, repository latch/tombstone, or repository-scoped
+// publication lease closes the clean window permanently for this workflow.
+func (resolver *ManagedHistoryResolver) rcloneCleanRollbackAvailable(ctx context.Context, repositoryID string) (bool, error) {
+	if resolver == nil || resolver.db == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return false, fmt.Errorf("%w: invalid Rclone clean rollback query", backupasset.ErrInvalidState)
+	}
+	var count int64
+	if err := resolver.db.WithContext(ctx).Model(&model.BackupAssetManagedHistoryLatch{}).
+		Where("scope = ? AND repository_id = ?", managedHistoryLatchScopeRepository, repositoryID).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query Rclone rollback repository latch: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+	if err := resolver.db.WithContext(ctx).Model(&model.RecoveryPoint{}).
+		Where("repository_id = ? AND semantics IN ?", repositoryID, managedHistoryPointSemantics()).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query Rclone rollback reservations: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+	if err := resolver.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
+		Joins("JOIN recovery_points ON recovery_points.id = recovery_point_leases.recovery_point_id").
+		Where("recovery_points.repository_id = ? AND recovery_point_leases.holder_type IN ? AND recovery_point_leases.status = ?",
+			repositoryID, managedHistoryLeaseHolderTypes(), backupasset.LeaseActive).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("query Rclone rollback publication leases: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+	tombstone, err := resolver.repositoryTombstoneHistory(ctx, repositoryID)
+	if err != nil {
+		return false, err
+	}
+	return !tombstone, nil
 }
 
 // legacyFallbackAllowed is the common fail-closed answer for disabled-mode
@@ -213,6 +271,16 @@ func managedHistoryLeaseHolderTypes() []string {
 	return []string{
 		string(backupasset.LeaseHolderPointPublication),
 		string(backupasset.LeaseHolderRsyncParent),
+	}
+}
+
+func managedHistoryPublicationModes() []string {
+	return []string{
+		string(backupasset.PublicationNativeSnapshot),
+		string(backupasset.PublicationVersionedHardlink),
+		string(backupasset.PublicationVersionedFullCopy),
+		string(backupasset.PublicationVersionedPrefix),
+		string(backupasset.PublicationNativeObjectVersions),
 	}
 }
 

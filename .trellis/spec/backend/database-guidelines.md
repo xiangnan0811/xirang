@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000061_task_runs_traffic_indexes`.
+  latest migration is `000064_backup_asset_rsync_publication_contract`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,10 +111,92 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` and `000063_backup_asset_publication_contract`;
-  later versions must remain paired. After a native managed RecoveryPoint or
-  tombstone exists, schema down must fail closed rather than deleting
-  publication history or Provider facts.
+  current baseline includes `000062`, `000063_backup_asset_publication_contract`,
+  and `000064_backup_asset_rsync_publication_contract`; later versions must
+  remain paired. After a native managed RecoveryPoint or tombstone exists,
+  schema down must fail closed rather than deleting publication history or
+  Provider facts.
+
+## Scenario: PostgreSQL Timestamp Scan-Location Parity
+
+### 1. Scope / Trigger
+
+- Trigger: changing PostgreSQL connection construction, timestamp-bearing
+  models, UTC migration coverage, or a migration that introduces a PostgreSQL
+  `TIMESTAMPTZ` column.
+- Applies to `backend/internal/database/database.go`, pgx codec registration,
+  GORM's PostgreSQL dialector, and the PostgreSQL migration-parity CI job.
+
+### 2. Signatures
+
+- Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
+- CI regression gate:
+  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
+- Required pgx registrations per physical connection:
+  `pgtype.TimestampCodec{ScanLocation: scanLocation}` and
+  `pgtype.TimestamptzCodec{ScanLocation: scanLocation}`.
+
+### 3. Contracts
+
+- PostgreSQL DSNs default `timezone` to `UTC` when the caller did not specify
+  one; `scanLocation` is loaded from that effective setting.
+- GORM must receive the `*sql.DB` returned by `openPostgresSQLDB`, rather than
+  opening an unrelated pool through the dialector DSN.
+- Register **both** `timestamp` and `timestamptz` codecs in pgx's `AfterConnect`
+  hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
+  `time.Local` on newer Go/pgx combinations.
+- SQLite/PostgreSQL migration parity for backup assets covers 000062, 000063,
+  and 000064. A new paired migration must be added to this regex deliberately;
+  it must never be silently omitted from the PostgreSQL gate.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| PostgreSQL DSN has no timezone | Use `UTC` for server runtime parameter and scan location. |
+| DSN timezone cannot be loaded | `Open` fails before creating a GORM database. |
+| `TIMESTAMPTZ '...+00'` is scanned while `TZ=Asia/Shanghai` | Returned `time.Time` has `Location()==time.UTC` and preserves the instant. |
+| Only `TimestampCodec` is registered | Invalid: `TIMESTAMPTZ` may scan in `time.Local`; add `TimestamptzCodec`. |
+| A backup-asset migration is absent from the parity regex | Invalid CI contract; extend the regex and add an integration test. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `AfterConnect` registers both codecs with the same `scanLocation`, and
+  a real PostgreSQL test passes with a non-UTC process timezone.
+- Base: a caller explicitly selects an IANA PostgreSQL timezone; both codecs
+  use that same location consistently.
+- Bad: relying on `gorm.io/driver/postgres` to register a scan location for
+  `TIMESTAMPTZ` after replacing its connection pool.
+
+### 6. Tests Required
+
+- `TestPostgresTimestamptzScanUsesConfiguredUTC` must run against a real
+  PostgreSQL service with `TZ` set to a non-UTC value and assert both location
+  and RFC3339 value.
+- PostgreSQL migration tests must exercise paired apply/down contracts for
+  000062, 000063, and 000064.
+- Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
+  PostgreSQL test is not completion evidence.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+conn.TypeMap().RegisterType(&pgtype.Type{
+    Name: "timestamp", OID: pgtype.TimestampOID,
+    Codec: &pgtype.TimestampCodec{ScanLocation: scanLocation},
+})
+```
+
+Correct:
+
+```go
+conn.TypeMap().RegisterType(&pgtype.Type{Name: "timestamp", OID: pgtype.TimestampOID,
+    Codec: &pgtype.TimestampCodec{ScanLocation: scanLocation}})
+conn.TypeMap().RegisterType(&pgtype.Type{Name: "timestamptz", OID: pgtype.TimestamptzOID,
+    Codec: &pgtype.TimestamptzCodec{ScanLocation: scanLocation}})
+```
 
 ## Scenario: Policy Hooks And Sensitive Settings At Rest
 

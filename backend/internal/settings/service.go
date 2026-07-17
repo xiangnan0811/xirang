@@ -192,6 +192,20 @@ var registry = []SettingDef{
 	{Key: "backup_assets.manifest_max_entries", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", CodeDefault: "10000000", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单条目上限", Min: "1", Max: "100000000"},
 	{Key: "backup_assets.manifest_max_record_bytes", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单单记录字节上限", Min: "4096", Max: "4194304"},
 	{Key: "backup_assets.manifest_max_depth", EnvVar: "BACKUP_ASSETS_MANIFEST_MAX_DEPTH", CodeDefault: "4096", Type: TypeInt, Category: "backup_assets", Description: "恢复点清单目录深度上限", Min: "1", Max: "65536"},
+	{Key: "backup_assets.rclone_preflight_ttl", EnvVar: "BACKUP_ASSETS_RCLONE_PREFLIGHT_TTL", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "Rclone 版本化预检有效期", MinDuration: "16m", MaxDuration: "24h"},
+	{Key: "backup_assets.rclone_portable_deadline", EnvVar: "BACKUP_ASSETS_RCLONE_PORTABLE_DEADLINE", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "Rclone portable 恢复点绝对时限", MinDuration: "5m", MaxDuration: "168h"},
+	{Key: "backup_assets.rclone_native_deadline", EnvVar: "BACKUP_ASSETS_RCLONE_NATIVE_DEADLINE", CodeDefault: "45m", Type: TypeDuration, Category: "backup_assets", Description: "Rclone native 恢复点绝对时限", MinDuration: "5m", MaxDuration: "55m"},
+	{Key: "backup_assets.rclone_bound_config_max_bytes", EnvVar: "BACKUP_ASSETS_RCLONE_BOUND_CONFIG_MAX_BYTES", CodeDefault: "65536", Type: TypeInt, Category: "backup_assets", Description: "Rclone 绑定配置最大字节数", Min: "1024", Max: "65536"},
+	{Key: "backup_assets.rclone_control_payload_max_bytes", EnvVar: "BACKUP_ASSETS_RCLONE_CONTROL_PAYLOAD_MAX_BYTES", CodeDefault: "8388608", Type: TypeInt, Category: "backup_assets", Description: "Rclone 控制对象暂存最大字节数", Min: "65536", Max: "67108864"},
+	{Key: "backup_assets.rclone_full_verify_max_bytes", EnvVar: "BACKUP_ASSETS_RCLONE_FULL_VERIFY_MAX_BYTES", CodeDefault: "1099511627776", Type: TypeInt, Category: "backup_assets", Description: "Rclone 全字节校验最大读取量", Min: "1048576", Max: "17592186044416"},
+	{Key: "backup_assets.rclone_manifest_chunk_max_bytes", EnvVar: "BACKUP_ASSETS_RCLONE_MANIFEST_CHUNK_MAX_BYTES", CodeDefault: "8388608", Type: TypeInt, Category: "backup_assets", Description: "Rclone 清单分块最大字节数", Min: "65536", Max: "67108864"},
+	{Key: "backup_assets.rclone_low_level_retries", EnvVar: "BACKUP_ASSETS_RCLONE_LOW_LEVEL_RETRIES", CodeDefault: "3", Type: TypeInt, Category: "backup_assets", Description: "Rclone 单次 attempt 低层重试次数", Min: "1", Max: "10"},
+	{Key: "backup_assets.rclone_staging_orphan_age", EnvVar: "BACKUP_ASSETS_RCLONE_STAGING_ORPHAN_AGE", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "Rclone 暂存孤儿判定年龄", MinDuration: "1h", MaxDuration: "168h"},
+	{Key: "backup_assets.rclone_staging_scan_limit", EnvVar: "BACKUP_ASSETS_RCLONE_STAGING_SCAN_LIMIT", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "Rclone 暂存孤儿扫描批次", Min: "1", Max: "4096"},
+	{Key: "backup_assets.rclone_kms_read_key_max_count", EnvVar: "BACKUP_ASSETS_RCLONE_KMS_READ_KEY_MAX_COUNT", CodeDefault: "8", Type: TypeInt, Category: "backup_assets", Description: "Rclone KMS 保留读取密钥数量上限", Min: "1", Max: "32"},
+	{Key: "backup_assets.rclone_health_interval", EnvVar: "BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "Rclone 版本化健康检查间隔", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.rclone_health_batch_size", EnvVar: "BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "Rclone 版本化健康检查批次", Min: "1", Max: "1000"},
+	{Key: "backup_assets.rclone_aws_sdk_max_attempts", EnvVar: "BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", CodeDefault: "3", Type: TypeInt, Category: "backup_assets", Description: "Rclone AWS SDK 最大尝试次数", Min: "1", Max: "10"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -654,6 +668,20 @@ var backupAssetFoundationSettingKeys = []string{
 	"backup_assets.manifest_max_entries",
 	"backup_assets.manifest_max_record_bytes",
 	"backup_assets.manifest_max_depth",
+	"backup_assets.rclone_preflight_ttl",
+	"backup_assets.rclone_portable_deadline",
+	"backup_assets.rclone_native_deadline",
+	"backup_assets.rclone_bound_config_max_bytes",
+	"backup_assets.rclone_control_payload_max_bytes",
+	"backup_assets.rclone_full_verify_max_bytes",
+	"backup_assets.rclone_manifest_chunk_max_bytes",
+	"backup_assets.rclone_low_level_retries",
+	"backup_assets.rclone_staging_orphan_age",
+	"backup_assets.rclone_staging_scan_limit",
+	"backup_assets.rclone_kms_read_key_max_count",
+	"backup_assets.rclone_health_interval",
+	"backup_assets.rclone_health_batch_size",
+	"backup_assets.rclone_aws_sdk_max_attempts",
 }
 
 var backupAssetFoundationSettingSet = func() map[string]bool {
@@ -710,6 +738,11 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	manifestTimeout, _ := time.ParseDuration(resolved["backup_assets.manifest_timeout"])
 	manifestMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.manifest_max_bytes"], 10, 64)
 	manifestMaxRecordBytes, _ := strconv.ParseInt(resolved["backup_assets.manifest_max_record_bytes"], 10, 64)
+	rclonePreflightTTL, _ := time.ParseDuration(resolved["backup_assets.rclone_preflight_ttl"])
+	rcloneNativeDeadline, _ := time.ParseDuration(resolved["backup_assets.rclone_native_deadline"])
+	rcloneBoundConfigMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_bound_config_max_bytes"], 10, 64)
+	rcloneControlPayloadMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_control_payload_max_bytes"], 10, 64)
+	rcloneManifestChunkMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_manifest_chunk_max_bytes"], 10, 64)
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -727,6 +760,18 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	}
 	if manifestMaxRecordBytes > manifestMaxBytes {
 		return fmt.Errorf("backup_assets.manifest_max_record_bytes 不能大于 manifest_max_bytes")
+	}
+	if rclonePreflightTTL <= 15*time.Minute+sshutil.CommandExecutionJoinTimeout {
+		return fmt.Errorf("backup_assets.rclone_preflight_ttl 必须覆盖 15 分钟稳定观察与命令收尾余量")
+	}
+	if rcloneNativeDeadline > 55*time.Minute {
+		return fmt.Errorf("backup_assets.rclone_native_deadline 必须为 STS role-chain 保留安全余量")
+	}
+	if rcloneBoundConfigMaxBytes > sshutil.MaximumSecretStdinBytes {
+		return fmt.Errorf("backup_assets.rclone_bound_config_max_bytes 不能超过 SecretStdin 上限")
+	}
+	if rcloneManifestChunkMaxBytes > rcloneControlPayloadMaxBytes {
+		return fmt.Errorf("backup_assets.rclone_manifest_chunk_max_bytes 不能超过控制对象暂存上限")
 	}
 	return nil
 }

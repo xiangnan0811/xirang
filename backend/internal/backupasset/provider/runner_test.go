@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -386,6 +387,149 @@ func TestRunnerPublicationPurposeMapsToSSHScopes(t *testing.T) {
 		if !ok || got != want {
 			t.Fatalf("purpose %q mapped to %q ok=%v, want %q", purpose, got, ok, want)
 		}
+	}
+}
+
+func TestRcloneManagedCommandAllowlistBuildsOnlyFixedArguments(t *testing.T) {
+	transport, err := newSSHCommandTransport(func(context.Context, RemoteCommandAccess, string) (remoteCommandRunner, io.Closer, error) {
+		return &fakeRemoteCommandRunner{}, &trackingCloser{}, nil
+	}, 1, ToolBinaries{Rclone: "rclone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := mustRclonePrivateLocatorForTest(t, "/srv/source")
+	destination := mustRclonePrivateLocatorForTest(t, "s3:bucket/managed/prefix")
+	staged := stagedPayloadRefForCommandTest("/home/operator/.xirang/rclone-publication/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/commit.json")
+	copyDest := mustRclonePrivateLocatorForTest(t, "s3:bucket/managed/parent/data")
+	base := []string{"--config", "/dev/stdin", "--retries", "1", "--low-level-retries", "3", "--links"}
+	tests := []struct {
+		name        string
+		operation   CommandOperation
+		source      *RclonePrivateLocator
+		destination *RclonePrivateLocator
+		stagedFrom  *StagedPayloadRef
+		stagedTo    *StagedPayloadRef
+		copyDest    *RclonePrivateLocator
+		want        []string
+	}{
+		{name: "version", operation: OperationRcloneManagedVersion, want: []string{"version"}},
+		{name: "features", operation: OperationRcloneManagedFeatures, source: &destination, want: []string{"backend", "features", "--", destination.value}},
+		{name: "recursive list", operation: OperationRcloneManagedRecursiveList, source: &destination, want: []string{"lsjson", "--recursive", "--hash", "--metadata", "--", destination.value}},
+		{name: "copy", operation: OperationRcloneManagedCopy, source: &source, destination: &destination, want: []string{"copy", "--create-empty-src-dirs", "--", source.value, destination.value}},
+		{name: "copy with exact parent", operation: OperationRcloneManagedCopy, source: &source, destination: &destination, copyDest: &copyDest, want: []string{"copy", "--create-empty-src-dirs", "--copy-dest", copyDest.value, "--", source.value, destination.value}},
+		{name: "native sync", operation: OperationRcloneManagedNativeSync, source: &source, destination: &destination, want: []string{"sync", "--create-empty-src-dirs", "--", source.value, destination.value}},
+		{name: "check download", operation: OperationRcloneManagedCheckDownload, source: &source, destination: &destination, want: []string{"check", "--download", "--one-way", "--", source.value, destination.value}},
+		{name: "copyto staged upload", operation: OperationRcloneManagedCopyTo, destination: &destination, stagedFrom: &staged, want: []string{"copyto", "--", staged.path, destination.value}},
+		{name: "copyto staged download", operation: OperationRcloneManagedCopyTo, source: &destination, stagedTo: &staged, want: []string{"copyto", "--", destination.value, staged.path}},
+		{name: "cat", operation: OperationRcloneManagedCat, source: &destination, want: []string{"cat", "--", destination.value}},
+		{name: "exact stat", operation: OperationRcloneManagedExactStat, source: &destination, want: []string{"lsjson", "--stat", "--hash", "--metadata", "--", destination.value}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invocation := CommandInvocation{
+				Tool: ToolRclone, Operation: test.operation, Purpose: CommandPurposePublish,
+				SecretStdin: []byte("FAKE_BOUND_RCLONE_CONFIG_FOR_TEST_ONLY"), Runtime: &RemoteCommandAccess{Node: model.Node{ID: 9}},
+				RcloneSource: test.source, RcloneDestination: test.destination,
+				RcloneStagedSource: test.stagedFrom, RcloneStagedDestination: test.stagedTo,
+				RcloneCopyDest: test.copyDest, RcloneLowLevelRetries: 3, AbsoluteDeadline: time.Now().UTC().Add(time.Hour),
+			}
+			specification, _, _, err := transport.commandSpec(invocation, testOperationLimits(), 1024)
+			if err != nil {
+				t.Fatalf("commandSpec: %v", err)
+			}
+			want := append(append([]string(nil), base...), test.want...)
+			if strings.Join(specification.Args, "\x00") != strings.Join(want, "\x00") {
+				t.Fatalf("managed args=%q want=%q", specification.Args, want)
+			}
+			if specification.SecretStdin == nil || string(specification.SecretStdin.Value) != "FAKE_BOUND_RCLONE_CONFIG_FOR_TEST_ONLY" {
+				t.Fatalf("managed config did not use SecretStdin: %+v", specification.SecretStdin)
+			}
+		})
+	}
+}
+
+func TestRcloneManagedInvocationRejectsCallerFlagsRawPathsAndUnsafeVariants(t *testing.T) {
+	source := mustRclonePrivateLocatorForTest(t, "/srv/source")
+	destination := mustRclonePrivateLocatorForTest(t, "s3:bucket/managed/prefix")
+	valid := CommandInvocation{
+		Tool: ToolRclone, Operation: OperationRcloneManagedCopy, Purpose: CommandPurposePublish,
+		SecretStdin: []byte("FAKE_BOUND_RCLONE_CONFIG_FOR_TEST_ONLY"), RcloneSource: &source, RcloneDestination: &destination,
+		RcloneLowLevelRetries: 3, AbsoluteDeadline: time.Now().UTC().Add(time.Hour),
+	}
+	mutations := []func(*CommandInvocation){
+		func(value *CommandInvocation) { value.Args = []string{"--backup-dir", "attacker:root"} },
+		func(value *CommandInvocation) { value.Args = []string{"--dest-after", "/tmp/leak"} },
+		func(value *CommandInvocation) { value.Args = []string{"--copy-links"} },
+		func(value *CommandInvocation) { value.Args = []string{"--skip-links"} },
+		func(value *CommandInvocation) { value.Args = []string{"delete", "--", destination.value} },
+		func(value *CommandInvocation) { value.Args = []string{"/home/operator/.xirang/rclone-publication/raw"} },
+		func(value *CommandInvocation) { value.SecretStdin = nil },
+		func(value *CommandInvocation) { value.RcloneLowLevelRetries = 0 },
+		func(value *CommandInvocation) { value.RcloneLowLevelRetries = 11 },
+		func(value *CommandInvocation) { value.AbsoluteDeadline = time.Time{} },
+		func(value *CommandInvocation) { value.RcloneDestination = nil },
+		func(value *CommandInvocation) { value.Operation = CommandOperation("rclone_managed_purge") },
+	}
+	for index, mutate := range mutations {
+		candidate := valid
+		mutate(&candidate)
+		if err := candidate.Validate(); !errors.Is(err, ErrUnsafeInvocation) {
+			t.Fatalf("unsafe managed invocation case %d accepted: %v", index, err)
+		}
+	}
+	if _, err := NewRclonePrivateLocator("--config=/tmp/attacker"); err == nil {
+		t.Fatal("flag-shaped private locator accepted")
+	}
+}
+
+func TestRcloneManagedVersionIsPinnedExactly(t *testing.T) {
+	if err := ValidateManagedRcloneVersion([]byte("rclone v1.74.4\n- os/version: test\n")); err != nil {
+		t.Fatalf("pinned Rclone version rejected: %v", err)
+	}
+	for _, output := range []string{"rclone v1.74.3\n", "rclone v1.75.0\n", "rclone v1.74.4-beta.1\n", "v1.74.4\n"} {
+		if err := ValidateManagedRcloneVersion([]byte(output)); err == nil {
+			t.Fatalf("unpinned managed Rclone output accepted: %q", output)
+		}
+	}
+}
+
+func TestRcloneManagedTransportPropagatesAbsoluteContextDeadline(t *testing.T) {
+	deadline := time.Now().UTC().Add(time.Hour)
+	var observed time.Time
+	transport, err := newSSHCommandTransport(func(ctx context.Context, _ RemoteCommandAccess, _ string) (remoteCommandRunner, io.Closer, error) {
+		observed, _ = ctx.Deadline()
+		return &fakeRemoteCommandRunner{}, &trackingCloser{}, nil
+	}, 1, ToolBinaries{Rclone: "rclone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := CommandInvocation{
+		Tool: ToolRclone, Operation: OperationRcloneManagedVersion, Purpose: CommandPurposeProbe,
+		SecretStdin: []byte("FAKE_BOUND_RCLONE_CONFIG_FOR_TEST_ONLY"), Runtime: &RemoteCommandAccess{Node: model.Node{ID: 9}},
+		RcloneLowLevelRetries: 3, AbsoluteDeadline: deadline,
+	}
+	if _, err := transport.Run(context.Background(), invocation, testOperationLimits()); err != nil {
+		t.Fatalf("run managed version: %v", err)
+	}
+	if observed.IsZero() || !observed.Equal(deadline) {
+		t.Fatalf("managed command context deadline=%v, want %v", observed, deadline)
+	}
+}
+
+func mustRclonePrivateLocatorForTest(t *testing.T, value string) RclonePrivateLocator {
+	t.Helper()
+	locator, err := NewRclonePrivateLocator(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return locator
+}
+
+func stagedPayloadRefForCommandTest(path string) StagedPayloadRef {
+	return StagedPayloadRef{
+		attemptID: strings.Repeat("a", 32), name: filepath.Base(path), path: path,
+		size: 1, digest: strings.Repeat("b", 64), ownerMarkerPath: filepath.Join(filepath.Dir(path), stagedPayloadOwnerMarkerName),
+		ownerDigest: strings.Repeat("c", 64), lease: &stagedPayloadLease{},
 	}
 }
 

@@ -209,4 +209,65 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByText("版本化完整副本树")).toBeInTheDocument();
     expect(screen.getByText("已提交")).toBeInTheDocument();
   });
+
+  it("编辑受管 Rclone 任务时只显示安全摘要并省略普通 target/config 写入", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onSave={onSave}
+        editingTask={{
+          ...createTask(),
+          executorType: "rclone",
+          rsyncTarget: undefined,
+          executorConfig: JSON.stringify({
+            version: 1,
+            publication_mode: "native_object_versions",
+            bandwidth_limit: "10M",
+            transfers: 4,
+          }),
+          rclonePublication: {
+            mode: "native_object_versions",
+            state: "ready",
+            reasonCode: "ready",
+            taskRevision: "9007199254740993",
+            bindingRevision: "7",
+            capabilityRevision: "8",
+            consistencyClass: "provider_strong",
+            hashFidelity: "provider_strong_checksum",
+            estimatedReadBytes: "1024",
+            apiCostClass: "low",
+            storageCostClass: "moderate",
+            egressCostClass: "none",
+            credentialExpiresAt: "2026-07-17T10:00:00Z",
+            encryptionProfile: "sse_kms_cmk",
+            kmsKeyStatus: "ready",
+            kmsReadKeyCount: 2,
+            rollbackLocatorPresent: true,
+            rollbackCapability: "preparation_only",
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("AWS S3 原生版本")).toBeInTheDocument();
+    expect(screen.getByText("已就绪")).toBeInTheDocument();
+    expect(screen.getByLabelText("执行器类型")).toBeDisabled();
+    expect(screen.queryByLabelText("Rclone 远程路径")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("带宽限制（可选）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("并发传输数（可选）")).not.toBeInTheDocument();
+    expect(screen.getByText("受管目标与发布配置只能通过 Rclone 版本化管理修改。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      executorType: "rclone",
+      rsyncTarget: undefined,
+      executorConfig: undefined,
+    }));
+  });
 });

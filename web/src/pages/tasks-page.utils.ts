@@ -1,4 +1,29 @@
-import type { TaskStatus, TaskRecord } from "@/types/domain";
+import type { RclonePublicationState, TaskStatus, TaskRecord } from "@/types/domain";
+
+export function rclonePublicationStateTone(
+  state: RclonePublicationState,
+): "success" | "warning" | "destructive" | "info" | "neutral" {
+  switch (state) {
+    case "ready":
+    case "committed":
+      return "success";
+    case "preparing":
+    case "verifying":
+    case "capability_settling":
+      return "info";
+    case "preflight_required":
+    case "credential_setup_required":
+    case "degraded":
+    case "rollback_prepared":
+      return "warning";
+    case "at_risk":
+    case "failed":
+    case "blocked":
+      return "destructive";
+    default:
+      return "neutral";
+  }
+}
 
 export function canTrigger(task: TaskRecord): boolean {
   return task.enabled !== false && task.status !== "running" && task.status !== "retrying";
@@ -43,6 +68,8 @@ export type TasksViewProps = {
   onViewHistory: (task: TaskRecord) => void;
   canManageRsyncVersioning: boolean;
   onManageRsyncVersioning: (task: TaskRecord) => void;
+  canManageRcloneVersioning: boolean;
+  onManageRcloneVersioning: (task: TaskRecord) => void;
   selectedTaskSet: Set<number>;
   allVisibleSelected: boolean;
   toggleTaskSelection: (id: number, checked: boolean) => void;

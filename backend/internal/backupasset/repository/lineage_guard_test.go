@@ -33,7 +33,7 @@ func TestLineageDecisionMatrix(t *testing.T) {
 		{"enabled without link blocks legacy fallback", true, publication.AdmissionManaged, false, false, false, false, "", true},
 		{"disabled repository history is exact rollback safe", false, publication.AdmissionPristineLegacy, true, true, false, false, publication.LineageExact, false},
 		{"disabled installation history and no link fails closed", false, publication.AdmissionPristineLegacy, false, false, true, false, "", true},
-		{"disabled exact link to different pristine repository remains compatibility", false, publication.AdmissionPristineLegacy, true, false, true, false, publication.LineageCompatibility, false},
+		{"disabled active managed link remains exact before first point", false, publication.AdmissionPristineLegacy, true, false, true, false, publication.LineageExact, false},
 		{"rollback-safe token with active lease is never compatibility", false, publication.AdmissionRollbackSafe, true, false, false, true, publication.LineageExact, false},
 		{"managed token with disabled setting and no binding never falls back", false, publication.AdmissionManaged, false, false, false, false, "", true},
 	}
@@ -200,6 +200,46 @@ func TestRsyncLegacyGuardAllowsOnlyExactPristineMutableBinding(t *testing.T) {
 	}
 	if _, err := service.Begin(context.Background(), taskEntity.ID, publication.OperationLegacyRestoreLatest); !errors.Is(err, backupasset.ErrForbidden) {
 		t.Fatalf("managed Rsync legacy guard error=%v, want forbidden", err)
+	}
+}
+
+func TestRcloneLegacyGuardAllowsOnlyExactPristineMutableBinding(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)
+	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{}`)
+	connect := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	if _, err := connect.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: backupasset.NewFoundationService(completeRepositoryFoundationSettings(false)),
+		Now: func() time.Time { return now }, Admission: &lineageAdmission{mode: publication.AdmissionPristineLegacy, generation: 10},
+		History: history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Begin(context.Background(), taskEntity.ID, publication.OperationLegacyIntegrity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Mode() != publication.LineageCompatibility {
+		_ = session.Close()
+		t.Fatalf("pristine Rclone session mode=%s, want compatibility", session.Mode())
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRepositoryLink{}).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).
+		Update("publication_mode", string(backupasset.PublicationVersionedPrefix)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Begin(context.Background(), taskEntity.ID, publication.OperationLegacyIntegrity); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("managed Rclone legacy guard error=%v, want forbidden", err)
 	}
 }
 

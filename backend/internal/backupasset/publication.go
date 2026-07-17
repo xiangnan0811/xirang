@@ -46,6 +46,11 @@ const (
 	FailureSnapshotMissingAtDeadline      PublicationFailureCode = "snapshot_missing_at_deadline"
 	FailureLegacyFallbackBlocked          PublicationFailureCode = "legacy_fallback_blocked"
 	FailureLegacyOperationBlocked         PublicationFailureCode = "legacy_operation_blocked"
+	FailureSourceDrift                    PublicationFailureCode = "source_drift"
+	FailureExternalWriterDetected         PublicationFailureCode = "external_writer_detected"
+	FailureUnexpectedVersion              PublicationFailureCode = "unexpected_version"
+	FailureMarkerMismatch                 PublicationFailureCode = "marker_mismatch"
+	FailureManifestMismatch               PublicationFailureCode = "manifest_mismatch"
 )
 
 type PublicationOutcomeCode string
@@ -101,6 +106,24 @@ type PublicationConfig struct {
 	ManifestMaxEntries     int64
 	ManifestMaxRecordBytes int
 	ManifestMaxDepth       int
+	Rclone                 RclonePublicationConfig
+}
+
+type RclonePublicationConfig struct {
+	PreflightTTL           time.Duration
+	PortableDeadline       time.Duration
+	NativeDeadline         time.Duration
+	BoundConfigMaxBytes    int64
+	ControlPayloadMaxBytes int64
+	FullVerifyMaxBytes     int64
+	ManifestChunkMaxBytes  int64
+	LowLevelRetries        int
+	StagingOrphanAge       time.Duration
+	StagingScanLimit       int
+	KMSReadKeyMaxCount     int
+	HealthInterval         time.Duration
+	HealthBatchSize        int
+	AWSSDKMaxAttempts      int
 }
 
 type PublicationAuditContext struct {
@@ -141,6 +164,11 @@ var validPublicationFailureCodes = setOf(
 	FailureSnapshotMissingAtDeadline,
 	FailureLegacyFallbackBlocked,
 	FailureLegacyOperationBlocked,
+	FailureSourceDrift,
+	FailureExternalWriterDetected,
+	FailureUnexpectedVersion,
+	FailureMarkerMismatch,
+	FailureManifestMismatch,
 )
 
 var knownExitZeroEvidenceFailureCodes = setOf(
@@ -308,7 +336,7 @@ func validatePublicationLineage(value PublicationLineageV1) error {
 		if value.TagCodecVersion != 1 {
 			return fmt.Errorf("%w: invalid native publication tag codec", ErrInvalidState)
 		}
-	case PublicationVersionedHardlink, PublicationVersionedFullCopy:
+	case PublicationVersionedHardlink, PublicationVersionedFullCopy, PublicationVersionedPrefix, PublicationNativeObjectVersions:
 		// Managed trees do not use provider tags. Keeping this zero makes the
 		// persisted lineage explicit instead of implying Restic tag semantics.
 		if value.TagCodecVersion != 0 {
@@ -366,7 +394,8 @@ func validatePublicationConsistency(value PublicationConsistencyV1) error {
 
 func terminalPublicationCodeWithoutCompletion(code PublicationFailureCode) bool {
 	switch code {
-	case FailureProviderCompletionUnproven,
+	case FailurePublicationPreconditionMissing,
+		FailureProviderCompletionUnproven,
 		FailureProviderSnapshotRewritten,
 		FailureRepositoryIdentityDrift,
 		FailureRunTagMissing,
@@ -376,7 +405,12 @@ func terminalPublicationCodeWithoutCompletion(code PublicationFailureCode) bool 
 		FailureManifestPartial,
 		FailureManifestUnavailable,
 		FailurePublicationDeadlineExceeded,
-		FailureSnapshotMissingAtDeadline:
+		FailureSnapshotMissingAtDeadline,
+		FailureSourceDrift,
+		FailureExternalWriterDetected,
+		FailureUnexpectedVersion,
+		FailureMarkerMismatch,
+		FailureManifestMismatch:
 		return true
 	default:
 		return false

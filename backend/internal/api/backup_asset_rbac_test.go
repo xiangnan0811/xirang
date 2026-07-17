@@ -158,3 +158,47 @@ func TestRsyncVersioningMigrationRoutesRequireAdminBeforeFeatureGate(t *testing.
 		}
 	}
 }
+
+func TestRcloneVersioningRoutesRequireAdminBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"portable setup", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/portable-binding-setups", `{"expected_task_revision":"1"}`},
+		{"portable binding", http.MethodPut, "/api/v1/tasks/7/rclone-versioning/portable-binding", `{"expected_task_revision":"1","expected_binding_revision":"0","setup_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","target_remote":"archive","managed_root_locator":"archive:managed","bound_config":"[archive]\\ntype = s3\\n"}`},
+		{"native setup", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/native-binding-setups", `{"expected_task_revision":"1"}`},
+		{"native binding", http.MethodPut, "/api/v1/tasks/7/rclone-versioning/native-binding", `{"expected_task_revision":"1","expected_binding_revision":"0","setup_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","region":"us-east-1","bucket":"private-bucket","managed_prefix":"managed/","role_arn":"arn:aws:iam::123456789012:role/xirang","bootstrap":{"mode":"workload_chain"},"encryption_profile":"sse_s3"}`},
+		{"preflight", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/preflights", `{"expected_task_revision":"1","requested_mode":"versioned_prefix"}`},
+		{"activate", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/activate", `{"expected_task_revision":"1","preflight_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","migration_choice":"first_new_point"}`},
+		{"clean rollback", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/clean-rollbacks", `{"expected_task_revision":"1","expected_binding_revision":"1"}`},
+		{"rollback preparation", http.MethodPost, "/api/v1/tasks/7/rclone-versioning/rollback-preparations", `{"expected_task_revision":"1","expected_binding_revision":"1"}`},
+	}
+	for _, route := range routes {
+		route := route
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, fixture.tokens[role])
+				expected := http.StatusForbidden
+				if role == "admin" {
+					expected = http.StatusServiceUnavailable
+				}
+				if response.Code != expected {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, expected, response.Body.String())
+				}
+				if expected == http.StatusServiceUnavailable && !strings.Contains(response.Body.String(), "feature_disabled") {
+					t.Fatalf("admin request did not reach feature gate: %s", response.Body.String())
+				}
+			})
+		}
+	}
+}

@@ -107,17 +107,22 @@ func NewFactoryWithResticPublicationStrategy(rsyncBinary string, strategy provid
 // lanes without changing the compatibility executors selected by NewFactory.
 // The Rsync wrapper retains the legacy Run and RunRestore implementations;
 // only an exact tagged Rsync attempt can enter RunWithPublication.
-func NewFactoryWithPublicationStrategies(rsyncBinary string, resticStrategy, rsyncStrategy provider.PublicationStrategy) Factory {
+func NewFactoryWithPublicationStrategies(rsyncBinary string, resticStrategy, rsyncStrategy provider.PublicationStrategy, rcloneStrategies ...provider.PublicationStrategy) Factory {
 	legacyRsync := &RsyncExecutor{binary: rsyncBinary}
 	var rsync Executor = legacyRsync
 	if rsyncStrategy != nil {
 		rsync = &RsyncPublicationExecutor{legacy: legacyRsync, strategy: rsyncStrategy}
 	}
+	legacyRclone := &RcloneExecutor{}
+	var rclone Executor = legacyRclone
+	if len(rcloneStrategies) == 1 && rcloneStrategies[0] != nil {
+		rclone = &RclonePublicationExecutor{legacy: legacyRclone, strategy: rcloneStrategies[0]}
+	}
 	return &factory{
 		rsync:   rsync,
 		command: &CommandExecutor{},
 		restic:  &ResticExecutor{strategy: resticStrategy},
-		rclone:  &RcloneExecutor{},
+		rclone:  rclone,
 	}
 }
 

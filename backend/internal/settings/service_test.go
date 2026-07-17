@@ -84,6 +84,20 @@ func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
 		"backup_assets.manifest_max_entries":             {"BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", "10000000", TypeInt, "1", "100000000", "", ""},
 		"backup_assets.manifest_max_record_bytes":        {"BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", "1048576", TypeInt, "4096", "4194304", "", ""},
 		"backup_assets.manifest_max_depth":               {"BACKUP_ASSETS_MANIFEST_MAX_DEPTH", "4096", TypeInt, "1", "65536", "", ""},
+		"backup_assets.rclone_preflight_ttl":             {"BACKUP_ASSETS_RCLONE_PREFLIGHT_TTL", "30m", TypeDuration, "", "", "16m", "24h"},
+		"backup_assets.rclone_portable_deadline":         {"BACKUP_ASSETS_RCLONE_PORTABLE_DEADLINE", "24h", TypeDuration, "", "", "5m", "168h"},
+		"backup_assets.rclone_native_deadline":           {"BACKUP_ASSETS_RCLONE_NATIVE_DEADLINE", "45m", TypeDuration, "", "", "5m", "55m"},
+		"backup_assets.rclone_bound_config_max_bytes":    {"BACKUP_ASSETS_RCLONE_BOUND_CONFIG_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
+		"backup_assets.rclone_control_payload_max_bytes": {"BACKUP_ASSETS_RCLONE_CONTROL_PAYLOAD_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.rclone_full_verify_max_bytes":     {"BACKUP_ASSETS_RCLONE_FULL_VERIFY_MAX_BYTES", "1099511627776", TypeInt, "1048576", "17592186044416", "", ""},
+		"backup_assets.rclone_manifest_chunk_max_bytes":  {"BACKUP_ASSETS_RCLONE_MANIFEST_CHUNK_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.rclone_low_level_retries":         {"BACKUP_ASSETS_RCLONE_LOW_LEVEL_RETRIES", "3", TypeInt, "1", "10", "", ""},
+		"backup_assets.rclone_staging_orphan_age":        {"BACKUP_ASSETS_RCLONE_STAGING_ORPHAN_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.rclone_staging_scan_limit":        {"BACKUP_ASSETS_RCLONE_STAGING_SCAN_LIMIT", "256", TypeInt, "1", "4096", "", ""},
+		"backup_assets.rclone_kms_read_key_max_count":    {"BACKUP_ASSETS_RCLONE_KMS_READ_KEY_MAX_COUNT", "8", TypeInt, "1", "32", "", ""},
+		"backup_assets.rclone_health_interval":           {"BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.rclone_health_batch_size":         {"BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.rclone_aws_sdk_max_attempts":      {"BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", "3", TypeInt, "1", "10", "", ""},
 	}
 	defs := NewService(setupTestDB(t)).Registry()
 	got := make(map[string]SettingDef, len(want))
@@ -185,6 +199,35 @@ func TestBackupAssetFoundationCrossSettingPublicationBoundaries(t *testing.T) {
 	invalidRecordLimit["backup_assets.manifest_max_record_bytes"] = "1048577"
 	if err := ValidateBackupAssetFoundationConfig(invalidRecordLimit); err == nil {
 		t.Fatal("manifest record limit above total bytes unexpectedly accepted")
+	}
+}
+
+func TestBackupAssetRcloneSettingCrossFieldBoundaries(t *testing.T) {
+	service := NewService(setupTestDB(t))
+	values := backupAssetFoundationValuesForTest()
+	values["backup_assets.rclone_preflight_ttl"] = "16m"
+	values["backup_assets.rclone_native_deadline"] = "55m"
+	values["backup_assets.rclone_bound_config_max_bytes"] = "65536"
+	values["backup_assets.rclone_control_payload_max_bytes"] = "65536"
+	values["backup_assets.rclone_manifest_chunk_max_bytes"] = "65536"
+	if err := service.ValidateBackupAssetEffectiveUpdate(values, map[string]string{}); err != nil {
+		t.Fatalf("valid Rclone boundary settings rejected: %v", err)
+	}
+
+	for name, overrides := range map[string]map[string]string{
+		"settle window": {"backup_assets.rclone_preflight_ttl": "15m"},
+		"STS margin":    {"backup_assets.rclone_native_deadline": "55m1s"},
+		"SecretStdin":   {"backup_assets.rclone_bound_config_max_bytes": "65537"},
+		"manifest payload": {
+			"backup_assets.rclone_control_payload_max_bytes": "65536",
+			"backup_assets.rclone_manifest_chunk_max_bytes":  "65537",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := service.ValidateBackupAssetEffectiveUpdate(values, overrides); err == nil {
+				t.Fatalf("unsafe Rclone settings accepted: %#v", overrides)
+			}
+		})
 	}
 }
 

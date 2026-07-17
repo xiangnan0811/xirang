@@ -113,6 +113,7 @@ export function TasksPage() {
   const [batchRetain, setBatchRetain] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [rsyncVersioningTask, setRsyncVersioningTask] = useState<TaskRecord | null>(null);
+  const [rcloneVersioningTask, setRcloneVersioningTask] = useState<TaskRecord | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [pauseConfirmTask, setPauseConfirmTask] = useState<TaskRecord | null>(null);
   // Chain folding state: set of parent task ids whose children are expanded
@@ -237,12 +238,20 @@ export function TasksPage() {
   };
 
   const canManageRsyncVersioning = role === "admin";
+  const canManageRcloneVersioning = role === "admin";
 
   const handleManageRsyncVersioning = (task: TaskRecord) => {
     if (!canManageRsyncVersioning || task.executorType !== "rsync" || !task.rsyncPublication) {
       return;
     }
     setRsyncVersioningTask(task);
+  };
+
+  const handleManageRcloneVersioning = (task: TaskRecord) => {
+    if (!canManageRcloneVersioning || task.executorType !== "rclone" || !task.rclonePublication) {
+      return;
+    }
+    setRcloneVersioningTask(task);
   };
 
   const handleUpdateTask = async (input: NewTaskInput) => {
@@ -510,6 +519,8 @@ export function TasksPage() {
               onViewHistory={handleViewHistory}
               canManageRsyncVersioning={canManageRsyncVersioning}
               onManageRsyncVersioning={handleManageRsyncVersioning}
+              canManageRcloneVersioning={canManageRcloneVersioning}
+              onManageRcloneVersioning={handleManageRcloneVersioning}
               selectedTaskSet={selectedTaskSet}
               allVisibleSelected={allVisibleSelected}
               toggleTaskSelection={toggleTaskSelection}
@@ -532,6 +543,8 @@ export function TasksPage() {
               onViewHistory={handleViewHistory}
               canManageRsyncVersioning={canManageRsyncVersioning}
               onManageRsyncVersioning={handleManageRsyncVersioning}
+              canManageRcloneVersioning={canManageRcloneVersioning}
+              onManageRcloneVersioning={handleManageRcloneVersioning}
               selectedTaskSet={selectedTaskSet}
               allVisibleSelected={allVisibleSelected}
               toggleTaskSelection={toggleTaskSelection}
@@ -582,6 +595,10 @@ export function TasksPage() {
         setRsyncVersioningTask={setRsyncVersioningTask}
         canManageRsyncVersioning={canManageRsyncVersioning}
         onRsyncVersioningUpdated={refreshTasks}
+        rcloneVersioningTask={rcloneVersioningTask}
+        setRcloneVersioningTask={setRcloneVersioningTask}
+        canManageRcloneVersioning={canManageRcloneVersioning}
+        onRcloneVersioningUpdated={refreshTasks}
         onRestoreTriggered={() => void refreshTasks()}
         nodes={nodes}
         policies={policies}

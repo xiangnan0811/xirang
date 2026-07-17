@@ -676,3 +676,36 @@ Implemented managed Rsync versioned recovery points with paired 000064 migration
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Child 5: Rclone versioned recovery points
+
+**Date**: 2026-07-17
+**Task**: Child 5: Rclone versioned recovery points
+**Branch**: `codex/backup-assets-rclone-versioning`
+
+### Summary
+
+Implemented portable Rclone versioned-prefix publication and strictly gated AWS S3 native object versions, including bound configuration, manifests, reconciliation, health/preflight APIs, UI workflow, migrations parity guards, documentation, and cross-layer tests. Full local gates passed; AWS live suite remained not_executed by owner-approved fixture exception.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bd123a9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

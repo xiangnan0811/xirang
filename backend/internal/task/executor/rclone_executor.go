@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -19,8 +20,10 @@ import (
 
 // RcloneConfig 是 rclone 执行器的配置（存储在 Task.ExecutorConfig JSON 中）。
 type RcloneConfig struct {
-	BandwidthLimit string `json:"bandwidth_limit,omitempty"` // 如 "10M"
-	Transfers      int    `json:"transfers,omitempty"`       // 并发传输数，默认 4
+	Version         int                             `json:"version,omitempty"`
+	PublicationMode backupasset.TaskPublicationMode `json:"publication_mode,omitempty"`
+	BandwidthLimit  string                          `json:"bandwidth_limit,omitempty"` // 如 "10M"
+	Transfers       int                             `json:"transfers,omitempty"`       // 并发传输数，默认 4
 }
 
 // RcloneExecutor 通过 SSH 在远程节点上执行 rclone 同步/恢复操作。
@@ -45,15 +48,17 @@ func (e *RcloneExecutor) rcloneBinary() string {
 }
 
 func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+	cfg, err := parseRcloneConfig(task.ExecutorConfig)
+	if err != nil {
+		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
+	}
+	if err := rejectManagedRcloneLegacyExecution(cfg); err != nil {
+		return -1, err
+	}
 	source := strings.TrimSpace(task.RsyncSource)
 	remote := strings.TrimSpace(task.RsyncTarget)
 	if source == "" || remote == "" {
 		return -1, fmt.Errorf("rclone 同步任务缺少源路径或目标 remote")
-	}
-
-	cfg, err := parseRcloneConfig(task.ExecutorConfig)
-	if err != nil {
-		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
 	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskBackup)
@@ -87,15 +92,17 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 // restoreTask.RsyncSource = rclone remote（原任务的 RsyncTarget）
 // restoreTask.RsyncTarget = 恢复目标路径
 func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+	cfg, err := parseRcloneConfig(task.ExecutorConfig)
+	if err != nil {
+		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
+	}
+	if err := rejectManagedRcloneLegacyExecution(cfg); err != nil {
+		return -1, err
+	}
 	remote := strings.TrimSpace(task.RsyncSource)
 	targetPath := strings.TrimSpace(task.RsyncTarget)
 	if remote == "" || targetPath == "" {
 		return -1, fmt.Errorf("rclone 恢复任务缺少 remote 或目标路径")
-	}
-
-	cfg, err := parseRcloneConfig(task.ExecutorConfig)
-	if err != nil {
-		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
 	}
 
 	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskRestore)
@@ -227,4 +234,11 @@ func parseRcloneConfig(raw string) (RcloneConfig, error) {
 		return RcloneConfig{}, err
 	}
 	return cfg, nil
+}
+
+func rejectManagedRcloneLegacyExecution(config RcloneConfig) error {
+	if config.PublicationMode == "" || config.PublicationMode == backupasset.PublicationLegacyMutable {
+		return nil
+	}
+	return fmt.Errorf("%w: managed Rclone mode cannot use the legacy executor", backupasset.ErrForbidden)
 }

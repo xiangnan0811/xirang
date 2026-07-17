@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { Switch } from "@/components/ui/switch";
 import type { NodeRecord } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
@@ -9,9 +10,10 @@ type TaskAdvancedProps = {
   setDraft: React.Dispatch<React.SetStateAction<TaskDraft>>;
   nodes: NodeRecord[];
   isEditing: boolean;
+  managedRclone: boolean;
 };
 
-export function TaskAdvanced({ draft, setDraft, nodes, isEditing }: TaskAdvancedProps) {
+export function TaskAdvanced({ draft, setDraft, nodes, isEditing, managedRclone }: TaskAdvancedProps) {
   const { t } = useTranslation();
 
   return (
@@ -81,7 +83,7 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing }: TaskAdvanced
 
       {draft.executorType === "rclone" && (
         <>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className={managedRclone ? undefined : "grid gap-3 md:grid-cols-2"}>
             <div>
               <label htmlFor="task-editor-rclone-source" className="mb-1 block text-sm font-medium">
                 {t("taskCreate.sourcePath")}
@@ -95,51 +97,57 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing }: TaskAdvanced
                 }
               />
             </div>
-            <div>
-              <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
-                {t("taskCreate.rcloneRemotePath")}
-              </label>
-              <Input
-                id="task-editor-rsync-target"
-                placeholder="s3:my-bucket/backups"
-                value={draft.rsyncTarget}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, rsyncTarget: event.target.value }))
-                }
-              />
-            </div>
+            {!managedRclone ? (
+              <div>
+                <label htmlFor="task-editor-rsync-target" className="mb-1 block text-sm font-medium">
+                  {t("taskCreate.rcloneRemotePath")}
+                </label>
+                <Input
+                  id="task-editor-rsync-target"
+                  placeholder="s3:my-bucket/backups"
+                  value={draft.rsyncTarget}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, rsyncTarget: event.target.value }))
+                  }
+                />
+              </div>
+            ) : null}
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="task-editor-rclone-bwlimit" className="mb-1 block text-sm font-medium">
-                {t("taskCreate.rcloneBandwidthLimit")}
-              </label>
-              <Input
-                id="task-editor-rclone-bwlimit"
-                placeholder={t("taskCreate.bwLimitPlaceholder")}
-                value={draft.rcloneBandwidthLimit}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, rcloneBandwidthLimit: event.target.value }))
-                }
-              />
+          {managedRclone ? (
+            <InlineAlert tone="info">{t("rcloneVersioning.managedEditorNotice")}</InlineAlert>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label htmlFor="task-editor-rclone-bwlimit" className="mb-1 block text-sm font-medium">
+                  {t("taskCreate.rcloneBandwidthLimit")}
+                </label>
+                <Input
+                  id="task-editor-rclone-bwlimit"
+                  placeholder={t("taskCreate.bwLimitPlaceholder")}
+                  value={draft.rcloneBandwidthLimit}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, rcloneBandwidthLimit: event.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="task-editor-rclone-transfers" className="mb-1 block text-sm font-medium">
+                  {t("taskCreate.rcloneConcurrentTransfers")}
+                </label>
+                <Input
+                  id="task-editor-rclone-transfers"
+                  type="number"
+                  min={1}
+                  max={32}
+                  placeholder={t("taskCreate.concurrencyPlaceholder")}
+                  value={draft.rcloneTransfers}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, rcloneTransfers: event.target.value }))
+                  }
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="task-editor-rclone-transfers" className="mb-1 block text-sm font-medium">
-                {t("taskCreate.rcloneConcurrentTransfers")}
-              </label>
-              <Input
-                id="task-editor-rclone-transfers"
-                type="number"
-                min={1}
-                max={32}
-                placeholder={t("taskCreate.concurrencyPlaceholder")}
-                value={draft.rcloneTransfers}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, rcloneTransfers: event.target.value }))
-                }
-              />
-            </div>
-          </div>
+          )}
         </>
       )}
 

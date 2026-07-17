@@ -90,6 +90,33 @@ func TestProviderRunnerRoutesManagedRsyncThroughBoundPublicationInput(t *testing
 	}
 }
 
+func TestProviderRunnerRoutesManagedRcloneThroughBoundPublicationInput(t *testing.T) {
+	attempt := publicationRcloneAttempt(7, 9)
+	commit := provider.NewRcloneProviderCommit(provider.RcloneCommitV1{})
+	input := provider.RclonePublicationInput{
+		ManifestLimits:  provider.ManifestLimits{Timeout: time.Minute, MaxBytes: 1 << 20, MaxEntries: 10, MaxRecordBytes: 1024, MaxDepth: 8},
+		PortableRequest: &provider.RclonePortablePublicationRequest{Attempt: *attempt.Rclone},
+	}
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt, rcloneInput: &input}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, ProviderCommit: &commit,
+	}}
+	manager := &Manager{
+		executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session},
+	}
+	taskEntity := model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source"}
+
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != "" {
+		t.Fatalf("managed Rclone provider result=%+v", result)
+	}
+	if evidence.request.RcloneInput == nil || evidence.request.RcloneInput.PortableRequest == nil ||
+		evidence.request.Attempt.Rclone == nil || evidence.request.Attempt.Rclone.RecoveryPointID != attempt.Rclone.RecoveryPointID ||
+		session.commit == nil || *session.commit != commit {
+		t.Fatalf("managed Rclone request=%+v session=%+v", evidence.request, session)
+	}
+}
+
 func TestManagedProviderResultBypassesLegacyVerifier(t *testing.T) {
 	policy := &model.Policy{VerifyEnabled: true}
 	if shouldRunLegacyVerification(providerRunResult{Managed: true}, policy) {
@@ -143,6 +170,7 @@ type publicationExecutionFake struct {
 	recordErr    error
 	abandonCalls int
 	rsyncInput   *provider.RsyncTreePublicationInput
+	rcloneInput  *provider.RclonePublicationInput
 }
 
 func (fake *publicationExecutionFake) Mode() publication.ExecutionMode { return fake.mode }
@@ -167,6 +195,13 @@ func (fake *publicationExecutionFake) RsyncTreePublicationInput() (provider.Rsyn
 	copy.MarkerKey = append([]byte(nil), copy.MarkerKey...)
 	return copy, nil
 }
+func (fake *publicationExecutionFake) RclonePublicationInput() (provider.RclonePublicationInput, error) {
+	if fake.rcloneInput == nil {
+		return provider.RclonePublicationInput{}, errors.New("FAKE_RCLONE_PUBLICATION_INPUT_NOT_CONFIGURED")
+	}
+	copy := *fake.rcloneInput
+	return copy, nil
+}
 func (fake *publicationExecutionFake) RecordProviderCommit(_ context.Context, commit provider.ProviderCommit) (publication.Outcome, error) {
 	copy := commit
 	fake.commit = &copy
@@ -178,6 +213,8 @@ func (fake *publicationExecutionFake) RecordProviderCommit(_ context.Context, co
 		pointID = fake.attempt.Restic.RecoveryPointID
 	} else if fake.attempt.RsyncTree != nil {
 		pointID = fake.attempt.RsyncTree.RecoveryPointID
+	} else if fake.attempt.Rclone != nil {
+		pointID = fake.attempt.Rclone.RecoveryPointID
 	}
 	return publication.Outcome{RecoveryPointID: pointID, State: backupasset.RecoveryPointVerifying, ProviderCommitRecorded: true}, nil
 }
@@ -225,5 +262,30 @@ func publicationRsyncAttempt(taskID, taskRunID uint) provider.TaggedPublicationA
 		RepositoryMarkerDigest: strings.Repeat("e", 64), ManagedRootIdentityDigest: strings.Repeat("f", 64),
 		StagingComponent: pointID + "." + attemptID, FinalComponent: pointID, CommandProfileVersion: 1,
 		PreflightID: strings.Repeat("1", 32), PreflightDigest: strings.Repeat("2", 64),
+	})
+}
+
+func publicationRcloneAttempt(taskID, taskRunID uint) provider.TaggedPublicationAttempt {
+	preparedAt := time.Date(2026, 7, 16, 1, 0, 0, 0, time.UTC)
+	pointID := strings.Repeat("a", 32)
+	attemptID := strings.Repeat("b", 32)
+	return provider.NewRclonePublicationAttempt(provider.RcloneAttemptV1{
+		SchemaVersion: 1, LayoutVersion: 1, MinimumRuntimeRevision: 1, Provider: backupasset.ProviderRclone,
+		RepositoryID: strings.Repeat("c", 32), TaskRepositoryLinkID: strings.Repeat("d", 32),
+		RecoveryPointID: pointID, AttemptID: attemptID, TaskID: taskID, TaskRunID: taskRunID, Trigger: "manual",
+		PublicationMode: backupasset.PublicationVersionedPrefix, CaptureStartedAt: preparedAt.Add(-time.Second),
+		PreparedAt: preparedAt, PointDeadlineAt: preparedAt.Add(time.Hour), ExpectedTaskRevision: 1,
+		BindingRevision: 2, ConfigRevision: 3, ConfigDigest: strings.Repeat("1", 64), CapabilityRevision: 4,
+		CredentialRevision: 5, PreflightID: strings.Repeat("e", 32), PreflightRevision: 6,
+		PreflightDigest: strings.Repeat("2", 64), ManifestSchemaRevision: 1, ManifestLimitsRevision: 1,
+		ManifestLimitsDigest: strings.Repeat("3", 64), RepositoryIdentityDigest: strings.Repeat("4", 64),
+		ManagedRootIdentityDigest: strings.Repeat("5", 64), ChildFenceDigest: strings.Repeat("6", 64),
+		LegacyOriginEvidenceDigest: strings.Repeat("7", 64),
+		Portable: &provider.RclonePortableAttemptV1{
+			AttemptComponent: pointID + "." + attemptID, DataComponent: "data", ControlComponent: "control",
+			AttemptMarkerDigest:      strings.Repeat("8", 64),
+			ExpectedConsistencyClass: string(backupasset.RcloneConsistencyObservationallyStable),
+			ExpectedHashFidelity:     string(backupasset.RcloneHashDownloadVerifiedBytes),
+		},
 	})
 }

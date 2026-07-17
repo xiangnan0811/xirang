@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -133,6 +134,38 @@ func TestManagedRsyncBindingV2RoundTripAndV1DecoderRefusesIt(t *testing.T) {
 	}
 	if strings.Contains(string(serialized), document.ManagedRootLocator) {
 		t.Fatalf("managed root locator leaked through public binding JSON: %s", serialized)
+	}
+}
+
+func TestManagedRcloneBindingV3RoundTripIsClosedAndV1V2RefuseIt(t *testing.T) {
+	document := validManagedRclonePortableBindingForTest(t)
+	payload, err := encodeManagedRcloneBindingDocumentV3(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeManagedRcloneBindingDocumentV3(payload)
+	if err != nil || !reflect.DeepEqual(decoded, document) {
+		t.Fatalf("managed Rclone V3 round trip=%+v err=%v want=%+v", decoded, err, document)
+	}
+	if _, err := decodeBindingDocument(payload); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("V1 decoder accepted managed Rclone V3: %v", err)
+	}
+	if _, err := decodeManagedRsyncBindingDocumentV2(payload); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("V2 decoder accepted managed Rclone V3: %v", err)
+	}
+	stored, err := decodeStoredBindingDocument(payload)
+	if err != nil || stored.ManagedRcloneV3 == nil || stored.ManagedRsyncV2 != nil || stored.V1 != nil ||
+		!reflect.DeepEqual(*stored.ManagedRcloneV3, document) {
+		t.Fatalf("stored V3 binding=%+v err=%v", stored, err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(payload, `"publication_mode":"versioned_prefix"`, `"publication_mode":"native_object_versions","native":{"profile_code":"aws_s3_general_purpose_v1"}`, 1),
+		strings.TrimSuffix(payload, "}") + `,"future":true}`,
+		strings.Replace(payload, `"version":3`, `"version":3,"version":3`, 1),
+	} {
+		if _, err := decodeManagedRcloneBindingDocumentV3(invalid); !errors.Is(err, backupasset.ErrInvalidState) {
+			t.Fatalf("invalid V3 binding accepted: %v payload=%s", err, invalid)
+		}
 	}
 }
 

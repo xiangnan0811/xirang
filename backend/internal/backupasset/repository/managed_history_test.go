@@ -162,6 +162,121 @@ func TestManagedHistoryResolverRecognizesRsyncManagedStatesAndParentLease(t *tes
 	}
 }
 
+func TestManagedHistoryResolverBlocksActiveRcloneManagedLinkBeforeFirstPoint(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	task := seedTask(t, db, "rclone", "backup:legacy", `{"version":1,"publication_mode":"legacy_mutable"}`)
+	identity := "rclone-managed-identity"
+	repository := model.BackupRepository{
+		ID: strings.Repeat("a", 32), ProviderKind: string(backupasset.ProviderRclone), VersionMode: string(backupasset.VersionVersionedPrefix),
+		RepositoryIdentity: &identity, DisplayName: "rclone-managed",
+		Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TaskRepositoryLink{
+		ID: strings.Repeat("b", 32), TaskID: &task.ID, RepositoryID: repository.ID, PublicationMode: string(backupasset.PublicationVersionedPrefix),
+		EncryptedLegacyLocator: "backup:legacy", LinkedAt: now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := resolver.legacyFallbackAllowed(context.Background(), task)
+	if err != nil || allowed {
+		t.Fatalf("active managed Rclone link fallback allowed=%t err=%v", allowed, err)
+	}
+}
+
+func TestRcloneCleanRollbackWindowClosesAtFirstReservation(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
+	task := seedTask(t, db, "rclone", "backup:legacy", `{"version":1,"publication_mode":"legacy_mutable"}`)
+	identity := "rclone-clean-rollback-identity"
+	repository := model.BackupRepository{
+		ID: strings.Repeat("c", 32), ProviderKind: string(backupasset.ProviderRclone),
+		VersionMode: string(backupasset.VersionVersionedPrefix), RepositoryIdentity: &identity,
+		DisplayName: "rclone-clean-rollback", Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1,
+		CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TaskRepositoryLink{
+		ID: strings.Repeat("d", 32), TaskID: &task.ID, RepositoryID: repository.ID,
+		PublicationMode: string(backupasset.PublicationVersionedPrefix), EncryptedLegacyLocator: "backup:legacy",
+		LinkedAt: now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if available, err := resolver.rcloneCleanRollbackAvailable(context.Background(), repository.ID); err != nil || !available {
+		t.Fatalf("zero-reservation clean rollback available=%t err=%v, want true/nil", available, err)
+	}
+
+	seedManagedHistoryPoint(t, db, strings.Repeat("e", 32), repository.ID, backupasset.PointXirangManifest, backupasset.RecoveryPointFailed, now)
+	if available, err := resolver.rcloneCleanRollbackAvailable(context.Background(), repository.ID); err != nil || available {
+		t.Fatalf("failed reservation clean rollback available=%t err=%v, want false/nil", available, err)
+	}
+}
+
+func TestRcloneCleanRollbackWindowRejectsImportedBaselineLatchLeaseAndTombstone(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		seed func(*testing.T, *gorm.DB, model.BackupRepository, time.Time)
+	}{
+		{"imported baseline", func(t *testing.T, db *gorm.DB, repository model.BackupRepository, now time.Time) {
+			seedManagedHistoryPoint(t, db, strings.Repeat("1", 32), repository.ID, backupasset.PointImportedBaseline, backupasset.RecoveryPointPreparing, now)
+		}},
+		{"repository latch", func(t *testing.T, db *gorm.DB, repository model.BackupRepository, now time.Time) {
+			createManagedHistoryLatchFixtureTable(t, db)
+			insertManagedHistoryLatchFixture(t, db, "repository", repository.ID, now)
+		}},
+		{"publication lease", func(t *testing.T, db *gorm.DB, repository model.BackupRepository, now time.Time) {
+			pointID := strings.Repeat("2", 32)
+			seedManagedHistoryPoint(t, db, pointID, repository.ID, backupasset.PointMutableHead, backupasset.RecoveryPointObserved, now)
+			if err := db.Create(&model.RecoveryPointLease{
+				ID: strings.Repeat("3", 32), RecoveryPointID: pointID,
+				HolderType: string(backupasset.LeaseHolderPointPublication), OwnerID: "rclone-clean-window-test",
+				AttemptID: strings.Repeat("4", 32), FenceToken: strings.Repeat("5", 64), Status: string(backupasset.LeaseActive),
+				LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour), LastHeartbeatAt: now,
+				CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := newRepositoryTestDB(t)
+			now := time.Date(2026, 7, 16, 8, 45, 0, 0, time.UTC)
+			identity := "rclone-clean-blocker-" + strings.ReplaceAll(test.name, " ", "-")
+			repository := model.BackupRepository{
+				ID: strings.Repeat("f", 32), ProviderKind: string(backupasset.ProviderRclone),
+				VersionMode: string(backupasset.VersionNativeObjectVersions), RepositoryIdentity: &identity,
+				DisplayName: "rclone-clean-blocker", Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1,
+				CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+			}
+			if err := db.Create(&repository).Error; err != nil {
+				t.Fatal(err)
+			}
+			test.seed(t, db, repository, now)
+			resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if available, err := resolver.rcloneCleanRollbackAvailable(context.Background(), repository.ID); err != nil || available {
+				t.Fatalf("blocked clean rollback available=%t err=%v, want false/nil", available, err)
+			}
+		})
+	}
+}
+
 func TestManagedHistoryInstallationLatchAllowsOnlyExactPristineLegacyBinding(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 15, 8, 0, 0, 0, time.UTC)

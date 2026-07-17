@@ -1,12 +1,17 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 
 	"xirang/backend/internal/config"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -71,6 +76,37 @@ func buildPostgresDSN(dsn string) string {
 	return dsn + sep + "timezone=UTC"
 }
 
+func openPostgresSQLDB(dsn string) (*sql.DB, error) {
+	config, err := pgx.ParseConfig(buildPostgresDSN(dsn))
+	if err != nil {
+		return nil, fmt.Errorf("解析 postgres DSN 失败: %w", err)
+	}
+
+	timezoneName := config.RuntimeParams["timezone"]
+	if timezoneName == "" {
+		timezoneName = "UTC"
+		config.RuntimeParams["timezone"] = timezoneName
+	}
+	scanLocation, err := time.LoadLocation(timezoneName)
+	if err != nil {
+		return nil, fmt.Errorf("加载 postgres 时区失败: %w", err)
+	}
+
+	return stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+		conn.TypeMap().RegisterType(&pgtype.Type{
+			Name:  "timestamp",
+			OID:   pgtype.TimestampOID,
+			Codec: &pgtype.TimestampCodec{ScanLocation: scanLocation},
+		})
+		conn.TypeMap().RegisterType(&pgtype.Type{
+			Name:  "timestamptz",
+			OID:   pgtype.TimestamptzOID,
+			Codec: &pgtype.TimestamptzCodec{ScanLocation: scanLocation},
+		})
+		return nil
+	})), nil
+}
+
 func configureSQLitePool(db *gorm.DB) error {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -118,11 +154,20 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		RegisterMetricsCallbacks(db)
 		return db, nil
 	case "postgres":
-		db, err := gorm.Open(postgres.Open(buildPostgresDSN(cfg.PostgresDSN)), gormCfg)
+		sqlDB, err := openPostgresSQLDB(cfg.PostgresDSN)
 		if err != nil {
 			return nil, fmt.Errorf("连接 postgres 失败: %w", err)
 		}
+		db, err := gorm.Open(postgres.New(postgres.Config{
+			DSN:  buildPostgresDSN(cfg.PostgresDSN),
+			Conn: sqlDB,
+		}), gormCfg)
+		if err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("连接 postgres 失败: %w", err)
+		}
 		if err := configurePool(db); err != nil {
+			_ = sqlDB.Close()
 			return nil, fmt.Errorf("配置连接池失败: %w", err)
 		}
 		RegisterMetricsCallbacks(db)

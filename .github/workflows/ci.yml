@@ -118,7 +118,7 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run 'TestBackupAssetMigration0(62|63)Postgres' -count=1
+        run: go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1
 
   frontend:
     name: Frontend Test & Build

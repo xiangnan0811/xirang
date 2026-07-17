@@ -25,8 +25,10 @@ var (
 const (
 	defaultCommandTimeout     = 2 * time.Minute
 	defaultCommandStderrLimit = int64(64 << 10)
-	maximumSecretStdinBytes   = 64 << 10
-	defaultTerminationGrace   = 100 * time.Millisecond
+	// MaximumSecretStdinBytes is the shared hard ceiling for in-memory secret
+	// stdin payloads. Settings that bound provider configs must never exceed it.
+	MaximumSecretStdinBytes = 64 << 10
+	defaultTerminationGrace = 100 * time.Millisecond
 )
 
 var safeBinaryPattern = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
@@ -1053,7 +1055,7 @@ func normalizeCommandSpec(specification CommandSpec) (CommandSpec, string, error
 	if specification.Timeout <= 0 {
 		specification.Timeout = defaultCommandTimeout
 	}
-	if specification.SecretStdin != nil && (len(specification.SecretStdin.Value) == 0 || len(specification.SecretStdin.Value) > maximumSecretStdinBytes) {
+	if specification.SecretStdin != nil && (len(specification.SecretStdin.Value) == 0 || len(specification.SecretStdin.Value) > MaximumSecretStdinBytes) {
 		return CommandSpec{}, "", fmt.Errorf("%w: invalid secret stdin", ErrUnsafeCommandSpec)
 	}
 	quoted := make([]string, len(operands))

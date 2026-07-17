@@ -1,6 +1,24 @@
 import type {
   LogEvent,
   NewTaskInput,
+  RcloneBindingSetupResult,
+  RcloneCostClass,
+  RcloneEncryptionProfile,
+  RcloneHashFidelity,
+  RcloneKmsKeyStatus,
+  RcloneNativeBindingInput,
+  RclonePortableBindingInput,
+  RclonePublicationMode,
+  RclonePublicationReasonCode,
+  RclonePublicationState,
+  RclonePublicationSummary,
+  RcloneRollbackCapability,
+  RcloneConsistencyClass,
+  RcloneVersionedPublicationMode,
+  RcloneVersioningActivationResult,
+  RcloneVersioningMigrationChoice,
+  RcloneVersioningPreflightResult,
+  RcloneVersioningRollbackResult,
   RsyncPublicationMode,
   RsyncPublicationReasonCode,
   RsyncPublicationState,
@@ -50,6 +68,7 @@ type TaskResponse = {
   skip_next?: boolean;
   progress?: number;
   rsync_publication?: RawRsyncPublicationSummary;
+  rclone_publication?: RawRclonePublicationSummary;
 };
 
 type RawRsyncPublicationSummary = {
@@ -81,6 +100,48 @@ type RawRsyncVersioningRollbackPreparationResult = {
   summary?: RawRsyncPublicationSummary;
 };
 
+type RawRclonePublicationSummary = {
+  mode?: unknown;
+  state?: unknown;
+  reason_code?: unknown;
+  task_revision?: unknown;
+  binding_revision?: unknown;
+  capability_revision?: unknown;
+  consistency_class?: unknown;
+  hash_fidelity?: unknown;
+  estimated_read_bytes?: unknown;
+  api_cost_class?: unknown;
+  storage_cost_class?: unknown;
+  egress_cost_class?: unknown;
+  credential_expires_at?: unknown;
+  encryption_profile?: unknown;
+  kms_key_status?: unknown;
+  kms_read_key_count?: unknown;
+  rollback_locator_present?: unknown;
+  rollback_capability?: unknown;
+};
+
+type RawRcloneBindingSetupResult = {
+  setup_id?: unknown;
+  expires_at?: unknown;
+  external_id?: unknown;
+};
+
+type RawRcloneVersioningPreflightResult = {
+  preflight_id?: unknown;
+  expires_at?: unknown;
+  summary?: RawRclonePublicationSummary;
+};
+
+type RawRcloneVersioningActivationResult = {
+  summary?: RawRclonePublicationSummary;
+  migration_choice?: unknown;
+};
+
+type RawRcloneVersioningRollbackResult = {
+  summary?: RawRclonePublicationSummary;
+};
+
 export type RsyncVersioningErrorCode =
   | "feature_disabled"
   | "repository_offline"
@@ -92,6 +153,13 @@ export type RsyncVersioningErrorCode =
   | "not_found"
   | "conflict"
   | "unsupported"
+  | "request_failed";
+
+export type RcloneVersioningErrorCode =
+  | RclonePublicationReasonCode
+  | "forbidden"
+  | "not_found"
+  | "conflict"
   | "request_failed";
 
 type TaskLogResponse = {
@@ -295,6 +363,248 @@ function mapRsyncVersioningRollbackPreparationResult(raw: RawRsyncVersioningRoll
   return { summary: mapRsyncPublicationSummary(raw.summary) };
 }
 
+function mapRclonePublicationMode(raw: unknown): RclonePublicationMode | undefined {
+  switch (raw) {
+    case "legacy_mutable":
+    case "versioned_prefix":
+    case "native_object_versions":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRclonePublicationState(raw: unknown): RclonePublicationState | undefined {
+  switch (raw) {
+    case "legacy":
+    case "preflight_required":
+    case "credential_setup_required":
+    case "capability_settling":
+    case "ready":
+    case "preparing":
+    case "verifying":
+    case "committed":
+    case "degraded":
+    case "at_risk":
+    case "failed":
+    case "blocked":
+    case "rollback_prepared":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRcloneReasonCode(raw: unknown): RclonePublicationReasonCode | undefined {
+  switch (raw) {
+    case "legacy":
+    case "preflight_required":
+    case "ready":
+    case "credential_setup_required":
+    case "capability_settling":
+    case "preflight_expired":
+    case "task_revision_changed":
+    case "binding_revision_changed":
+    case "preflight_mismatch":
+    case "feature_disabled":
+    case "unsupported_profile":
+    case "repository_offline":
+    case "provider_unavailable":
+    case "provider_timeout":
+    case "provider_resource_limit":
+    case "session_too_short":
+    case "versioning_disabled":
+    case "lifecycle_conflict":
+    case "encryption_unsupported":
+    case "kms_key_unavailable":
+    case "kms_permission_denied":
+    case "kms_key_ring_limit":
+    case "identity_mismatch":
+    case "credential_invalid":
+    case "verification_cost_limit":
+    case "source_drift":
+    case "external_writer_detected":
+    case "unexpected_version":
+    case "manifest_mismatch":
+    case "marker_mismatch":
+    case "admission_blocked":
+    case "outcome_unknown":
+    case "rollback_prepared":
+      return raw;
+    default:
+      return undefined;
+  }
+}
+
+function mapRcloneConsistency(raw: unknown): RcloneConsistencyClass | undefined {
+  return raw === "not_evaluated" || raw === "observationally_stable" || raw === "provider_strong"
+    ? raw
+    : undefined;
+}
+
+function mapRcloneHashFidelity(raw: unknown): RcloneHashFidelity | undefined {
+  return raw === "not_evaluated" || raw === "provider_strong_checksum" || raw === "download_verified_bytes"
+    ? raw
+    : undefined;
+}
+
+function mapRcloneCost(raw: unknown): RcloneCostClass | undefined {
+  return raw === "not_evaluated" || raw === "none" || raw === "low" || raw === "moderate" || raw === "high"
+    ? raw
+    : undefined;
+}
+
+function mapRcloneEncryption(raw: unknown): RcloneEncryptionProfile | undefined {
+  return raw === "none" || raw === "sse_s3" || raw === "sse_kms_cmk" ? raw : undefined;
+}
+
+function mapRcloneKmsStatus(raw: unknown): RcloneKmsKeyStatus | undefined {
+  return raw === "not_applicable" || raw === "ready" || raw === "degraded" || raw === "at_risk" || raw === "blocked"
+    ? raw
+    : undefined;
+}
+
+function mapRcloneRollback(raw: unknown): RcloneRollbackCapability | undefined {
+  return raw === "clean_available" || raw === "preparation_only" || raw === "prepared" ? raw : undefined;
+}
+
+function safeUnsignedDecimal(raw: unknown): string {
+  return typeof raw === "string" && /^(0|[1-9]\d*)$/.test(raw) ? raw : "0";
+}
+
+function safeOptionalTimestamp(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw === "" || !Number.isFinite(Date.parse(raw))) {
+    return undefined;
+  }
+  return raw;
+}
+
+function blockedRclonePublicationSummary(raw?: RawRclonePublicationSummary): RclonePublicationSummary {
+  return {
+    mode: "native_object_versions",
+    state: "blocked",
+    reasonCode: "unsupported_profile",
+    taskRevision: safeUnsignedDecimal(raw?.task_revision),
+    bindingRevision: safeUnsignedDecimal(raw?.binding_revision),
+    capabilityRevision: safeUnsignedDecimal(raw?.capability_revision),
+    consistencyClass: "not_evaluated",
+    hashFidelity: "not_evaluated",
+    estimatedReadBytes: safeUnsignedDecimal(raw?.estimated_read_bytes),
+    apiCostClass: "high",
+    storageCostClass: "high",
+    egressCostClass: "high",
+    encryptionProfile: "sse_kms_cmk",
+    kmsKeyStatus: "blocked",
+    kmsReadKeyCount: 0,
+    rollbackLocatorPresent: false,
+    rollbackCapability: "preparation_only",
+  };
+}
+
+function legacyRclonePublicationSummary(): RclonePublicationSummary {
+  return {
+    mode: "legacy_mutable",
+    state: "legacy",
+    reasonCode: "legacy",
+    taskRevision: "0",
+    bindingRevision: "0",
+    capabilityRevision: "0",
+    consistencyClass: "not_evaluated",
+    hashFidelity: "not_evaluated",
+    estimatedReadBytes: "0",
+    apiCostClass: "not_evaluated",
+    storageCostClass: "not_evaluated",
+    egressCostClass: "not_evaluated",
+    encryptionProfile: "none",
+    kmsKeyStatus: "not_applicable",
+    kmsReadKeyCount: 0,
+    rollbackLocatorPresent: false,
+    rollbackCapability: "preparation_only",
+  };
+}
+
+function mapRclonePublicationSummary(raw: unknown, fallbackToLegacy = false): RclonePublicationSummary {
+  if (!raw || typeof raw !== "object") {
+    return fallbackToLegacy ? legacyRclonePublicationSummary() : blockedRclonePublicationSummary();
+  }
+  const source = raw as RawRclonePublicationSummary;
+  const mode = mapRclonePublicationMode(source.mode);
+  const state = mapRclonePublicationState(source.state);
+  const reasonCode = mapRcloneReasonCode(source.reason_code);
+  const consistencyClass = mapRcloneConsistency(source.consistency_class);
+  const hashFidelity = mapRcloneHashFidelity(source.hash_fidelity);
+  const apiCostClass = mapRcloneCost(source.api_cost_class);
+  const storageCostClass = mapRcloneCost(source.storage_cost_class);
+  const egressCostClass = mapRcloneCost(source.egress_cost_class);
+  const encryptionProfile = mapRcloneEncryption(source.encryption_profile);
+  const kmsKeyStatus = mapRcloneKmsStatus(source.kms_key_status);
+  const rollbackCapability = mapRcloneRollback(source.rollback_capability) ?? "preparation_only";
+  const kmsCount = typeof source.kms_read_key_count === "number" && Number.isSafeInteger(source.kms_read_key_count) && source.kms_read_key_count >= 0
+    ? source.kms_read_key_count
+    : undefined;
+  if (!mode || !state || !reasonCode || !consistencyClass || !hashFidelity || !apiCostClass ||
+      !storageCostClass || !egressCostClass || !encryptionProfile || !kmsKeyStatus ||
+      kmsCount === undefined ||
+      (mode === "native_object_versions") === (encryptionProfile === "none") ||
+      (encryptionProfile === "sse_kms_cmk"
+        ? kmsKeyStatus === "not_applicable"
+        : kmsKeyStatus !== "not_applicable" || kmsCount !== 0)) {
+    return blockedRclonePublicationSummary(source);
+  }
+  return {
+    mode,
+    state,
+    reasonCode,
+    taskRevision: safeUnsignedDecimal(source.task_revision),
+    bindingRevision: safeUnsignedDecimal(source.binding_revision),
+    capabilityRevision: safeUnsignedDecimal(source.capability_revision),
+    consistencyClass,
+    hashFidelity,
+    estimatedReadBytes: safeUnsignedDecimal(source.estimated_read_bytes),
+    apiCostClass,
+    storageCostClass,
+    egressCostClass,
+    credentialExpiresAt: safeOptionalTimestamp(source.credential_expires_at),
+    encryptionProfile,
+    kmsKeyStatus,
+    kmsReadKeyCount: kmsCount,
+    rollbackLocatorPresent: source.rollback_locator_present === true,
+    rollbackCapability,
+  };
+}
+
+function mapRcloneBindingSetupResult(raw: RawRcloneBindingSetupResult): RcloneBindingSetupResult {
+  const setupId = typeof raw.setup_id === "string" && /^[a-f0-9]{32}$/.test(raw.setup_id) ? raw.setup_id : "";
+  const externalId = typeof raw.external_id === "string" && /^xirang-[a-f0-9]{32}$/.test(raw.external_id)
+    ? raw.external_id
+    : undefined;
+  return {
+    setupId,
+    expiresAt: safeOptionalTimestamp(raw.expires_at) ?? "",
+    externalId,
+  };
+}
+
+function mapRclonePreflightResult(raw: RawRcloneVersioningPreflightResult): RcloneVersioningPreflightResult {
+  return {
+    preflightId: typeof raw.preflight_id === "string" && /^[a-f0-9]{32}$/.test(raw.preflight_id) ? raw.preflight_id : "",
+    expiresAt: safeOptionalTimestamp(raw.expires_at) ?? "",
+    summary: mapRclonePublicationSummary(raw.summary),
+  };
+}
+
+function mapRcloneMigrationChoice(raw: unknown): RcloneVersioningMigrationChoice {
+  return raw === "imported_baseline" ? raw : "first_new_point";
+}
+
+function mapRcloneActivationResult(raw: RawRcloneVersioningActivationResult): RcloneVersioningActivationResult {
+  return { summary: mapRclonePublicationSummary(raw.summary), migrationChoice: mapRcloneMigrationChoice(raw.migration_choice) };
+}
+
+function mapRcloneRollbackResult(raw: RawRcloneVersioningRollbackResult): RcloneVersioningRollbackResult {
+  return { summary: mapRclonePublicationSummary(raw.summary) };
+}
+
 function mapLogLevel(raw?: string): LogEvent["level"] {
   if (raw === "error") {
     return "error";
@@ -356,6 +666,9 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     rsyncPublication: executorType === "rsync"
       ? mapRsyncPublicationSummary(row.rsync_publication, true)
       : undefined,
+    rclonePublication: executorType === "rclone"
+      ? mapRclonePublicationSummary(row.rclone_publication, true)
+      : undefined,
     enabled: row.enabled !== false,
     skipNext: row.skip_next === true,
   };
@@ -402,6 +715,44 @@ export function getRsyncVersioningErrorCode(error: unknown): RsyncVersioningErro
         return "conflict";
       case 501:
         return "unsupported";
+      default:
+        return "request_failed";
+    }
+  }
+  return "request_failed";
+}
+
+export function getRcloneVersioningErrorCode(error: unknown): RcloneVersioningErrorCode {
+  if (error instanceof ApiError && error.detail && typeof error.detail === "object") {
+    const data = (error.detail as { data?: unknown }).data;
+    if (data && typeof data === "object") {
+      const reason = (data as { reason?: unknown }).reason;
+      const code = reason && typeof reason === "object" ? (reason as { code?: unknown }).code : undefined;
+      switch (code) {
+        case "feature_disabled":
+          return "feature_disabled";
+        case "repository_offline":
+        case "repository_disconnected":
+          return "repository_offline";
+        case "provider_unavailable":
+          return "provider_unavailable";
+        case "provider_operation_timeout":
+          return "provider_timeout";
+        case "provider_resource_limit":
+          return "provider_resource_limit";
+      }
+    }
+  }
+  if (error instanceof ApiError) {
+    switch (error.status) {
+      case 403:
+        return "forbidden";
+      case 404:
+        return "not_found";
+      case 409:
+        return "conflict";
+      case 501:
+        return "unsupported_profile";
       default:
         return "request_failed";
     }
@@ -520,6 +871,145 @@ export function createTasksApi() {
         body: { expected_task_revision: input.expectedTaskRevision },
       });
       return mapRsyncVersioningRollbackPreparationResult(raw);
+    },
+
+    async createRclonePortableBindingSetup(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string },
+    ): Promise<RcloneBindingSetupResult> {
+      const raw = await request<RawRcloneBindingSetupResult>(`/tasks/${taskId}/rclone-versioning/portable-binding-setups`, {
+        method: "POST",
+        token,
+        body: { expected_task_revision: input.expectedTaskRevision },
+      });
+      return mapRcloneBindingSetupResult(raw);
+    },
+
+    async setRclonePortableBinding(
+      token: string,
+      taskId: number,
+      input: RclonePortableBindingInput,
+    ): Promise<RclonePublicationSummary> {
+      const raw = await request<RawRclonePublicationSummary>(`/tasks/${taskId}/rclone-versioning/portable-binding`, {
+        method: "PUT",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          expected_binding_revision: input.expectedBindingRevision,
+          setup_id: input.setupId,
+          target_remote: input.targetRemote,
+          managed_root_locator: input.managedRootLocator,
+          bound_config: input.boundConfig,
+        },
+      });
+      return mapRclonePublicationSummary(raw);
+    },
+
+    async createRcloneNativeBindingSetup(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string },
+    ): Promise<RcloneBindingSetupResult> {
+      const raw = await request<RawRcloneBindingSetupResult>(`/tasks/${taskId}/rclone-versioning/native-binding-setups`, {
+        method: "POST",
+        token,
+        body: { expected_task_revision: input.expectedTaskRevision },
+      });
+      return mapRcloneBindingSetupResult(raw);
+    },
+
+    async setRcloneNativeBinding(
+      token: string,
+      taskId: number,
+      input: RcloneNativeBindingInput,
+    ): Promise<RclonePublicationSummary> {
+      const bootstrap = input.bootstrap.mode === "workload_chain"
+        ? { mode: input.bootstrap.mode }
+        : {
+            mode: input.bootstrap.mode,
+            access_key_id: input.bootstrap.accessKeyId,
+            secret_access_key: input.bootstrap.secretAccessKey,
+          };
+      const raw = await request<RawRclonePublicationSummary>(`/tasks/${taskId}/rclone-versioning/native-binding`, {
+        method: "PUT",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          expected_binding_revision: input.expectedBindingRevision,
+          setup_id: input.setupId,
+          region: input.region,
+          bucket: input.bucket,
+          managed_prefix: input.managedPrefix,
+          role_arn: input.roleArn,
+          bootstrap,
+          encryption_profile: input.encryptionProfile,
+          kms_key_arn: input.kmsKeyArn,
+        },
+      });
+      return mapRclonePublicationSummary(raw);
+    },
+
+    async createRcloneVersioningPreflight(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; requestedMode: RcloneVersionedPublicationMode },
+    ): Promise<RcloneVersioningPreflightResult> {
+      const raw = await request<RawRcloneVersioningPreflightResult>(`/tasks/${taskId}/rclone-versioning/preflights`, {
+        method: "POST",
+        token,
+        body: { expected_task_revision: input.expectedTaskRevision, requested_mode: input.requestedMode },
+      });
+      return mapRclonePreflightResult(raw);
+    },
+
+    async activateRcloneVersioning(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; preflightId: string; migrationChoice: RcloneVersioningMigrationChoice },
+    ): Promise<RcloneVersioningActivationResult> {
+      const raw = await request<RawRcloneVersioningActivationResult>(`/tasks/${taskId}/rclone-versioning/activate`, {
+        method: "POST",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          preflight_id: input.preflightId,
+          migration_choice: input.migrationChoice,
+        },
+      });
+      return mapRcloneActivationResult(raw);
+    },
+
+    async cleanRollbackRcloneVersioning(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; expectedBindingRevision: string },
+    ): Promise<RcloneVersioningRollbackResult> {
+      const raw = await request<RawRcloneVersioningRollbackResult>(`/tasks/${taskId}/rclone-versioning/clean-rollbacks`, {
+        method: "POST",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          expected_binding_revision: input.expectedBindingRevision,
+        },
+      });
+      return mapRcloneRollbackResult(raw);
+    },
+
+    async prepareRcloneVersioningRollback(
+      token: string,
+      taskId: number,
+      input: { expectedTaskRevision: string; expectedBindingRevision: string },
+    ): Promise<RcloneVersioningRollbackResult> {
+      const raw = await request<RawRcloneVersioningRollbackResult>(`/tasks/${taskId}/rclone-versioning/rollback-preparations`, {
+        method: "POST",
+        token,
+        body: {
+          expected_task_revision: input.expectedTaskRevision,
+          expected_binding_revision: input.expectedBindingRevision,
+        },
+      });
+      return mapRcloneRollbackResult(raw);
     },
 
     async deleteTask(token: string, taskId: number): Promise<void> {

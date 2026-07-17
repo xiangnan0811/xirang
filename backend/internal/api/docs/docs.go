@@ -7301,6 +7301,508 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/{id}/rclone-versioning/activate": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "激活 Rclone 版本化",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone 激活请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneActivationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningActivationResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/clean-rollbacks": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "清理回退未产生历史的 Rclone 版本化激活",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone clean rollback 请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneRollbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningRollbackResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/native-binding": {
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "一次性接收 STS 与加密配置；响应不回显 provider identity 或凭据",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "写入 Rclone AWS native 绑定",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone native 绑定请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneNativeBindingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/native-binding-setups": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "创建短期 setup 与仅本响应可见的 external ID",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "创建 Rclone native 绑定设置",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone native setup 请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneBindingSetupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneBindingSetupResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/portable-binding": {
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "一次性接收 private Remote、managed root 与 bound config；响应只返回安全摘要",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "写入 Rclone portable 绑定",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone portable 绑定请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRclonePortableBindingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/portable-binding-setups": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "创建短期一次性 setup；响应不包含 Remote 或配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "创建 Rclone portable 绑定设置",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone portable setup 请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneBindingSetupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneBindingSetupResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/preflights": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "执行 Rclone 版本化预检",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone 预检请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRclonePreflightRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningPreflightResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/rclone-versioning/rollback-preparations": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "准备保留证据的 Rclone 版本化回退",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rclone rollback preparation 请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskRcloneRollbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningRollbackResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}/restore": {
             "post": {
                 "security": [
@@ -9662,6 +10164,122 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.taskRcloneActivationRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "migration_choice": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningMigrationChoice"
+                },
+                "preflight_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRcloneBindingSetupRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRcloneNativeBindingRequest": {
+            "type": "object",
+            "properties": {
+                "bootstrap": {
+                    "$ref": "#/definitions/internal_api_handlers.taskRcloneNativeBootstrapRequest"
+                },
+                "bucket": {
+                    "type": "string"
+                },
+                "encryption_profile": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneEncryptionProfile"
+                },
+                "expected_binding_revision": {
+                    "type": "string"
+                },
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "kms_key_arn": {
+                    "type": "string"
+                },
+                "managed_prefix": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "role_arn": {
+                    "type": "string"
+                },
+                "setup_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRcloneNativeBootstrapRequest": {
+            "type": "object",
+            "properties": {
+                "access_key_id": {
+                    "type": "string"
+                },
+                "mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneNativeBootstrapMode"
+                },
+                "secret_access_key": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRclonePortableBindingRequest": {
+            "type": "object",
+            "properties": {
+                "bound_config": {
+                    "type": "string"
+                },
+                "expected_binding_revision": {
+                    "type": "string"
+                },
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "managed_root_locator": {
+                    "type": "string"
+                },
+                "setup_id": {
+                    "type": "string"
+                },
+                "target_remote": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskRclonePreflightRequest": {
+            "type": "object",
+            "properties": {
+                "expected_task_revision": {
+                    "type": "string"
+                },
+                "requested_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.TaskPublicationMode"
+                }
+            }
+        },
+        "internal_api_handlers.taskRcloneRollbackRequest": {
+            "type": "object",
+            "properties": {
+                "expected_binding_revision": {
+                    "type": "string"
+                },
+                "expected_task_revision": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.taskRequest": {
             "type": "object",
             "required": [
@@ -9963,6 +10581,327 @@ const docTemplate = `{
                 "ProviderRclone",
                 "ProviderCommand",
                 "ProviderVerifiedImport"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneBindingSetupResult": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "external_id": {
+                    "description": "ExternalID is returned only by the native setup endpoint. It is not\nincluded in ordinary Task or Repository projections.",
+                    "type": "string"
+                },
+                "setup_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RcloneConsistencyClass": {
+            "type": "string",
+            "enum": [
+                "not_evaluated",
+                "observationally_stable",
+                "provider_strong"
+            ],
+            "x-enum-varnames": [
+                "RcloneConsistencyNotEvaluated",
+                "RcloneConsistencyObservationallyStable",
+                "RcloneConsistencyProviderStrong"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneCostClass": {
+            "type": "string",
+            "enum": [
+                "not_evaluated",
+                "none",
+                "low",
+                "moderate",
+                "high"
+            ],
+            "x-enum-varnames": [
+                "RcloneCostNotEvaluated",
+                "RcloneCostNone",
+                "RcloneCostLow",
+                "RcloneCostModerate",
+                "RcloneCostHigh"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneEncryptionProfile": {
+            "type": "string",
+            "enum": [
+                "none",
+                "sse_s3",
+                "sse_kms_cmk"
+            ],
+            "x-enum-varnames": [
+                "RcloneEncryptionNone",
+                "RcloneEncryptionSSES3",
+                "RcloneEncryptionSSEKMS"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneHashFidelity": {
+            "type": "string",
+            "enum": [
+                "not_evaluated",
+                "provider_strong_checksum",
+                "download_verified_bytes"
+            ],
+            "x-enum-varnames": [
+                "RcloneHashNotEvaluated",
+                "RcloneHashProviderStrongChecksum",
+                "RcloneHashDownloadVerifiedBytes"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneKMSKeyStatus": {
+            "type": "string",
+            "enum": [
+                "not_applicable",
+                "ready",
+                "degraded",
+                "at_risk",
+                "blocked"
+            ],
+            "x-enum-varnames": [
+                "RcloneKMSNotApplicable",
+                "RcloneKMSReady",
+                "RcloneKMSDegraded",
+                "RcloneKMSAtRisk",
+                "RcloneKMSBlocked"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneNativeBootstrapMode": {
+            "type": "string",
+            "enum": [
+                "workload_chain",
+                "static_sts_bootstrap"
+            ],
+            "x-enum-varnames": [
+                "RcloneBootstrapWorkloadChain",
+                "RcloneBootstrapStaticSTS"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RclonePublicationSummary": {
+            "type": "object",
+            "properties": {
+                "api_cost_class": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneCostClass"
+                },
+                "binding_revision": {
+                    "type": "string"
+                },
+                "capability_revision": {
+                    "type": "string"
+                },
+                "consistency_class": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneConsistencyClass"
+                },
+                "credential_expires_at": {
+                    "type": "string"
+                },
+                "egress_cost_class": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneCostClass"
+                },
+                "encryption_profile": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneEncryptionProfile"
+                },
+                "estimated_read_bytes": {
+                    "type": "string"
+                },
+                "hash_fidelity": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneHashFidelity"
+                },
+                "kms_key_status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneKMSKeyStatus"
+                },
+                "kms_read_key_count": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.TaskPublicationMode"
+                },
+                "reason_code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningReasonCode"
+                },
+                "rollback_capability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneRollbackCapability"
+                },
+                "rollback_locator_present": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningState"
+                },
+                "storage_cost_class": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneCostClass"
+                },
+                "task_revision": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RcloneRollbackCapability": {
+            "type": "string",
+            "enum": [
+                "clean_available",
+                "preparation_only",
+                "prepared"
+            ],
+            "x-enum-varnames": [
+                "RcloneRollbackCleanAvailable",
+                "RcloneRollbackPreparationOnly",
+                "RcloneRollbackPrepared"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningActivationResult": {
+            "type": "object",
+            "properties": {
+                "migration_choice": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RcloneVersioningMigrationChoice"
+                },
+                "summary": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningMigrationChoice": {
+            "type": "string",
+            "enum": [
+                "imported_baseline",
+                "first_new_point"
+            ],
+            "x-enum-varnames": [
+                "RcloneImportedBaseline",
+                "RcloneFirstNewPoint"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningPreflightResult": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "preflight_id": {
+                    "type": "string"
+                },
+                "summary": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningReasonCode": {
+            "type": "string",
+            "enum": [
+                "legacy",
+                "preflight_required",
+                "ready",
+                "credential_setup_required",
+                "capability_settling",
+                "preflight_expired",
+                "task_revision_changed",
+                "binding_revision_changed",
+                "preflight_mismatch",
+                "feature_disabled",
+                "unsupported_profile",
+                "repository_offline",
+                "provider_unavailable",
+                "provider_timeout",
+                "provider_resource_limit",
+                "session_too_short",
+                "versioning_disabled",
+                "lifecycle_conflict",
+                "encryption_unsupported",
+                "kms_key_unavailable",
+                "kms_permission_denied",
+                "kms_key_ring_limit",
+                "identity_mismatch",
+                "credential_invalid",
+                "verification_cost_limit",
+                "source_drift",
+                "external_writer_detected",
+                "unexpected_version",
+                "manifest_mismatch",
+                "marker_mismatch",
+                "admission_blocked",
+                "outcome_unknown",
+                "rollback_prepared"
+            ],
+            "x-enum-varnames": [
+                "RcloneReasonLegacy",
+                "RcloneReasonPreflightRequired",
+                "RcloneReasonReady",
+                "RcloneReasonCredentialSetupRequired",
+                "RcloneReasonCapabilitySettling",
+                "RcloneReasonPreflightExpired",
+                "RcloneReasonTaskRevisionChanged",
+                "RcloneReasonBindingRevisionChanged",
+                "RcloneReasonPreflightMismatch",
+                "RcloneReasonFeatureDisabled",
+                "RcloneReasonUnsupportedProfile",
+                "RcloneReasonRepositoryOffline",
+                "RcloneReasonProviderUnavailable",
+                "RcloneReasonProviderTimeout",
+                "RcloneReasonProviderResourceLimit",
+                "RcloneReasonSessionTooShort",
+                "RcloneReasonVersioningDisabled",
+                "RcloneReasonLifecycleConflict",
+                "RcloneReasonEncryptionUnsupported",
+                "RcloneReasonKMSKeyUnavailable",
+                "RcloneReasonKMSPermissionDenied",
+                "RcloneReasonKMSKeyRingLimit",
+                "RcloneReasonIdentityMismatch",
+                "RcloneReasonCredentialInvalid",
+                "RcloneReasonVerificationCostLimit",
+                "RcloneReasonSourceDrift",
+                "RcloneReasonExternalWriterDetected",
+                "RcloneReasonUnexpectedVersion",
+                "RcloneReasonManifestMismatch",
+                "RcloneReasonMarkerMismatch",
+                "RcloneReasonAdmissionBlocked",
+                "RcloneReasonOutcomeUnknown",
+                "RcloneReasonRollbackPrepared"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningRollbackResult": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.RcloneVersioningState": {
+            "type": "string",
+            "enum": [
+                "legacy",
+                "preflight_required",
+                "credential_setup_required",
+                "capability_settling",
+                "ready",
+                "preparing",
+                "verifying",
+                "committed",
+                "degraded",
+                "at_risk",
+                "failed",
+                "blocked",
+                "rollback_prepared"
+            ],
+            "x-enum-varnames": [
+                "RcloneStateLegacy",
+                "RcloneStatePreflightRequired",
+                "RcloneStateCredentialSetupRequired",
+                "RcloneStateCapabilitySettling",
+                "RcloneStateReady",
+                "RcloneStatePreparing",
+                "RcloneStateVerifying",
+                "RcloneStateCommitted",
+                "RcloneStateDegraded",
+                "RcloneStateAtRisk",
+                "RcloneStateFailed",
+                "RcloneStateBlocked",
+                "RcloneStateRollbackPrepared"
             ]
         },
         "xirang_backend_internal_backupasset.RecoveryPointDTO": {

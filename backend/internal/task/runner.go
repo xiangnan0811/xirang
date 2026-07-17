@@ -472,9 +472,12 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		// 检查关联策略是否启用校验
 		if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
-			result := verifier.Verify(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
+			result := verifier.VerifyWithLineageGuard(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
 				m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, string(StatusRunning))
-			}, false)
+			}, false, m.lineageGuard)
+			if result.LegacyBlocked {
+				m.recordLegacyResticBlock(execCtx, taskID, runIDPtr, publication.OperationLegacyIntegrity)
+			}
 
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
@@ -945,7 +948,7 @@ func (m *Manager) failLegacyRestore(taskID uint, runID uint) {
 
 func isLegacyGuardedProvider(executorType string) bool {
 	switch strings.ToLower(strings.TrimSpace(executorType)) {
-	case "restic", "rsync":
+	case "restic", "rsync", "rclone":
 		return true
 	default:
 		return false

@@ -19,7 +19,17 @@ import (
 
 const rcloneAdapterRevision = "rclone-reader:v1"
 
+const managedRcloneVersion = "rclone v1.74.4"
+
 var safeRcloneBackend = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+func ValidateManagedRcloneVersion(output []byte) error {
+	firstLine := strings.TrimSpace(strings.SplitN(string(output), "\n", 2)[0])
+	if firstLine != managedRcloneVersion {
+		return fmt.Errorf("%w: managed Rclone runtime must be v1.74.4", backupasset.ErrCapabilityUnavailable)
+	}
+	return nil
+}
 
 type RcloneConfigSource string
 
@@ -29,10 +39,20 @@ const (
 )
 
 type RcloneRuntimeAccess struct {
-	Backend      string               `json:"-"`
-	RangeProven  bool                 `json:"-"`
-	ConfigSource RcloneConfigSource   `json:"-"`
-	Command      *RemoteCommandAccess `json:"-"`
+	Backend      string                    `json:"-"`
+	RangeProven  bool                      `json:"-"`
+	ConfigSource RcloneConfigSource        `json:"-"`
+	Command      *RemoteCommandAccess      `json:"-"`
+	ManagedPoint *RcloneManagedPointAccess `json:"-"`
+}
+
+type RcloneManagedPointAccess struct {
+	RecoveryPointID string `json:"-"`
+	AttemptID       string `json:"-"`
+	DataLocator     string `json:"-"`
+	ManifestDigest  string `json:"-"`
+	SourceRevision  string `json:"-"`
+	Committed       bool   `json:"-"`
 }
 
 type RcloneAdapter struct {
@@ -113,14 +133,26 @@ func (adapter *RcloneAdapter) ListPoints(ctx context.Context, snapshot ReadSnaps
 	if err != nil {
 		return NativePointPage{}, err
 	}
-	if _, err := adapter.validateOperation(ctx, snapshot, rclonePointLocator(snapshot.SourceRevision), CommandPurposeList, limits); err != nil {
+	runtimeAccess, err := adapter.runtimeAccess(snapshot.Access)
+	if err != nil {
+		return NativePointPage{}, err
+	}
+	pointLocator := rclonePointLocator(snapshot.SourceRevision)
+	semantics := backupasset.PointMutableHead
+	opaqueDigest := stableDigest("rclone-mutable-point", snapshot.RepositoryID)
+	if runtimeAccess.ManagedPoint != nil {
+		pointLocator = rcloneManagedPointLocator(*runtimeAccess.ManagedPoint)
+		semantics = backupasset.PointXirangManifest
+		opaqueDigest = stableDigest("rclone-managed-point", runtimeAccess.ManagedPoint.RecoveryPointID+"\x00"+runtimeAccess.ManagedPoint.AttemptID+"\x00"+runtimeAccess.ManagedPoint.ManifestDigest)
+	}
+	if _, err := adapter.validateOperation(ctx, snapshot, pointLocator, CommandPurposeList, limits); err != nil {
 		return NativePointPage{}, err
 	}
 	request, err = request.Normalize(adapter.maxPageSize)
 	if err != nil {
 		return NativePointPage{}, err
 	}
-	point := NativePoint{OpaqueDigest: stableDigest("rclone-mutable-point", snapshot.RepositoryID), CapturedAt: adapter.now().UTC(), Semantics: backupasset.PointMutableHead, SourceRevision: snapshot.SourceRevision, Locator: rclonePointLocator(snapshot.SourceRevision)}
+	point := NativePoint{OpaqueDigest: opaqueDigest, CapturedAt: adapter.now().UTC(), Semantics: semantics, SourceRevision: snapshot.SourceRevision, Locator: pointLocator}
 	if request.Cursor == "" {
 		return NativePointPage{Items: []NativePoint{point}}, nil
 	}
@@ -303,14 +335,33 @@ func (adapter *RcloneAdapter) runtimeAccess(binding AccessBinding) (RcloneRuntim
 		return RcloneRuntimeAccess{}, fmt.Errorf("%w: Rclone runtime facts unavailable", backupasset.ErrInvalidState)
 	}
 	runtimeAccess.ConfigSource = rcloneConfigSource(binding)
+	if runtimeAccess.ManagedPoint != nil {
+		managed := runtimeAccess.ManagedPoint
+		if runtimeAccess.ConfigSource != RcloneConfigBound || !managed.Committed || backupasset.ValidateOpaqueID(managed.RecoveryPointID) != nil ||
+			backupasset.ValidateOpaqueID(managed.AttemptID) != nil || !validTaggedDigest(managed.ManifestDigest) ||
+			!validTaggedDigest(managed.SourceRevision) || managed.DataLocator != binding.Locator {
+			return RcloneRuntimeAccess{}, fmt.Errorf("%w: managed Rclone point facts unavailable", backupasset.ErrInvalidState)
+		}
+		if _, err := NewRclonePrivateLocator(managed.DataLocator); err != nil {
+			return RcloneRuntimeAccess{}, fmt.Errorf("%w: invalid managed Rclone data locator", backupasset.ErrInvalidState)
+		}
+	}
 	return runtimeAccess, nil
 }
 
 func (adapter *RcloneAdapter) validateOperation(ctx context.Context, snapshot ReadSnapshot, point PointLocator, purpose CommandPurpose, limits OperationLimits) ([]Entry, error) {
-	if _, err := adapter.runtimeAccess(snapshot.Access); err != nil {
+	runtimeAccess, err := adapter.runtimeAccess(snapshot.Access)
+	if err != nil {
 		return nil, err
 	}
-	if backupasset.ValidateOpaqueID(snapshot.RepositoryID) != nil || snapshot.RepositoryID != snapshot.Access.RepositoryID || snapshot.CapabilityRevision <= 0 || snapshot.SourceRevision == "" || point.Native != rclonePointLocator(snapshot.SourceRevision).Native {
+	expectedPoint := rclonePointLocator(snapshot.SourceRevision)
+	if runtimeAccess.ManagedPoint != nil {
+		expectedPoint = rcloneManagedPointLocator(*runtimeAccess.ManagedPoint)
+		if snapshot.SourceRevision != runtimeAccess.ManagedPoint.SourceRevision {
+			return nil, fmt.Errorf("%w: managed Rclone source revision mismatch", backupasset.ErrInvalidState)
+		}
+	}
+	if backupasset.ValidateOpaqueID(snapshot.RepositoryID) != nil || snapshot.RepositoryID != snapshot.Access.RepositoryID || snapshot.CapabilityRevision <= 0 || snapshot.SourceRevision == "" || point.Native != expectedPoint.Native {
 		return nil, fmt.Errorf("%w: invalid Rclone read snapshot", backupasset.ErrInvalidState)
 	}
 	entries, err := adapter.loadList(ctx, snapshot.Access, "", limits, purpose)
@@ -567,6 +618,10 @@ func rcloneListFingerprint(entries []Entry) string {
 
 func rclonePointLocator(sourceRevision string) PointLocator {
 	return PointLocator{Native: "mutable:" + revisionDigest(sourceRevision)}
+}
+
+func rcloneManagedPointLocator(value RcloneManagedPointAccess) PointLocator {
+	return PointLocator{Native: "managed:" + value.RecoveryPointID + ":" + value.AttemptID + ":" + value.ManifestDigest}
 }
 
 func mapRcloneOperationError(ctx context.Context, err error) error {

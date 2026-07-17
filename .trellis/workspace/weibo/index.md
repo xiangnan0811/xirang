@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
-- **Last Active**: 2026-07-15
+- **Total Sessions**: 20
+- **Last Active**: 2026-07-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~678 | Active |
+| `journal-1.md` | ~711 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-07-17 | Child 5: Rclone versioned recovery points | `bd123a9` | `codex/backup-assets-rclone-versioning` |
 | 19 | 2026-07-15 | Rsync versioned recovery points | `8e45e22` | `codex/backup-assets-rsync-versioning` |
 | 18 | 2026-07-14 | Restic exact lineage and recovery-point publication | `41c5f9a137389167ef2a1790f18ee5c28797bc5c`, `357e784e50fab42fc795d259695b9a92c64a2fde`, `bff502b220ee81c0f79460305c561672ccc1cbbe`, `f2818a9b94aeaa203b256dedf0a7ed54206d8d3b`, `b9f6e84605515806c13a78f3b21c9479bf1893a4` | `codex/backup-assets-restic-lineage` |
 | 17 | 2026-07-14 | Complete backup repository read adapters | `a6a9b2d` | `codex/backup-assets-provider-readers` |

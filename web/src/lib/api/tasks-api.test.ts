@@ -210,3 +210,268 @@ describe("Rsync versioning task API", () => {
     });
   });
 });
+
+describe("Rclone versioning task API", () => {
+  const fetchMock = vi.fn();
+  const api = createTasksApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const rawReadySummary = {
+    mode: "native_object_versions",
+    state: "ready",
+    reason_code: "ready",
+    task_revision: "9007199254740993",
+    binding_revision: "7",
+    capability_revision: "11",
+    consistency_class: "provider_strong",
+    hash_fidelity: "download_verified_bytes",
+    estimated_read_bytes: "1099511627776",
+    api_cost_class: "moderate",
+    storage_cost_class: "low",
+    egress_cost_class: "high",
+    credential_expires_at: "2026-07-17T10:00:00Z",
+    encryption_profile: "sse_kms_cmk",
+    kms_key_status: "ready",
+    kms_read_key_count: 2,
+    rollback_locator_present: true,
+    rollback_capability: "clean_available",
+  };
+
+  it("maps the complete safe Rclone summary and drops provider-private fields", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        id: 81,
+        name: "nightly-rclone",
+        status: "pending",
+        node_id: 7,
+        executor_type: "rclone",
+        rclone_publication: {
+          ...rawReadySummary,
+          profile_code: "aws_s3_general_purpose_v1",
+          internal_encryption_profile: "sse_kms_cmk_v1",
+          bucket: "private-bucket",
+          managed_prefix: "private-prefix/",
+          role_arn: "arn:aws:iam::123456789012:role/private",
+          version_id: "private-version",
+          evidence_digest: "private-digest",
+        },
+      },
+    })));
+
+    const task = await api.getTask("token", 81);
+
+    expect(task.rclonePublication).toEqual({
+      mode: "native_object_versions",
+      state: "ready",
+      reasonCode: "ready",
+      taskRevision: "9007199254740993",
+      bindingRevision: "7",
+      capabilityRevision: "11",
+      consistencyClass: "provider_strong",
+      hashFidelity: "download_verified_bytes",
+      estimatedReadBytes: "1099511627776",
+      apiCostClass: "moderate",
+      storageCostClass: "low",
+      egressCostClass: "high",
+      credentialExpiresAt: "2026-07-17T10:00:00Z",
+      encryptionProfile: "sse_kms_cmk",
+      kmsKeyStatus: "ready",
+      kmsReadKeyCount: 2,
+      rollbackLocatorPresent: true,
+      rollbackCapability: "clean_available",
+    });
+    const safe = JSON.stringify(task.rclonePublication);
+    for (const privateValue of ["aws_s3_general_purpose_v1", "_v1", "private-bucket", "private-prefix", "role/private", "private-version", "private-digest"]) {
+      expect(safe).not.toContain(privateValue);
+    }
+  });
+
+  it("fails the enclosing Rclone summary closed for unknown values and never opens unknown rollback", async () => {
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          id: 82,
+          name: "unknown-rclone",
+          status: "pending",
+          node_id: 7,
+          executor_type: "rclone",
+          rclone_publication: { ...rawReadySummary, state: "future_state" },
+        },
+      })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          id: 83,
+          name: "unknown-rollback",
+          status: "pending",
+          node_id: 7,
+          executor_type: "rclone",
+          rclone_publication: { ...rawReadySummary, rollback_capability: "future_clean" },
+        },
+      })));
+
+    const blocked = await api.getTask("token", 82);
+    expect(blocked.rclonePublication).toMatchObject({
+      mode: "native_object_versions",
+      state: "blocked",
+      reasonCode: "unsupported_profile",
+      rollbackCapability: "preparation_only",
+      encryptionProfile: "sse_kms_cmk",
+      kmsKeyStatus: "blocked",
+    });
+    const guarded = await api.getTask("token", 83);
+    expect(guarded.rclonePublication).toMatchObject({
+      state: "ready",
+      reasonCode: "ready",
+      rollbackCapability: "preparation_only",
+    });
+  });
+
+  it("fails impossible Rclone encryption and KMS combinations closed", async () => {
+    const impossible = [
+      { ...rawReadySummary, mode: "versioned_prefix", encryption_profile: "sse_kms_cmk" },
+      { ...rawReadySummary, encryption_profile: "sse_s3", kms_key_status: "ready", kms_read_key_count: 0 },
+      { ...rawReadySummary, kms_key_status: "not_applicable" },
+      {
+        ...rawReadySummary,
+        mode: "versioned_prefix",
+        encryption_profile: "none",
+        kms_key_status: "not_applicable",
+        kms_read_key_count: 1,
+      },
+    ];
+
+    for (const [index, summary] of impossible.entries()) {
+      fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          id: 90 + index,
+          name: `invalid-rclone-${index}`,
+          status: "pending",
+          node_id: 7,
+          executor_type: "rclone",
+          rclone_publication: summary,
+        },
+      })));
+      const task = await api.getTask("token", 90 + index);
+      expect(task.rclonePublication).toMatchObject({
+        mode: "native_object_versions",
+        state: "blocked",
+        reasonCode: "unsupported_profile",
+        encryptionProfile: "sse_kms_cmk",
+        kmsKeyStatus: "blocked",
+        kmsReadKeyCount: 0,
+      });
+    }
+  });
+
+  it("serializes all eight Rclone workflow requests and never synthesizes secrets into responses", async () => {
+    const summaryEnvelope = (summary = rawReadySummary) => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: summary }));
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
+        setup_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expires_at: "2026-07-17T10:00:00Z",
+      } })))
+      .mockResolvedValueOnce(summaryEnvelope())
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
+        setup_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", expires_at: "2026-07-17T10:00:00Z",
+        external_id: "xirang-cccccccccccccccccccccccccccccccc",
+      } })))
+      .mockResolvedValueOnce(summaryEnvelope())
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
+        preflight_id: "dddddddddddddddddddddddddddddddd", expires_at: "2026-07-17T10:00:00Z", summary: rawReadySummary,
+      } })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
+        migration_choice: "first_new_point", summary: rawReadySummary,
+      } })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { summary: rawReadySummary } })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { summary: rawReadySummary } })));
+
+    const portableConfig = "[archive]\ntype = s3\nsecret_access_key = FAKE_RCLONE_SECRET_FOR_TEST_ONLY\n";
+    const accessKeyId = "FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY";
+    const secretAccessKey = "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY";
+    const kmsKeyArn = "arn:aws:kms:us-east-1:123456789012:key/FAKE-KMS-KEY-FOR-TEST-ONLY";
+    const setupPortable = await api.createRclonePortableBindingSetup("token", 7, { expectedTaskRevision: "9007199254740993" });
+    const portable = await api.setRclonePortableBinding("token", 7, {
+      expectedTaskRevision: "9007199254740993",
+      expectedBindingRevision: "0",
+      setupId: setupPortable.setupId,
+      targetRemote: "archive",
+      managedRootLocator: "archive:managed/v1",
+      boundConfig: portableConfig,
+    });
+    const setupNative = await api.createRcloneNativeBindingSetup("token", 7, { expectedTaskRevision: "9007199254740993" });
+    const native = await api.setRcloneNativeBinding("token", 7, {
+      expectedTaskRevision: "9007199254740993",
+      expectedBindingRevision: "0",
+      setupId: setupNative.setupId,
+      region: "us-east-1",
+      bucket: "private-bucket",
+      managedPrefix: "managed/v1/",
+      roleArn: "arn:aws:iam::123456789012:role/xirang-rclone",
+      bootstrap: { mode: "static_sts_bootstrap", accessKeyId, secretAccessKey },
+      encryptionProfile: "sse_kms_cmk",
+      kmsKeyArn,
+    });
+    await api.createRcloneVersioningPreflight("token", 7, {
+      expectedTaskRevision: "9007199254740993", requestedMode: "native_object_versions",
+    });
+    await api.activateRcloneVersioning("token", 7, {
+      expectedTaskRevision: "9007199254740993", preflightId: "dddddddddddddddddddddddddddddddd", migrationChoice: "first_new_point",
+    });
+    await api.cleanRollbackRcloneVersioning("token", 7, {
+      expectedTaskRevision: "9007199254740994", expectedBindingRevision: "7",
+    });
+    await api.prepareRcloneVersioningRollback("token", 7, {
+      expectedTaskRevision: "9007199254740994", expectedBindingRevision: "7",
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/tasks/7/rclone-versioning/portable-binding-setups",
+      "/api/v1/tasks/7/rclone-versioning/portable-binding",
+      "/api/v1/tasks/7/rclone-versioning/native-binding-setups",
+      "/api/v1/tasks/7/rclone-versioning/native-binding",
+      "/api/v1/tasks/7/rclone-versioning/preflights",
+      "/api/v1/tasks/7/rclone-versioning/activate",
+      "/api/v1/tasks/7/rclone-versioning/clean-rollbacks",
+      "/api/v1/tasks/7/rclone-versioning/rollback-preparations",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual({
+      expected_task_revision: "9007199254740993",
+      expected_binding_revision: "0",
+      setup_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      target_remote: "archive",
+      managed_root_locator: "archive:managed/v1",
+      bound_config: portableConfig,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1].body))).toEqual({
+      expected_task_revision: "9007199254740993",
+      expected_binding_revision: "0",
+      setup_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      region: "us-east-1",
+      bucket: "private-bucket",
+      managed_prefix: "managed/v1/",
+      role_arn: "arn:aws:iam::123456789012:role/xirang-rclone",
+      bootstrap: { mode: "static_sts_bootstrap", access_key_id: accessKeyId, secret_access_key: secretAccessKey },
+      encryption_profile: "sse_kms_cmk",
+      kms_key_arn: kmsKeyArn,
+    });
+    const returned = JSON.stringify({ portable, native });
+    for (const secret of [portableConfig, accessKeyId, secretAccessKey, kmsKeyArn, "private-bucket", "managed/v1/"]) {
+      expect(returned).not.toContain(secret);
+    }
+  });
+});

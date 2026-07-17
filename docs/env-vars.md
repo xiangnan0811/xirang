@@ -106,8 +106,22 @@
 | `BACKUP_ASSETS_MANIFEST_MAX_ENTRIES` | int | `10000000` | 否 | 单个 Manifest 的目录/文件条目上限，范围 `1..100000000` |
 | `BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES` | int | `1048576` | 否 | 单条 Restic Manifest 记录上限，范围 `4096..4194304`；不得大于 Manifest 总字节上限 |
 | `BACKUP_ASSETS_MANIFEST_MAX_DEPTH` | int | `4096` | 否 | Manifest 遍历的最大目录深度，范围 `1..65536` |
+| `BACKUP_ASSETS_RCLONE_PREFLIGHT_TTL` | duration | `30m` | 否 | Rclone 版本化预检有效期，范围 `16m..24h`；Task、绑定或能力 revision 改变时会提前失效 |
+| `BACKUP_ASSETS_RCLONE_PORTABLE_DEADLINE` | duration | `24h` | 否 | 单个 Rclone Portable 恢复点的绝对时限，范围 `5m..168h` |
+| `BACKUP_ASSETS_RCLONE_NATIVE_DEADLINE` | duration | `45m` | 否 | 单个 Rclone AWS Native 恢复点的绝对时限，范围 `5m..55m` |
+| `BACKUP_ASSETS_RCLONE_BOUND_CONFIG_MAX_BYTES` | int | `65536` | 否 | write-only Rclone bound config 最大字节数，范围 `1024..65536` |
+| `BACKUP_ASSETS_RCLONE_CONTROL_PAYLOAD_MAX_BYTES` | int | `8388608` | 否 | Rclone manifest/control 对象单次暂存最大字节数，范围 `65536..67108864` |
+| `BACKUP_ASSETS_RCLONE_FULL_VERIFY_MAX_BYTES` | int | `1099511627776` | 否 | weak/no-hash Remote 单个恢复点允许的全字节校验读取量，范围 `1048576..17592186044416`；超过时失败关闭 |
+| `BACKUP_ASSETS_RCLONE_MANIFEST_CHUNK_MAX_BYTES` | int | `8388608` | 否 | Rclone canonical manifest 单个分块最大字节数，范围 `65536..67108864` |
+| `BACKUP_ASSETS_RCLONE_LOW_LEVEL_RETRIES` | int | `3` | 否 | Rclone 单次 publication attempt 的 low-level retries，范围 `1..10`；重启 attempt 仍使用新身份 |
+| `BACKUP_ASSETS_RCLONE_STAGING_ORPHAN_AGE` | duration | `24h` | 否 | Rclone 未提交 staging 前缀进入 orphan 调和候选前的最小年龄，范围 `1h..168h` |
+| `BACKUP_ASSETS_RCLONE_STAGING_SCAN_LIMIT` | int | `256` | 否 | 单次 Rclone staging orphan 扫描上限，范围 `1..4096` |
+| `BACKUP_ASSETS_RCLONE_KMS_READ_KEY_MAX_COUNT` | int | `8` | 否 | AWS Native SSE-KMS 保留 decrypt-only read key 的数量上限，范围 `1..32` |
+| `BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL` | duration | `15m` | 否 | Rclone 受管 Repository 健康复核间隔，范围 `1m..24h` |
+| `BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE` | int | `100` | 否 | 单次 Rclone 版本化健康检查批次大小，范围 `1..1000` |
+| `BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS` | int | `3` | 否 | Rclone AWS Native SDK 操作最大尝试次数，范围 `1..10` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default，均可动态调整）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先排空已获准的 Restic 命令，再提交新值。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default，均可动态调整）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。
 
 ## 7. 节点探测
 

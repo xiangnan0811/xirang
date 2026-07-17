@@ -1,7 +1,10 @@
 package task
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,12 +150,12 @@ func (manager *Manager) ReconcileInterruptedRuns(ctx context.Context, limit int)
 func interruptedPublicationRunsQuery(db *gorm.DB) *gorm.DB {
 	return db.Table("task_runs").Where(`
 		LOWER(tasks.executor_type) = ? OR (
-			LOWER(tasks.executor_type) = ? AND EXISTS (
+			LOWER(tasks.executor_type) IN ? AND EXISTS (
 				SELECT 1 FROM recovery_points AS points
 				WHERE points.producing_task_run_id = task_runs.id
 				AND points.semantics IN ?
 			)
-		)`, "restic", "rsync", []string{string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline)})
+		)`, "restic", []string{"rsync", "rclone"}, []string{string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline)})
 }
 
 func interruptedOutcomeFromPoint(point model.RecoveryPoint, run model.TaskRun) (publication.Outcome, bool, error) {
@@ -191,24 +194,116 @@ func interruptedProviderCommitRecorded(point model.RecoveryPoint, lineage backup
 	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
 		switch backupasset.TaskPublicationMode(lineage.PublicationMode) {
 		case backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy:
+			locator, attempt, err := decodeInterruptedManagedRsyncLocator(point.EncryptedProviderLocator)
+			if err != nil {
+				return false, err
+			}
+			if locator.RepositoryID != point.RepositoryID || locator.RecoveryPointID != point.ID || attempt.RepositoryID != point.RepositoryID ||
+				attempt.RecoveryPointID != point.ID || attempt.TaskRepositoryLinkID != lineage.TaskRepositoryLinkID || attempt.TaskID != lineage.TaskID ||
+				attempt.TaskRunID != lineage.TaskRunID || attempt.PublicationMode != backupasset.TaskPublicationMode(lineage.PublicationMode) ||
+				!attempt.PointDeadlineAt.Equal(lineage.PointDeadlineAt.UTC()) || locator.ManagedRootIdentityDigest != attempt.ManagedRootIdentityDigest {
+				return false, fmt.Errorf("%w: interrupted managed Rsync locator drift", backupasset.ErrConflict)
+			}
+			return consistency.Provider == backupasset.ProviderRsync && validInterruptedDigest(consistency.ProviderCommitDigest) &&
+				consistency.RepositoryIdentityDigest == locator.ManagedRootIdentityDigest && consistency.CapabilityRevision > 0, nil
+		case backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions:
+			if consistency.ProviderCommitDigest == "" {
+				return false, nil
+			}
+			locator, attempt, commit, err := decodeInterruptedManagedRcloneLocator(point.EncryptedProviderLocator)
+			if err != nil {
+				return false, err
+			}
+			if locator.RepositoryID != point.RepositoryID || locator.RecoveryPointID != point.ID || attempt.RepositoryID != point.RepositoryID ||
+				attempt.RecoveryPointID != point.ID || attempt.TaskRepositoryLinkID != lineage.TaskRepositoryLinkID || attempt.TaskID != lineage.TaskID ||
+				attempt.TaskRunID != lineage.TaskRunID || attempt.PublicationMode != backupasset.TaskPublicationMode(lineage.PublicationMode) ||
+				!attempt.PointDeadlineAt.Equal(lineage.PointDeadlineAt.UTC()) || point.SourceFingerprint != locator.PhysicalIdentityDigest ||
+				point.ManifestDigest != commit.ManifestIndexDigest || point.EntryCount != int64(commit.ManifestEntryCount) || point.LogicalBytes != int64(commit.LogicalBytes) {
+				return false, fmt.Errorf("%w: interrupted managed Rclone locator drift", backupasset.ErrConflict)
+			}
+			return consistency.Provider == backupasset.ProviderRclone && consistency.ProviderCommitDigest == locator.ProviderCommitDigest &&
+				consistency.RepositoryIdentityDigest == attempt.RepositoryIdentityDigest && consistency.CapabilityRevision > 0, nil
 		default:
-			return false, fmt.Errorf("%w: interrupted managed Rsync point lineage drift", backupasset.ErrConflict)
+			return false, fmt.Errorf("%w: interrupted managed publication point lineage drift", backupasset.ErrConflict)
 		}
-		locator, attempt, err := decodeInterruptedManagedRsyncLocator(point.EncryptedProviderLocator)
-		if err != nil {
-			return false, err
-		}
-		if locator.RepositoryID != point.RepositoryID || locator.RecoveryPointID != point.ID || attempt.RepositoryID != point.RepositoryID ||
-			attempt.RecoveryPointID != point.ID || attempt.TaskRepositoryLinkID != lineage.TaskRepositoryLinkID || attempt.TaskID != lineage.TaskID ||
-			attempt.TaskRunID != lineage.TaskRunID || attempt.PublicationMode != backupasset.TaskPublicationMode(lineage.PublicationMode) ||
-			!attempt.PointDeadlineAt.Equal(lineage.PointDeadlineAt.UTC()) || locator.ManagedRootIdentityDigest != attempt.ManagedRootIdentityDigest {
-			return false, fmt.Errorf("%w: interrupted managed Rsync locator drift", backupasset.ErrConflict)
-		}
-		return consistency.Provider == backupasset.ProviderRsync && validInterruptedDigest(consistency.ProviderCommitDigest) &&
-			consistency.RepositoryIdentityDigest == locator.ManagedRootIdentityDigest && consistency.CapabilityRevision > 0, nil
 	default:
 		return false, fmt.Errorf("%w: interrupted publication semantics are unsupported", backupasset.ErrConflict)
 	}
+}
+
+type interruptedManagedRcloneLocatorV1 struct {
+	Version                 int                             `json:"version"`
+	Provider                backupasset.ProviderKind        `json:"provider"`
+	RepositoryID            string                          `json:"repository_id"`
+	RecoveryPointID         string                          `json:"recovery_point_id"`
+	AttemptID               string                          `json:"attempt_id"`
+	PublicationMode         backupasset.TaskPublicationMode `json:"publication_mode"`
+	TaggedAttempt           string                          `json:"tagged_attempt"`
+	TaggedCommit            string                          `json:"tagged_commit"`
+	ChildFenceDigest        string                          `json:"child_fence_digest"`
+	CommitPayloadDigest     string                          `json:"commit_payload_digest"`
+	PortableAttemptRoot     string                          `json:"portable_attempt_root,omitempty"`
+	NativeCommitKey         string                          `json:"native_commit_key,omitempty"`
+	NativeCommitVersionID   string                          `json:"native_commit_version_id,omitempty"`
+	PhysicalIdentityDigest  string                          `json:"physical_identity_digest"`
+	ProviderCommitDigest    string                          `json:"provider_commit_digest"`
+	ManifestControlIdentity string                          `json:"manifest_control_identity"`
+}
+
+func decodeInterruptedManagedRcloneLocator(payload string) (interruptedManagedRcloneLocatorV1, provider.RcloneAttemptV1, provider.RcloneCommitV1, error) {
+	invalid := func() (interruptedManagedRcloneLocatorV1, provider.RcloneAttemptV1, provider.RcloneCommitV1, error) {
+		return interruptedManagedRcloneLocatorV1{}, provider.RcloneAttemptV1{}, provider.RcloneCommitV1{}, fmt.Errorf("%w: invalid interrupted managed Rclone locator", backupasset.ErrInvalidState)
+	}
+	if payload == "" || len(payload) > 64*1024 || rejectDuplicateInterruptedLocatorMembers(payload) != nil {
+		return invalid()
+	}
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var locator interruptedManagedRcloneLocatorV1
+	if err := decoder.Decode(&locator); err != nil {
+		return invalid()
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return invalid()
+	}
+	attempt, err := provider.DecodeRcloneAttemptV1(locator.TaggedAttempt)
+	if err != nil {
+		return invalid()
+	}
+	commit, err := provider.DecodeRcloneCommitV1(locator.TaggedCommit)
+	if err != nil {
+		return invalid()
+	}
+	commitDigest := sha256.Sum256([]byte(locator.TaggedCommit))
+	if locator.Version != 1 || locator.Provider != backupasset.ProviderRclone || backupasset.ValidateOpaqueID(locator.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(locator.RecoveryPointID) != nil || backupasset.ValidateOpaqueID(locator.AttemptID) != nil ||
+		!validInterruptedDigest(locator.ChildFenceDigest) || !validInterruptedDigest(locator.CommitPayloadDigest) ||
+		!validInterruptedDigest(locator.PhysicalIdentityDigest) || !validInterruptedDigest(locator.ProviderCommitDigest) ||
+		!validInterruptedDigest(locator.ManifestControlIdentity) || hex.EncodeToString(commitDigest[:]) != locator.ProviderCommitDigest ||
+		attempt.RepositoryID != locator.RepositoryID || attempt.RecoveryPointID != locator.RecoveryPointID || attempt.AttemptID != locator.AttemptID ||
+		attempt.PublicationMode != locator.PublicationMode || attempt.ChildFenceDigest != locator.ChildFenceDigest ||
+		commit.RepositoryID != locator.RepositoryID || commit.RecoveryPointID != locator.RecoveryPointID || commit.AttemptID != locator.AttemptID ||
+		commit.PublicationMode != locator.PublicationMode || commit.ChildFenceDigest != locator.ChildFenceDigest {
+		return invalid()
+	}
+	switch locator.PublicationMode {
+	case backupasset.PublicationVersionedPrefix:
+		if locator.PortableAttemptRoot == "" || locator.NativeCommitKey != "" || locator.NativeCommitVersionID != "" ||
+			commit.Portable == nil || commit.Native != nil || commit.Portable.CommitPayloadDigest != locator.CommitPayloadDigest ||
+			commit.Portable.ControlIdentityDigest != locator.ManifestControlIdentity {
+			return invalid()
+		}
+	case backupasset.PublicationNativeObjectVersions:
+		if locator.PortableAttemptRoot != "" || locator.NativeCommitKey == "" || locator.NativeCommitVersionID == "" ||
+			strings.ContainsRune(locator.NativeCommitKey, '\x00') || strings.ContainsRune(locator.NativeCommitVersionID, '\x00') ||
+			commit.Native == nil || commit.Portable != nil || commit.Native.CommitKey != "" || commit.Native.CommitVersionID != "" ||
+			commit.Native.CommitContentDigest != locator.CommitPayloadDigest || commit.Native.ManifestControlGraphDigest != locator.ManifestControlIdentity {
+			return invalid()
+		}
+	default:
+		return invalid()
+	}
+	return locator, attempt, commit, nil
 }
 
 type interruptedManagedRsyncLocatorV1 struct {
@@ -269,6 +364,9 @@ func rejectDuplicateInterruptedLocatorMembers(payload string) error {
 		var discard json.RawMessage
 		if err := decoder.Decode(&discard); err != nil {
 			return err
+		}
+		if bytes.Equal(bytes.TrimSpace(discard), []byte("null")) {
+			return fmt.Errorf("null interrupted locator member")
 		}
 	}
 	closing, err := decoder.Token()

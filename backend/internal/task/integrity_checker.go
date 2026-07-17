@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -103,6 +104,24 @@ func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	if m.lineageGuard != nil {
+		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyIntegrity)
+		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
+			if session != nil {
+				defer func() { _ = session.Close() }()
+			}
+			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyIntegrity)
+			log.Warn().Uint("task_id", task.ID).Msg("受管 Rclone 完整性检查已被安全边界阻止")
+			return
+		}
+		defer func() { _ = session.Close() }()
+	}
+
+	source := strings.TrimSpace(task.RsyncSource)
+	target := strings.TrimSpace(task.RsyncTarget)
+	if source == "" || target == "" {
+		return
+	}
 
 	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeIntegrityCheck)
 	if err != nil {
@@ -110,12 +129,6 @@ func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 		return
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	source := strings.TrimSpace(task.RsyncSource)
-	target := strings.TrimSpace(task.RsyncTarget)
-	if source == "" || target == "" {
-		return
-	}
 
 	rcloneBin := util.GetEnvOrDefault("RCLONE_BINARY", "rclone")
 	cmd := fmt.Sprintf("%s check %s %s --one-way 2>&1",

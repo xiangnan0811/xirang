@@ -48,6 +48,54 @@ Rsync 任务默认继续使用传统的可变目标。只有管理员可以从�
 - “准备回退”会停止新的受管准入、排空相关工作，并恢复保留的 legacy locator 后让任务保持暂停；它不会删除已提交恢复点，也不会自动恢复旧的可变执行路径。
 - 一旦存在受管 Rsync 历史，managed-history latch 会阻止不安全的 mutable fallback，即使备份资产功能后来被关闭。执行 schema down 前也会因受管 history、versioned link 或活动 lease 而失败关闭；保留 `000064_backup_asset_rsync_publication_contract`。
 
+## Rclone 版本化恢复点
+
+Rclone 任务默认仍是 `legacy_mutable`：任务把数据同步到一个可变 Remote 目标，不会把旧 TaskRun、对象时间或 Remote 当前内容追认为历史恢复点。`backup_assets.enabled` 仍默认是 `false`；只有管理员显式开启该功能后，才能从现有 Rclone 任务的操作区配置、预检并激活版本化发布。传输完成、Provider 端提交完成和数据库恢复点发布是三个独立事实，只有三者的精确证据收敛后，恢复点才会进入可用状态。
+
+管理员必须为受管任务选择以下一种模式：
+
+| 模式 | 适用范围 | 可信边界与成本 |
+|---|---|---|
+| Portable 独立前缀（`versioned_prefix`） | 默认推荐；通过经过校验的 Rclone v1.74.4 bound config 访问 Remote | 每次运行写入新的受管前缀，生成规范化清单，并最后写入 commit marker。Remote 只提供弱哈希或没有哈希时，Xirang 会逐字节读取并校验源、目标数据；这会增加节点出口流量、Remote API 请求、读取费用和运行时间，超过配置的字节或时限上限时失败关闭。 |
+| AWS 原生对象版本（`native_object_versions`） | 仅 AWS 官方区域端点上的通用型 S3 bucket | 用 S3 `VersionId`、delete marker、完整 mutation ledger 和精确版本读取证明一个恢复点。当前实现范围不覆盖 directory bucket、access point/Outposts、自定义端点、任意 S3-compatible 存储、Azure Blob 或 Google Cloud Storage 的原生版本能力；这些目标应使用 Portable 或保持 legacy。 |
+
+Portable 仍是默认推荐。当前版本保留官方 AWS 的 opt-in live conformance suite，但项目维护者没有为本版本配置专用 AWS fixture，因此不提供 release-level AWS live certification 声明。AWS Native 的每个实际目标仍必须通过自身 bucket、Role、versioning、lifecycle、加密和 KMS 状态的完整运行时预检，缺少或漂移任一证据都会失败关闭。
+
+### 管理员配置与预检
+
+1. 先暂停现有 Rclone 任务，并确认仍保留正确的 legacy locator。受管 namespace 必须与旧目标物理隔离；系统不会原地接管或重命名旧数据。
+2. 在任务的“Rclone 版本化”对话框选择 Portable（默认）或 AWS Native，创建一次性 setup，并提交 write-only 绑定信息。
+3. Portable 必须重新提交完整的 Rclone 配置和目标 Remote。受管命令始终使用加密保存的同一份 bound config bytes/revision；节点上的默认 Rclone 配置（`node_default`）只服务 legacy 任务，不会被导入、推断或自动升级为受管凭据。动态凭据来源、未知选项、未认证 backend/wrapper 或不闭合的 Remote 依赖会被拒绝。
+4. AWS Native 必须使用同账户的专用 IAM Role，并配置由信任策略强制校验的 external ID。Xirang 只通过 STS `AssumeRole` 获得覆盖单次操作时限的临时会话，不接受把节点静态身份当作受管绑定。external ID 只在短期 setup 响应中显示一次，不会由普通任务查询接口回显。
+5. 运行预检并查看 Remote 一致性、哈希强度、预计 API/存储/全字节校验成本、凭据有效期、外部 writer 风险、生命周期和加密状态。AWS Native 要求 versioning、lifecycle、身份和能力的两次稳定观察至少相隔 15 分钟，并通过精确版本 canary；在 settling 完成前不能激活。
+
+预检是有时效和 revision 绑定的安全证据。任务、绑定、凭据、Remote 能力、生命周期或加密配置发生变化后，旧预检失效，必须重新运行；系统不会在执行中静默降级到 Portable 或可变同步。
+
+### AWS 加密与生命周期
+
+AWS Native 只接受两种闭合加密档位：
+
+- **SSE-S3**：写入显式使用 S3 托管密钥加密，并核对每个精确对象版本的实际加密身份。
+- **同账户 customer-managed SSE-KMS**：绑定一个 active write key，并可保留有限数量的 decrypt-only read keys。轮换时先把旧 active key 加入保留读取 key ring，再切换新 active key；只要任何已提交版本仍引用旧 key，就必须保持该 key 可用、可解密，不得禁用或安排删除。系统校验 key 的账户、区域、状态、用途、来源和权限，但普通 DTO、日志与审计不会暴露 key ARN。
+
+Xirang 不会创建、修改或删除 KMS key，也不会自动修改 bucket lifecycle。任何与受管前缀重叠的 current/noncurrent expiration、expired delete-marker cleanup、未知动作或未认证的离线存储转换都会使预检/admission 失败关闭；运行期间检测到 versioning、lifecycle、身份、权限、KMS key 或加密档位漂移时同样阻止新发布。运维人员必须在 AWS 侧先修正策略，再重新预检。
+
+### Baseline 与回退边界
+
+预检成功后仍需明确选择迁移方式：
+
+- **从下一次成功运行开始（`first_new_point`，默认）**：旧目标保持不变，下一次受管运行才创建第一个恢复点。在激活完成后、任何受管运行或 publication reservation 开始前，仍保留一次 clean rollback 窗口。
+- **导入当前基线（`imported_baseline`）**：把稳定的 legacy current head 物理复制到新的受管 namespace，并用与正常恢复点相同的清单、fence、完整校验和发布合同建立第一个点。它不会根据 mtime、旧 TaskRun 或已有对象版本伪造历史。激活会立即建立 durable reservation，因此激活成功后不再存在 clean rollback 窗口。
+
+Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受管 reservation、恢复点、history latch 或活动 lease 的短暂窗口；它会恢复原 legacy 配置，不删除 Remote 数据。窗口关闭后只能使用“准备回退”：系统停止新的受管准入、排空并调和未决工作、重新连接隔离保存的 legacy locator，同时让任务保持暂停。该操作保留所有 committed point、失败尝试、orphan、清单、审计证据和 managed-history latch，也不会自动启用旧的 mutable runtime。
+
+### 明确不提供的保证
+
+- Portable 前缀和 AWS 原生对象版本都不是 WORM。Native 的 `backend_versioned` 只说明 Xirang 能按精确 `VersionId` 证明和读取版本；拥有底层删除权限的外部主体仍可能破坏数据，也不代表启用了 Object Lock、合规保留或不可删除介质。
+- 当前不实现 Provider deletion、精确版本清理、通用 retention/purge 或已提交恢复点删除；回退、调和和健康检查都不会删除已提交前缀、对象版本或 delete marker。
+- Rclone 不是源端时间点快照。需要数据库或应用一致性时，仍应使用应用静默、dump 或底层卷快照。
+- 一旦产生受管 reservation/history，持久 latch 会在 feature 后续关闭时继续阻止不安全的 legacy mutable fallback。关闭 `backup_assets.enabled` 不是降级或清除受管历史的方法。
+
 ## 应用感知备份
 
 应用感知备份会根据业务应用类型，在备份前自动执行数据库 dump，降低直接备份数据目录造成不一致的风险。

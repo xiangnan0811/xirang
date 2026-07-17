@@ -375,34 +375,10 @@ func workerFoundation(enabled bool) *backupasset.FoundationService {
 }
 
 func workerSettingsFromEnabled(enabled bool) workerSettings {
-	value := "false"
-	if enabled {
-		value = "true"
+	values := make(workerSettings)
+	for key, value := range runtimeFoundationSettingsFromEnvironment() {
+		values[key] = value
 	}
-	return workerSettings{
-		"backup_assets.enabled":                          value,
-		"backup_assets.catalog_batch_size":               "2000",
-		"backup_assets.catalog_build_timeout":            "30m",
-		"backup_assets.repository_reconcile_interval":    "15m",
-		"backup_assets.audit_segment_max_events":         "10000",
-		"backup_assets.audit_segment_max_age":            "24h",
-		"backup_assets.audit_detail_retention_days":      "180",
-		"backup_assets.audit_checkpoint_retention_days":  "2555",
-		"backup_assets.lease_duration":                   "5m",
-		"backup_assets.lease_heartbeat":                  "60s",
-		"backup_assets.lease_absolute_deadline":          "168h",
-		"backup_assets.provider_operation_timeout":       "2m",
-		"backup_assets.provider_max_concurrency":         "4",
-		"backup_assets.provider_metadata_limit_bytes":    "16777216",
-		"backup_assets.publication_reconcile_interval":   "5m",
-		"backup_assets.publication_reconcile_batch_size": "100",
-		"backup_assets.publication_worker_concurrency":   "2",
-		"backup_assets.publication_missing_grace":        "30m",
-		"backup_assets.publication_stream_max_bytes":     "268435456",
-		"backup_assets.manifest_timeout":                 "2h",
-		"backup_assets.manifest_max_bytes":               "4294967296",
-		"backup_assets.manifest_max_entries":             "10000000",
-		"backup_assets.manifest_max_record_bytes":        "1048576",
-		"backup_assets.manifest_max_depth":               "4096",
-	}
+	values["backup_assets.enabled"] = fmt.Sprintf("%t", enabled)
+	return values
 }

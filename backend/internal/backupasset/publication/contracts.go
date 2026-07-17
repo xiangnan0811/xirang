@@ -29,6 +29,7 @@ const (
 	OperationLegacyRestoreLatest   ResticOperation = "legacy_restore_latest"
 	OperationLegacyAnomaly         ResticOperation = "legacy_anomaly"
 	OperationLegacyRetention       ResticOperation = "legacy_retention"
+	OperationLegacyIntegrity       ResticOperation = "legacy_integrity"
 	OperationEvidenceBackup        ResticOperation = "evidence_backup"
 	OperationManifest              ResticOperation = "manifest"
 	OperationReconcile             ResticOperation = "reconcile"
@@ -46,6 +47,7 @@ var validResticOperations = map[ResticOperation]struct{}{
 	OperationLegacyRestoreLatest:   {},
 	OperationLegacyAnomaly:         {},
 	OperationLegacyRetention:       {},
+	OperationLegacyIntegrity:       {},
 	OperationEvidenceBackup:        {},
 	OperationManifest:              {},
 	OperationReconcile:             {},

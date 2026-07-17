@@ -188,6 +188,7 @@ func main() {
 		cfg.RsyncBinary,
 		assetRuntime.ResticPublicationStrategy(),
 		assetRuntime.RsyncTreePublicationStrategy(),
+		assetRuntime.RclonePublicationStrategy(),
 	)
 	legacyRestic, ok := executorFactory.Resolve("restic").(*executor.ResticExecutor)
 	if !ok {

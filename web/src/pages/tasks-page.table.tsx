@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
+  Cloud,
   GitFork,
   GitBranch,
   History,
@@ -23,7 +24,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
-import { buildChainParentMap, canCancel, canTrigger } from "@/pages/tasks-page.utils";
+import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone } from "@/pages/tasks-page.utils";
 
 export const TasksTable = React.memo(function TasksTable({
   loading,
@@ -41,6 +42,8 @@ export const TasksTable = React.memo(function TasksTable({
   onViewHistory,
   canManageRsyncVersioning,
   onManageRsyncVersioning,
+  canManageRcloneVersioning,
+  onManageRcloneVersioning,
   selectedTaskSet,
   allVisibleSelected,
   toggleTaskSelection,
@@ -182,6 +185,15 @@ export const TasksTable = React.memo(function TasksTable({
                           {t("tasks.skipNextBadge")}
                         </Badge>
                       )}
+                      {task.executorType === "rclone" && task.rclonePublication ? (
+                        <Badge
+                          tone={rclonePublicationStateTone(task.rclonePublication.state)}
+                          className="text-micro"
+                          title={t(`rcloneVersioning.reason.${task.rclonePublication.reasonCode}`)}
+                        >
+                          {t(`rcloneVersioning.state.${task.rclonePublication.state}`)}
+                        </Badge>
+                      ) : null}
                     </div>
                   </td>
                   <td className="px-3 py-2.5">
@@ -258,6 +270,18 @@ export const TasksTable = React.memo(function TasksTable({
                           onClick={() => onManageRsyncVersioning(task)}
                         >
                           <GitBranch className="size-4" aria-hidden />
+                        </Button>
+                      ) : null}
+                      {canManageRcloneVersioning && task.executorType === "rclone" && task.rclonePublication ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("tasks.rcloneVersioningAriaLabel", { name: task.name || task.policyName })}
+                          disabled={isPendingAny}
+                          onClick={() => onManageRcloneVersioning(task)}
+                        >
+                          <Cloud className="size-4" aria-hidden />
                         </Button>
                       ) : null}
                       <Button

@@ -24,34 +24,52 @@ import (
 const publicationLeaseOwner = "point-publication"
 
 type PublicationDependencies struct {
-	DB         *gorm.DB
-	Foundation *backupasset.FoundationService
-	Registry   *provider.Registry
-	Keyring    *backupasset.Keyring
-	Lease      *backupasset.LeaseService
-	Admission  publication.Admission
-	Metrics    publication.Metrics
-	Audit      AssetAuditSink
-	History    *ManagedHistoryResolver
-	Now        func() time.Time
-	TryWake    func(string) bool
+	DB                         *gorm.DB
+	Foundation                 *backupasset.FoundationService
+	Registry                   *provider.Registry
+	Keyring                    *backupasset.Keyring
+	Lease                      *backupasset.LeaseService
+	Admission                  publication.Admission
+	Metrics                    publication.Metrics
+	Audit                      AssetAuditSink
+	History                    *ManagedHistoryResolver
+	Now                        func() time.Time
+	TryWake                    func(string) bool
+	RcloneNativeFactoryBuilder RcloneNativeFactoryBuilder
 }
+
+type RcloneNativeFactory interface {
+	provider.STSAssumer
+	provider.BootstrapDenyProbe
+	provider.RcloneNativeClientFactory
+	provider.RcloneNativeBaselineClientFactory
+	BootstrapCredentialsExpire(context.Context) (bool, error)
+}
+
+type RcloneNativeFactoryBuilder func(
+	context.Context,
+	provider.RcloneNativeBootstrap,
+	string,
+	int,
+) (RcloneNativeFactory, error)
 
 // PublicationService owns transactionally fenced RecoveryPoint publication. It
 // deliberately remains separate from the Repository HTTP service and Task
 // Manager so Provider evidence can be reused by later backends.
 type PublicationService struct {
-	db         *gorm.DB
-	foundation *backupasset.FoundationService
-	registry   *provider.Registry
-	keyring    *backupasset.Keyring
-	lease      *backupasset.LeaseService
-	admission  publication.Admission
-	metrics    publication.Metrics
-	audit      AssetAuditSink
-	history    *ManagedHistoryResolver
-	now        func() time.Time
-	tryWake    func(string) bool
+	db                         *gorm.DB
+	foundation                 *backupasset.FoundationService
+	registry                   *provider.Registry
+	keyring                    *backupasset.Keyring
+	lease                      *backupasset.LeaseService
+	admission                  publication.Admission
+	metrics                    publication.Metrics
+	audit                      AssetAuditSink
+	history                    *ManagedHistoryResolver
+	now                        func() time.Time
+	tryWake                    func(string) bool
+	rcloneNativeFactoryBuilder RcloneNativeFactoryBuilder
+	rcloneNativeHealthCheck    func(context.Context, string) (provider.RcloneNativeHealthResult, error)
 }
 
 func NewPublicationService(dependencies PublicationDependencies) (*PublicationService, error) {
@@ -65,11 +83,24 @@ func NewPublicationService(dependencies PublicationDependencies) (*PublicationSe
 	if dependencies.TryWake == nil {
 		dependencies.TryWake = func(string) bool { return false }
 	}
-	return &PublicationService{
+	if dependencies.RcloneNativeFactoryBuilder == nil {
+		dependencies.RcloneNativeFactoryBuilder = func(
+			ctx context.Context,
+			bootstrap provider.RcloneNativeBootstrap,
+			region string,
+			maxAttempts int,
+		) (RcloneNativeFactory, error) {
+			return provider.NewRcloneNativeAWSFactory(ctx, bootstrap, region, maxAttempts)
+		}
+	}
+	service := &PublicationService{
 		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring, lease: dependencies.Lease,
 		admission: dependencies.Admission, metrics: dependencies.Metrics, audit: dependencies.Audit, history: dependencies.History,
 		now: dependencies.Now, tryWake: dependencies.TryWake,
-	}, nil
+		rcloneNativeFactoryBuilder: dependencies.RcloneNativeFactoryBuilder,
+	}
+	service.rcloneNativeHealthCheck = service.checkRcloneNativeProviderHealth
+	return service, nil
 }
 
 func (service *PublicationService) Prepare(ctx context.Context, run publication.Run) (publication.Execution, error) {
@@ -150,6 +181,8 @@ func (service *PublicationService) prepareEvidence(ctx context.Context, run publ
 		return service.prepareResticEvidence(ctx, run, token)
 	case backupasset.ProviderRsync:
 		return service.prepareRsyncPublication(ctx, run, token)
+	case backupasset.ProviderRclone:
+		return service.prepareRclonePublication(ctx, run, token)
 	default:
 		_ = token.Close()
 		return nil, fmt.Errorf("%w: managed publication provider is unsupported", backupasset.ErrCapabilityUnavailable)
@@ -1020,7 +1053,8 @@ func legacyResticOperation(operation publication.ResticOperation) bool {
 		publication.OperationLegacySnapshotRestore,
 		publication.OperationLegacyRestoreLatest,
 		publication.OperationLegacyAnomaly,
-		publication.OperationLegacyRetention:
+		publication.OperationLegacyRetention,
+		publication.OperationLegacyIntegrity:
 		return true
 	default:
 		return false

@@ -78,8 +78,9 @@ type managedRsyncBindingAssociation struct {
 // inspect the exact decoded version instead of treating an encrypted V2
 // document as a mutable V1 locator.
 type storedBindingDocument struct {
-	V1             *bindingDocument
-	ManagedRsyncV2 *managedRsyncBindingDocumentV2
+	V1              *bindingDocument
+	ManagedRsyncV2  *managedRsyncBindingDocumentV2
+	ManagedRcloneV3 *managedRcloneBindingDocumentV3
 }
 
 func generateBindingSalt() ([]byte, error) {
@@ -208,6 +209,12 @@ func decodeStoredBindingDocument(payload string) (storedBindingDocument, error) 
 			return storedBindingDocument{}, err
 		}
 		return storedBindingDocument{ManagedRsyncV2: &document}, nil
+	case managedRcloneBindingDocumentVersion:
+		document, err := decodeManagedRcloneBindingDocumentV3(payload)
+		if err != nil {
+			return storedBindingDocument{}, err
+		}
+		return storedBindingDocument{ManagedRcloneV3: &document}, nil
 	default:
 		return storedBindingDocument{}, fmt.Errorf("%w: unsupported binding document version", backupasset.ErrInvalidState)
 	}

@@ -364,6 +364,7 @@ type TaggedPublicationAttempt struct {
 	Version   int
 	Restic    *ResticAttemptV1
 	RsyncTree *RsyncTreeAttemptV1
+	Rclone    *RcloneAttemptV1
 }
 
 // RsyncTreeAttemptV1 freezes the provider-visible identity for a future
@@ -433,21 +434,33 @@ func NewRsyncTreePublicationAttempt(value RsyncTreeAttemptV1) TaggedPublicationA
 	return TaggedPublicationAttempt{Provider: backupasset.ProviderRsync, Version: taggedPublicationSchemaV1, RsyncTree: &value}
 }
 
+func NewRclonePublicationAttempt(value RcloneAttemptV1) TaggedPublicationAttempt {
+	if value.Provider == "" {
+		value.Provider = backupasset.ProviderRclone
+	}
+	return TaggedPublicationAttempt{Provider: backupasset.ProviderRclone, Version: taggedPublicationSchemaV1, Rclone: &value}
+}
+
 func (value TaggedPublicationAttempt) Validate() error {
 	if value.Version != taggedPublicationSchemaV1 {
 		return fmt.Errorf("%w: unsupported tagged publication attempt version", backupasset.ErrInvalidState)
 	}
 	switch value.Provider {
 	case backupasset.ProviderRestic:
-		if value.Restic == nil || value.RsyncTree != nil || value.Restic.Provider != backupasset.ProviderRestic {
+		if value.Restic == nil || value.RsyncTree != nil || value.Rclone != nil || value.Restic.Provider != backupasset.ProviderRestic {
 			return fmt.Errorf("%w: invalid Restic tagged publication attempt", backupasset.ErrInvalidState)
 		}
 		return validateResticAttemptDescriptor(*value.Restic)
 	case backupasset.ProviderRsync:
-		if value.RsyncTree == nil || value.Restic != nil {
+		if value.RsyncTree == nil || value.Restic != nil || value.Rclone != nil {
 			return fmt.Errorf("%w: invalid Rsync tagged publication attempt", backupasset.ErrInvalidState)
 		}
 		return value.RsyncTree.Validate()
+	case backupasset.ProviderRclone:
+		if value.Rclone == nil || value.Restic != nil || value.RsyncTree != nil {
+			return fmt.Errorf("%w: invalid Rclone tagged publication attempt", backupasset.ErrInvalidState)
+		}
+		return value.Rclone.Validate()
 	default:
 		return fmt.Errorf("%w: unsupported tagged publication provider", backupasset.ErrInvalidState)
 	}
@@ -471,6 +484,16 @@ func (value TaggedPublicationAttempt) RsyncTreeAttempt() (RsyncTreeAttemptV1, er
 		return RsyncTreeAttemptV1{}, fmt.Errorf("%w: Rsync tagged publication attempt required", backupasset.ErrInvalidState)
 	}
 	return *value.RsyncTree, nil
+}
+
+func (value TaggedPublicationAttempt) RcloneAttempt() (RcloneAttemptV1, error) {
+	if err := value.Validate(); err != nil || value.Provider != backupasset.ProviderRclone || value.Rclone == nil {
+		if err != nil {
+			return RcloneAttemptV1{}, err
+		}
+		return RcloneAttemptV1{}, fmt.Errorf("%w: Rclone tagged publication attempt required", backupasset.ErrInvalidState)
+	}
+	return *value.Rclone, nil
 }
 
 func (value RsyncTreeAttemptV1) Validate() error {
@@ -554,6 +577,7 @@ type ProviderCommit struct {
 	Version   int
 	Restic    *ResticCommitV1
 	RsyncTree *RsyncTreeCommitV1
+	Rclone    *RcloneCommitV1
 }
 
 func NewResticProviderCommit(value ResticCommitV1) ProviderCommit {
@@ -567,20 +591,31 @@ func NewRsyncTreeProviderCommit(value RsyncTreeCommitV1) ProviderCommit {
 	return ProviderCommit{Provider: backupasset.ProviderRsync, Version: taggedPublicationSchemaV1, RsyncTree: &value}
 }
 
+func NewRcloneProviderCommit(value RcloneCommitV1) ProviderCommit {
+	return ProviderCommit{Provider: backupasset.ProviderRclone, Version: taggedPublicationSchemaV1, Rclone: &value}
+}
+
 func (value ProviderCommit) Validate() error {
 	if value.Version != taggedPublicationSchemaV1 {
 		return fmt.Errorf("%w: unsupported provider commit version", backupasset.ErrInvalidState)
 	}
 	switch value.Provider {
 	case backupasset.ProviderRestic:
-		if value.Restic == nil || value.RsyncTree != nil || value.Restic.Provider != backupasset.ProviderRestic || !validResticCommit(*value.Restic) {
+		if value.Restic == nil || value.RsyncTree != nil || value.Rclone != nil || value.Restic.Provider != backupasset.ProviderRestic || !validResticCommit(*value.Restic) {
 			return fmt.Errorf("%w: invalid Restic provider commit", backupasset.ErrInvalidState)
 		}
 	case backupasset.ProviderRsync:
-		if value.RsyncTree == nil || value.Restic != nil {
+		if value.RsyncTree == nil || value.Restic != nil || value.Rclone != nil {
 			return fmt.Errorf("%w: invalid Rsync provider commit", backupasset.ErrInvalidState)
 		}
 		if err := value.RsyncTree.Validate(); err != nil {
+			return err
+		}
+	case backupasset.ProviderRclone:
+		if value.Rclone == nil || value.Restic != nil || value.RsyncTree != nil {
+			return fmt.Errorf("%w: invalid Rclone provider commit", backupasset.ErrInvalidState)
+		}
+		if err := value.Rclone.Validate(); err != nil {
 			return err
 		}
 	default:
@@ -607,6 +642,16 @@ func (value ProviderCommit) RsyncTreeCommit() (RsyncTreeCommitV1, error) {
 		return RsyncTreeCommitV1{}, fmt.Errorf("%w: Rsync provider commit required", backupasset.ErrInvalidState)
 	}
 	return *value.RsyncTree, nil
+}
+
+func (value ProviderCommit) RcloneCommit() (RcloneCommitV1, error) {
+	if err := value.Validate(); err != nil || value.Provider != backupasset.ProviderRclone || value.Rclone == nil {
+		if err != nil {
+			return RcloneCommitV1{}, err
+		}
+		return RcloneCommitV1{}, fmt.Errorf("%w: Rclone provider commit required", backupasset.ErrInvalidState)
+	}
+	return *value.Rclone, nil
 }
 
 func validResticCommit(value ResticCommitV1) bool {
@@ -668,21 +713,32 @@ type ManifestResult struct {
 	Version   int
 	Restic    *ResticManifestV1
 	RsyncTree *RsyncTreeManifestV1
+	Rclone    *RcloneManifestV1
 }
 
 func (value ManifestResult) ResticManifest() (ResticManifestV1, error) {
-	if value.Version != taggedPublicationSchemaV1 || value.Provider != backupasset.ProviderRestic || value.Restic == nil || value.RsyncTree != nil {
+	if value.Version != taggedPublicationSchemaV1 || value.Provider != backupasset.ProviderRestic || value.Restic == nil || value.RsyncTree != nil || value.Rclone != nil {
 		return ResticManifestV1{}, fmt.Errorf("%w: Restic manifest result required", backupasset.ErrInvalidState)
 	}
 	return *value.Restic, nil
 }
 
 func (value ManifestResult) RsyncTreeManifest() (RsyncTreeManifestV1, error) {
-	if value.Version != taggedPublicationSchemaV1 || value.Provider != backupasset.ProviderRsync || value.RsyncTree == nil || value.Restic != nil ||
+	if value.Version != taggedPublicationSchemaV1 || value.Provider != backupasset.ProviderRsync || value.RsyncTree == nil || value.Restic != nil || value.Rclone != nil ||
 		value.RsyncTree.DigestAlgorithm != "sha256" || !validTaggedDigest(value.RsyncTree.Digest) || !validTaggedDigest(value.RsyncTree.FidelityDigest) || value.RsyncTree.FailureCode != "" {
 		return RsyncTreeManifestV1{}, fmt.Errorf("%w: Rsync tree manifest result required", backupasset.ErrInvalidState)
 	}
 	return *value.RsyncTree, nil
+}
+
+func (value ManifestResult) RcloneManifest() (RcloneManifestV1, error) {
+	if value.Version != taggedPublicationSchemaV1 || value.Provider != backupasset.ProviderRclone || value.Rclone == nil || value.Restic != nil || value.RsyncTree != nil {
+		return RcloneManifestV1{}, fmt.Errorf("%w: Rclone manifest result required", backupasset.ErrInvalidState)
+	}
+	if err := value.Rclone.Validate(); err != nil {
+		return RcloneManifestV1{}, err
+	}
+	return *value.Rclone, nil
 }
 
 // PublicationPrepareRequest and its result carry a closed tagged attempt into
@@ -692,13 +748,42 @@ type PublicationPrepareRequest struct {
 	Attempt        TaggedPublicationAttempt
 	ResticInput    *ResticBackupInput
 	RsyncTreeInput *RsyncTreePublicationInput
+	RcloneInput    *RclonePublicationInput
 }
 
 type PreparedPublication struct {
 	Attempt        TaggedPublicationAttempt
 	ResticInput    *ResticBackupInput
 	RsyncTreeInput *RsyncTreePublicationInput
+	RcloneInput    *RclonePublicationInput
 	rsyncTree      *rsyncTreePreparedPublication
+}
+
+func (value PublicationPrepareRequest) Validate() error {
+	if err := value.Attempt.Validate(); err != nil {
+		return err
+	}
+	switch value.Attempt.Provider {
+	case backupasset.ProviderRestic:
+		if value.ResticInput == nil || value.RsyncTreeInput != nil || value.RcloneInput != nil {
+			return fmt.Errorf("%w: invalid Restic publication prepare request", backupasset.ErrInvalidState)
+		}
+	case backupasset.ProviderRsync:
+		if value.RsyncTreeInput == nil || value.ResticInput != nil || value.RcloneInput != nil {
+			return fmt.Errorf("%w: invalid Rsync publication prepare request", backupasset.ErrInvalidState)
+		}
+	case backupasset.ProviderRclone:
+		attempt, err := value.Attempt.RcloneAttempt()
+		if err != nil || value.RcloneInput == nil || !value.RcloneInput.validateVariant(attempt.PublicationMode) ||
+			value.ResticInput != nil || value.RsyncTreeInput != nil || value.RcloneInput.ManifestLimits.Timeout <= 0 ||
+			value.RcloneInput.ManifestLimits.MaxBytes <= 0 || value.RcloneInput.ManifestLimits.MaxEntries <= 0 ||
+			value.RcloneInput.ManifestLimits.MaxRecordBytes <= 0 || value.RcloneInput.ManifestLimits.MaxDepth <= 0 {
+			return fmt.Errorf("%w: invalid Rclone publication prepare request", backupasset.ErrInvalidState)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported publication prepare provider", backupasset.ErrInvalidState)
+	}
+	return nil
 }
 
 type PublicationProgress struct {
@@ -715,11 +800,13 @@ type ProviderExecutionResult struct {
 type PublicationReconcileRequest struct {
 	Attempt        TaggedPublicationAttempt
 	RsyncTreeInput *RsyncTreeReconcileInput
+	RcloneInput    *RcloneReconcileInput
 }
 
 type PublicationReconcileResult struct {
 	ResticObservations []ResticSnapshotObservation
 	RsyncTree          *RsyncTreeReconcileV1
+	Rclone             *RcloneReconcileV1
 }
 
 // RsyncTreeReconcileInput supplies only the repository-owned material needed
@@ -777,13 +864,23 @@ func (value RsyncTreeReconcileV1) Validate() error {
 }
 
 func (value PublicationReconcileResult) RsyncTreeResult() (RsyncTreeReconcileV1, error) {
-	if value.RsyncTree == nil || len(value.ResticObservations) != 0 {
+	if value.RsyncTree == nil || value.Rclone != nil || len(value.ResticObservations) != 0 {
 		return RsyncTreeReconcileV1{}, fmt.Errorf("%w: Rsync reconciliation result required", backupasset.ErrInvalidState)
 	}
 	if err := value.RsyncTree.Validate(); err != nil {
 		return RsyncTreeReconcileV1{}, err
 	}
 	return *value.RsyncTree, nil
+}
+
+func (value PublicationReconcileResult) RcloneResult() (RcloneReconcileV1, error) {
+	if value.Rclone == nil || value.RsyncTree != nil || len(value.ResticObservations) != 0 {
+		return RcloneReconcileV1{}, fmt.Errorf("%w: Rclone reconciliation result required", backupasset.ErrInvalidState)
+	}
+	if err := value.Rclone.Validate(); err != nil {
+		return RcloneReconcileV1{}, err
+	}
+	return *value.Rclone, nil
 }
 
 // PublicationStrategy is the provider-tagged boundary used by the shared
@@ -818,6 +915,7 @@ type taggedPublicationAttemptWireV1 struct {
 	Version   int                      `json:"version"`
 	Restic    *resticAttemptWireV1     `json:"restic,omitempty"`
 	RsyncTree *RsyncTreeAttemptV1      `json:"rsync_tree,omitempty"`
+	Rclone    *rcloneAttemptWireV1     `json:"rclone,omitempty"`
 }
 
 func EncodePublicationAttempt(value TaggedPublicationAttempt) (string, error) {
@@ -838,6 +936,9 @@ func EncodePublicationAttempt(value TaggedPublicationAttempt) (string, error) {
 		copy := *value.RsyncTree
 		copy.PointDeadlineAt = copy.PointDeadlineAt.UTC()
 		wire.RsyncTree = &copy
+	}
+	if value.Rclone != nil {
+		wire.Rclone = rcloneAttemptToWire(*value.Rclone)
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
@@ -876,6 +977,7 @@ func DecodePublicationAttempt(raw string) (TaggedPublicationAttempt, error) {
 		copy.PointDeadlineAt = copy.PointDeadlineAt.UTC()
 		value.RsyncTree = &copy
 	}
+	value.Rclone = rcloneAttemptFromWire(wire.Rclone)
 	if err := value.Validate(); err != nil {
 		return TaggedPublicationAttempt{}, err
 	}
@@ -898,6 +1000,14 @@ func DecodeRsyncTreeAttemptV1(raw string) (RsyncTreeAttemptV1, error) {
 	return value.RsyncTreeAttempt()
 }
 
+func DecodeRcloneAttemptV1(raw string) (RcloneAttemptV1, error) {
+	value, err := DecodePublicationAttempt(raw)
+	if err != nil {
+		return RcloneAttemptV1{}, err
+	}
+	return value.RcloneAttempt()
+}
+
 type resticCommitWireV1 struct {
 	RepositoryIdentity string    `json:"repository_identity"`
 	NativePointID      string    `json:"native_point_id"`
@@ -912,6 +1022,7 @@ type providerCommitWireV1 struct {
 	Version   int                      `json:"version"`
 	Restic    *resticCommitWireV1      `json:"restic,omitempty"`
 	RsyncTree *RsyncTreeCommitV1       `json:"rsync_tree,omitempty"`
+	Rclone    *rcloneCommitWireV1      `json:"rclone,omitempty"`
 }
 
 func EncodeProviderCommit(value ProviderCommit) (string, error) {
@@ -929,6 +1040,9 @@ func EncodeProviderCommit(value ProviderCommit) (string, error) {
 		copy.ProviderCommittedAt = copy.ProviderCommittedAt.UTC()
 		copy.PointDeadlineAt = copy.PointDeadlineAt.UTC()
 		wire.RsyncTree = &copy
+	}
+	if value.Rclone != nil {
+		wire.Rclone = rcloneCommitToWire(*value.Rclone)
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
@@ -964,6 +1078,7 @@ func DecodeProviderCommit(raw string) (ProviderCommit, error) {
 		copy.PointDeadlineAt = copy.PointDeadlineAt.UTC()
 		value.RsyncTree = &copy
 	}
+	value.Rclone = rcloneCommitFromWire(wire.Rclone)
 	if err := value.Validate(); err != nil {
 		return ProviderCommit{}, err
 	}
@@ -976,6 +1091,14 @@ func DecodeRsyncTreeCommitV1(raw string) (RsyncTreeCommitV1, error) {
 		return RsyncTreeCommitV1{}, err
 	}
 	return value.RsyncTreeCommit()
+}
+
+func DecodeRcloneCommitV1(raw string) (RcloneCommitV1, error) {
+	value, err := DecodeProviderCommit(raw)
+	if err != nil {
+		return RcloneCommitV1{}, err
+	}
+	return value.RcloneCommit()
 }
 
 // strictTaggedPayloadDecoder rejects duplicate object members before typed
