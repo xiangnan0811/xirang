@@ -23,7 +23,8 @@
     "07-13-backup-assets-provider-readers",
     "07-14-backup-assets-restic-lineage",
     "07-15-backup-assets-rsync-versioning",
-    "07-15-backup-assets-rclone-versioning"
+    "07-15-backup-assets-rclone-versioning",
+    "07-17-backup-assets-catalog"
   ],
   "parent": null,
   "relatedFiles": [],

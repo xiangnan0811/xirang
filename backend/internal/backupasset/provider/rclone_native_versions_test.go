@@ -885,6 +885,109 @@ func TestRcloneNativePublisherCapturesExactGraphAndCommitsLast(t *testing.T) {
 	}
 }
 
+func TestRcloneNativeCatalogReopensExactControlAndObjectVersionsWithoutCurrentFallback(t *testing.T) {
+	now := time.Date(2026, 7, 16, 1, 30, 0, 0, time.UTC)
+	profile := validRcloneNativeProfileForTest()
+	payload := []byte("hello")
+	manifestJSON := fmt.Sprintf(`[{"Path":"a.txt","Name":"a.txt","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"},"Metadata":{"mode":"100640","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:01Z"}}]`, len(payload), sha256Hex(payload))
+	manifest, err := BuildRcloneManifestV1(context.Background(), strings.NewReader(manifestJSON), rcloneManifestOptionsForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b0, err := NewRcloneNativeStableGraph(RcloneNativeFullObservation{PageCount: 1}, RcloneNativeFullObservation{PageCount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := validRcloneAttemptForTest(backupasset.PublicationNativeObjectVersions)
+	attempt.Native.B0VersionGraphDigest = b0.Digest
+	session := newRcloneNativeSession(
+		"FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY", "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY", "FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY",
+		"123456789012", attempt.Native.RoleSessionIdentityDigest, attempt.Native.SessionExpiresAt,
+	)
+	config, err := BuildRcloneNativeRcloneConfig(profile, RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1}, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt.ConfigDigest = sha256Hex(config)
+	events := make([]string, 0)
+	s3 := newRcloneNativePublisherS3Fake(profile, now, &events)
+	dataPlane := &rcloneNativeDataPlaneFake{observations: []RcloneManifestBundle{manifest, manifest}, s3: s3, payload: payload, events: &events}
+	publisher := NewRcloneNativePublisher(dataPlane, func() time.Time { return now })
+	request := RcloneNativePublicationRequest{
+		Attempt: attempt, Profile: profile, Session: session, ClientFactory: rcloneNativeClientFactoryFake{s3: s3},
+		Source: mustRclonePrivateLocatorForTest(t, "/srv/source"), RcloneConfig: config, Runtime: RemoteCommandAccess{Node: model.Node{ID: 9}},
+		Manifest: manifest, ManifestOptions: rcloneManifestOptionsForTest(),
+		ObservationLimits: RcloneNativeObservationLimits{PageSize: 1000, MaxPages: 4, MaxRecords: 100},
+		Encryption:        RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1}, EncryptionEvidence: RcloneNativeEncryptionEvidence{Profile: RcloneNativeSSES3V1},
+		MarkerKey: []byte("FAKE_NATIVE_MARKER_AUTH_KEY_32_BYTES_FOR_TEST_ONLY"), CapabilityEvidenceDigest: strings.Repeat("a", 64),
+		CostEvidenceDigest: strings.Repeat("b", 64), MaxVerifyBytes: 1 << 20, ControlPayloadMaxBytes: 1 << 20, LowLevelRetries: 3,
+	}
+	commit, err := publisher.Publish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writesBefore := len(s3.writes)
+	listsBefore := countString(events, "list")
+	physical, err := EncodeRcloneV1744S3Path("a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3.addObject(profile.ManagedPrefix+"data/"+physical, "opaque-current-root-replacement", []byte("replacement"), RcloneNativeSSES3V1, "", false)
+
+	reconcile := request
+	reconcile.Source = RclonePrivateLocator{}
+	reconcile.RcloneConfig = nil
+	reconcile.Runtime = RemoteCommandAccess{}
+	reconcile.Manifest = RcloneManifestBundle{}
+	reconcile.MaxVerifyBytes = 0
+	reconcile.LowLevelRetries = 0
+	reconcile.ExactCommitKey = commit.Native.CommitKey
+	reconcile.ExactCommitVersionID = commit.Native.CommitVersionID
+	strategy, err := NewRclonePublicationStrategy(
+		NewRclonePortablePublisher(&fakeRclonePortableRemote{}, func(time.Duration) {}, func() time.Time { return now }), publisher,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRequest := CatalogReadRequest{
+		Provider: backupasset.ProviderRclone, RecoveryPointID: attempt.RecoveryPointID,
+		Snapshot: ReadSnapshot{RepositoryID: attempt.RepositoryID, CapabilityRevision: int(attempt.CapabilityRevision), SourceRevision: strings.Repeat("f", 64),
+			Access: AccessBinding{Provider: backupasset.ProviderRclone, RepositoryID: attempt.RepositoryID}},
+		Point: PointLocator{Native: "FAKE_EXACT_NATIVE_POINT_FOR_TEST_ONLY"}, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{ManifestID: strings.Repeat("9", 32), Revision: 1, DigestAlgorithm: "sha256", Digest: commit.ManifestIndexDigest,
+			EntryCount: int64(commit.ManifestEntryCount), Completeness: backupasset.ManifestComplete, SourceRevision: strings.Repeat("f", 64)},
+		RcloneProof: &RcloneCatalogProofInput{Reconcile: RcloneReconcileInput{ManifestLimits: request.ManifestOptions.Limits, NativeRequest: &reconcile}, Commit: commit},
+		MaxItems:    int(commit.ManifestEntryCount) + 1,
+	}
+	catalogSession, err := strategy.OpenCatalogRead(context.Background(), readRequest)
+	if err != nil {
+		t.Fatalf("open native Catalog: %v", err)
+	}
+	page, err := catalogSession.ListCanonical(context.Background(), PageRequest{Limit: 10})
+	if err != nil || len(page.Items) != 1 || page.Items[0].NormalizedPath != "a.txt" ||
+		!strings.Contains(page.Items[0].ProviderLocator.Native, "opaque-data-v1") ||
+		strings.Contains(page.Items[0].ProviderLocator.Native, "opaque-current-root-replacement") {
+		t.Fatalf("native Catalog page=%+v err=%v", page, err)
+	}
+	proof, err := catalogSession.Finalize(context.Background())
+	if err != nil || proof.Manifest != readRequest.Manifest || !proof.Catalog.Complete {
+		t.Fatalf("native Catalog proof=%+v err=%v", proof, err)
+	}
+	if len(s3.writes) != writesBefore || countString(events, "list") != listsBefore {
+		t.Fatalf("native Catalog used mutation/current listing writes=%d/%d lists=%d/%d events=%v", len(s3.writes), writesBefore, countString(events, "list"), listsBefore, events)
+	}
+}
+
+func countString(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
 func countRcloneNativeTestEvents(events []string, want string) int {
 	count := 0
 	for _, event := range events {

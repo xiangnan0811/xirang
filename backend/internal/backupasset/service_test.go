@@ -269,6 +269,39 @@ func TestFoundationConfigGettersUseFullEffectiveLeaseAndPublicationValues(t *tes
 	}
 }
 
+func TestFoundationCatalogConfigUsesRegisteredSettingsAndBounds(t *testing.T) {
+	reader := staticSettingsReader{
+		"backup_assets.enabled":                       "true",
+		"backup_assets.catalog_batch_size":            "4096",
+		"backup_assets.catalog_build_timeout":         "45m",
+		"backup_assets.repository_reconcile_interval": "11m",
+		"backup_assets.provider_max_concurrency":      "7",
+		"backup_assets.manifest_max_entries":          "9000000",
+		"backup_assets.lease_duration":                "4m",
+		"backup_assets.lease_heartbeat":               "30s",
+		"backup_assets.lease_absolute_deadline":       "3h",
+	}
+	config, err := NewFoundationService(reader).CatalogConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Enabled || config.BatchSize != 4096 || config.BuildTimeout != 45*time.Minute ||
+		config.ReconcileInterval != 11*time.Minute || config.MaxConcurrency != 7 || config.MaxEntries != 9000000 ||
+		config.Lease.Duration != 4*time.Minute || config.Lease.Heartbeat != 30*time.Second || config.Lease.AbsoluteDeadline != 3*time.Hour {
+		t.Fatalf("CatalogConfig=%+v", config)
+	}
+
+	reader["backup_assets.catalog_batch_size"] = "0"
+	if _, err := NewFoundationService(reader).CatalogConfig(); err == nil {
+		t.Fatal("invalid Catalog batch size was accepted")
+	}
+	reader["backup_assets.catalog_batch_size"] = "4096"
+	reader["backup_assets.lease_heartbeat"] = "5m"
+	if _, err := NewFoundationService(reader).CatalogConfig(); err == nil {
+		t.Fatal("Catalog heartbeat outside lease duration was accepted")
+	}
+}
+
 type staticSettingsReader map[string]string
 
 func (reader staticSettingsReader) GetEffective(key string) string {

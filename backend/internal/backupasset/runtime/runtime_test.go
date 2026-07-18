@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
@@ -79,8 +80,12 @@ func TestRuntimeExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.
 	if runtime.FoundationService() == nil || runtime.RepositoryService() == nil || runtime.PublicationCoordinator() == nil || runtime.healthWorker == nil ||
 		runtime.PublicationReconciler() == nil || runtime.ResticPublicationStrategy() == nil ||
 		runtime.RsyncTreePublicationStrategy() == nil || runtime.RclonePublicationStrategy() == nil ||
-		runtime.LineageGuard() == nil || runtime.LegacyBlockRecorder() == nil || runtime.FeatureTransitioner() == nil {
+		runtime.LineageGuard() == nil || runtime.LegacyBlockRecorder() == nil || runtime.FeatureTransitioner() == nil ||
+		runtime.CatalogService() == nil || runtime.CatalogAuditSink() == nil || runtime.catalogIndexer == nil || runtime.catalogWorker == nil {
 		t.Fatal("runtime omitted a required shared graph port")
+	}
+	if _, err := runtime.CatalogService().GetRecoveryPoint(context.Background(), strings.Repeat("f", 32), catalog.AuthorizationScope{Role: "admin", UserID: 1}); !errors.Is(err, catalog.ErrFeatureDisabled) {
+		t.Fatalf("default-disabled runtime Catalog error=%v", err)
 	}
 	if runtime.ResticPublicationStrategy().Kind() != backupasset.ProviderRestic {
 		t.Fatalf("publication strategy kind=%q, want %q", runtime.ResticPublicationStrategy().Kind(), backupasset.ProviderRestic)

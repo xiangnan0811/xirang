@@ -15,6 +15,7 @@ type Registration struct {
 	EntryStatter        EntryStatter
 	SequentialReader    SequentialReader
 	RangeReader         RangeReader
+	CatalogReader       CatalogReader
 	PublicationStrategy PublicationStrategy
 }
 
@@ -104,6 +105,17 @@ func (registry *Registry) RangeReader(kind backupasset.ProviderKind) (RangeReade
 		return nil, newCapabilityError(backupasset.CapabilityRangeUnavailable)
 	}
 	return registration.RangeReader, nil
+}
+
+func (registry *Registry) CatalogReader(kind backupasset.ProviderKind) (CatalogReader, error) {
+	registration, err := registry.registration(kind)
+	if err != nil || interfaceNil(registration.CatalogReader) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, newCapabilityError(backupasset.CapabilityCatalogUnavailable)
+	}
+	return registration.CatalogReader, nil
 }
 
 // PublicationStrategy returns the one registered tagged publication strategy

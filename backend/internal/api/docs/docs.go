@@ -2301,6 +2301,106 @@ const docTemplate = `{
                 }
             }
         },
+        "/backup-repositories/{id}/recovery-points": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按当前 producing lineage 授权后返回稳定分页的恢复点与 Catalog 状态",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出仓库内可见恢复点",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量（最大 200）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "captured_desc、captured_asc 或 created_desc",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RecoveryPointPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/batch-commands": {
             "post": {
                 "security": [
@@ -4979,6 +5079,516 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-point-diffs": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回两个已授权 active Catalog generation 的精确 metadata diff；请求不接受路径",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "比较两个精确恢复点",
+                "parameters": [
+                    {
+                        "description": "精确两点 diff 请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupAssetDiffRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回经过 producing-lineage 授权和字段净化的恢复点详情",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看恢复点详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RecoveryPointView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/catalog-status": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "独立返回 generation、coverage、staleness 与内容可用性",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看恢复点 Catalog 状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StatusDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只接受 opaque parent entry ID，不接受 Provider 路径",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出恢复点 Catalog 目录项",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "父目录 opaque entry ID；空值表示根",
+                        "name": "parent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量（最大 200）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "name_asc、name_desc、size_desc 或 modified_desc",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "必须同时提供 recovery point 与 entry opaque ID",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看恢复点 Catalog 目录项",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "目录项 opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/evidence": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回相互独立的 lineage、manifest、publication verification 与 restore drill 证据层",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看恢复点可信证据",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EvidenceDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -9330,6 +9940,32 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupAssetDiffRequest": {
+            "type": "object",
+            "properties": {
+                "base_parent_entry_id": {
+                    "type": "string"
+                },
+                "base_recovery_point_id": {
+                    "type": "string"
+                },
+                "compare_parent_entry_id": {
+                    "type": "string"
+                },
+                "compare_recovery_point_id": {
+                    "type": "string"
+                },
+                "cursor": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "sort": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -10508,6 +11144,25 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset.CatalogEntryType": {
+            "type": "string",
+            "enum": [
+                "file",
+                "directory",
+                "symlink",
+                "hardlink",
+                "special",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "CatalogEntryFile",
+                "CatalogEntryDirectory",
+                "CatalogEntrySymlink",
+                "CatalogEntryHardlink",
+                "CatalogEntrySpecial",
+                "CatalogEntryUnknown"
+            ]
+        },
         "xirang_backend_internal_backupasset.HoldState": {
             "type": "string",
             "enum": [
@@ -10534,6 +11189,19 @@ const docTemplate = `{
                 "ImmutabilityXirangManaged",
                 "ImmutabilityBackendVersioned",
                 "ImmutabilityStorageWORM"
+            ]
+        },
+        "xirang_backend_internal_backupasset.ManifestCompleteness": {
+            "type": "string",
+            "enum": [
+                "complete",
+                "partial",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "ManifestComplete",
+                "ManifestPartial",
+                "ManifestUnavailable"
             ]
         },
         "xirang_backend_internal_backupasset.PhysicalAvailability": {
@@ -10566,6 +11234,19 @@ const docTemplate = `{
                 "PointMutableHead"
             ]
         },
+        "xirang_backend_internal_backupasset.ProviderCompletionClass": {
+            "type": "string",
+            "enum": [
+                "known_exit_zero",
+                "known_nonzero",
+                "outcome_unknown"
+            ],
+            "x-enum-varnames": [
+                "CompletionKnownExitZero",
+                "CompletionKnownNonzero",
+                "CompletionOutcomeUnknown"
+            ]
+        },
         "xirang_backend_internal_backupasset.ProviderKind": {
             "type": "string",
             "enum": [
@@ -10581,6 +11262,75 @@ const docTemplate = `{
                 "ProviderRclone",
                 "ProviderCommand",
                 "ProviderVerifiedImport"
+            ]
+        },
+        "xirang_backend_internal_backupasset.PublicationFailureCode": {
+            "type": "string",
+            "enum": [
+                "publication_precondition_missing",
+                "publication_in_progress",
+                "publication_session_abandoned",
+                "evidence_missing_summary",
+                "evidence_malformed_stream",
+                "evidence_duplicate_summary",
+                "evidence_non_final_summary",
+                "evidence_invalid_native_id",
+                "provider_nonzero_exit",
+                "provider_timeout",
+                "provider_canceled",
+                "provider_resource_limit",
+                "provider_outcome_unknown",
+                "provider_completion_unproven",
+                "provider_snapshot_rewritten",
+                "repository_identity_drift",
+                "run_tag_missing",
+                "ambiguous_run_tags",
+                "native_point_conflict",
+                "manifest_partial",
+                "manifest_unavailable",
+                "lease_fence_lost",
+                "publication_deadline_exceeded",
+                "snapshot_missing_at_deadline",
+                "legacy_fallback_blocked",
+                "legacy_operation_blocked",
+                "source_drift",
+                "external_writer_detected",
+                "unexpected_version",
+                "marker_mismatch",
+                "manifest_mismatch"
+            ],
+            "x-enum-varnames": [
+                "FailurePublicationPreconditionMissing",
+                "FailurePublicationInProgress",
+                "FailurePublicationSessionAbandoned",
+                "FailureEvidenceMissingSummary",
+                "FailureEvidenceMalformedStream",
+                "FailureEvidenceDuplicateSummary",
+                "FailureEvidenceNonFinalSummary",
+                "FailureEvidenceInvalidNativeID",
+                "FailureProviderNonzeroExit",
+                "FailureProviderTimeout",
+                "FailureProviderCanceled",
+                "FailureProviderResourceLimit",
+                "FailureProviderOutcomeUnknown",
+                "FailureProviderCompletionUnproven",
+                "FailureProviderSnapshotRewritten",
+                "FailureRepositoryIdentityDrift",
+                "FailureRunTagMissing",
+                "FailureAmbiguousRunTags",
+                "FailureNativePointConflict",
+                "FailureManifestPartial",
+                "FailureManifestUnavailable",
+                "FailureLeaseFenceLost",
+                "FailurePublicationDeadlineExceeded",
+                "FailureSnapshotMissingAtDeadline",
+                "FailureLegacyFallbackBlocked",
+                "FailureLegacyOperationBlocked",
+                "FailureSourceDrift",
+                "FailureExternalWriterDetected",
+                "FailureUnexpectedVersion",
+                "FailureMarkerMismatch",
+                "FailureManifestMismatch"
             ]
         },
         "xirang_backend_internal_backupasset.RcloneBindingSetupResult": {
@@ -11255,6 +12005,696 @@ const docTemplate = `{
                 "VersionMutableHead"
             ]
         },
+        "xirang_backend_internal_backupasset_catalog.BreadcrumbDTO": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.ContentEquality": {
+            "type": "string",
+            "enum": [
+                "equal",
+                "different",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "ContentEqual",
+                "ContentDifferent",
+                "ContentUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.CoverageDTO": {
+            "type": "object",
+            "properties": {
+                "expected_entries": {
+                    "type": "integer"
+                },
+                "indexed_entries": {
+                    "type": "integer"
+                },
+                "manifest_digest": {
+                    "type": "string"
+                },
+                "observed_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.CoverageStatus": {
+            "type": "string",
+            "enum": [
+                "building",
+                "complete",
+                "partial",
+                "failed",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "CoverageBuilding",
+                "CoverageComplete",
+                "CoveragePartial",
+                "CoverageFailed",
+                "CoverageUnavailable"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.DiffChangeKind": {
+            "type": "string",
+            "enum": [
+                "added",
+                "removed",
+                "modified",
+                "type_changed"
+            ],
+            "x-enum-varnames": [
+                "DiffAdded",
+                "DiffRemoved",
+                "DiffModified",
+                "DiffTypeChanged"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.DiffItemDTO": {
+            "type": "object",
+            "properties": {
+                "base": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffSideDTO"
+                },
+                "changed_fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "compare": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffSideDTO"
+                },
+                "content_equality": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentEquality"
+                },
+                "kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffChangeKind"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.DiffPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffItemDTO"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "provider_evidence": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ProviderDiffEvidenceDTO"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.DiffSideDTO": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "string"
+                },
+                "entry_type": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CatalogEntryType"
+                },
+                "fingerprint_strength": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FingerprintStrength"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "modified_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.EntryDTO": {
+            "type": "object",
+            "properties": {
+                "breadcrumb": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.BreadcrumbDTO"
+                    }
+                },
+                "entry_id": {
+                    "type": "string"
+                },
+                "entry_type": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CatalogEntryType"
+                },
+                "fingerprint_strength": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FingerprintStrength"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "modified_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "parent_entry_id": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.EntryPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryDTO"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.EvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "lineage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.LineageEvidenceDTO"
+                },
+                "manifest": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ManifestEvidenceDTO"
+                },
+                "publication_verification": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.PublicationEvidenceDTO"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "restore_drills": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RestoreDrillEvidenceDTO"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.EvidenceLayerStatus": {
+            "type": "string",
+            "enum": [
+                "recorded",
+                "unavailable",
+                "not_recorded",
+                "invalid"
+            ],
+            "x-enum-varnames": [
+                "EvidenceRecorded",
+                "EvidenceUnavailable",
+                "EvidenceNotRecorded",
+                "EvidenceInvalid"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.FingerprintStrength": {
+            "type": "string",
+            "enum": [
+                "strong",
+                "weak",
+                "none"
+            ],
+            "x-enum-varnames": [
+                "FingerprintStrong",
+                "FingerprintWeak",
+                "FingerprintNone"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.GenerationDTO": {
+            "type": "object",
+            "properties": {
+                "correlation_id": {
+                    "type": "string"
+                },
+                "error_code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.GenerationErrorCode"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "sequence": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.GenerationState"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.GenerationErrorCode": {
+            "type": "string",
+            "enum": [
+                "",
+                "catalog_build_abandoned",
+                "catalog_build_failed",
+                "catalog_build_incomplete",
+                "catalog_build_limit",
+                "catalog_build_timeout",
+                "catalog_identity_key_unavailable",
+                "catalog_invalid_record",
+                "catalog_projection_mismatch",
+                "catalog_proof_mismatch",
+                "catalog_provider_resource_limit",
+                "catalog_provider_timeout",
+                "catalog_provider_unavailable",
+                "catalog_source_changed"
+            ],
+            "x-enum-varnames": [
+                "GenerationErrorNone",
+                "GenerationErrorBuildAbandoned",
+                "GenerationErrorBuildFailed",
+                "GenerationErrorBuildIncomplete",
+                "GenerationErrorBuildLimit",
+                "GenerationErrorBuildTimeout",
+                "GenerationErrorIdentityKeyUnavailable",
+                "GenerationErrorInvalidRecord",
+                "GenerationErrorProjectionMismatch",
+                "GenerationErrorProofMismatch",
+                "GenerationErrorProviderResourceLimit",
+                "GenerationErrorProviderTimeout",
+                "GenerationErrorProviderUnavailable",
+                "GenerationErrorSourceChanged"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.GenerationState": {
+            "type": "string",
+            "enum": [
+                "building",
+                "complete",
+                "partial",
+                "failed",
+                "superseded"
+            ],
+            "x-enum-varnames": [
+                "GenerationBuilding",
+                "GenerationComplete",
+                "GenerationPartial",
+                "GenerationFailed",
+                "GenerationSuperseded"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.LineageEvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "finished_at": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "run_status": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EvidenceLayerStatus"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "task_name": {
+                    "type": "string"
+                },
+                "task_run_id": {
+                    "type": "integer"
+                },
+                "trigger": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.ManifestEvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "completeness": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ManifestCompleteness"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "digest": {
+                    "type": "string"
+                },
+                "digest_algorithm": {
+                    "type": "string"
+                },
+                "entry_count": {
+                    "type": "integer"
+                },
+                "generator": {
+                    "type": "string"
+                },
+                "generator_version": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EvidenceLayerStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.PermissionsDTO": {
+            "type": "object",
+            "properties": {
+                "download": {
+                    "type": "boolean"
+                },
+                "list": {
+                    "type": "boolean"
+                },
+                "preview": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.ProviderDiffEvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ProviderDiffStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.ProviderDiffStatus": {
+            "type": "string",
+            "enum": [
+                "supported",
+                "unavailable",
+                "not_applicable"
+            ],
+            "x-enum-varnames": [
+                "ProviderDiffSupported",
+                "ProviderDiffUnavailable",
+                "ProviderDiffNotApplicable"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.PublicationEvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "capture_finished_at": {
+                    "type": "string"
+                },
+                "capture_started_at": {
+                    "type": "string"
+                },
+                "commit_recorded": {
+                    "type": "boolean"
+                },
+                "completion": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ProviderCompletionClass"
+                },
+                "failure_code": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PublicationFailureCode"
+                },
+                "files_processed": {
+                    "type": "integer"
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "provider": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ProviderKind"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EvidenceLayerStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.RecoveryPointPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RecoveryPointView"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.RecoveryPointView": {
+            "type": "object",
+            "properties": {
+                "capabilities": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilitySet"
+                },
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "captured_at": {
+                    "type": "string"
+                },
+                "catalog": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StatusDTO"
+                },
+                "committed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "entry_count": {
+                    "type": "integer"
+                },
+                "hold_state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.HoldState"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "immutability_level": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImmutabilityLevel"
+                },
+                "lineage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointLineageSummary"
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "manifest_digest": {
+                    "type": "string"
+                },
+                "observed_at": {
+                    "type": "string"
+                },
+                "physical_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PhysicalAvailability"
+                },
+                "producing_node_id": {
+                    "type": "integer"
+                },
+                "producing_node_name": {
+                    "type": "string"
+                },
+                "producing_task_name": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "semantics": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PointVersionSemantics"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointState"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.RepositorySummaryDTO": {
+            "type": "object",
+            "properties": {
+                "complete_catalog_count": {
+                    "type": "integer"
+                },
+                "content_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"
+                },
+                "coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
+                },
+                "permissions": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.PermissionsDTO"
+                },
+                "recovery_point_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.RestoreDrillEvidenceDTO": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RestoreDrillSummaryDTO"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EvidenceLayerStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.RestoreDrillSummaryDTO": {
+            "type": "object",
+            "properties": {
+                "confidence_eligible": {
+                    "type": "boolean"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "failed_step": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_run_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.StalenessDTO": {
+            "type": "object",
+            "properties": {
+                "observed_at": {
+                    "type": "string"
+                },
+                "reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StalenessStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.StalenessStatus": {
+            "type": "string",
+            "enum": [
+                "fresh",
+                "stale",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "StalenessFresh",
+                "StalenessStale",
+                "StalenessUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.StatusDTO": {
+            "type": "object",
+            "properties": {
+                "content_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"
+                },
+                "coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageDTO"
+                },
+                "generation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.GenerationDTO"
+                },
+                "latest_build": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.GenerationDTO"
+                },
+                "permissions": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.PermissionsDTO"
+                },
+                "staleness": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StalenessDTO"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_repository.ConnectResult": {
             "type": "object",
             "properties": {
@@ -11326,6 +12766,9 @@ const docTemplate = `{
                 },
                 "capability_revision": {
                     "type": "integer"
+                },
+                "catalog": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.RepositorySummaryDTO"
                 },
                 "created_at": {
                     "type": "string"

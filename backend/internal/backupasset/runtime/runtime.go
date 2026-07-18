@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/repository"
@@ -35,6 +36,7 @@ type Dependencies struct {
 	StagedPayload   provider.StagedPayloadTransport
 	ToolBinaries    provider.ToolBinaries
 	Metrics         publication.Metrics
+	CatalogMetrics  catalog.Metrics
 	Tombstones      repository.ManagedHistoryTombstoneSource
 }
 
@@ -51,6 +53,10 @@ type Runtime struct {
 	admission      *AdmissionController
 	worker         *PublicationWorker
 	healthWorker   *RcloneHealthWorker
+	catalogService *catalog.Service
+	catalogIndexer *catalog.Indexer
+	catalogWorker  *CatalogWorker
+	catalogAudit   repository.AssetAuditSink
 	metrics        publication.Metrics
 
 	mu        sync.Mutex
@@ -78,6 +84,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if _, err := foundation.PublicationConfig(); err != nil {
 		return nil, err
 	}
+	catalogConfig, err := foundation.CatalogConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	metricsSink := dependencies.Metrics
 	if metricsSink == nil {
@@ -87,12 +97,35 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		}
 		metricsSink = prometheusMetrics
 	}
+	catalogMetrics := dependencies.CatalogMetrics
+	if catalogMetrics == nil {
+		if dependencies.Metrics == nil {
+			catalogMetrics, err = catalog.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			catalogMetrics = catalog.NoopMetrics{}
+		}
+	}
 	keyring := backupasset.NewKeyring(dependencies.DB, dependencies.Now)
 	auditWriter, err := backupasset.NewAuditWriterWithConfigSource(dependencies.DB, keyring, dependencies.Now, foundation.AuditConfig)
 	if err != nil {
 		return nil, err
 	}
 	auditSink := repository.NewAssetAuditSink(auditWriter)
+	catalogOwnership, err := catalog.NewOwnership(dependencies.DB)
+	if err != nil {
+		return nil, err
+	}
+	catalogService, err := catalog.NewService(catalog.ServiceDependencies{
+		DB: dependencies.DB, Ownership: catalogOwnership,
+		Cursor: catalog.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Now: dependencies.Now,
+		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: foundation.FeatureEnabled,
+	})
+	if err != nil {
+		return nil, err
+	}
 	history, err := repository.NewManagedHistoryResolver(repository.ManagedHistoryResolverDependencies{DB: dependencies.DB, Tombstones: dependencies.Tombstones})
 	if err != nil {
 		return nil, err
@@ -159,14 +192,18 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	rcloneCatalogReader, err := provider.NewRcloneCatalogReader(rcloneAdapter, rcloneStrategy)
+	if err != nil {
+		return nil, err
+	}
 	registry := provider.NewRegistry()
 	for _, registration := range []struct {
 		kind  backupasset.ProviderKind
 		value provider.Registration
 	}{
-		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, PublicationStrategy: rsyncStrategy}},
-		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, PublicationStrategy: resticStrategy}},
-		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter, PublicationStrategy: rcloneStrategy}},
+		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, CatalogReader: rsyncAdapter, PublicationStrategy: rsyncStrategy}},
+		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, CatalogReader: resticAdapter, PublicationStrategy: resticStrategy}},
+		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter, CatalogReader: rcloneCatalogReader, PublicationStrategy: rcloneStrategy}},
 	} {
 		if err := registry.Register(registration.kind, registration.value); err != nil {
 			return nil, err
@@ -201,11 +238,34 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	repositoryService, err := repository.NewService(repository.Dependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: dependencies.Now,
 		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink, Publication: publicationService,
+		CatalogOwnership: catalogOwnership, CatalogSummary: catalogService,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{foundation: foundation, repository: repositoryService, publication: publicationService, resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy, admission: admission, worker: worker, healthWorker: healthWorker, metrics: metricsSink}, nil
+	catalogIndexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: dependencies.DB, Factory: repositoryService, Lease: lease, IdentityKeys: keyring, Now: dependencies.Now,
+		Config: catalog.IndexerConfig{
+			BatchSize: catalogConfig.BatchSize, BuildTimeout: catalogConfig.BuildTimeout, MaxEntries: catalogConfig.MaxEntries,
+			HeartbeatInterval: catalogConfig.Lease.Heartbeat,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	catalogWorker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: foundation, Backend: catalogIndexer, Metrics: catalogMetrics, Now: dependencies.Now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{
+		foundation: foundation, repository: repositoryService, publication: publicationService,
+		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
+		admission: admission, worker: worker, healthWorker: healthWorker,
+		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
+		metrics: metricsSink,
+	}, nil
 }
 
 func runtimeTransport(dependencies Dependencies, foundation *backupasset.FoundationService) (provider.CommandTransport, provider.CommandStreamTransport, error) {
@@ -250,8 +310,20 @@ func sameTransportInstance(command provider.CommandTransport, stream provider.Co
 
 func (runtime *Runtime) FoundationService() *backupasset.FoundationService { return runtime.foundation }
 func (runtime *Runtime) RepositoryService() *repository.Service            { return runtime.repository }
-func (runtime *Runtime) PublicationCoordinator() publication.Coordinator   { return runtime.publication }
-func (runtime *Runtime) PublicationReconciler() publication.Reconciler     { return runtime.publication }
+func (runtime *Runtime) CatalogService() *catalog.Service {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.catalogService
+}
+func (runtime *Runtime) CatalogAuditSink() repository.AssetAuditSink {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.catalogAudit
+}
+func (runtime *Runtime) PublicationCoordinator() publication.Coordinator { return runtime.publication }
+func (runtime *Runtime) PublicationReconciler() publication.Reconciler   { return runtime.publication }
 func (runtime *Runtime) ResticPublicationStrategy() provider.PublicationStrategy {
 	if runtime == nil {
 		return nil
@@ -400,6 +472,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 			runtime.healthWorker.Run(runCtx)
 		}()
 	}
+	if runtime.catalogWorker != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.catalogWorker.Run(runCtx)
+		}()
+	}
 	runtime.worker.Run(runCtx)
 	cancel()
 	health.Wait()
@@ -414,6 +493,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if runtime.admission != nil {
 		runtime.admission.StopAccepting()
+	}
+	if runtime.catalogWorker != nil {
+		if err := runtime.catalogWorker.Shutdown(ctx); err != nil {
+			return err
+		}
 	}
 	if runtime.worker != nil {
 		if err := runtime.worker.Shutdown(ctx); err != nil {

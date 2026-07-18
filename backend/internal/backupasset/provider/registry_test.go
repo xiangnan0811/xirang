@@ -87,6 +87,34 @@ func TestRegistryReturnsTypedPublicationStrategyOnlyWhenRegistered(t *testing.T)
 	}
 }
 
+func TestRegistryReturnsCatalogReaderOnlyWhenExplicitlyRegistered(t *testing.T) {
+	reader := &catalogReaderFake{}
+	registry := NewRegistry()
+	if err := registry.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}, CatalogReader: reader}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := registry.CatalogReader(backupasset.ProviderRestic); err != nil || got != reader {
+		t.Fatalf("CatalogReader=%T err=%v", got, err)
+	}
+	if _, err := registry.CatalogReader(backupasset.ProviderCommand); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("Command Catalog reader error=%v", err)
+	}
+
+	missing := NewRegistry()
+	if err := missing.Register(backupasset.ProviderRsync, Registration{Prober: &fakeProvider{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missing.CatalogReader(backupasset.ProviderRsync); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("missing Catalog reader error=%v", err)
+	}
+}
+
+type catalogReaderFake struct{}
+
+func (*catalogReaderFake) OpenCatalogRead(context.Context, CatalogReadRequest) (CatalogReadSession, error) {
+	return nil, nil
+}
+
 type fakePublicationStrategy struct{}
 
 func (*fakePublicationStrategy) Kind() backupasset.ProviderKind { return backupasset.ProviderRestic }

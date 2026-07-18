@@ -25,6 +25,16 @@ type ProviderConfig struct {
 	MetadataLimitBytes int64
 }
 
+type CatalogConfig struct {
+	Enabled           bool
+	BatchSize         int
+	BuildTimeout      time.Duration
+	ReconcileInterval time.Duration
+	MaxConcurrency    int
+	MaxEntries        int64
+	Lease             LeaseConfig
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -90,6 +100,60 @@ func (service *FoundationService) ProviderConfig() (ProviderConfig, error) {
 		OperationTimeout:   operationTimeout,
 		MaxConcurrency:     maxConcurrency,
 		MetadataLimitBytes: metadataLimitBytes,
+	}, nil
+}
+
+func (service *FoundationService) CatalogConfig() (CatalogConfig, error) {
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(values["backup_assets.enabled"]))
+	if err != nil {
+		return CatalogConfig{}, fmt.Errorf("%w: parse backup_assets.enabled: %v", ErrInvalidState, err)
+	}
+	batchSize, err := parseFoundationInt(values, "backup_assets.catalog_batch_size")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	buildTimeout, err := parseFoundationDuration(values, "backup_assets.catalog_build_timeout")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	reconcileInterval, err := parseFoundationDuration(values, "backup_assets.repository_reconcile_interval")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	maxConcurrency, err := parseFoundationInt(values, "backup_assets.provider_max_concurrency")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	maxEntries, err := parseFoundationInt64(values, "backup_assets.manifest_max_entries")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	leaseDuration, err := parseFoundationDuration(values, "backup_assets.lease_duration")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	leaseHeartbeat, err := parseFoundationDuration(values, "backup_assets.lease_heartbeat")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	leaseDeadline, err := parseFoundationDuration(values, "backup_assets.lease_absolute_deadline")
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	if batchSize < 1 || batchSize > 100000 || buildTimeout < time.Minute || buildTimeout > 24*time.Hour ||
+		reconcileInterval < time.Minute || reconcileInterval > 24*time.Hour || maxConcurrency < 1 || maxConcurrency > 32 ||
+		maxEntries < 1 || leaseDuration < 30*time.Second || leaseDuration > 30*time.Minute ||
+		leaseHeartbeat < 10*time.Second || leaseHeartbeat >= leaseDuration || leaseDeadline < leaseDuration || leaseDeadline > 168*time.Hour {
+		return CatalogConfig{}, fmt.Errorf("%w: invalid Catalog settings", ErrInvalidState)
+	}
+	return CatalogConfig{
+		Enabled: enabled, BatchSize: batchSize, BuildTimeout: buildTimeout, ReconcileInterval: reconcileInterval,
+		MaxConcurrency: maxConcurrency, MaxEntries: maxEntries,
+		Lease: LeaseConfig{Duration: leaseDuration, Heartbeat: leaseHeartbeat, AbsoluteDeadline: leaseDeadline},
 	}, nil
 }
 

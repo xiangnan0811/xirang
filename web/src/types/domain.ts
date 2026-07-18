@@ -1341,3 +1341,407 @@ export interface StatusPageItem {
   uptimePct: number;
   lastCheckedAt: string | null;
 }
+
+// Backup asset Catalog boundary. Raw snake_case DTOs remain private to
+// web/src/lib/api; consumers receive only these closed, camelCase projections.
+export type CatalogCapabilityCode =
+  | "feature_disabled"
+  | "task_artifact_contract_missing"
+  | "repository_offline"
+  | "repository_disconnected"
+  | "provider_unavailable"
+  | "repository_identity_unavailable"
+  | "provider_protocol_incompatible"
+  | "provider_operation_timeout"
+  | "provider_resource_limit"
+  | "point_not_committed"
+  | "mutable_source_changed"
+  | "catalog_unavailable"
+  | "sequential_read_unavailable"
+  | "range_unavailable"
+  | "download_unavailable"
+  | "restore_unavailable"
+  | "diff_unavailable"
+  | "unknown_internal_state";
+
+export interface CatalogCapabilityReason {
+  code: CatalogCapabilityCode;
+  params: Record<string, string>;
+}
+
+export type CatalogProjection<T> =
+  | { status: "available"; value: T }
+  | { status: "blocked"; reason: CatalogCapabilityReason };
+
+export type BackupProviderKind = "restic" | "rsync" | "rclone" | "command" | "verified_import";
+export type BackupVersionMode =
+  | "native_snapshot"
+  | "hardlink_tree"
+  | "full_copy_tree"
+  | "versioned_prefix"
+  | "native_object_versions"
+  | "mutable_head";
+export type BackupPublicationMode =
+  | "legacy_mutable"
+  | "versioned_hardlink"
+  | "versioned_full_copy"
+  | "versioned_prefix"
+  | "native_object_versions"
+  | "native_snapshot";
+export type BackupRepositoryStatus =
+  | "connecting"
+  | "online"
+  | "degraded"
+  | "offline"
+  | "disconnected"
+  | "purging"
+  | "purge_blocked";
+export type BackupImmutabilityLevel = "mutable" | "xirang_managed" | "backend_versioned" | "storage_worm";
+export type RecoveryPointSemantics = "native_snapshot" | "xirang_manifest" | "imported_baseline" | "mutable_head";
+export type RecoveryPointState =
+  | "observed"
+  | "retired"
+  | "preparing"
+  | "verifying"
+  | "committed"
+  | "degraded"
+  | "expiring"
+  | "expired"
+  | "failed"
+  | "purge_blocked";
+export type RecoveryPointPhysicalAvailability = "online" | "offline" | "missing" | "unknown";
+export type RecoveryPointHoldState = "none" | "active" | "released";
+
+export interface CatalogCapabilitySet {
+  list: boolean;
+  searchPath: boolean;
+  openSequential: boolean;
+  openRange: boolean;
+  download: boolean;
+  restore: boolean;
+  diff: boolean;
+  nativeHistory: boolean;
+  reason: CatalogCapabilityReason | null;
+}
+
+export type CatalogGenerationState = "building" | "complete" | "partial" | "failed" | "superseded";
+export type CatalogGenerationErrorCode =
+  | ""
+  | "catalog_build_abandoned"
+  | "catalog_build_failed"
+  | "catalog_build_incomplete"
+  | "catalog_build_limit"
+  | "catalog_build_timeout"
+  | "catalog_identity_key_unavailable"
+  | "catalog_invalid_record"
+  | "catalog_projection_mismatch"
+  | "catalog_proof_mismatch"
+  | "catalog_provider_resource_limit"
+  | "catalog_provider_timeout"
+  | "catalog_provider_unavailable"
+  | "catalog_source_changed";
+export type CatalogCoverageStatus = "building" | "complete" | "partial" | "failed" | "unavailable";
+export type CatalogStalenessStatus = "fresh" | "stale" | "unknown";
+
+export interface CatalogGeneration {
+  id: string;
+  sequence: number;
+  state: CatalogGenerationState;
+  startedAt: string;
+  finishedAt: string | null;
+  errorCode: CatalogGenerationErrorCode;
+  correlationId: string;
+}
+
+export interface CatalogCoverage {
+  status: CatalogCoverageStatus;
+  indexedEntries: number;
+  expectedEntries: number | null;
+  manifestDigest: string;
+  observedAt: string;
+}
+
+export interface CatalogStaleness {
+  status: CatalogStalenessStatus;
+  observedAt: string | null;
+  reason: CatalogCapabilityReason | null;
+}
+
+export interface CatalogContentAvailability {
+  available: boolean;
+  reason: CatalogCapabilityReason | null;
+}
+
+export interface CatalogPermissions {
+  list: boolean;
+  preview: boolean;
+  download: boolean;
+}
+
+export interface CatalogStatus {
+  generation: CatalogGeneration | null;
+  latestBuild: CatalogGeneration | null;
+  coverage: CatalogCoverage;
+  staleness: CatalogStaleness;
+  contentAvailability: CatalogContentAvailability;
+  permissions: CatalogPermissions;
+}
+
+export interface BackupRepositoryCatalogSummary {
+  recoveryPointCount: number;
+  completeCatalogCount: number;
+  coverage: CatalogCoverageStatus;
+  contentAvailability: CatalogContentAvailability;
+  permissions: CatalogPermissions;
+}
+
+export type BackupRepositoryLineageSource = "task_link" | "recovery_point";
+
+export interface BackupRepositoryLineage {
+  source: BackupRepositoryLineageSource;
+  taskId?: number;
+  taskName: string;
+  nodeId: number;
+  nodeName: string;
+  publicationMode?: BackupPublicationMode;
+  recoveryPointId?: string;
+  recoveryPointState?: RecoveryPointState;
+  pointSemantics?: RecoveryPointSemantics;
+  active: boolean;
+}
+
+export interface BackupRepository {
+  id: string;
+  providerKind: BackupProviderKind;
+  displayName: string;
+  description: string;
+  versionMode: BackupVersionMode;
+  status: BackupRepositoryStatus;
+  capabilityRevision: number;
+  capabilities: CatalogCapabilitySet;
+  immutabilityLevel: BackupImmutabilityLevel;
+  lastSeenAt: string | null;
+  lastReconciledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  accessActive: boolean;
+  lineages: BackupRepositoryLineage[];
+  catalog: BackupRepositoryCatalogSummary;
+}
+
+export interface BackupRepositoryPage {
+  items: Array<CatalogProjection<BackupRepository>>;
+  nextCursor: string | null;
+}
+
+export interface RecoveryPointLineage {
+  producingTaskId?: number;
+  producingTaskRunId?: number;
+  sourceRecoveryPointId?: string;
+}
+
+export interface BackupRecoveryPoint {
+  id: string;
+  repositoryId: string;
+  lineage: RecoveryPointLineage;
+  semantics: RecoveryPointSemantics;
+  state: RecoveryPointState;
+  physicalAvailability: RecoveryPointPhysicalAvailability;
+  holdState: RecoveryPointHoldState;
+  immutabilityLevel: BackupImmutabilityLevel;
+  manifestDigest: string;
+  entryCount: number;
+  logicalBytes: number;
+  capturedAt: string | null;
+  committedAt: string | null;
+  observedAt: string | null;
+  capabilityRevision: number;
+  capabilities: CatalogCapabilitySet;
+  createdAt: string;
+  updatedAt: string;
+  producingTaskName: string;
+  producingNodeId: number;
+  producingNodeName: string;
+  catalog: CatalogProjection<CatalogStatus>;
+}
+
+export interface RecoveryPointPage {
+  items: Array<CatalogProjection<BackupRecoveryPoint>>;
+  nextCursor: string | null;
+}
+
+export type EvidenceLayerStatus = "recorded" | "unavailable" | "not_recorded" | "invalid";
+export type ManifestCompleteness = "complete" | "partial" | "unavailable";
+export type ProviderCompletionClass = "known_exit_zero" | "known_nonzero" | "outcome_unknown";
+export type CatalogPublicationFailureCode =
+  | "publication_precondition_missing"
+  | "publication_in_progress"
+  | "publication_session_abandoned"
+  | "evidence_missing_summary"
+  | "evidence_malformed_stream"
+  | "evidence_duplicate_summary"
+  | "evidence_non_final_summary"
+  | "evidence_invalid_native_id"
+  | "provider_nonzero_exit"
+  | "provider_timeout"
+  | "provider_canceled"
+  | "provider_resource_limit"
+  | "provider_outcome_unknown"
+  | "provider_completion_unproven"
+  | "provider_snapshot_rewritten"
+  | "repository_identity_drift"
+  | "run_tag_missing"
+  | "ambiguous_run_tags"
+  | "native_point_conflict"
+  | "manifest_partial"
+  | "manifest_unavailable"
+  | "lease_fence_lost"
+  | "publication_deadline_exceeded"
+  | "snapshot_missing_at_deadline"
+  | "legacy_fallback_blocked"
+  | "legacy_operation_blocked"
+  | "source_drift"
+  | "external_writer_detected"
+  | "unexpected_version"
+  | "marker_mismatch"
+  | "manifest_mismatch";
+
+export interface RecoveryPointLineageEvidence {
+  status: EvidenceLayerStatus;
+  taskId?: number;
+  taskRunId?: number;
+  taskName: string;
+  nodeId: number;
+  nodeName: string;
+  trigger: TaskRunTriggerType | null;
+  runStatus: TaskStatus | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface RecoveryPointManifestEvidence {
+  status: EvidenceLayerStatus;
+  id: string;
+  revision: number;
+  digestAlgorithm: string;
+  digest: string;
+  entryCount: number;
+  logicalBytes: number;
+  generator: string;
+  generatorVersion: string;
+  completeness: ManifestCompleteness | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface RecoveryPointPublicationEvidence {
+  status: EvidenceLayerStatus;
+  provider: BackupProviderKind | null;
+  completion: ProviderCompletionClass | null;
+  failureCode: CatalogPublicationFailureCode | null;
+  captureStartedAt: string | null;
+  captureFinishedAt: string | null;
+  filesProcessed: number;
+  logicalBytes: number;
+  commitRecorded: boolean;
+}
+
+export interface RecoveryPointRestoreDrillSummary {
+  taskRunId: number;
+  status: RestoreDrillStatus;
+  failedStep: string;
+  confidenceEligible: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number;
+}
+
+export interface RecoveryPointRestoreDrillEvidence {
+  status: EvidenceLayerStatus;
+  items: RecoveryPointRestoreDrillSummary[];
+}
+
+export interface RecoveryPointEvidence {
+  recoveryPointId: string;
+  lineage: RecoveryPointLineageEvidence;
+  manifest: RecoveryPointManifestEvidence;
+  publicationVerification: RecoveryPointPublicationEvidence;
+  restoreDrills: RecoveryPointRestoreDrillEvidence;
+}
+
+export type CatalogEntryType = "file" | "directory" | "symlink" | "hardlink" | "special" | "unknown";
+export type CatalogFingerprintStrength = "strong" | "weak" | "none";
+
+export interface AssetRef {
+  recoveryPointId: string;
+  entryId: string;
+}
+
+export interface BackupAssetBreadcrumb {
+  ref: AssetRef;
+  name: string;
+}
+
+export interface BackupAsset {
+  ref: AssetRef;
+  parentRef: AssetRef | null;
+  name: string;
+  entryType: CatalogEntryType;
+  size: number;
+  modifiedAt: string | null;
+  mode: string;
+  owner: string;
+  mimeType: string;
+  fingerprintStrength: CatalogFingerprintStrength;
+  breadcrumb: BackupAssetBreadcrumb[];
+}
+
+export interface BackupAssetPage {
+  items: Array<CatalogProjection<BackupAsset>>;
+  nextCursor: string | null;
+}
+
+export type RecoveryPointDiffKind = "added" | "removed" | "modified" | "type_changed";
+export type RecoveryPointDiffContentEquality = "equal" | "different" | "unknown";
+export type RecoveryPointDiffProviderStatus = "supported" | "unavailable" | "not_applicable";
+export type RecoveryPointDiffChangedField =
+  | "name"
+  | "entry_type"
+  | "size"
+  | "modified_at"
+  | "mode"
+  | "owner"
+  | "mime_type"
+  | "fingerprint_strength"
+  | "content";
+
+export interface RecoveryPointDiffSide {
+  ref: AssetRef;
+  name: string;
+  entryType: CatalogEntryType;
+  size: number;
+  modifiedAt: string | null;
+  mode: string;
+  owner: string;
+  mimeType: string;
+  fingerprintStrength: CatalogFingerprintStrength;
+}
+
+export interface RecoveryPointDiffItem {
+  kind: RecoveryPointDiffKind;
+  base: RecoveryPointDiffSide | null;
+  compare: RecoveryPointDiffSide | null;
+  changedFields: RecoveryPointDiffChangedField[];
+  contentEquality: RecoveryPointDiffContentEquality;
+}
+
+export interface RecoveryPointDiffProviderEvidence {
+  status: RecoveryPointDiffProviderStatus;
+  reason: CatalogCapabilityReason | null;
+}
+
+export interface RecoveryPointDiff {
+  items: RecoveryPointDiffItem[];
+  nextCursor: string | null;
+  providerEvidence: RecoveryPointDiffProviderEvidence;
+}

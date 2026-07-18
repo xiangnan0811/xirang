@@ -31,6 +31,9 @@ import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
 import { createServiceMonitorsApi } from "./service-monitors";
+import { createBackupRepositoriesApi } from "./backup-repositories-api";
+import { createRecoveryPointsApi } from "./recovery-points-api";
+import { createBackupAssetsApi } from "./backup-assets-api";
 
 export { ApiError } from "./core";
 
@@ -68,4 +71,7 @@ export const apiClient = {
   ...createAppCredentialsApi(),
   ...createAutomationRulesApi(),
   ...createServiceMonitorsApi(),
+  ...createBackupRepositoriesApi(),
+  ...createRecoveryPointsApi(),
+  ...createBackupAssetsApi(),
 };

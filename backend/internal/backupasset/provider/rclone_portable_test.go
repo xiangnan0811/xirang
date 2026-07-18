@@ -185,6 +185,72 @@ func TestRclonePortablePublishesAttemptDataManifestIndexAndCommitLast(t *testing
 	}
 }
 
+func TestRclonePortableCatalogReopensExactControlsWithoutMutation(t *testing.T) {
+	request := portablePublicationRequestForTest(t, false)
+	remote := &fakeRclonePortableRemote{
+		presence:     RcloneAttemptAbsent,
+		observations: []RcloneManifestBundle{request.Manifest, request.Manifest, request.Manifest, request.Manifest},
+	}
+	strategy, err := NewRclonePublicationStrategy(
+		NewRclonePortablePublisher(remote, func(time.Duration) {}, portableNowForTest),
+		NewRcloneNativePublisher(&rcloneNativeDataPlaneFake{}, portableNowForTest),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := strategy.portable.Publish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationCount := len(remote.mutations)
+	reconcile := request
+	reconcile.Manifest = RcloneManifestBundle{}
+	readRequest := CatalogReadRequest{
+		Provider: backupasset.ProviderRclone, RecoveryPointID: request.Attempt.RecoveryPointID,
+		Snapshot: ReadSnapshot{
+			RepositoryID: request.Attempt.RepositoryID, CapabilityRevision: int(request.Attempt.CapabilityRevision),
+			SourceRevision: strings.Repeat("f", 64),
+			Access:         AccessBinding{Provider: backupasset.ProviderRclone, RepositoryID: request.Attempt.RepositoryID},
+		},
+		Point: PointLocator{Native: "FAKE_EXACT_PORTABLE_POINT_FOR_TEST_ONLY"}, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{
+			ManifestID: strings.Repeat("9", 32), Revision: 1, DigestAlgorithm: "sha256", Digest: commit.ManifestIndexDigest,
+			EntryCount: int64(commit.ManifestEntryCount), Completeness: backupasset.ManifestComplete, SourceRevision: strings.Repeat("f", 64),
+		},
+		RcloneProof: &RcloneCatalogProofInput{Reconcile: RcloneReconcileInput{ManifestLimits: request.ManifestOptions.Limits, PortableRequest: &reconcile}, Commit: commit},
+		MaxItems:    int(commit.ManifestEntryCount) + 1,
+	}
+	session, err := strategy.OpenCatalogRead(context.Background(), readRequest)
+	if err != nil {
+		t.Fatalf("open portable Catalog: %v", err)
+	}
+	var records []CatalogRecord
+	cursor := ""
+	for {
+		page, err := session.ListCanonical(context.Background(), PageRequest{Limit: 2, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	proof, err := session.Finalize(context.Background())
+	if err != nil || proof.Manifest != readRequest.Manifest || proof.Catalog.EntryCount != int64(len(records)) || !proof.Catalog.Complete {
+		t.Fatalf("portable Catalog proof=%+v records=%d err=%v", proof, len(records), err)
+	}
+	if int64(len(records)) != readRequest.Manifest.EntryCount || len(remote.mutations) != mutationCount {
+		t.Fatalf("portable Catalog records=%d mutations before=%d after=%d", len(records), mutationCount, len(remote.mutations))
+	}
+	for _, record := range records {
+		if record.NormalizedPath == "" || record.ProviderLocator.Native == "" || record.SealedProviderLocator != "" {
+			t.Fatalf("invalid portable Catalog record=%+v", record)
+		}
+	}
+}
+
 func TestCommandRclonePortableRemoteClassifiesJoinedRcloneDirectoryProbeExitCodes(t *testing.T) {
 	request := portablePublicationRequestForTest(t, false)
 	limits := func() (OperationLimits, error) { return NewMetadataOperationLimits(time.Minute, 1<<20) }

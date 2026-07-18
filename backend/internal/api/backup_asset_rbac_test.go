@@ -121,6 +121,54 @@ func TestBackupAssetRBACUsesAuthAndExactRepositoryPermissionsBeforeFeatureGate(t
 	}
 }
 
+func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	const repositoryID = "0123456789abcdef0123456789abcdef"
+	const pointID = "11111111111111111111111111111111"
+	const comparePointID = "22222222222222222222222222222222"
+	const entryID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"recovery point list", http.MethodGet, "/api/v1/backup-repositories/" + repositoryID + "/recovery-points", ""},
+		{"recovery point detail", http.MethodGet, "/api/v1/recovery-points/" + pointID, ""},
+		{"Catalog status", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/catalog-status", ""},
+		{"evidence", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/evidence", ""},
+		{"entry list", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/entries", ""},
+		{"entry detail", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/entries/" + entryID, ""},
+		{"exact diff", http.MethodPost, "/api/v1/recovery-point-diffs", `{"base_recovery_point_id":"` + pointID + `","compare_recovery_point_id":"` + comparePointID + `"}`},
+	}
+
+	for _, route := range routes {
+		route := route
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, fixture.tokens[role])
+				expected := http.StatusForbidden
+				if role == "admin" || role == "operator" {
+					expected = http.StatusServiceUnavailable
+				}
+				if response.Code != expected {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, expected, response.Body.String())
+				}
+				if expected == http.StatusServiceUnavailable && !strings.Contains(response.Body.String(), "feature_disabled") {
+					t.Fatalf("authorized request did not reach Catalog feature gate: %s", response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestRsyncVersioningMigrationRoutesRequireAdminBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	routes := []struct {

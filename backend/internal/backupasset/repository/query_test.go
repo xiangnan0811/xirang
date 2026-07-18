@@ -283,6 +283,43 @@ func TestVisibilityOwnershipQueryFailureFailsClosed(t *testing.T) {
 	}
 }
 
+func TestVisibilityRejectsMalformedOwnedPointBeforeRepositoryProjection(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	now := time.Date(2026, 7, 17, 19, 0, 0, 0, time.UTC)
+	ownedTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/malformed", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	const operatorID uint = 702
+	if err := db.Create(&model.User{
+		ID: operatorID, Username: "malformed-operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+		Role: "operator", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedTask.NodeID, UserID: operatorID, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	repository := seedVisibilityRepository(t, db, strings.Repeat("f", 32), "MUST_NOT_PROJECT_MALFORMED", now)
+	unlinkedAt := now
+	seedVisibilityLink(t, db, strings.Repeat("e", 32), repository.ID, &ownedTask.ID, "malformed-link", ownedTask.NodeID, now)
+	if err := db.Model(&model.TaskRepositoryLink{}).Where("repository_id = ?", repository.ID).Update("unlinked_at", unlinkedAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	point := seedVisibilityPoint(t, db, strings.Repeat("d", 32), repository.ID, &ownedTask.ID, "malformed-point", ownedTask.NodeID, now)
+	if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).Update("lineage_json", `{}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := newVisibilityServiceForTest(t, db, now)
+	page, err := service.List(context.Background(), RepositoryListRequest{Limit: 10}, VisibilityScope{Role: "operator", UserID: operatorID}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("malformed owned point projected repository=%+v", page.Items)
+	}
+	if _, err := service.Detail(context.Background(), repository.ID, VisibilityScope{Role: "operator", UserID: operatorID}, RequestContext{}); !errors.Is(err, backupasset.ErrNotFound) {
+		t.Fatalf("malformed repository detail error=%v", err)
+	}
+}
+
 func TestQueryCursorIsSignedStableAndVisibilityScoped(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
@@ -350,13 +387,35 @@ func seedVisibilityLink(t *testing.T, db *gorm.DB, id, repositoryID string, task
 
 func seedVisibilityPoint(t *testing.T, db *gorm.DB, id, repositoryID string, taskID *uint, name string, nodeSnapshot uint, now time.Time) model.RecoveryPoint {
 	t.Helper()
-	lineage, err := json.Marshal(backupasset.RecoveryPointLineageSummary{ProducingTaskID: taskID})
-	if err != nil {
-		t.Fatal(err)
+	lineage := `{}`
+	var taskRunID *uint
+	if taskID != nil {
+		started := now.Add(-2 * time.Minute)
+		run := model.TaskRun{
+			TaskID: *taskID, TriggerType: "manual", Status: "success", StartedAt: &started, FinishedAt: &now,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatal(err)
+		}
+		var link model.TaskRepositoryLink
+		if err := db.Where("repository_id = ? AND task_id = ?", repositoryID, *taskID).First(&link).Error; err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := backupasset.EncodePublicationLineage(backupasset.PublicationLineageV1{
+			Version: 1, TaskRepositoryLinkID: link.ID, TaskID: *taskID, TaskRunID: run.ID,
+			Trigger: "manual", PublicationMode: string(backupasset.PublicationNativeSnapshot),
+			PointCodecVersion: 1, TagCodecVersion: 1, StartedAt: started, PreparedAt: now.Add(-time.Minute), PointDeadlineAt: now.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lineage = encoded
+		taskRunID = &run.ID
 	}
 	point := model.RecoveryPoint{
-		ID: id, RepositoryID: repositoryID, ProducingTaskID: taskID, ProducingTaskNameSnapshot: name,
-		ProducingNodeIDSnapshot: nodeSnapshot, ProducingNodeNameSnapshot: "snapshot-node", LineageJSON: string(lineage),
+		ID: id, RepositoryID: repositoryID, ProducingTaskID: taskID, ProducingTaskRunID: taskRunID, ProducingTaskNameSnapshot: name,
+		ProducingNodeIDSnapshot: nodeSnapshot, ProducingNodeNameSnapshot: "snapshot-node", LineageJSON: lineage,
 		EncryptedProviderLocator: "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY", Semantics: string(backupasset.PointNativeSnapshot),
 		State: string(backupasset.RecoveryPointCommitted), CapturedAt: &now, CommittedAt: &now, SourceFingerprint: strings.Repeat(string(id[0]), 64),
 		ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat(string(id[0]), 64), ConsistencyJSON: `{}`,
