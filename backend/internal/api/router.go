@@ -237,10 +237,16 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	dockerHandler := handlers.NewDockerHandler(dep.DB)
 	reportHandler := handlers.NewReportHandler(dep.DB)
 	var backupRepositoryService handlers.BackupRepositoryService = featureDisabledBackupRepositoryService{}
+	backupAssetCatalogService := handlers.NewFeatureDisabledBackupAssetCatalogService()
+	var backupAssetAuditSink handlers.BackupAssetAuditSink
 	var lineageGuard publication.LineageGuard
 	var featureTransitioner publication.FeatureTransitioner
 	if dep.BackupAssets != nil {
 		backupRepositoryService = dep.BackupAssets.RepositoryService()
+		if dep.BackupAssets.CatalogService() != nil {
+			backupAssetCatalogService = dep.BackupAssets.CatalogService()
+			backupAssetAuditSink = dep.BackupAssets.CatalogAuditSink()
+		}
 		lineageGuard = dep.BackupAssets.LineageGuard()
 		featureTransitioner = dep.BackupAssets.FeatureTransitioner()
 	}
@@ -256,6 +262,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
+	backupAssetHandler := handlers.NewBackupAssetHandler(backupAssetCatalogService, backupAssetAuditSink)
 	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
 	if dep.BackupAssets != nil {
 		rsyncVersioningService = dep.BackupAssets.RepositoryService()
@@ -297,6 +304,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/backup-repositories/connect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Connect)
 	secured.GET("/backup-repositories", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.List)
 	secured.GET("/backup-repositories/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.Detail)
+	secured.GET("/backup-repositories/:id/recovery-points", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListRecoveryPoints)
+	secured.GET("/recovery-points/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetRecoveryPoint)
+	secured.GET("/recovery-points/:id/catalog-status", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetCatalogStatus)
+	secured.GET("/recovery-points/:id/evidence", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEvidence)
+	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
+	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
+	secured.POST("/recovery-point-diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.Diff)
 	secured.POST("/backup-repositories/:id/reconcile", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Reconcile)
 	secured.POST("/backup-repositories/:id/disconnect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Disconnect)
 	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)

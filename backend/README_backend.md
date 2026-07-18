@@ -16,7 +16,7 @@
 
 `backend/internal/backupasset/runtime` 是备份资产的唯一组合根：它创建一套 Provider transport、admission barrier、Repository service、Restic/Rsync/Rclone publication strategy、manifest/reconciliation worker、Rclone health worker 和 lineage guard。`cmd/server` 在 Task Manager 与 executor factory 之前创建该运行时；同一套 admission 与精确血缘合同同时保护 legacy 读取、受管发布和后台调和。Router 只接收已注入的 runtime/窄端口，不会自行创建第二个 Provider 图。
 
-`backup_assets.enabled` 默认仍为 `false`。本层不新增公开的资产导航或恢复点 API；Restic、Rsync 和 Rclone 受管恢复点仍作为内部精确 lineage/发布事实。Rclone 版本化 setup、binding、preflight、activation 与 rollback 通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
+`backup_assets.enabled` 默认仍为 `false`。启用后，Catalog API 只公开经过 producing-lineage 授权的已提交元数据；每个资产引用必须同时携带恢复点 ID 与 entry ID，不接受 Provider 路径。已经原子提交的 immutable Catalog 在 Provider 离线时仍可浏览，但内容可用性会独立返回 `false`；Catalog 不提供内容字节，也不是恢复源。Rclone 版本化 setup、binding、preflight、activation 与 rollback 继续通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
 
 ## 快速运行
 
@@ -133,8 +133,15 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | POST | /backup-repositories/connect | 🔒 从现有 Task 派生并探测 Repository（`backup_repositories:manage`） |
 | GET | /backup-repositories | 🔒 列出谱系可见 Repository（`backup_assets:list`） |
 | GET | /backup-repositories/:id | 🔒 查看脱敏 Repository 详情（`backup_assets:list`） |
+| GET | /backup-repositories/:id/recovery-points | 🔒 列出谱系授权后的恢复点与 Catalog 状态（`backup_assets:list`） |
 | POST | /backup-repositories/:id/reconcile | 🔒 执行有界只读重新探测（`backup_repositories:manage`） |
 | POST | /backup-repositories/:id/disconnect | 🔒 撤销访问但保留 Repository、恢复点及 Provider 数据（`backup_repositories:manage`） |
+| GET | /recovery-points/:id | 🔒 查看脱敏恢复点详情（`backup_assets:list`） |
+| GET | /recovery-points/:id/catalog-status | 🔒 独立查看 generation、coverage、staleness 与内容可用性（`backup_assets:list`） |
+| GET | /recovery-points/:id/evidence | 🔒 查看分层且不提升信任结论的精确证据（`backup_assets:list`） |
+| GET | /recovery-points/:id/entries | 🔒 使用 opaque parent/cursor 浏览 active Catalog（`backup_assets:list`） |
+| GET | /recovery-points/:id/entries/:entryId | 🔒 使用恢复点与 entry 复合身份查看条目（`backup_assets:list`） |
+| POST | /recovery-point-diffs | 🔒 对两个明确恢复点执行精确 metadata diff（`backup_assets:list`） |
 
 ### 任务与执行
 

@@ -202,6 +202,39 @@ func TestResticManifestReprobesRepositoryIdentityBeforeAndAfterEnumeration(t *te
 	}
 }
 
+func TestResticCatalogProofReusesPublicationCodecWithoutPublicationDeadline(t *testing.T) {
+	body := readResticPublicationFixture(t, "manifest-valid.ndjson")
+	stream := &fakePublicationExecution{Reader: bytes.NewReader(body), completion: CommandCompletion{ExitCode: 0, ExitCodeKnown: true}}
+	transport := &fakeManifestTransport{execution: stream}
+	adapter := newManifestResticAdapterForTest(t, transport)
+	attempt := manifestAttemptForTest()
+	attempt.PointDeadlineAt = attempt.PointDeadlineAt.Add(-48 * time.Hour)
+	commit := ResticCommitV1{
+		Provider: backupasset.ProviderRestic, RepositoryIdentity: attempt.RepositoryIdentity,
+		NativePointID: strings.Repeat("a", 64), CaptureStartedAt: time.Date(2026, 7, 14, 3, 0, 0, 0, time.UTC),
+		CaptureFinishedAt: time.Date(2026, 7, 14, 3, 0, 2, 0, time.UTC), FilesProcessed: 1, LogicalBytes: 5,
+	}
+	input := ResticCatalogProofInput{Attempt: attempt, Commit: commit, Limits: manifestLimitsForTest()}
+	manifest, err := adapter.BuildCatalogManifest(context.Background(), input)
+	if err != nil || manifest.Completeness != backupasset.ManifestComplete || manifest.EntryCount != 8 || manifest.Digest == "" {
+		t.Fatalf("Catalog manifest=%+v err=%v", manifest, err)
+	}
+	request := CatalogReadRequest{
+		Provider: backupasset.ProviderRestic, RecoveryPointID: attempt.RecoveryPointID,
+		Snapshot: ReadSnapshot{RepositoryID: attempt.RepositoryID, CapabilityRevision: attempt.CapabilityRevision,
+			SourceRevision: strings.Repeat("9", 64), Access: attempt.Access},
+		Point: PointLocator{Native: commit.NativePointID}, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{ManifestID: strings.Repeat("8", 32), Revision: 1, DigestAlgorithm: "sha256",
+			Digest: manifest.Digest, EntryCount: manifest.EntryCount, Completeness: backupasset.ManifestComplete, SourceRevision: strings.Repeat("9", 64)},
+		ResticProof: &input, MaxItems: 100,
+	}
+	stream.Reader = bytes.NewReader(body)
+	proved, err := adapter.ProveCatalogManifest(context.Background(), request)
+	if err != nil || proved != request.Manifest {
+		t.Fatalf("proved manifest=%+v err=%v", proved, err)
+	}
+}
+
 func buildResticManifestForTest(t *testing.T, body []byte, limits ManifestLimits) (ResticManifestV1, error) {
 	return buildResticManifestWithExecutionForTest(t, body, limits, CommandCompletion{ExitCode: 0, ExitCodeKnown: true}, nil, nil)
 }

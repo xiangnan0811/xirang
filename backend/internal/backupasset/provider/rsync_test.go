@@ -217,6 +217,54 @@ func TestRsyncCommittedPointReaderReadsOnlyExactPublishedTree(t *testing.T) {
 	}
 }
 
+func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	request := CatalogReadRequest{
+		Provider: backupasset.ProviderRsync, RecoveryPointID: fixture.attempt.RecoveryPointID,
+		Snapshot: snapshot, Point: point, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{
+			ManifestID: strings.Repeat("d", 32), Revision: 1, DigestAlgorithm: "sha256",
+			Digest: fixture.commit.ManifestDigest, EntryCount: int64(fixture.commit.ManifestEntryCount),
+			Completeness: backupasset.ManifestComplete, SourceRevision: snapshot.SourceRevision,
+		},
+		MaxItems: 100,
+	}
+	session, err := adapter.OpenCatalogRead(context.Background(), request)
+	if err != nil {
+		t.Fatalf("open committed Catalog: %v", err)
+	}
+	page, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100})
+	if err != nil || len(page.Items) != int(fixture.commit.ManifestEntryCount) || page.NextCursor != "" {
+		t.Fatalf("Catalog page=%+v err=%v", page, err)
+	}
+	proof, err := session.Finalize(context.Background())
+	if err != nil || proof.Manifest != request.Manifest || !proof.Catalog.Complete {
+		t.Fatalf("Catalog proof=%+v err=%v", proof, err)
+	}
+
+	changed, changedSnapshot, changedPoint := rsyncCommittedPointReaderForFixture(t, fixture)
+	changedRequest := request
+	changedRequest.Snapshot = changedSnapshot
+	changedRequest.Point = changedPoint
+	changedSession, err := changed.OpenCatalogRead(context.Background(), changedRequest)
+	if err != nil {
+		t.Fatalf("open Catalog before source mutation: %v", err)
+	}
+	if _, err := changedSession.ListCanonical(context.Background(), PageRequest{Limit: 100}); err != nil {
+		t.Fatalf("enumerate Catalog before source mutation: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changedSnapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess).Root.Path, "late"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changedSession.Finalize(context.Background()); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("mutated committed Catalog proof error=%v", err)
+	}
+}
+
 func TestRsyncCommittedPointReaderRejectsMalformedPointIdentity(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("strict local provider access is Linux-only")

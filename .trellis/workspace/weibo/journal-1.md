@@ -709,3 +709,66 @@ Implemented portable Rclone versioned-prefix publication and strictly gated AWS 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Child 6 atomic backup asset Catalog
+
+**Date**: 2026-07-18
+**Task**: Child 6 atomic backup asset Catalog
+**Branch**: `codex/backup-assets-catalog`
+
+### Summary
+
+Implemented and locally verified the option-A atomic Catalog plane, archived only Child 6, and left PR/required CI/merge delivery pending.
+
+### Main Changes
+
+## Scope and contracts
+
+- Added atomic Catalog generations, deterministic RecoveryPoint-scoped entry identity, ownership-first repository/point/entry/evidence/diff APIs, offline immutable metadata browsing, and runtime scheduling with per-repository process lanes plus durable per-point fences.
+- Added exact Restic, Rsync, Rclone Catalog proof/read-session contracts. Command remains typed unsupported; Provider bytes are never mutated and handlers execute no Provider/runner/SSH/process command.
+- Frontend remains raw DTO/domain/API boundary only. No page, component, route, i18n, model, migration, deploy or feature-default change was made.
+- Schema option A remains in force: no Child 6 migration and reservations 000065–000071 are untouched. `backup_assets.enabled` remains default false.
+
+## Fresh verification
+
+- Focused Provider/Repository/Catalog/Runtime/API and three frontend boundary suites passed.
+- Targeted `-race` Catalog and Runtime suites passed.
+- SQLite behavior passed through the focused/full Catalog suite.
+- A real local PostgreSQL 18 service ran `REQUIRE_POSTGRES_CATALOG_TEST=1`; activation-failure rollback, zero-active visibility, concurrent generation sequence, retired projection and ownership/order/cursor/diff parity passed. This was executed, not skipped.
+- Swagger was generated twice with the existing v1.16.4 binary; tracked docs were identical at hash `6bd0d34bec5ae9ee804ad820e57650433463a42c`. The Codex shell lacked GOPATH/bin in PATH, so the binary was invoked with a temporary PATH override; no repository workaround was added.
+- `make backend-test`, `env -u NODE_ENV npm run check` (133 files, 591 tests), and a final `env -u NODE_ENV make check` passed; golangci-lint reported 0 issues.
+- Trellis validation, docs freshness, diff checks, exact-manifest checks, no-migration/no-UI/no-command/no-secret boundary scans passed.
+
+## Review fixes
+
+- Joined the lease-heartbeat goroutine before Catalog Build returns.
+- Failed closed for unknown TaskRun/restore-drill/generation error enums without echoing raw values.
+- Reconciled impossible legacy retired-mutable-point plus active-generation projections on both SQLite and PostgreSQL.
+- Review was performed inline under the Child's explicit no implement/check-subagent mode; no external reviewer claim is made.
+
+## Delivery state
+
+- Work commit: `67f6c2f348a80e62548ef20af925a0a370306752`.
+- Child-only archive commit: `ca7e7a7`; parent remains planning and unarchived.
+- PR, required CI, squash merge, post-merge automation and main sync are not yet executed at this journal point.
+- Parent program progress is 6/15. Trellis reports 6/6 only because six Child task directories have been instantiated so far.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `67f6c2f348a80e62548ef20af925a0a370306752` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

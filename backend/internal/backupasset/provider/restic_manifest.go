@@ -89,6 +89,54 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt ResticA
 	if err := validateManifestCommit(attempt, commit); err != nil {
 		return ResticManifestV1{}, err
 	}
+	deadline := adapter.now().UTC().Add(limits.Timeout)
+	if attempt.PointDeadlineAt.Before(deadline) {
+		deadline = attempt.PointDeadlineAt
+	}
+	return adapter.buildManifestWithValidatedInput(ctx, attempt, commit, limits, attempt.Access, deadline)
+}
+
+// BuildCatalogManifest reruns the exact publication-compatible canonical
+// codec against a committed snapshot without reviving its expired publication
+// lease/deadline. It performs only probes and Restic `ls` reads.
+func (adapter *ResticAdapter) BuildCatalogManifest(ctx context.Context, input ResticCatalogProofInput) (ResticManifestV1, error) {
+	if err := input.Limits.Validate(); err != nil {
+		return ResticManifestV1{}, err
+	}
+	attempt := input.Attempt
+	if adapter == nil || adapter.transport == nil || adapter.streamTransport == nil || attempt.Provider != backupasset.ProviderRestic ||
+		backupasset.ValidateOpaqueID(attempt.RepositoryID) != nil || backupasset.ValidateOpaqueID(attempt.TaskRepositoryLinkID) != nil ||
+		backupasset.ValidateOpaqueID(attempt.RecoveryPointID) != nil || attempt.TaskID == 0 || attempt.TaskRunID == 0 ||
+		attempt.CapabilityRevision <= 0 || attempt.AdapterRevision != resticAdapterRevision ||
+		!strings.HasPrefix(attempt.RepositoryIdentity, NativeResticIdentityPrefix) ||
+		!lowerHex(strings.TrimPrefix(attempt.RepositoryIdentity, NativeResticIdentityPrefix), 64) ||
+		!validGeneratedResticTag(attempt.RequiredTags[0], 0) || !validGeneratedResticTag(attempt.RequiredTags[1], 1) {
+		return ResticManifestV1{}, fmt.Errorf("%w: invalid Restic Catalog proof input", backupasset.ErrInvalidState)
+	}
+	if err := adapter.validateBinding(attempt.Access); err != nil || attempt.Access.RepositoryID != attempt.RepositoryID ||
+		attempt.Access.TaskID != attempt.TaskID {
+		return ResticManifestV1{}, fmt.Errorf("%w: invalid Restic Catalog access", backupasset.ErrInvalidState)
+	}
+	runtimeAccess, ok := attempt.Access.AdapterData.(ResticRuntimeAccess)
+	if !ok || !lowerHex(runtimeAccess.NativeRepositoryID, 64) ||
+		NativeResticIdentityPrefix+runtimeAccess.NativeRepositoryID != attempt.RepositoryIdentity || runtimeAccess.Command == nil {
+		return ResticManifestV1{}, fmt.Errorf("%w: invalid Restic Catalog runtime", backupasset.ErrInvalidState)
+	}
+	if err := validateManifestCommit(attempt, input.Commit); err != nil {
+		return ResticManifestV1{}, err
+	}
+	deadline := adapter.now().UTC().Add(input.Limits.Timeout)
+	return adapter.buildManifestWithValidatedInput(ctx, attempt, input.Commit, input.Limits, attempt.Access, deadline)
+}
+
+func (adapter *ResticAdapter) buildManifestWithValidatedInput(
+	ctx context.Context,
+	attempt ResticAttemptV1,
+	commit ResticCommitV1,
+	limits ManifestLimits,
+	binding AccessBinding,
+	deadline time.Time,
+) (ResticManifestV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -98,10 +146,6 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt ResticA
 	if err != nil {
 		return unavailableManifestEvidence(backupasset.FailureManifestUnavailable), nil
 	}
-	deadline := adapter.now().UTC().Add(limits.Timeout)
-	if attempt.PointDeadlineAt.Before(deadline) {
-		deadline = attempt.PointDeadlineAt
-	}
 	remaining := deadline.Sub(adapter.now().UTC()) - sshutil.CommandExecutionJoinTimeout
 	if remaining <= 0 {
 		return unavailableManifestEvidence(backupasset.FailurePublicationDeadlineExceeded), nil
@@ -109,10 +153,6 @@ func (adapter *ResticAdapter) BuildManifest(ctx context.Context, attempt ResticA
 	operationLimits.Timeout = remaining
 	if err := operationLimits.Validate(); err != nil {
 		return unavailableManifestEvidence(backupasset.FailureManifestUnavailable), nil
-	}
-	binding, err := publicationAccessBinding(attempt)
-	if err != nil {
-		return ResticManifestV1{}, err
 	}
 	if !adapter.manifestProbeMatches(manifestContext, binding, operationLimits, attempt) {
 		return unavailableManifestEvidence(backupasset.FailureRepositoryIdentityDrift), nil

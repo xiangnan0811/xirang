@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
@@ -52,8 +53,9 @@ type RepositoryPage struct {
 
 type RepositoryView struct {
 	backupasset.RepositoryDTO
-	AccessActive bool             `json:"access_active"`
-	Lineages     []LineageSummary `json:"lineages"`
+	AccessActive bool                         `json:"access_active"`
+	Lineages     []LineageSummary             `json:"lineages"`
+	Catalog      catalog.RepositorySummaryDTO `json:"catalog"`
 }
 
 type LineageSummary struct {
@@ -83,25 +85,34 @@ func (service *Service) List(ctx context.Context, request RepositoryListRequest,
 	if err != nil {
 		return RepositoryPage{}, err
 	}
-	query := service.db.WithContext(ctx).Model(&model.BackupRepository{})
-	if scope.Role == "operator" {
-		query = applyOperatorRepositoryVisibility(query, scope.UserID)
-	}
+	var cursor *repositoryCursor
 	if strings.TrimSpace(request.Cursor) != "" {
-		cursor, err := service.decodeRepositoryCursor(ctx, request.Cursor, scope)
+		decoded, err := service.decodeRepositoryCursor(ctx, request.Cursor, scope)
 		if err != nil {
 			return RepositoryPage{}, err
 		}
-		query = query.Where(`backup_repositories.created_at < ? OR
-			(backup_repositories.created_at = ? AND backup_repositories.id < ?)`, cursor.CreatedAt, cursor.CreatedAt, cursor.RepositoryID)
+		cursor = &decoded
 	}
 	var repositories []model.BackupRepository
-	if err := query.Order("backup_repositories.created_at DESC, backup_repositories.id DESC").Limit(limit + 1).Find(&repositories).Error; err != nil {
-		return RepositoryPage{}, fmt.Errorf("list visible backup repositories: %w", err)
-	}
-	hasMore := len(repositories) > limit
-	if hasMore {
-		repositories = repositories[:limit]
+	var hasMore bool
+	if scope.Role == "operator" {
+		repositories, hasMore, err = service.listOperatorRepositories(ctx, limit, cursor, scope)
+		if err != nil {
+			return RepositoryPage{}, err
+		}
+	} else {
+		query := service.db.WithContext(ctx).Model(&model.BackupRepository{})
+		if cursor != nil {
+			query = query.Where(`backup_repositories.created_at < ? OR
+				(backup_repositories.created_at = ? AND backup_repositories.id < ?)`, cursor.CreatedAt, cursor.CreatedAt, cursor.RepositoryID)
+		}
+		if err := query.Order("backup_repositories.created_at DESC, backup_repositories.id DESC").Limit(limit + 1).Find(&repositories).Error; err != nil {
+			return RepositoryPage{}, fmt.Errorf("list visible backup repositories: %w", err)
+		}
+		hasMore = len(repositories) > limit
+		if hasMore {
+			repositories = repositories[:limit]
+		}
 	}
 	page := RepositoryPage{Items: make([]RepositoryView, 0, len(repositories))}
 	for _, repository := range repositories {
@@ -135,12 +146,17 @@ func (service *Service) Detail(ctx context.Context, repositoryID string, scope V
 	if err := validateVisibilityScope(scope); err != nil {
 		return RepositoryView{}, err
 	}
-	query := service.db.WithContext(ctx).Model(&model.BackupRepository{}).Where("backup_repositories.id = ?", repositoryID)
 	if scope.Role == "operator" {
-		query = applyOperatorRepositoryVisibility(query, scope.UserID)
+		authorized, err := service.operatorRepositoryAuthorized(ctx, repositoryID, scope)
+		if err != nil {
+			return RepositoryView{}, err
+		}
+		if !authorized {
+			return RepositoryView{}, fmt.Errorf("%w: repository", backupasset.ErrNotFound)
+		}
 	}
 	var repository model.BackupRepository
-	if err := query.First(&repository).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := service.db.WithContext(ctx).Where("id = ?", repositoryID).First(&repository).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		return RepositoryView{}, fmt.Errorf("%w: repository", backupasset.ErrNotFound)
 	} else if err != nil {
 		return RepositoryView{}, fmt.Errorf("load visible backup repository: %w", err)
@@ -272,28 +288,108 @@ func signRepositoryCursor(key []byte, claims repositoryCursorClaims) (string, er
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func applyOperatorRepositoryVisibility(query *gorm.DB, userID uint) *gorm.DB {
-	return query.Where(`
-		EXISTS (
-			SELECT 1
-			FROM task_repository_links AS visible_links
-			JOIN tasks AS visible_link_tasks ON visible_link_tasks.id = visible_links.task_id
-			JOIN node_owners AS visible_link_owners ON visible_link_owners.node_id = visible_link_tasks.node_id AND visible_link_owners.user_id = ?
-			WHERE visible_links.repository_id = backup_repositories.id
-			  AND visible_links.task_id IS NOT NULL
-			  AND visible_links.unlinked_at IS NULL
-			  AND visible_link_tasks.archived_at IS NULL
-		)
-		OR EXISTS (
-			SELECT 1
-			FROM recovery_points AS visible_points
-			JOIN tasks AS visible_point_tasks ON visible_point_tasks.id = visible_points.producing_task_id
-			JOIN node_owners AS visible_point_owners ON visible_point_owners.node_id = visible_point_tasks.node_id AND visible_point_owners.user_id = ?
-			WHERE visible_points.repository_id = backup_repositories.id
-			  AND visible_points.producing_task_id IS NOT NULL
-			  AND visible_point_tasks.archived_at IS NULL
-		)
-	`, userID, userID)
+type repositoryVisibilityControl struct {
+	ID        string
+	CreatedAt time.Time
+}
+
+func (service *Service) listOperatorRepositories(
+	ctx context.Context,
+	limit int,
+	cursor *repositoryCursor,
+	scope VisibilityScope,
+) ([]model.BackupRepository, bool, error) {
+	const scanBudget = 2000
+	visibleIDs := make([]string, 0, limit+1)
+	var anchor *repositoryVisibilityControl
+	if cursor != nil {
+		anchor = &repositoryVisibilityControl{ID: cursor.RepositoryID, CreatedAt: cursor.CreatedAt}
+	}
+	scanned := 0
+	hasCandidates := true
+	for len(visibleIDs) < limit+1 && hasCandidates {
+		remaining := scanBudget - scanned
+		if remaining <= 0 {
+			return nil, false, fmt.Errorf("%w: repository ownership scan budget", catalog.ErrOwnershipProjectionLimit)
+		}
+		chunkSize := min(remaining, max(50, limit*2))
+		query := service.db.WithContext(ctx).Table("backup_repositories").Select("id", "created_at")
+		if anchor != nil {
+			query = query.Where("created_at < ? OR (created_at = ? AND id < ?)", anchor.CreatedAt, anchor.CreatedAt, anchor.ID)
+		}
+		var candidates []repositoryVisibilityControl
+		if err := query.Order("created_at DESC, id DESC").Limit(chunkSize + 1).Scan(&candidates).Error; err != nil {
+			return nil, false, fmt.Errorf("list repository ownership controls: %w", err)
+		}
+		hasCandidates = len(candidates) > chunkSize
+		if hasCandidates {
+			candidates = candidates[:chunkSize]
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			authorized, err := service.operatorRepositoryAuthorized(ctx, candidate.ID, scope)
+			if err != nil {
+				return nil, false, err
+			}
+			if authorized {
+				visibleIDs = append(visibleIDs, candidate.ID)
+				if len(visibleIDs) == limit+1 {
+					break
+				}
+			}
+		}
+		scanned += len(candidates)
+		last := candidates[len(candidates)-1]
+		anchor = &last
+		if scanned >= scanBudget && hasCandidates && len(visibleIDs) < limit+1 {
+			return nil, false, fmt.Errorf("%w: repository ownership scan budget", catalog.ErrOwnershipProjectionLimit)
+		}
+	}
+	hasMore := len(visibleIDs) > limit
+	if hasMore {
+		visibleIDs = visibleIDs[:limit]
+	}
+	repositories := make([]model.BackupRepository, 0, len(visibleIDs))
+	for _, repositoryID := range visibleIDs {
+		var repository model.BackupRepository
+		if err := service.db.WithContext(ctx).Where("id = ?", repositoryID).Take(&repository).Error; err != nil {
+			return nil, false, fmt.Errorf("load authorized backup repository: %w", err)
+		}
+		repositories = append(repositories, repository)
+	}
+	return repositories, hasMore, nil
+}
+
+func (service *Service) operatorRepositoryAuthorized(ctx context.Context, repositoryID string, scope VisibilityScope) (bool, error) {
+	if service.catalogOwnership == nil {
+		return false, fmt.Errorf("%w: Catalog ownership unavailable", backupasset.ErrInvalidState)
+	}
+	var activeLinks int64
+	if err := service.db.WithContext(ctx).Table("task_repository_links AS links").
+		Joins("JOIN tasks AS link_tasks ON link_tasks.id = links.task_id AND link_tasks.archived_at IS NULL").
+		Joins("JOIN node_owners AS link_owners ON link_owners.node_id = link_tasks.node_id AND link_owners.user_id = ?", scope.UserID).
+		Where("links.repository_id = ? AND links.task_id IS NOT NULL AND links.unlinked_at IS NULL", repositoryID).
+		Count(&activeLinks).Error; err != nil {
+		return false, fmt.Errorf("check repository current lineage ownership: %w", err)
+	}
+	if activeLinks > 0 {
+		return true, nil
+	}
+	var pointIDs []string
+	if err := service.db.WithContext(ctx).Table("recovery_points").Select("id").Where("repository_id = ?", repositoryID).
+		Order("id ASC").Limit(2001).Scan(&pointIDs).Error; err != nil {
+		return false, fmt.Errorf("load repository point ownership controls: %w", err)
+	}
+	if len(pointIDs) > 2000 {
+		return false, fmt.Errorf("%w: repository point ownership budget", catalog.ErrOwnershipProjectionLimit)
+	}
+	authorized, err := service.catalogOwnership.AuthorizedPointIDs(ctx, catalog.AuthorizationScope{Role: scope.Role, UserID: scope.UserID}, pointIDs)
+	if err != nil {
+		return false, err
+	}
+	return len(authorized) > 0, nil
 }
 
 func (service *Service) repositoryView(ctx context.Context, repository model.BackupRepository, scope VisibilityScope) (RepositoryView, error) {
@@ -311,7 +407,14 @@ func (service *Service) repositoryView(ctx context.Context, repository model.Bac
 		Count(&activeBindings).Error; err != nil {
 		return RepositoryView{}, fmt.Errorf("load repository access status: %w", err)
 	}
-	return RepositoryView{RepositoryDTO: dto, AccessActive: activeBindings > 0, Lineages: lineages}, nil
+	var summary catalog.RepositorySummaryDTO
+	if service.catalogSummary != nil {
+		summary, err = service.catalogSummary.RepositorySummary(ctx, repository.ID, catalog.AuthorizationScope{Role: scope.Role, UserID: scope.UserID})
+		if err != nil {
+			return RepositoryView{}, err
+		}
+	}
+	return RepositoryView{RepositoryDTO: dto, AccessActive: activeBindings > 0, Lineages: lineages, Catalog: summary}, nil
 }
 
 func (service *Service) loadLineages(ctx context.Context, repositoryID string, scope VisibilityScope) ([]LineageSummary, error) {
@@ -346,10 +449,28 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 
 	pointQuery := service.db.WithContext(ctx).Table("recovery_points AS points").Where("points.repository_id = ?", repositoryID)
 	if scope.Role == "operator" {
-		pointQuery = pointQuery.
-			Joins("JOIN tasks AS point_tasks ON point_tasks.id = points.producing_task_id AND point_tasks.archived_at IS NULL").
-			Joins("JOIN node_owners AS point_owners ON point_owners.node_id = point_tasks.node_id AND point_owners.user_id = ?", scope.UserID).
-			Where("points.producing_task_id IS NOT NULL")
+		if service.catalogOwnership == nil {
+			return nil, fmt.Errorf("%w: Catalog ownership unavailable", backupasset.ErrInvalidState)
+		}
+		var candidateIDs []string
+		if err := service.db.WithContext(ctx).Table("recovery_points").Select("id").Where("repository_id = ?", repositoryID).
+			Order("id ASC").Limit(2001).Scan(&candidateIDs).Error; err != nil {
+			return nil, fmt.Errorf("load repository lineage ownership controls: %w", err)
+		}
+		if len(candidateIDs) > 2000 {
+			return nil, fmt.Errorf("%w: repository lineage ownership budget", catalog.ErrOwnershipProjectionLimit)
+		}
+		authorizedIDs, err := service.catalogOwnership.AuthorizedPointIDs(
+			ctx, catalog.AuthorizationScope{Role: scope.Role, UserID: scope.UserID}, candidateIDs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(authorizedIDs) == 0 {
+			pointQuery = pointQuery.Where("1 = 0")
+		} else {
+			pointQuery = pointQuery.Where("points.id IN ?", authorizedIDs)
+		}
 	}
 	var points []struct {
 		ID        string

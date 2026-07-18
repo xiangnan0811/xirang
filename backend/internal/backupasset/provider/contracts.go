@@ -302,6 +302,16 @@ type ManifestLimits struct {
 	MaxDepth       int
 }
 
+// ResticCatalogProofInput carries the exact immutable publication facts needed
+// to rerun the Restic manifest codec. Unlike ResticAttemptV1 publication
+// execution, Catalog verification deliberately does not reuse the historical
+// publication deadline or fence.
+type ResticCatalogProofInput struct {
+	Attempt ResticAttemptV1 `json:"-"`
+	Commit  ResticCommitV1  `json:"-"`
+	Limits  ManifestLimits  `json:"-"`
+}
+
 type ResticManifestFidelity struct {
 	Version     int       `json:"version"`
 	Profile     string    `json:"profile"`
