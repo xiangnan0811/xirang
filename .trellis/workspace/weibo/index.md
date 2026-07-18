@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-07-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~774 | Active |
+| `journal-1.md` | ~839 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-07-18 | Child 7 backup asset search and user overlays | `c6956d03518071534db3d7144982a7c0c38b2189` | `codex/backup-assets-search-overlays` |
 | 21 | 2026-07-18 | Child 6 atomic backup asset Catalog | `67f6c2f348a80e62548ef20af925a0a370306752` | `codex/backup-assets-catalog` |
 | 20 | 2026-07-17 | Child 5: Rclone versioned recovery points | `bd123a9` | `codex/backup-assets-rclone-versioning` |
 | 19 | 2026-07-15 | Rsync versioned recovery points | `8e45e22` | `codex/backup-assets-rsync-versioning` |
